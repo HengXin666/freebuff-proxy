@@ -314,18 +314,25 @@ export function createProxyHandler(ctx) {
     const stream = Boolean(body.stream)
     let attempt = 0
     const maxRetry = config.limits.maxAutoRetryOnSessionError ?? 1
+    // 换号重试预算：最多试到账号数（封顶 5 次），保证一波限流/5xx 时能换到可用账号。
+    const maxAttempts = Math.max(
+      maxRetry + 1,
+      Math.min(runtimes.allEmails().length || 1, 5),
+    )
     /** @type {string | null} */
     let lastEmail = null
     /** @type {string | null} */
     let pendingGateCode = null
     /** @type {number | null} */
     let pendingRetryAfterMs = null
+    /** @type {boolean} */
+    let pendingSwitchAccount = false
 
     // 会话级粘性：同一会话固定同一账号（热 session 复用），
     // 不同会话按轮询 + 最少会话数摊开（不用哈希，账号少时哈希易碰撞到同一账号）。
     const sticky = resolveSticky(req, body, upstreamModel)
 
-    while (attempt <= maxRetry) {
+    while (attempt < maxAttempts) {
       attempt++
       try {
         // Single reacquire path: first attempt acquires; retries use gate from previous failure.
@@ -339,6 +346,7 @@ export function createProxyHandler(ctx) {
                 preferredEmail: lastEmail,
                 gateCode: pendingGateCode,
                 retryAfterMs: pendingRetryAfterMs,
+                switchAccount: pendingSwitchAccount,
               })
         // 首次成功记录会话粘性；gate/限流重试后账号可能已切换，同样立即更新，
         // 避免同一会话下次又先去试旧账号。
@@ -346,6 +354,7 @@ export function createProxyHandler(ctx) {
         sticky.preferredEmail = rt.email
         pendingGateCode = null
         pendingRetryAfterMs = null
+        pendingSwitchAccount = false
         lastEmail = rt.email
 
         // 可观测性：响应头标明本次实际使用的账号与会话 key。
@@ -396,16 +405,20 @@ export function createProxyHandler(ctx) {
 
         if (result.ok) return
 
-        if (result.recoverable && attempt <= maxRetry) {
-          logger.warn('session error; will re-acquire once', {
+        const retryBudget = result.switchAccount ? maxAttempts : maxRetry + 1
+        if (result.recoverable && attempt < retryBudget) {
+          logger.warn('session error; will re-acquire', {
             code: result.gateCode,
             attempt,
+            budget: retryBudget,
             model: upstreamModel,
             account: lastEmail,
+            switchAccount: result.switchAccount === true,
             retryAfterMs: result.retryAfterMs ?? null,
           })
           pendingGateCode = result.gateCode
           pendingRetryAfterMs = result.retryAfterMs ?? null
+          pendingSwitchAccount = result.switchAccount === true
           continue
         }
 
@@ -420,16 +433,14 @@ export function createProxyHandler(ctx) {
         return
       } catch (err) {
         if (err instanceof UpstreamError) {
-          if (
-            isSessionRecoverableGate(err.code) &&
-            attempt <= maxRetry
-          ) {
+          if (isSessionRecoverableGate(err.code) && attempt < maxRetry + 1) {
             logger.warn('recoverable session error; will re-acquire once', {
               code: err.code,
               attempt,
               account: lastEmail,
             })
             pendingGateCode = err.code
+            pendingSwitchAccount = false
             continue
           }
           mapAndSendError(res, err)
@@ -521,15 +532,21 @@ export function createProxyHandler(ctx) {
         parsed = null
       }
       const retryAfterMs = parseRetryAfterMsHeader(respHeaders['retry-after'])
-      // 账号级限流（free_mode_rate_limited / rate_limited / spend_limited /
-      // ip_capped）：冷却当前账号并换号重试一次，而不是把 429 直接甩给用户。
-      const rateCode = extractRateLimitError(parsed, status)
-      if (rateCode) {
+      const errCode =
+        (parsed &&
+        typeof parsed === 'object' &&
+        (parsed.error?.code || parsed.error || parsed.code || parsed.status)) ||
+        null
+      // 账号侧故障（429 限流 / 5xx / 403 账号级封禁）：冷却当前账号并换号重试，
+      // 而不是把错误直接甩给用户。4xx 客户端错误（400/401/404/422 等）不换号。
+      const switchAccount = shouldSwitchAccountOnError(status, errCode)
+      if (switchAccount) {
         return {
           ok: false,
           wrote: false,
           recoverable: true,
-          gateCode: rateCode,
+          switchAccount: true,
+          gateCode: typeof errCode === 'string' ? errCode : `http_${status}`,
           retryAfterMs,
           status,
           body: parsed || { error: { message: text, type: 'upstream_error' } },
@@ -542,6 +559,7 @@ export function createProxyHandler(ctx) {
           ok: false,
           wrote: false,
           recoverable: true,
+          switchAccount: false,
           gateCode,
           retryAfterMs,
           status,
@@ -553,6 +571,7 @@ export function createProxyHandler(ctx) {
         ok: false,
         wrote: false,
         recoverable: false,
+        switchAccount: false,
         gateCode,
         status,
         body: parsed || text,
@@ -671,6 +690,26 @@ export function extractConversationKey(body, headers) {
 function methodHasBody(method) {
   const m = (method || 'GET').toUpperCase()
   return m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE'
+}
+
+/**
+ * 上游 chat/completions 报错时是否应冷却当前账号并换号重试：
+ * 429（限流/配额）、5xx（服务端故障）、403 账号级封禁（banned/country_blocked/ip_capped）
+ * 以及 free_mode_rate_limited 等账号级限流 code。4xx 客户端错误不换号。
+ * @param {number} status
+ * @param {unknown} code
+ * @returns {boolean}
+ */
+function shouldSwitchAccountOnError(status, code) {
+  if (status >= 500) return true
+  if (status === 429) return true
+  if (
+    status === 403 &&
+    ['banned', 'country_blocked', 'ip_capped'].includes(String(code))
+  ) {
+    return true
+  }
+  return extractRateLimitError({ error: code }) !== null
 }
 
 /** Parse Retry-After header (seconds or HTTP-date) into ms, or null. */

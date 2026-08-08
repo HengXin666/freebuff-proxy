@@ -24,7 +24,7 @@ configureLogger({ level: 'error' })
 
 const originalFetch = globalThis.fetch
 let calls = []
-/** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion'} */
+/** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion' | 'err_500_a'} */
 let mockMode = 'ok'
 let sessionPosts = 0
 let completionAttempts = 0
@@ -147,6 +147,9 @@ globalThis.fetch = async (url, init = {}) => {
         429,
         { 'retry-after': '60' },
       )
+    }
+    if (mockMode === 'err_500_a' && String(compAuth).includes('token-a')) {
+      return jsonRes({ error: 'internal_error', message: 'boom' }, 500)
     }
 
     if (body.stream) {
@@ -1145,6 +1148,122 @@ assert.equal(requireModelId(''), null)
   await subRuntimes.shutdown()
   subServer.close()
   fs.rmSync(subDir, { recursive: true, force: true })
+}
+
+// 粘性记忆 TTL=0：同一个恒定会话 key 也必须轮巡（不钉死在一个账号）
+{
+  const ttlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-ttl-'))
+  saveAccountUser(ttlDir, { id: 'ta', email: 'ta@example.com', authToken: 'token-ta' })
+  saveAccountUser(ttlDir, { id: 'tb', email: 'tb@example.com', authToken: 'token-tb' })
+  saveAccountUser(ttlDir, { id: 'tc', email: 'tc@example.com', authToken: 'token-tc' })
+  const ttlConfig = loadConfig()
+  ttlConfig.server.host = '127.0.0.1'
+  ttlConfig.server.port = 0
+  ttlConfig.server.apiKeys = ['sk-test']
+  ttlConfig.upstream.credentialsDir = ttlDir
+  ttlConfig.session.pollIntervalSec = 3600
+  ttlConfig.lb.stickyTtlSec = 0 // 记忆即时过期 → 每请求重新轮询分配
+  const ttlRuntimes = new AccountRuntimes(ttlConfig)
+  const ttlServer = await startServer({
+    config: ttlConfig,
+    runtimes: ttlRuntimes,
+    ...(() => {
+      const rt = ttlRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const ttlPort = ttlServer.address().port
+  mockMode = 'ok'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  const seen = new Set()
+  for (let i = 0; i < 3; i++) {
+    const res = await fetch(`http://127.0.0.1:${ttlPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer sk-test',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'deepseek/deepseek-v4-flash',
+        codebuff_metadata: { conversation_id: 'same-thread-forever' },
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    })
+    assert.equal(res.status, 200, await res.clone().text())
+    seen.add(res.headers.get('x-freebuff-proxy-account'))
+  }
+  assert.equal(
+    seen.size,
+    3,
+    `同一恒定 key 也应轮巡到 3 个账号, got ${[...seen]}`,
+  )
+  await ttlRuntimes.shutdown()
+  ttlServer.close()
+  fs.rmSync(ttlDir, { recursive: true, force: true })
+}
+
+// 上游 500 报错 → 冷却当前账号并换号重试
+{
+  const e5Dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-e500-'))
+  saveAccountUser(e5Dir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
+  saveAccountUser(e5Dir, { id: 'b', email: 'b@example.com', authToken: 'token-b' })
+  const e5Config = loadConfig()
+  e5Config.server.host = '127.0.0.1'
+  e5Config.server.port = 0
+  e5Config.server.apiKeys = ['sk-test']
+  e5Config.upstream.credentialsDir = e5Dir
+  e5Config.session.pollIntervalSec = 3600
+  const e5Runtimes = new AccountRuntimes(e5Config)
+  const e5Server = await startServer({
+    config: e5Config,
+    runtimes: e5Runtimes,
+    ...(() => {
+      const rt = e5Runtimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const e5Port = e5Server.address().port
+  mockMode = 'err_500_a'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  const res = await fetch(`http://127.0.0.1:${e5Port}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  assert.equal(sessionPosts, 2, `expected 2 session POSTs, got ${sessionPosts}`)
+  assert.equal(completionAttempts, 2)
+  const e5Accounts = e5Runtimes.list()
+  const e5a = e5Accounts.find((x) => x.email === 'a@example.com')
+  assert.equal(e5a.available, false)
+  assert.equal(e5a.cooldownCode, 'internal_error')
+  assert.equal(res.headers.get('x-freebuff-proxy-account'), 'b@example.com')
+  await e5Runtimes.shutdown()
+  e5Server.close()
+  fs.rmSync(e5Dir, { recursive: true, force: true })
+  mockMode = 'ok'
 }
 
 await runtimes.shutdown()

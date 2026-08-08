@@ -56,7 +56,7 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 
 - 前端展示上游 `rateLimitsByModel`（每模型 `已用/上限/重置时间`）；额度仅在 admit/活跃 session 时由上游返回。
 - 提供**只读探测刷新**（`POST /api/accounts/probe`，只 GET、不创建 session、不占额度）；导入账号后自动探测。
-- 多账号池自动切号：`rate_limited / spend_limited / ip_capped / free_mode_rate_limited / banned` 整号冷却并换下一个；`model_unavailable` 只冷却该模型。chat/completions 返回 429 限流（如 `free_mode_rate_limited`）时同样按 Retry-After 冷却并换号重试一次。
+- 多账号池自动切号：`rate_limited / spend_limited / ip_capped / free_mode_rate_limited / banned` 整号冷却并换下一个；`model_unavailable` 只冷却该模型。chat/completions 上游报错（429 限流 / 5xx / 403 账号级封禁）按 Retry-After 冷却当前账号并换号重试（最多试到账号数，封顶 5 次）；4xx 客户端错误不换号。
 - **配额感知负载均衡**：**轮询为主**（无会话 ID 的请求按账号轮流，不做"活跃 session 加分"——那会把请求全吸到一个账号），限额模型叠加「剩余额度越多越优先、用满降权」，冷却排除。
 - **不限量模型豁免**：目录 `pool: 'unlimited'` 的模型（`deepseek/deepseek-v4-flash`、`mimo/mimo-v2.5`）
   **不参与配额切换**（不因上游 rateLimit 条目切号），前端显示「不限」。
@@ -64,6 +64,7 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 ## Session 行为
 
 - 创建 session 才扣额度 → **活跃 session 尽量复用**（轮询下每个账号的 session 在轮到它时被复用，避免重复 admit 占额度）。
+- **会话记忆带 TTL**（`lb.sticky_ttl_sec`，默认 60s）：同一会话 TTL 内固定同一账号，过期后重新轮询分配，防止恒定会话 key 把账号钉死、永不轮巡。
 - 换模型先释放旧 session；gate 错误（session_expired/superseded/waiting room 等）自动 re-admit **一次**。
 
 ## Web 控制台

@@ -59,18 +59,22 @@ export class AccountRuntimes {
     /** Per-account success counters (in-memory, for load-balance visibility). */
     this.stats = { total: 0, byEmail: new Map() }
     /**
-     * 会话ID → 账号（进程内粘性）。同一会话固定同一账号（热 session 复用）；
-     * 新会话按"轮询 + 最少会话数"分到不同账号，避免账号少时哈希碰撞导致
-     * 所有会话总落到同一个账号。
-     * @type {Map<string, string>}
+     * 会话ID → { email, until }（进程内粘性记忆，带 TTL）。
+     * TTL 内同一会话固定同一账号（热 session 复用）；过期后重新按
+     * "轮询 + 最少会话数"分配——防止恒定 conversation_id 把账号钉死、永不轮巡。
+     * @type {Map<string, { email: string, until: number }>}
      */
     this.stickyByConversation = new Map()
+    /** 会话粘性记忆时长（毫秒），0 = 不做粘性记忆、每请求重新轮询分配。 */
+    this._stickyTtlMs = Math.max(0, Number(config.lb?.stickyTtlSec ?? 60)) * 1000
   }
 
   list() {
     const now = Date.now()
     const convCountByEmail = new Map()
-    for (const email of this.stickyByConversation.values()) {
+    for (const v of this.stickyByConversation.values()) {
+      const email = v && typeof v === 'object' ? v.email : v
+      if (!email) continue
       convCountByEmail.set(email, (convCountByEmail.get(email) || 0) + 1)
     }
     return listAccounts(this.dir).map((a) => {
@@ -238,8 +242,9 @@ export class AccountRuntimes {
    */
   conversationPreferredEmail(convKey, model = null) {
     if (!convKey) return null
-    const known = this.stickyByConversation.get(String(convKey))
-    if (known) return known
+    const key = String(convKey)
+    const known = this.stickyByConversation.get(key)
+    if (known && known.until > Date.now()) return known.email
     const emails = this.allEmails()
       .filter((e) => !this.isCoolingDown(e, model))
       .filter((e) => {
@@ -275,14 +280,20 @@ export class AccountRuntimes {
 
     // 立即记忆（预订），避免并发的新会话同时选中同一个账号；
     // 若最终请求失败回落到其他账号，recordConversation 会更新为新账号。
-    this.stickyByConversation.set(String(convKey), best)
+    this.stickyByConversation.set(key, {
+      email: best,
+      until: Date.now() + this._stickyTtlMs,
+    })
     return best
   }
 
-  /** 记录 会话ID → 账号 粘性（首次成功或账号回落后更新）。 */
+  /** 记录 会话ID → 账号 粘性（首次成功或账号回落后更新，刷新 TTL）。 */
   recordConversation(convKey, email) {
     if (!convKey) return
-    this.stickyByConversation.set(String(convKey), email)
+    this.stickyByConversation.set(String(convKey), {
+      email,
+      until: Date.now() + this._stickyTtlMs,
+    })
   }
 
   /** 手动解除某会话的粘性（一般由冷却回落自动更新，无需外部调用）。 */
@@ -454,12 +465,16 @@ export class AccountRuntimes {
 
   /**
    * @param {string} model
-   * @param {{ preferredEmail?: string | null, gateCode?: string | null, retryAfterMs?: number | null }} [opts]
-   *   retryAfterMs: 上游返回的限流等待时间（用于设置账号冷却时长）。
+   * @param {{ preferredEmail?: string | null, gateCode?: string | null, retryAfterMs?: number | null, switchAccount?: boolean }} [opts]
+   *   retryAfterMs: 上游返回的限流等待时间（用于设置账号冷却时长）；
+   *   switchAccount: 上游报错（429/5xx 等）时强制冷却当前账号并换号，而不是同号重试。
    */
   async reacquireAfterGate(model, opts = {}) {
     if (opts.preferredEmail) {
-      if (opts.gateCode && SWITCHABLE_CODES.has(opts.gateCode)) {
+      if (
+        opts.switchAccount ||
+        (opts.gateCode && SWITCHABLE_CODES.has(opts.gateCode))
+      ) {
         this.markCooldown(
           opts.preferredEmail,
           new UpstreamError(opts.gateCode, {
