@@ -94,5 +94,5 @@ docker build .
 - [x] 轻量镜像 + compose 一键部署 + /data 持久化 + GitHub Actions 构建
 - [x] Web 控制台：登录、用户管理、账号导入/浏览器回调、playground、额度/请求/冷却/出口展示
 - [x] 多账号池 + 配额感知负载均衡 + 不限量模型（flash/mimo）豁免
-- [x] 全局代理池（config 层）+ 代理测试 + 账号级 proxy 覆盖
-- [ ] **前端「代理设置」全局池管理**（持久化 `/data/proxies.json`、保存立即生效、无需重启）—— 用户最高优先级待办
+- [x] 前端「代理设置」全局池管理：多行代理、保存立即生效、持久化 `/data/proxies.json`、重启自动加载、无需重启
+- [x] 全局代理池（config 层兜底）+ 代理测试（出口 IP/国家/延迟/codebuff 状态、底层原因码）+ 账号级 proxy 仅内部字段（无 UI）

@@ -194,32 +194,26 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 
 ## 代理支持
 
-服务器出网（请求 Freebuff / Codebuff）支持代理，配置方式按优先级：
+服务器出网（请求 Freebuff / Codebuff）支持代理。**日常操作全部在控制台「代理设置」里完成**：
+一个文本框一行一个代理，保存立即生效并持久化到 `/data/proxies.json`，不用改任何配置文件。
 
-1. **全局代理池（推荐，多代理）**：在 `/data/config.yaml` 里配一组代理，所有账号共享这个池子：
+### 前端「代理设置」（唯一日常入口）
 
-   ```yaml
-   upstream:
-     proxies:
-       - http://user:pass@127.0.0.1:7890
-       - socks5://127.0.0.1:1080
-   ```
+控制台「总览 → 代理设置」：
 
-   - 每个账号按**稳定哈希**分配到池内某个代理（同一账号始终同一出口，保持 session IP 稳定，不会中途换 IP）；
-   - 账号分布自动打散到各代理，天然负载均衡；
-   - 某个代理**连接失败**时自动回落到池内下一个（写日志）；
-   - 控制台「总览」每个账号会显示实际生效的**出口**（池内第几个 / 哪个 URL）。
-2. **账号专属代理（可选高级覆盖）**：某个账号要固定走独立代理时，控制台「总览 → 改出口」或编辑凭据文件：
+- 文本框里**一行一个代理**（`http://...` / `socks5://...`），点「保存并生效」立即生效、无需重启；
+- 持久化到 `/data/proxies.json`（数据全在 `/data`，删容器不丢），重启后自动加载；
+- 账号由系统**内部分配**到池内代理（稳定哈希：同一账号始终同一出口，保持 session IP 稳定，不会中途换 IP）；
+- 账号分布自动打散到各代理，天然负载均衡；某个代理**连接失败**时自动回落到池内下一个（写日志）；
+- **留空保存 = 清空全局池**（走环境变量 / 直连）。
 
-   ```json
-   // data/credentials/<email>.json
-   { "email": "you@example.com", "authToken": "...", "proxy": "http://user:pass@127.0.0.1:7890" }
-   ```
+### 兜底配置（一般不用动）
 
-   该账号所有请求走自己的代理（优先于全局池）；改后缓存运行时自动重建、立即生效。
-3. **全局单代理 / 环境变量**：`upstream.proxy: http://...`，或 `.env` / compose 里设 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`（undici `EnvHttpProxyAgent`，`NO_PROXY` 放行内网）。
+代理优先级：控制台全局池（`/data/proxies.json`）> `config.yaml` 的 `upstream.proxies` > 账号凭据文件
+`credentials/<email>.json#proxy`（内部字段，仅脚本/手工维护，无 UI）> `upstream.proxy` > `HTTP(S)_PROXY` 环境变量 > 直连。
 
-以上都未配置时直连。
+`config.yaml` 里的 `upstream.proxies` / `upstream.proxy` 只作**兜底默认值**（控制台保存后会覆盖并优先），
+改完需要重启容器才生效——日常加/删代理请在控制台操作。
 
 ### 测试代理是否生效
 
@@ -231,19 +225,11 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 
 > 也可以直接 curl 后端接口：`POST /api/proxy/test`，`{"proxy":"http://..."}` 测试指定代理，空 body 测试已配置代理。
 
-### 代理设置（前端页面操作，不用改配置文件）
+### 地址怎么填（host 网络模式默认）
 
-**你只需要添加一个（或几个）代理，账号怎么分配是系统内部的事。**
-
-控制台「总览 → 代理设置」：
-
-- 文本框里**一行一个代理**（`http://...` / `socks5://...`），点「保存并生效」即生效，无需重启（持久化 `/data/proxies.json`）；
-- 账号由系统内部分配到池内代理（稳定哈希：同一账号固定同一出口，连接失败自动回落下一个）；
-- 「测试」可验证任意代理或已配置代理：显示**出口 IP / 国家 / 延迟 / codebuff 状态**——即"通过该代理访问 Cloudflare trace 拿到真实出口 IP/地区，再探测 codebuff 可达性"，看到出口 IP 就说明代理真的生效了。
-
-> 地址怎么填：**host 网络模式（默认）**下容器与宿主机共享网络栈，代理在这台机器上（VPS 本机）直接填
-> `http://127.0.0.1:2334`（Clash 只监听 127.0.0.1 也能通，无需开 Allow LAN）。
-> 代理在**另一台机器**时填真实 IP（`http://192.168.1.10:2334`）。
+- **host 网络模式（默认）**下容器与宿主机共享网络栈，代理在这台机器上（VPS 本机）直接填
+  `http://127.0.0.1:2334`（Clash 只监听 127.0.0.1 也能通，无需开 Allow LAN）；
+- 代理在**另一台机器**时填真实 IP（`http://192.168.1.10:2334`），不要用 `host.docker.internal`。
 
 容器健康检查走 `NO_PROXY=127.0.0.1,localhost,172.16.0.0/12`，不受代理影响。
 
@@ -315,7 +301,7 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 | Web 用户 / API Key | `/data/users.json`（控制台管理） |
 | Agent 门禁 | `server.api_keys`（可选；非 loopback 必填） |
 | 上游 API / 登录 URL | `upstream.api_base` / `login_base` |
-| 出网代理 | 账号级 `credentials/<email>.json#proxy` > `upstream.proxy` > `HTTP(S)_PROXY` / `NO_PROXY` |
+| 出网代理 | 控制台「代理设置」→ `/data/proxies.json`（账号级 `credentials/<email>.json#proxy`、`upstream.proxy`、`HTTP(S)_PROXY` 仅兜底） |
 | 监听地址 | `server.host` / `port`（`FREEBUFF_PROXY_HOST` / `FREEBUFF_PROXY_PORT` 覆盖） |
 | 管理员 | `ADMIN_USERNAME` / `ADMIN_PASSWORD`（或 `users.default_admin_*`） |
 | 并发上限 | `limits.max_concurrent_requests` |
@@ -329,6 +315,6 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 
 - Luna 等 premium：大约每天 6×1 小时 session（共享 premium 池）。
 - Flash：CLI full 访问下次数较松，仍有 spend / IP / 容量限制。
-- 同账号多端会 `superseded`；多账号多 IP 场景建议为每个账号配独立出口（见代理支持）。
+- 同账号多端会 `superseded`；多账号多 IP 场景在「代理设置」配多个代理即可，系统按账号稳定分配出口（见代理支持）。
 - 地区 / VPN / 封禁由上游决定。
 - 本项目**不**绕过风控，也**不**保证无限额度。
