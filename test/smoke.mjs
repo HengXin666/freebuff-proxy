@@ -256,7 +256,8 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
   assert.equal(extractConversationKey(mk({ client_id: 'install-1' }), {}), null)
   assert.equal(extractConversationKey({ conversation_id: 'cv' }, {}), 'cv')
   assert.equal(extractConversationKey({}, { 'x-conversation-id': 'xc' }), 'xc')
-  assert.equal(extractConversationKey({ user: 'u1' }, {}), 'u1')
+  // user（终端用户标识，sub2api 等转换层常传恒定值）不作为会话 key
+  assert.equal(extractConversationKey({ user: 'u1' }, {}), null)
   assert.equal(extractConversationKey({}, {}), null)
 }
 
@@ -1080,6 +1081,70 @@ assert.equal(requireModelId(''), null)
   await rrRuntimes.shutdown()
   rrServer.close()
   fs.rmSync(rrDir, { recursive: true, force: true })
+}
+
+// sub2api 场景：恒定的 user 字段 + 无任何会话 id → 仍按池子轮询，不钉死在固定 user 的账号
+{
+  const subDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-sub2api-'))
+  saveAccountUser(subDir, { id: 'sa', email: 'sa@example.com', authToken: 'token-sa' })
+  saveAccountUser(subDir, { id: 'sb', email: 'sb@example.com', authToken: 'token-sb' })
+  saveAccountUser(subDir, { id: 'sc', email: 'sc@example.com', authToken: 'token-sc' })
+  const subConfig = loadConfig()
+  subConfig.server.host = '127.0.0.1'
+  subConfig.server.port = 0
+  subConfig.server.apiKeys = ['sk-test']
+  subConfig.upstream.credentialsDir = subDir
+  subConfig.session.pollIntervalSec = 3600
+  const subRuntimes = new AccountRuntimes(subConfig)
+  const subServer = await startServer({
+    config: subConfig,
+    runtimes: subRuntimes,
+    ...(() => {
+      const rt = subRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const subPort = subServer.address().port
+  mockMode = 'ok'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  const seenAccounts = new Map()
+  for (let i = 0; i < 6; i++) {
+    const res = await fetch(`http://127.0.0.1:${subPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer sk-test',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'deepseek/deepseek-v4-flash',
+        user: 'sub2api-fixed-user', // 恒定 user，不应成为会话 key
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    })
+    assert.equal(res.status, 200, await res.clone().text())
+    const acc = res.headers.get('x-freebuff-proxy-account')
+    seenAccounts.set(acc, (seenAccounts.get(acc) || 0) + 1)
+    // 恒定 user 场景不应有 conv-key（user 不再作为会话 key）
+    assert.equal(res.headers.get('x-freebuff-proxy-conv-key'), null)
+  }
+  for (const email of ['sa@example.com', 'sb@example.com', 'sc@example.com']) {
+    assert.equal(
+      seenAccounts.get(email),
+      2,
+      `${email} 应收到 2 个轮询请求, got ${seenAccounts.get(email)}`,
+    )
+  }
+  await subRuntimes.shutdown()
+  subServer.close()
+  fs.rmSync(subDir, { recursive: true, force: true })
 }
 
 await runtimes.shutdown()

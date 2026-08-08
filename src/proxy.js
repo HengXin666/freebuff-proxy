@@ -42,8 +42,8 @@ export function createProxyHandler(ctx) {
 
   /**
    * Compute sticky context for a chat request (会话级负载均衡):
-   *  - 同一会话ID（conversation_id / thread_id / 常见会话头 / user）固定同一账号
-   *    （热 session 复用、避免 superseded）；不用恒定的 client_id 作为会话 key；
+   *  - 同一会话ID（conversation_id / thread_id / 常见会话头）固定同一账号
+   *    （热 session 复用、避免 superseded）；不用恒定的 client_id / user 作为会话 key；
    *  - 不同会话按「轮询 + 最少会话数」摊到不同账号，避免所有请求压在一个账号上被风控；
    *  - `x-sticky-account` 头显式指定账号，优先级最高；
    *  - Web 用户 pin 模式固定到 pinnedEmail；
@@ -629,9 +629,11 @@ export function createProxyHandler(ctx) {
 
 /**
  * 从 chat 请求提取会话标识（会话级负载均衡的 key）。
- * 只用"会话级"标识（conversation_id / thread_id / 常见会话头 / user）。
- * 不用 codebuff_metadata.client_id：它是客户端安装 ID，对同一客户端恒定，
- * 会让所有会话共享同一个 key、永远分到同一个账号（曾导致"总是同一个账号"）。
+ * 只用"会话级"标识：codebuff_metadata.conversation_id / thread_id、
+ * 显式会话字段（conversation_id / threadId / session_id）、常见会话头。
+ * 不用 codebuff_metadata.client_id（安装 ID 恒定）和 body.user
+ * （sub2api 等转换层常传固定 user）——它们对同一客户端恒定，会让所有会话
+ * 共享同一个 key、永远分到同一个账号。
  * 拿不到返回 null（该请求走池子轮询选号，不做会话粘性，按账号轮流分配）。
  *
  * @param {any} body
@@ -656,7 +658,6 @@ export function extractConversationKey(body, headers) {
     h['x-conversation_id'],
     h['x-thread-id'],
     h['x-session-id'],
-    body?.user,
   ]
   for (const v of candidates) {
     if (typeof v === 'string') {

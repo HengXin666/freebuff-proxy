@@ -161,18 +161,19 @@ data/
 
 - 会话 ID 自动从请求里提取，优先级：`codebuff_metadata.conversation_id` / `thread_id`
   → 显式会话字段（`conversation_id` / `thread_id` / `session_id`）→ 常见会话头
-  （`x-conversation-id` / `x-thread-id` / `x-session-id`）→ `user` 字段兜底。
-  **不用 `codebuff_metadata.client_id`**：它是客户端安装 ID，对同一客户端恒定，会让所有会话
-  共享同一个 key、永远分到同一个账号。
+  （`x-conversation-id` / `x-thread-id` / `x-session-id`）。
+  **不用 `codebuff_metadata.client_id`（安装 ID 恒定）和 `user` 字段**（终端用户标识，
+  sub2api 等转换层常传固定值）——它们对同一客户端恒定，会让所有会话共享同一个 key、
+  永远分到同一个账号。
 - **新会话**从健康账号里选「当前持有会话数最少」的账号，平局按轮询次序轮流
   （第 1、第 2、第 3…个账号），并立即记忆分配结果（冷却中 / 已用满限额的账号不参与）；
   3 个账号时 12 个新对话会 4/4/4 平均摊开——不用哈希，账号少时哈希碰撞容易
   导致新会话总落到同一个账号；
 - **同一会话**后续请求固定走该账号（热 session 复用，避免 `superseded` 与重复 admit）；
   该账号冷却/超额时自动回落到池子，并记住新账号；
-- 无会话 ID 的请求（如控制台 playground、只发 `client_id` 的客户端）走池子**轮询选号**：
-  请求按 第 1、第 2、第 3…个账号轮流分配，不会因为某账号已有活跃 session 而一直压在上面
-  （每个账号自己的 session 在轮到它时仍会被复用，热 session 不丢）。
+- 无会话 ID 的请求（控制台 playground、sub2api 转换层、只发 `client_id`/`user` 的客户端）
+  走池子**轮询选号**：请求按 第 1、第 2、第 3…个账号轮流分配，不会因为某账号已有活跃
+  session 而一直压在上面（每个账号自己的 session 在轮到它时仍会被复用，热 session 不丢）。
 
 控制台「总览」顶部负载均衡条显示各账号请求占比；账号表新增「会话」列，显示当前固定到
 该账号的会话数，一眼就能看出分布是否均匀。
