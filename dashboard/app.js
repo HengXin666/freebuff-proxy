@@ -296,6 +296,7 @@ async function runProxyTest(proxy) {
         ].join('')))
       } else {
         lines.push(el('div', { class: 'muted', style: 'color:var(--red)' }, `失败: ${res.error || '连接失败'}（${res.latencyMs}ms）`))
+        if (res.hint) lines.push(el('div', { class: 'muted', style: 'margin-top:4px' }, res.hint))
       }
       box.append(el('div', { style: 'padding:8px 0;border-bottom:1px solid var(--border)' }, lines))
     }

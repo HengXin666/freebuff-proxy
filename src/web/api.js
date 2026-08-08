@@ -613,9 +613,22 @@ async function testProxyUrl(proxyUrl, timeoutMs = 12_000) {
     }
     out.ok = true
   } catch (err) {
-    out.error = err instanceof Error ? err.message : String(err)
+    const cause = err && err.cause
+    const causeCode =
+      cause && typeof cause === 'object' && cause.code
+        ? String(cause.code)
+        : null
+    out.error =
+      (err instanceof Error ? err.message : String(err)) +
+      (causeCode ? ` (${causeCode})` : '')
   } finally {
     out.latencyMs = Date.now() - started
+  }
+  if (!out.ok && String(proxyUrl).includes('host.docker.internal')) {
+    out.hint =
+      'host.docker.internal 需要 compose 里有 extra_hosts: host.docker.internal:host-gateway，' +
+      '且宿主机代理必须监听 0.0.0.0（Clash 需开 Allow LAN / 允许局域网连接）。' +
+      '更稳妥的做法：换成 docker 网关 IP，例如 http://172.17.0.1:2334（用 docker network inspect bridge 查实际网关）。'
   }
   return out
 }
