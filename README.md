@@ -61,13 +61,15 @@ docker compose ps            # 状态
 docker compose logs -f       # 日志
 docker compose restart       # 重启
 docker compose down          # 停止（数据保留在 ./data）
-docker compose pull          # 拉取远程镜像（配置好 registry 后）
 ```
 
-### 使用 GHCR 预构建镜像
+> 升级方式：`git pull && docker compose up -d --build`（数据都在 `./data`，不动）。
 
-GitHub Actions 会在 push 到 `main` / 打 `v*` tag 时自动构建并推送到
-`ghcr.io/<你的账号>/freebuff-proxy`。可直接替换 compose 中的 `build: .` 为：
+### 不想本地构建？用 GHCR 预构建镜像（可选）
+
+本仓库默认 `build: .` 本地构建（镜像很小，构建很快）。发版（`v*` tag）时 GitHub
+Actions 也会自动推送 `ghcr.io/HengXin666/freebuff-proxy`（`latest` + `vX.Y.Z`），
+不想本地构建的话，把 compose 里的 `build: .` 换成 `image` 即可：
 
 ```yaml
 image: ghcr.io/HengXin666/freebuff-proxy:latest
