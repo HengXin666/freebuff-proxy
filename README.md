@@ -38,8 +38,8 @@ cd freebuff-proxy
 cp .env.example .env
 # 编辑 .env：建议设置 ADMIN_PASSWORD
 
-# 一键构建并启动
-docker compose up -d --build
+# 一键启动（自动拉取 GHCR 预构建镜像，无需本地构建）
+docker compose up -d
 ```
 
 启动后：
@@ -60,23 +60,23 @@ docker compose logs freebuff-proxy | grep -A4 "首次启动"
 docker compose ps            # 状态
 docker compose logs -f       # 日志
 docker compose restart       # 重启
+docker compose pull          # 拉取最新镜像
 docker compose down          # 停止（数据保留在 ./data）
 ```
 
-> 升级方式：`git pull && docker compose up -d --build`（数据都在 `./data`，不动）。
+> 升级方式：`git pull && docker compose pull && docker compose up -d`（数据都在 `./data`，不动）。
 
-### 不想本地构建？用 GHCR 预构建镜像（可选）
+### 想本地构建？（可选，开发调试用）
 
-本仓库默认 `build: .` 本地构建（镜像很小，构建很快）。发版（`v*` tag）时 GitHub
-Actions 也会自动推送 `ghcr.io/HengXin666/freebuff-proxy`（`latest` + 版本号 tag，如 `1.0.0`，semver 去 `v` 前缀），
-不想本地构建的话，把 compose 里的 `build: .` 换成 `image` 即可：
+默认使用 GHCR 预构建镜像（发版 `v*` tag 时自动推送，`latest` + 版本号 tag，如 `1.0.0`，semver 去 `v` 前缀）。
+想自己构建的话，把 compose 里的 `image: ghcr.io/hengxin666/freebuff-proxy:latest` 换成 `build: .`：
 
 ```yaml
-image: ghcr.io/HengXin666/freebuff-proxy:latest
+build: .
 ```
 
 ```bash
-docker compose pull && docker compose up -d
+docker compose up -d --build
 ```
 
 ---

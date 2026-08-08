@@ -11,8 +11,9 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 
 1. **轻量优先，禁止加无用东西**
    - 镜像 = `node:22-alpine` + 仅 2 个运行时依赖（`undici` / `yaml`），保持现状。
-   - `docker-compose.yml` 保持最小：`build / image / container_name / restart /
-     network_mode / environment / volumes`，外加端口说明见下。
+   - `docker-compose.yml` 保持最小：`image / container_name / restart /
+     network_mode / environment / volumes`；默认 `image: ghcr.io/hengxin666/freebuff-proxy:latest`
+     （发版自动推送，`docker compose up -d` 免构建），`build: .` 仅本地开发/离线场景。
    - **禁止**：`NETWORK_MODE` 变量、`init`、`extra_hosts`、`stop_grace_period`、
      重复的 healthcheck（Dockerfile 里已有）、多余的 docker 模块/依赖。
 
@@ -75,7 +76,7 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 - GitHub Actions（`.github/workflows/docker-image.yml`）：push main/tag → test + typecheck + 构建推送 GHCR；
   pull_request 只测不推；带 GHA 缓存。
 - **教训**：`secrets` 不允许出现在 step 级 `if:`，需先提升为 workflow 级 `env` 再用 `env.X` 判断。
-- 升级方式：`git pull && docker compose up -d --build`。
+- 升级方式：`git pull && docker compose pull && docker compose up -d`。
 
 ## 测试与验证（提交前必须全过）
 
