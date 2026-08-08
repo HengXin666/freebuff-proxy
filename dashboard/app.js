@@ -203,7 +203,6 @@ async function renderOverview(view) {
           el('td', {}, [
             a.email,
             a.lastUsed ? el('span', { class: 'badge ok', style: 'margin-left:6px' }, '最近使用') : '',
-            a.effectiveProxy ? el('div', { class: 'muted', style: 'font-size:11px', title: `出网代理：${a.effectiveProxy}${a.proxy ? '（账号显式覆盖）' : '（全局池/全局配置分配）'}` }, `出口 ${shortProxy(a.effectiveProxy)}`) : null,
           ]),
           el('td', {}, a.available
             ? el('span', { class: 'badge ok' }, '可用')
@@ -213,7 +212,6 @@ async function renderOverview(view) {
           el('td', { class: 'mono' }, `${a.requests || 0} 次`),
           el('td', {}, cd ? el('span', { class: 'badge warn' }, a.cooldownCode || 'cooldown') : '—'),
           el('td', {}, state.me.role === 'admin' ? el('div', { class: 'row' }, [
-            el('button', { class: 'muted', onclick: () => editProxy(a) }, '改出口'),
             el('button', { class: 'muted', onclick: () => clearCooldown(a.email) }, '解除冷却'),
             el('button', { class: 'danger', onclick: () => removeAccount(a.email) }, '删除'),
           ]) : '—'),
@@ -256,7 +254,7 @@ async function renderProxySettings(view) {
     el('div', { class: 'row spread' }, [
       el('div', {}, [
         el('h3', { style: 'margin:0 0 2px' }, '代理设置（全局代理池）'),
-        el('span', { class: 'muted' }, '保存后立即生效，无需重启；账号自动分配到池内代理，保持同一出口'),
+        el('span', { class: 'muted' }, '填一个或多个代理，保存立即生效；账号出口由系统内部分配（同一账号固定同一出口），无需逐个配置'),
       ]),
       el('button', { class: 'primary', onclick: saveProxyPool }, '保存并生效'),
     ]),
@@ -416,26 +414,6 @@ async function removeAccount(email) {
   await api(`/api/accounts/${encodeURIComponent(email)}`, { method: 'DELETE' })
   toast('已删除')
   render()
-}
-
-/** 修改账号专属出口代理（多代理场景：每个账号绑定一个代理避开地区封锁/IP 限流） */
-async function editProxy(a) {
-  const input = prompt(
-    `设置 ${a.email} 的专属出口代理（可选高级用法，覆盖全局代理池；留空则用全局池/全局配置/env）\n例: http://user:pass@127.0.0.1:7890`,
-    a.proxy || '',
-  )
-  if (input === null) return
-  const proxy = input.trim() || null
-  try {
-    await api(`/api/accounts/${encodeURIComponent(a.email)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ proxy }),
-    })
-    toast(proxy ? `已设置出口 ${shortProxy(proxy)}` : '已改回全局代理')
-    render()
-  } catch (err) {
-    toast(err.message, true)
-  }
 }
 
 function shortProxy(proxy) {
