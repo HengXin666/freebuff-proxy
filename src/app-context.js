@@ -53,6 +53,8 @@ export class AccountRuntimes {
     this.cooldowns = new Map()
     this._rr = 0
     this._lastSuccessEmail = null
+    /** Per-account success counters (in-memory, for load-balance visibility). */
+    this.stats = { total: 0, byEmail: new Map() }
   }
 
   list() {
@@ -68,6 +70,7 @@ export class AccountRuntimes {
         available: !cooling,
         cooldownUntil: cooling ? new Date(cd.until).toISOString() : null,
         cooldownCode: cooling ? cd.code : null,
+        requests: this.stats.byEmail.get(a.email) || 0,
         session: snap
           ? {
               status: snap.status,
@@ -76,6 +79,8 @@ export class AccountRuntimes {
               live: snap.live,
             }
           : null,
+        // 每日免费 session 额度（来自最近一次 admit/refresh 的上游返回）
+        quota: snap?.quota || null,
       }
     })
   }
@@ -96,17 +101,26 @@ export class AccountRuntimes {
     }
 
     const existing = this.byEmail.get(user.email)
-    if (existing && existing.authToken === user.authToken) return existing
+    if (
+      existing &&
+      existing.authToken === user.authToken &&
+      existing.proxy === (user.proxy || null)
+    ) {
+      return existing
+    }
     if (existing) {
       existing.sessions.shutdown().catch(() => {})
       this.byEmail.delete(user.email)
     }
 
-    const upstream = createUpstreamClient(this.config, user.authToken)
+    const upstream = createUpstreamClient(this.config, user.authToken, {
+      proxy: user.proxy || null,
+    })
     const sessions = new SessionManager({ upstream, config: this.config })
     const runtime = {
       email: user.email,
       authToken: user.authToken,
+      proxy: user.proxy || null,
       user,
       upstream,
       sessions,
@@ -185,6 +199,11 @@ export class AccountRuntimes {
     if (model) this.cooldowns.delete(this._cooldownKey(email, model))
   }
 
+  _recordSuccess(email) {
+    this.stats.total += 1
+    this.stats.byEmail.set(email, (this.stats.byEmail.get(email) || 0) + 1)
+  }
+
   /**
    * @param {string} model
    */
@@ -201,6 +220,14 @@ export class AccountRuntimes {
         (idx + emails.length - (this._rr % emails.length)) % emails.length
       score += (emails.length - rot) / 100
       if (this.isCoolingDown(email, model)) score -= 1000
+      // 配额感知：剩余额度越多的账号越优先；已用完的整周期内大幅降权
+      const q = rt?.sessions?.getSnapshot?.()?.quota?.byModel?.[model]
+      if (q && Number.isFinite(q.limit) && q.limit > 0) {
+        const used = Number(q.recentCount) || 0
+        const remaining = Math.max(0, q.limit - used)
+        score += Math.min(10, (remaining / q.limit) * 10)
+        if (remaining <= 0) score -= 500
+      }
       return { email, score }
     })
     scored.sort((a, b) => b.score - a.score)
@@ -209,8 +236,10 @@ export class AccountRuntimes {
 
   /**
    * @param {string} model
+   * @param {{ preferredEmail?: string | null }} [opts] sticky pin: try this
+   *   account first when it is not cooling down; fall back to the pool.
    */
-  async acquireForModel(model) {
+  async acquireForModel(model, opts = {}) {
     if (!model) {
       throw new UpstreamError('model is required', {
         status: 400,
@@ -221,7 +250,7 @@ export class AccountRuntimes {
     const emails = this.allEmails()
     if (!emails.length) {
       throw new UpstreamError(
-        'No Freebuff accounts. Run `npm run login` (saves credentials/<email>.json).',
+        'No Freebuff accounts. Add one via the web console (账号管理 → 添加账号) or run `npm run login`.',
         { status: 401, code: 'upstream_auth_missing' },
       )
     }
@@ -229,6 +258,37 @@ export class AccountRuntimes {
     const order = this.candidateEmails(model)
     /** @type {Array<{ email: string, code?: string, message: string }>} */
     const failures = []
+
+    // Sticky path: honor the caller's preferred (sticky) account first.
+    const preferred = opts.preferredEmail
+    if (
+      preferred &&
+      emails.includes(preferred) &&
+      !this.isCoolingDown(preferred, model)
+    ) {
+      try {
+        const rt = this.get(preferred)
+        await rt.sessions.ensureSession(model)
+        this.clearCooldown(preferred, model)
+        this._lastSuccessEmail = preferred
+        this._recordSuccess(preferred)
+        logger.info('sticky account selected', { email: preferred, model })
+        return rt
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        failures.push({ email: preferred, code: err?.code, message })
+        const wrap =
+          err instanceof UpstreamError
+            ? err
+            : new UpstreamError(message, { status: 502, code: 'admit_failed' })
+        this.markCooldown(preferred, wrap, model)
+        logger.warn('sticky account failed; falling back to pool', {
+          email: preferred,
+          model,
+          error: message,
+        })
+      }
+    }
 
     for (const email of order) {
       if (this.isCoolingDown(email, model)) {
@@ -260,6 +320,7 @@ export class AccountRuntimes {
         this.clearCooldown(email, model)
         this._lastSuccessEmail = email
         this._rr = (this._rr + 1) % Math.max(emails.length, 1)
+        this._recordSuccess(email)
         logger.info('selected account for model', { email, model })
         return rt
       } catch (err) {
@@ -362,11 +423,20 @@ export class AccountRuntimes {
  */
 export function buildAppContext(config) {
   const runtimes = new AccountRuntimes(config)
-  if (!runtimes.allEmails().length) {
-    throw new UpstreamError(
-      'No Freebuff account credentials. Run `npm run login` (saves to credentials/<email>.json).',
-      { status: 401, code: 'upstream_auth_missing' },
-    )
+  const emails = runtimes.allEmails()
+  if (!emails.length) {
+    // Zero-account startup is allowed: the web console can add Freebuff
+    // accounts later. Runtime endpoints report 401 until one exists.
+    return {
+      config,
+      dir: runtimes.dir,
+      runtimes,
+      authToken: null,
+      authSource: null,
+      authEmail: null,
+      upstream: null,
+      sessions: null,
+    }
   }
   const current = runtimes.getAny()
   return {

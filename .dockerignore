@@ -1,0 +1,18 @@
+.git
+.gitignore
+node_modules
+data
+# 本地账号凭据一律不进镜像（Docker 部署固定读 /data/credentials）
+credentials
+*.log
+.DS_Store
+.idea
+.vscode
+test
+README.md
+config.yaml
+config.toml
+config.json
+.env
+.env.*
+!.env.example

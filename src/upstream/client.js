@@ -1,5 +1,6 @@
 import { freebuffAuthHeaders } from '../auth-store.js'
 import { logger } from '../util/log.js'
+import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from 'undici'
 
 export const FREEBUFF_INSTANCE_HEADER = 'x-freebuff-instance-id'
 export const FREEBUFF_MODEL_HEADER = 'x-freebuff-model'
@@ -28,13 +29,41 @@ function parseRetryAfterMs(value) {
   return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : undefined
 }
 
+
+/**
+ * Build a fetch dispatcher for outbound proxy support.
+ * Priority: per-account proxy > config.upstream.proxy > HTTP(S)_PROXY env (with NO_PROXY).
+ * Returns null when no proxy is configured (plain direct fetch).
+ */
+function makeDispatcher(config, accountProxy) {
+  const explicit = accountProxy || config?.upstream?.proxy
+  const envSet = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'].some(
+    (k) => Boolean(process.env[k]),
+  )
+  if (explicit) return new ProxyAgent({ uri: explicit })
+  if (envSet) return new EnvHttpProxyAgent()
+  return null
+}
+
+/**
+ * undici's own fetch must be used when a custom proxy dispatcher is active:
+ * Node's global fetch rejects dispatchers from a different undici build.
+ */
+function makeFetcher(dispatcher) {
+  return dispatcher ? undiciFetch : globalThis.fetch
+}
+
 /**
  * @param {import('../config.js').ProxyConfig} config
  * @param {string} token
+ * @param {{ proxy?: string | null }} [opts] per-account proxy override
  */
-export function createUpstreamClient(config, token) {
+export function createUpstreamClient(config, token, opts = {}) {
+
   const apiBase = config.upstream.apiBase
   const loginBase = config.upstream.loginBase
+  const dispatcher = makeDispatcher(config, opts.proxy)
+  const fetcher = makeFetcher(dispatcher)
 
   async function apiFetch(path, init = {}) {
     const url = path.startsWith('http') ? path : `${apiBase}${path}`
@@ -57,12 +86,13 @@ export function createUpstreamClient(config, token) {
       }
     }
     try {
-      const res = await fetch(url, {
+      const res = await fetcher(url, {
         method: init.method || 'GET',
         headers,
         body: init.body,
         signal: controller.signal,
         duplex: init.body && typeof init.body !== 'string' ? 'half' : undefined,
+        ...(dispatcher ? { dispatcher } : {}),
       })
       return res
     } finally {
@@ -90,10 +120,11 @@ export function createUpstreamClient(config, token) {
     },
 
     async loginCode(fingerprintId) {
-      const res = await fetch(`${loginBase}/api/auth/cli/code`, {
+      const res = await fetcher(`${loginBase}/api/auth/cli/code`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ fingerprintId }),
+        ...(dispatcher ? { dispatcher } : {}),
       })
       if (!res.ok) {
         throw new UpstreamError(`login code failed: ${res.status}`, {
@@ -110,8 +141,9 @@ export function createUpstreamClient(config, token) {
         fingerprintHash,
         expiresAt,
       })
-      const res = await fetch(`${loginBase}/api/auth/cli/status?${qs}`, {
+      const res = await fetcher(`${loginBase}/api/auth/cli/status?${qs}`, {
         method: 'GET',
+        ...(dispatcher ? { dispatcher } : {}),
       })
       if (res.status === 401) return { pending: true }
       if (!res.ok) {

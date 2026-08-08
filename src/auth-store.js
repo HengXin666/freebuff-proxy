@@ -100,6 +100,10 @@ export function coerceUser(raw) {
     authToken: raw.authToken,
     fingerprintId: raw.fingerprintId,
     fingerprintHash: raw.fingerprintHash,
+    /** 可选：该账号专属出网代理，如 http://user:pass@127.0.0.1:7890 */
+    proxy: typeof raw.proxy === 'string' && raw.proxy.trim()
+      ? raw.proxy.trim()
+      : null,
   }
 }
 
@@ -140,6 +144,7 @@ export function listAccounts(dir) {
       name: user.name,
       id: user.id,
       path: full,
+      proxy: user.proxy || null,
     })
   }
   accounts.sort((a, b) => a.email.localeCompare(b.email))

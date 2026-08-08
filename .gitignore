@@ -1,15 +1,19 @@
-.venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-
+node_modules/
 dashboard/node_modules/
 dashboard/dist/
-node_modules/
+
+# 本地运行数据（Docker 挂载 /data 到宿主机时同样忽略）
+data/
+*.log
+*.pid
+
+# 上游账号凭据（credentials JSON 视为机密，勿提交）
 credentials/*.json
+credentials/active
 
 # 环境配置
 config.toml
+config.yaml
 .env
 .env.*
 !.env.example
@@ -25,17 +29,14 @@ Results/
 
 # Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 *.egg-info/
 dist/
 build/
 
-# 系统
+# 系统 / IDE
 .DS_Store
 Thumbs.db
-
-# IDE
 .vscode/
 .idea/
 *.swp

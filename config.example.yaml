@@ -1,18 +1,33 @@
-# freebuff-proxy — single-track config
-
+# freebuff-proxy — 配置文件（Docker 部署时位于 /data/config.yaml）
 server:
-  # Loopback default. Non-loopback requires api_keys (serve refuses otherwise).
+  # Docker 部署请用 0.0.0.0（compose 已通过 FREEBUFF_PROXY_HOST 注入）
   host: 127.0.0.1
   port: 8787
-  # Optional Agent gate (not Freebuff auth). Empty = open on loopback only.
+  # 超级 API Key（可多个）。下游 Agent 也可用 Web 用户自己的 Key。
+  # 留空 + 非 loopback 绑定时会要求至少存在一个 Web 用户，否则拒绝启动。
   api_keys: ["sk-proxy-local"]
+  # 所有持久化数据（凭据/用户/会话/登录流程）——Docker 里固定 /data
+  data_dir: ./data
 
 upstream:
-  # Freebuff API + login origins (config only; no env dual override)
   api_base: https://codebuff.com
   login_base: https://freebuff.com
-  # Default: <project>/credentials  →  <email>.json per account
+  # 默认 <data_dir>/credentials（<email>.json / 每账号一个）
   # credentials_dir: ./credentials
+  # 显式上游代理，如 http://user:pass@127.0.0.1:7890；不配则读 HTTP(S)_PROXY/NO_PROXY 环境变量
+  # proxy: http://127.0.0.1:7890
+
+web:
+  # 通过 HTTPS 反向代理访问时设为 true
+  cookie_secure: false
+  # Web 登录会话有效期（小时）
+  session_ttl_hours: 168
+
+users:
+  # 首次启动自动创建的管理员（也可用 ADMIN_USERNAME/ADMIN_PASSWORD 环境变量）
+  default_admin_username: admin
+  # 留空则随机生成密码，仅在首次启动日志中打印一次
+  default_admin_password: null
 
 session:
   release_on_shutdown: true

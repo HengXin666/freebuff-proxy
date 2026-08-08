@@ -13,9 +13,11 @@
     "login": "node bin/login.js",
     "doctor": "node bin/doctor.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node test/smoke.mjs"
+    "test": "node test/smoke.mjs",
+    "web": "node bin/serve.js"
   },
   "dependencies": {
+    "undici": "^8.10.0",
     "yaml": "^2.8.0"
   },
   "devDependencies": {

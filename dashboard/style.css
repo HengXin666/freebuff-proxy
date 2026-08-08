@@ -1,0 +1,110 @@
+:root {
+  --bg: #0f1117;
+  --bg2: #171a23;
+  --bg3: #1e2230;
+  --border: #2a2f3f;
+  --text: #e6e8ef;
+  --muted: #8b91a5;
+  --accent: #4f8cff;
+  --accent2: #7c5cff;
+  --green: #34c98e;
+  --red: #ff5d6c;
+  --yellow: #ffc857;
+  --radius: 10px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+a { color: var(--accent); text-decoration: none; }
+button {
+  background: var(--bg3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); border: none; color: #fff; }
+button.danger { color: var(--red); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+input, select, textarea {
+  background: var(--bg2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  width: 100%;
+  font-family: inherit;
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+label { font-size: 12px; color: var(--muted); display: block; margin: 10px 0 4px; }
+.card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+.grid { display: grid; gap: 12px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.spread { justify-content: space-between; }
+.muted { color: var(--muted); font-size: 12px; }
+.mono { font-family: var(--mono); }
+.badge {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; border: 1px solid var(--border); color: var(--muted);
+}
+.badge.ok { color: var(--green); border-color: var(--green); }
+.badge.warn { color: var(--yellow); border-color: var(--yellow); }
+.badge.err { color: var(--red); border-color: var(--red); }
+.badge.admin { color: var(--accent); border-color: var(--accent); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+tr:hover td { background: rgba(255,255,255,.02); }
+.hidden { display: none !important; }
+
+/* Layout */
+#app { max-width: 1080px; margin: 0 auto; padding: 20px; }
+header { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
+header h1 { font-size: 18px; margin: 0; }
+header .spacer { flex: 1; }
+nav { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+nav button { border-radius: 999px; }
+nav button.active { background: var(--bg3); border-color: var(--accent); color: var(--accent); }
+
+/* Login */
+.login-wrap { max-width: 360px; margin: 12vh auto 0; }
+.login-wrap h1 { text-align: center; margin-bottom: 20px; }
+.login-wrap .card { padding: 24px; }
+.login-wrap .hint { font-size: 12px; color: var(--muted); text-align: center; margin-top: 12px; }
+
+/* Modal */
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center; z-index: 50;
+}
+.modal { width: min(560px, 92vw); max-height: 86vh; overflow: auto; }
+.modal h3 { margin-top: 0; }
+.flow-url { word-break: break-all; font-family: var(--mono); font-size: 12px; background: var(--bg); padding: 10px; border-radius: 8px; border: 1px solid var(--border); margin: 8px 0; }
+
+/* Chat */
+.chat-log { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; min-height: 220px; max-height: 420px; overflow: auto; padding: 12px; white-space: pre-wrap; font-size: 13px; }
+.chat-log .assistant { color: var(--text); }
+.chat-log .user { color: var(--accent); }
+
+#toast {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 18px; font-size: 13px; z-index: 99; display: none;
+}
+#toast.show { display: block; }
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+@keyframes spin { to { transform: rotate(360deg); } }

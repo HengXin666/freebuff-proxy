@@ -1,0 +1,516 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import {
+  readRequestBody,
+  sendJson,
+  parseCookies,
+  serializeCookie,
+} from '../util/http.js'
+import { buildModelsListResponse } from '../model.js'
+import {
+  saveAccountUser,
+  coerceUser,
+  emailToFilename,
+  accountCredentialsPath,
+  readJsonFile,
+  writeJsonFile,
+} from '../auth-store.js'
+import { logger } from '../util/log.js'
+
+const SESSION_COOKIE = 'fb_session'
+
+/**
+ * Control-plane HTTP API for the dashboard (login, users, accounts, login flows).
+ *
+ * @param {{
+ *   config: any,
+ *   userStore: import('./user-store.js').UserStore,
+ *   webSessions: import('./session-store.js').WebSessionStore,
+ *   loginFlows: import('./login-flows.js').LoginFlowManager,
+ *   runtimes: any,
+ * }} deps
+ */
+export function createWebApi(deps) {
+  const { config, userStore, webSessions, loginFlows, runtimes } = deps
+
+  function getSessionUser(req) {
+    const cookies = parseCookies(req.headers.cookie)
+    const token = cookies[SESSION_COOKIE]
+    const username = token ? webSessions.get(token) : null
+    return username ? userStore.getByUsername(username) : null
+  }
+
+  function requireUser(req, res) {
+    const user = getSessionUser(req)
+    if (!user) {
+      sendJson(res, 401, { error: '未登录或会话已过期' })
+      return null
+    }
+    return user
+  }
+
+  async function readJson(req) {
+    const buf = await readRequestBody(req, 2 * 1024 * 1024)
+    if (!buf || !buf.length) return {}
+    return JSON.parse(buf.toString('utf8') || '{}')
+  }
+
+  /**
+   * @returns {Promise<boolean>} handled
+   */
+  async function handle(req, res, url) {
+    const method = (req.method || 'GET').toUpperCase()
+    const path = url.pathname
+
+    // Freebuff upstream API surface (/api/v1/*) is never exposed.
+    if (path.startsWith('/api/v1/')) {
+      sendJson(res, 404, {
+        error: `No route for ${method} ${path}`,
+        type: 'invalid_request_error',
+        code: 'not_found',
+      })
+      return true
+    }
+
+    // --- public: login ---
+    if (method === 'POST' && path === '/api/auth/login') {
+      let body
+      try {
+        body = await readJson(req)
+      } catch {
+        sendJson(res, 400, { error: '无效的 JSON' })
+        return true
+      }
+      const user = userStore.verifyPassword(body.username, body.password)
+      if (!user) {
+        sendJson(res, 401, { error: '用户名或密码错误' })
+        return true
+      }
+      const token = webSessions.create(user.username)
+      res.setHeader(
+        'set-cookie',
+        serializeCookie(SESSION_COOKIE, token, {
+          maxAge: config.web.sessionTtlHours * 3600,
+          path: '/',
+          httpOnly: true,
+          sameSite: 'lax',
+          secure: Boolean(config.web.cookieSecure),
+        }),
+      )
+      sendJson(res, 200, { ok: true, user })
+      return true
+    }
+
+    // --- session required ---
+    const user = requireUser(req, res)
+    if (!user) return true
+
+    if (method === 'POST' && path === '/api/auth/logout') {
+      const cookies = parseCookies(req.headers.cookie)
+      if (cookies[SESSION_COOKIE]) webSessions.destroy(cookies[SESSION_COOKIE])
+      res.setHeader(
+        'set-cookie',
+        serializeCookie(SESSION_COOKIE, '', {
+          maxAge: 0,
+          path: '/',
+          httpOnly: true,
+        }),
+      )
+      sendJson(res, 200, { ok: true })
+      return true
+    }
+
+    if (method === 'GET' && path === '/api/me') {
+      const apiKey = userStore.getByUsername(user.username)?.apiKey
+      sendJson(res, 200, { user: { ...sanitize(user), apiKey } })
+      return true
+    }
+
+    if (method === 'GET' && path === '/api/overview') {
+      let models = []
+      try {
+        models = buildModelsListResponse({ includeAllCatalog: true }).data
+      } catch {
+        models = []
+      }
+      sendJson(res, 200, {
+        accounts: runtimes.list(),
+        accountCount: runtimes.allEmails().length,
+        models: models.length,
+        upstream: {
+          apiBase: config.upstream.apiBase,
+          loginBase: config.upstream.loginBase,
+        },
+        dataDir: config.server.dataDir,
+        version: process.env.npm_package_version || '1.0.0',
+      })
+      return true
+    }
+
+    if (method === 'GET' && path === '/api/models') {
+      let accessTier = null
+      let extraIds = []
+      const accounts = runtimes.list()
+      if (accounts.length) {
+        try {
+          const rt = runtimes.getAny()
+          const session = await rt.upstream.freebuffSession('GET')
+          if (session?.accessTier === 'full' || session?.accessTier === 'limited') {
+            accessTier = session.accessTier
+          }
+          extraIds = (session?.rateLimitsByModel
+            ? Object.keys(session.rateLimitsByModel)
+            : []
+          ).concat(session?.model ? [session.model] : [])
+        } catch {
+          // static catalog below
+        }
+      }
+      sendJson(
+        res,
+        200,
+        buildModelsListResponse({ accessTier, extraIds, includeAllCatalog: true }),
+      )
+      return true
+    }
+
+    // ---- accounts (any logged-in user can view; manage = admin) ----
+    if (method === 'GET' && path === '/api/accounts') {
+      sendJson(res, 200, { object: 'list', data: runtimes.list() })
+      return true
+    }
+
+    if (path.startsWith('/api/accounts/login')) {
+      return handleLoginFlows(method, path, req, res, user)
+    }
+
+    if (method === 'POST' && path === '/api/accounts/import') {
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      let body
+      try {
+        body = await readJson(req)
+      } catch {
+        sendJson(res, 400, { error: '无效的 JSON' })
+        return true
+      }
+      let raw = body
+      if (typeof body.json === 'string') {
+        try {
+          raw = JSON.parse(body.json)
+        } catch {
+          sendJson(res, 400, { error: 'json 字段不是合法 JSON' })
+          return true
+        }
+      }
+      const u = coerceUser(raw)
+      if (!u) {
+        sendJson(res, 400, {
+          error: '缺少 email / authToken（或格式不对）',
+          hint: '期望形如 {"email":"you@example.com","authToken":"..."}',
+        })
+        return true
+      }
+      const saved = saveAccountUser(runtimes.dir, u)
+      // Drop any cached runtime so the fresh token is picked up
+      try {
+        await runtimes.get(saved.user.email).sessions.shutdown()
+      } catch {
+        // ignore
+      }
+      logger.info('account imported via web', { email: saved.user.email })
+      sendJson(res, 200, { ok: true, account: saved.user.email })
+      return true
+    }
+
+    const acctMatch = path.match(/^\/api\/accounts\/([^/]+)$/)
+    if (acctMatch && method === 'PATCH') {
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      const email = decodeURIComponent(acctMatch[1])
+      let body
+      try {
+        body = await readJson(req)
+      } catch {
+        sendJson(res, 400, { error: '无效的 JSON' })
+        return true
+      }
+      const file = accountCredentialsPath(runtimes.dir, email)
+      const raw = readJsonFile(file)
+      if (!raw) {
+        sendJson(res, 404, { error: '账号不存在' })
+        return true
+      }
+      const proxy =
+        typeof body.proxy === 'string' && body.proxy.trim()
+          ? body.proxy.trim()
+          : null
+      raw.proxy = proxy
+      writeJsonFile(file, raw)
+      // 让新的出口代理立即生效：丢弃缓存的 runtime
+      const rt = runtimes.byEmail.get(email)
+      if (rt) {
+        try {
+          await rt.sessions.shutdown()
+        } catch {
+          // ignore
+        }
+        runtimes.byEmail.delete(email)
+      }
+      logger.info('account proxy updated via web', { email, proxy })
+      sendJson(res, 200, { ok: true, email, proxy })
+      return true
+    }
+
+    if (acctMatch && method === 'DELETE') {
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      const email = decodeURIComponent(acctMatch[1])
+      const rt = runtimes.byEmail.get(email)
+      if (rt) {
+        try {
+          await rt.sessions.release()
+        } catch {
+          // ignore
+        }
+        runtimes.byEmail.delete(email)
+      }
+      const removed = removeCredential(runtimes.dir, email)
+      if (!removed) {
+        sendJson(res, 404, { error: '账号不存在' })
+        return true
+      }
+      sendJson(res, 200, { ok: true, email })
+      return true
+    }
+
+    const cooldownMatch = path.match(/^\/api\/accounts\/([^/]+)\/cooldown\/clear$/)
+    if (cooldownMatch && method === 'POST') {
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      const email = decodeURIComponent(cooldownMatch[1])
+      runtimes.clearCooldown(email)
+      sendJson(res, 200, { ok: true })
+      return true
+    }
+
+    // ---- user management (admin) ----
+    if (path === '/api/users' && method === 'GET') {
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      sendJson(res, 200, { object: 'list', data: userStore.all().map(sanitize) })
+      return true
+    }
+
+    if (path === '/api/users' && method === 'POST') {
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      let body
+      try {
+        body = await readJson(req)
+      } catch {
+        sendJson(res, 400, { error: '无效的 JSON' })
+        return true
+      }
+      try {
+        const created = userStore.create({
+          username: body.username,
+          password: body.password,
+          role: body.role,
+          stickyMode: body.stickyMode,
+          pinnedEmail: body.pinnedEmail,
+        })
+        sendJson(res, 200, { ok: true, user: created })
+      } catch (err) {
+        sendJson(res, 400, {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+      return true
+    }
+
+    const userMatch = path.match(/^\/api\/users\/([^/]+)(?:\/([^/]+))?$/)
+    if (userMatch && user.role === 'admin') {
+      const username = decodeURIComponent(userMatch[1])
+      const action = userMatch[2]
+      const target = userStore.getByUsername(username)
+      if (!target) {
+        sendJson(res, 404, { error: '用户不存在' })
+        return true
+      }
+
+      if (!action && method === 'PATCH') {
+        let body
+        try {
+          body = await readJson(req)
+        } catch {
+          sendJson(res, 400, { error: '无效的 JSON' })
+          return true
+        }
+        try {
+          if (body.role !== undefined) userStore.setRole(username, body.role)
+          if (body.stickyMode !== undefined || body.pinnedEmail !== undefined) {
+            userStore.setSticky(username, {
+              stickyMode: body.stickyMode,
+              pinnedEmail: body.pinnedEmail,
+            })
+          }
+          sendJson(res, 200, { ok: true, user: sanitize(userStore.getByUsername(username)) })
+        } catch (err) {
+          sendJson(res, 400, {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+        return true
+      }
+
+      if (!action && method === 'DELETE') {
+        if (target.username === user.username) {
+          sendJson(res, 400, { error: '不能删除自己' })
+          return true
+        }
+        userStore.delete(username)
+        sendJson(res, 200, { ok: true })
+        return true
+      }
+
+      if (action === 'reset-key' && method === 'POST') {
+        const key = userStore.resetApiKey(username)
+        sendJson(res, 200, { ok: true, apiKey: key })
+        return true
+      }
+
+      if (action === 'password' && method === 'POST') {
+        let body
+        try {
+          body = await readJson(req)
+        } catch {
+          sendJson(res, 400, { error: '无效的 JSON' })
+          return true
+        }
+        try {
+          userStore.setPassword(username, body.password)
+          sendJson(res, 200, { ok: true })
+        } catch (err) {
+          sendJson(res, 400, {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+        return true
+      }
+
+      sendJson(res, 404, { error: '未知操作' })
+      return true
+    }
+
+    if (path === '/api/config' && method === 'GET' && user.role === 'admin') {
+      sendJson(res, 200, {
+        config: {
+          server: {
+            host: config.server.host,
+            port: config.server.port,
+            dataDir: config.server.dataDir,
+            apiKeyCount: config.server.apiKeys.length,
+          },
+          upstream: {
+            apiBase: config.upstream.apiBase,
+            loginBase: config.upstream.loginBase,
+            proxy: config.upstream.proxy || envProxyOrNull(),
+            credentialsDir: config.upstream.credentialsDir,
+          },
+          web: config.web,
+        },
+      })
+      return true
+    }
+
+    sendJson(res, 404, { error: `未知接口 ${method} ${path}` })
+    return true
+  }
+
+  // ---- login flows (admin) ----
+  async function handleLoginFlows(method, path, req, res, user) {
+    if (user.role !== 'admin') {
+      sendJson(res, 403, { error: '需要管理员权限' })
+      return true
+    }
+    if (method === 'POST' && path === '/api/accounts/login') {
+      try {
+        const flow = await loginFlows.start()
+        logger.info('web login flow started', { id: flow.id })
+        sendJson(res, 200, { ok: true, flow })
+      } catch (err) {
+        sendJson(res, 502, {
+          error: `发起登录失败: ${err instanceof Error ? err.message : String(err)}`,
+        })
+      }
+      return true
+    }
+    if (method === 'GET' && path === '/api/accounts/login') {
+      sendJson(res, 200, { object: 'list', data: loginFlows.list() })
+      return true
+    }
+    const m = path.match(/^\/api\/accounts\/login\/([^/]+)(?:\/([^/]+))?$/)
+    if (m) {
+      const id = m[1]
+      const action = m[2]
+      if (!action && method === 'GET') {
+        const flow = loginFlows.get(id)
+        if (!flow) {
+          sendJson(res, 404, { error: '流程不存在' })
+          return true
+        }
+        sendJson(res, 200, { flow })
+        return true
+      }
+      if (action === 'cancel' && method === 'POST') {
+        loginFlows.cancel(id)
+        sendJson(res, 200, { ok: true })
+        return true
+      }
+    }
+    sendJson(res, 404, { error: '未知登录流程操作' })
+    return true
+  }
+
+  return { handle }
+}
+
+function sanitize(user) {
+  if (!user) return null
+  const { salt, passwordHash, ...rest } = user
+  return rest
+}
+
+function envProxyOrNull() {
+  return (
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    null
+  )
+}
+
+function removeCredential(dir, email) {
+  try {
+    const file = path.join(dir, emailToFilename(email))
+    if (!fs.existsSync(file)) return false
+    fs.unlinkSync(file)
+    return true
+  } catch {
+    return false
+  }
+}

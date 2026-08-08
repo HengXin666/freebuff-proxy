@@ -6,8 +6,10 @@ import { parse as parseYaml } from 'yaml'
 
 /**
  * @typedef {object} ProxyConfig
- * @property {{host: string, port: number, apiKeys: string[]}} server
- * @property {{apiBase: string, loginBase: string, credentialsDir: string | null}} upstream
+ * @property {{host: string, port: number, apiKeys: string[], dataDir: string}} server
+ * @property {{apiBase: string, loginBase: string, credentialsDir: string | null, proxy: string | null}} upstream
+ * @property {{cookieSecure: boolean, sessionTtlHours: number}} web
+ * @property {{defaultAdminUsername: string, defaultAdminPassword: string | null}} users
  * @property {{releaseOnShutdown: boolean, reAdmitOnExpire: boolean, pollIntervalSec: number, admitTimeoutMs: number}} session
  * @property {{maxConcurrentRequests: number, upstreamTimeoutSec: number, maxAutoRetryOnSessionError: number}} limits
  * @property {{level: 'debug' | 'info' | 'warn' | 'error'}} logging
@@ -19,12 +21,26 @@ const DEFAULTS = {
     port: 8787,
     /** Optional Agent gate. Empty = open (OK on loopback only). */
     apiKeys: [],
+    /** All persistent state (credentials, users, sessions, login flows). */
+    dataDir: './data',
   },
   upstream: {
     apiBase: 'https://codebuff.com',
     loginBase: 'https://freebuff.com',
-    /** null → <projectRoot>/credentials */
+    /** null → <dataDir>/credentials (legacy ./credentials kept as fallback) */
     credentialsDir: null,
+    /** Explicit proxy URL, e.g. http://user:pass@host:7890. Env HTTP(S)_PROXY used otherwise. */
+    proxy: null,
+  },
+  web: {
+    cookieSecure: false,
+    sessionTtlHours: 24 * 7,
+  },
+  users: {
+    /** First-run admin (created when no admin exists). */
+    defaultAdminUsername: 'admin',
+    /** null → random password printed once in logs (also ADMIN_PASSWORD env). */
+    defaultAdminPassword: null,
   },
   session: {
     releaseOnShutdown: true,
@@ -48,6 +64,11 @@ const KEY_MAP = {
   api_base: 'apiBase',
   login_base: 'loginBase',
   credentials_dir: 'credentialsDir',
+  data_dir: 'dataDir',
+  cookie_secure: 'cookieSecure',
+  session_ttl_hours: 'sessionTtlHours',
+  default_admin_username: 'defaultAdminUsername',
+  default_admin_password: 'defaultAdminPassword',
   release_on_shutdown: 'releaseOnShutdown',
   re_admit_on_expire: 'reAdmitOnExpire',
   poll_interval_sec: 'pollIntervalSec',
@@ -114,8 +135,27 @@ export function credentialsDir() {
 }
 
 /**
+ * Default credentials dir: <dataDir>/credentials, unless a legacy
+ * <projectRoot>/credentials with account files still exists and the new one
+ * is empty (keeps pre-/data installs working).
+ */
+function resolveDefaultCredentialsDir(dataDir) {
+  const primary = path.join(dataDir, 'credentials')
+  const legacy = credentialsDir()
+  try {
+    if (fs.existsSync(legacy) && !fs.existsSync(primary)) {
+      const files = fs.readdirSync(legacy).filter((f) => f.endsWith('.json'))
+      if (files.length > 0) return legacy
+    }
+  } catch {
+    // fall through
+  }
+  return primary
+}
+
+/**
  * @param {string | undefined} configPath
- * @returns {ProxyConfig & { _configPath: string, _configExists: boolean }}
+ * @returns {ProxyConfig & { _configPath: string, _configExists: boolean, _dataDir: string }}
  */
 export function loadConfig(configPath) {
   const resolvedPath =
@@ -131,7 +171,10 @@ export function loadConfig(configPath) {
 
   const merged = deepMerge(DEFAULTS, fileConfig)
 
-  // Operational overrides only (not Freebuff auth, not upstream dual bases)
+  // Operational overrides (not Freebuff auth)
+  if (process.env.FREEBUFF_PROXY_DATA_DIR) {
+    merged.server.dataDir = process.env.FREEBUFF_PROXY_DATA_DIR
+  }
   if (process.env.FREEBUFF_PROXY_HOST) merged.server.host = process.env.FREEBUFF_PROXY_HOST
   if (process.env.FREEBUFF_PROXY_PORT) {
     merged.server.port = Number(process.env.FREEBUFF_PROXY_PORT)
@@ -139,6 +182,8 @@ export function loadConfig(configPath) {
   if (process.env.FREEBUFF_PROXY_LOG_LEVEL) {
     merged.logging.level = process.env.FREEBUFF_PROXY_LOG_LEVEL
   }
+  if (process.env.ADMIN_USERNAME) merged.users.defaultAdminUsername = process.env.ADMIN_USERNAME
+  if (process.env.ADMIN_PASSWORD) merged.users.defaultAdminPassword = process.env.ADMIN_PASSWORD
 
   merged.upstream.apiBase = stripTrailingSlash(merged.upstream.apiBase)
   merged.upstream.loginBase = stripTrailingSlash(merged.upstream.loginBase)
@@ -146,15 +191,33 @@ export function loadConfig(configPath) {
   if (!Array.isArray(merged.server.apiKeys)) merged.server.apiKeys = []
   merged.server.apiKeys = merged.server.apiKeys.map(String).filter(Boolean)
 
+  // Resolve data dir against project root when relative
+  if (!path.isAbsolute(merged.server.dataDir)) {
+    merged.server.dataDir = path.resolve(
+      projectRootFromModule(),
+      merged.server.dataDir,
+    )
+  }
+
+  // Resolve credentials dir: explicit config wins, else default under dataDir
   if (
     typeof merged.upstream.credentialsDir === 'string' &&
-    merged.upstream.credentialsDir &&
-    !path.isAbsolute(merged.upstream.credentialsDir)
+    merged.upstream.credentialsDir
   ) {
-    merged.upstream.credentialsDir = path.resolve(
-      projectRootFromModule(),
-      merged.upstream.credentialsDir,
+    if (!path.isAbsolute(merged.upstream.credentialsDir)) {
+      merged.upstream.credentialsDir = path.resolve(
+        projectRootFromModule(),
+        merged.upstream.credentialsDir,
+      )
+    }
+  } else {
+    merged.upstream.credentialsDir = resolveDefaultCredentialsDir(
+      merged.server.dataDir,
     )
+  }
+
+  if (merged.upstream.proxy && typeof merged.upstream.proxy === 'string') {
+    merged.upstream.proxy = merged.upstream.proxy.trim() || null
   }
 
   // Drop any leftover dual-track fields from old configs

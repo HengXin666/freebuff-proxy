@@ -34,26 +34,81 @@ import { logger } from './util/log.js'
  * @param {import('./app-context.js').AccountRuntimes} ctx.runtimes
  */
 export function createProxyHandler(ctx) {
-  const { config, runtimes } = ctx
+  const { config, runtimes, userStore } = ctx
   if (!runtimes) {
     throw new Error('createProxyHandler requires ctx.runtimes (AccountRuntimes)')
   }
 
+  /**
+   * Compute sticky context for a chat request:
+   *  - web user api key → user.stickyMode (pin / auto-learn / none)
+   *  - super (admin) key → remembered last account, or explicit header
+   *  - explicit `x-sticky-account` header wins over everything
+   */
+  function resolveSticky(req) {
+    const token = readBearer(req) || ''
+    const key = token || (req.headers['x-sticky-account'] ? `hdr:${req.headers['x-sticky-account']}` : '')
+    const headerPin =
+      typeof req.headers['x-sticky-account'] === 'string'
+        ? req.headers['x-sticky-account'].trim()
+        : null
+    const username = userStore ? userByKey.get(token) : null
+    const user = username ? userStore.getByUsername(username) : null
+
+    let preferredEmail = null
+    /** @type {((email: string) => void) | null} */
+    let onSuccess = null
+
+    if (headerPin) {
+      preferredEmail = headerPin
+    } else if (user) {
+      if (user.stickyMode === 'pin' && user.pinnedEmail) {
+        preferredEmail = user.pinnedEmail
+      } else if (user.stickyMode === 'auto') {
+        preferredEmail = user.lastStickyEmail || null
+        onSuccess = (email) => userStore.recordStickySuccess(user.username, email)
+      }
+    } else if (key) {
+      preferredEmail = lastAccountByKey.get(key) || null
+    }
+
+    return {
+      key: key || 'anon',
+      preferredEmail,
+      onSuccess,
+    }
+  }
+
+  /**
+   * @type {Map<string, string>} api-key → last upstream account (in-memory sticky)
+   */
+  const lastAccountByKey = new Map()
+  /** @type {Map<string, string>} api-key → username (resolved at auth time) */
+  const userByKey = new Map()
+
   function authorize(req, res) {
     const keys = config.server.apiKeys || []
-    if (keys.length === 0) return true
+    if (keys.length === 0 && !userStore) return true
     const token = readBearer(req)
-    if (!token || !apiKeyMatches(token, keys)) {
-      sendJson(res, 401, {
-        error: {
-          message: 'Invalid proxy API key',
-          type: 'auth_error',
-          code: 'invalid_api_key',
-        },
-      })
-      return false
+    if (keys.length > 0 && token && apiKeyMatches(token, keys)) {
+      userByKey.set(token, null) // super key, not a web user
+      return true
     }
-    return true
+    if (userStore) {
+      const user = token ? userStore.getByApiKey(token) : null
+      if (user) {
+        userByKey.set(token, user.username)
+        return true
+      }
+    }
+    sendJson(res, 401, {
+      error: {
+        message: 'Invalid proxy API key',
+        type: 'auth_error',
+        code: 'invalid_api_key',
+      },
+    })
+    return false
   }
 
   async function handle(req, res) {
@@ -157,22 +212,29 @@ export function createProxyHandler(ctx) {
   }
 
   async function handleStatus(res) {
-    const rt = runtimes.getAny()
+    const accounts = runtimes.list()
     let me = null
-    try {
-      me = await rt.upstream.me(['id', 'email'])
-    } catch (err) {
-      me = { error: err instanceof Error ? err.message : String(err) }
+    let session = null
+    let account = null
+    if (accounts.length) {
+      const rt = runtimes.getAny()
+      account = rt.email
+      try {
+        me = await rt.upstream.me(['id', 'email'])
+      } catch (err) {
+        me = { error: err instanceof Error ? err.message : String(err) }
+      }
+      session = rt.sessions.getSnapshot()
     }
     sendJson(res, 200, {
       upstream: {
         apiBase: config.upstream.apiBase,
         loginBase: config.upstream.loginBase,
       },
-      account: rt.email,
-      accounts: runtimes.list(),
+      account,
+      accounts,
       user: me,
-      session: rt.sessions.getSnapshot(),
+      session,
     })
   }
 
@@ -247,17 +309,28 @@ export function createProxyHandler(ctx) {
     /** @type {string | null} */
     let pendingGateCode = null
 
+    // Sticky session: pin this caller to one upstream account so a
+    // conversation keeps the same warm free session.
+    const sticky = resolveSticky(req)
+
     while (attempt <= maxRetry) {
       attempt++
       try {
         // Single reacquire path: first attempt acquires; retries use gate from previous failure.
         const rt =
           attempt === 1
-            ? await runtimes.acquireForModel(upstreamModel)
+            ? await runtimes.acquireForModel(upstreamModel, {
+                preferredEmail: sticky.preferredEmail,
+              })
             : await runtimes.reacquireAfterGate(upstreamModel, {
                 preferredEmail: lastEmail,
                 gateCode: pendingGateCode,
               })
+        if (attempt === 1) {
+          sticky.onSuccess?.(rt.email)
+          sticky.preferredEmail = rt.email
+          lastAccountByKey.set(sticky.key, rt.email)
+        }
         pendingGateCode = null
         lastEmail = rt.email
 

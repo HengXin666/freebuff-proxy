@@ -84,3 +84,26 @@ export function filterResponseHeaders(headers) {
   })
   return out
 }
+
+export function parseCookies(header) {
+  const out = {}
+  if (!header || typeof header !== 'string') return out
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=')
+    if (eq === -1) continue
+    const key = part.slice(0, eq).trim()
+    const value = part.slice(eq + 1).trim()
+    if (key) out[key] = decodeURIComponent(value)
+  }
+  return out
+}
+
+export function serializeCookie(name, value, opts = {}) {
+  const parts = [`${name}=${encodeURIComponent(value)}`]
+  if (opts.maxAge != null) parts.push(`Max-Age=${Math.floor(opts.maxAge)}`)
+  if (opts.path) parts.push(`Path=${opts.path}`)
+  if (opts.httpOnly !== false) parts.push('HttpOnly')
+  if (opts.sameSite) parts.push(`SameSite=${opts.sameSite}`)
+  if (opts.secure) parts.push('Secure')
+  return parts.join('; ')
+}

@@ -25,6 +25,13 @@ export class SessionManager {
      *   raw?: any
      * }} */
     this.session = null
+    /**
+     * Cached per-model daily quota from the last admit/refresh that included
+     * rateLimit / rateLimitsByModel. Survives session release so the console
+     * can keep showing 已用/上限 until the next admit refreshes it.
+     * @type {null | { byModel: Record<string, any>, rateLimit: any, updatedAt: string }}
+     */
+    this.quota = null
     this._mutex = Promise.resolve()
     this._pollTimer = null
   }
@@ -47,7 +54,7 @@ export class SessionManager {
 
   getSnapshot() {
     const s = this.session
-    if (!s) return { status: 'none' }
+    if (!s) return { status: 'none', quota: this.quota }
     const remainingMs =
       s.expiresAt != null
         ? Math.max(0, Date.parse(s.expiresAt) - Date.now())
@@ -56,6 +63,7 @@ export class SessionManager {
       ...s,
       remainingMs,
       live: this.hasLiveSlot(s),
+      quota: this.quota,
     }
   }
 
@@ -215,6 +223,8 @@ export class SessionManager {
       accessTier: body.accessTier,
       raw: body,
     }
+    const quota = extractQuota(body)
+    if (quota) this.quota = quota
   }
 
   async refresh() {
@@ -288,5 +298,31 @@ export class SessionManager {
     if (this.config.session.releaseOnShutdown) {
       await this.release()
     }
+  }
+}
+
+
+/**
+ * Pull daily-session quota out of a Freebuff session payload.
+ * Present on admit (POST) and on GET while a slot is live; absent when
+ * status is none. Returns null when the payload has no quota info.
+ * @param {any} body
+ * @returns {null | { byModel: Record<string, any>, rateLimit: any, updatedAt: string }}
+ */
+function extractQuota(body) {
+  if (!body || typeof body !== 'object') return null
+  const byModel =
+    body.rateLimitsByModel && typeof body.rateLimitsByModel === 'object'
+      ? body.rateLimitsByModel
+      : null
+  if (!byModel && !body.rateLimit) return null
+  const single = byModel || {}
+  if (body.rateLimit && body.rateLimit.model) {
+    single[body.rateLimit.model] = body.rateLimit
+  }
+  return {
+    byModel: single,
+    rateLimit: body.rateLimit || null,
+    updatedAt: new Date().toISOString(),
   }
 }

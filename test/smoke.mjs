@@ -61,6 +61,16 @@ globalThis.fetch = async (url, init = {}) => {
         429,
       )
     }
+    const rateLimit = {
+      model,
+      entitlementBreakdown: { base: 6, referral: 0, streak: 0 },
+      limit: 6,
+      period: 'pacific_day',
+      resetTimeZone: 'America/Los_Angeles',
+      resetAt: '2026-08-09T07:00:00.000Z',
+      windowHours: 24,
+      recentCount: 1,
+    }
     return jsonRes({
       status: 'active',
       instanceId: `inst-${sessionPosts}`,
@@ -69,6 +79,8 @@ globalThis.fetch = async (url, init = {}) => {
       expiresAt: new Date(Date.now() + 3600_000).toISOString(),
       remainingMs: 3600_000,
       accessTier: 'full',
+      rateLimit,
+      rateLimitsByModel: { [model]: rateLimit },
     })
   }
   if (u.includes('/api/v1/freebuff/session') && method === 'GET') {
@@ -383,6 +395,12 @@ assert.equal(requireModelId(''), null)
   const a = accounts.find((x) => x.email === 'a@example.com')
   assert.equal(a.available, false)
   assert.equal(a.cooldownCode, 'rate_limited')
+  // quota from admit is surfaced on the row
+  const b = accounts.find((x) => x.email === 'b@example.com')
+  assert.equal(b.quota.byModel['deepseek/deepseek-v4-flash'].limit, 6)
+  assert.equal(b.quota.byModel['deepseek/deepseek-v4-flash'].recentCount, 1)
+  // request distribution stats present
+  assert.ok(b.requests >= 1)
   await multiRuntimes.shutdown()
   multiServer.close()
   fs.rmSync(multiDir, { recursive: true, force: true })
@@ -412,6 +430,160 @@ assert.equal(requireModelId(''), null)
   assert.equal(pool.isCoolingDown('smoke@example.com', 'any'), true)
   const cd = pool.cooldowns.get('smoke@example.com')
   assert.ok(cd.until - Date.now() > 60_000) // banned floors to 1 day
+}
+
+// --- unit: user store + web sessions ---
+{
+  const { UserStore } = await import('../src/web/user-store.js')
+  const { WebSessionStore } = await import('../src/web/session-store.js')
+  const us = new UserStore(path.join(tmpDir, 'users.json'))
+  assert.equal(us.all().length, 0)
+  const u = us.create({ username: 'Alice', password: 'secret123', role: 'user' })
+  assert.equal(u.username, 'alice')
+  assert.ok(u.apiKey.startsWith('sk-fb-'))
+  assert.equal(us.verifyPassword('alice', 'wrong'), null)
+  const good = us.verifyPassword('alice', 'secret123')
+  assert.equal(good.username, 'alice')
+  assert.equal(us.getByApiKey(u.apiKey).username, 'alice')
+  const newKey = us.resetApiKey('alice')
+  assert.ok(newKey !== u.apiKey)
+  us.setSticky('alice', { stickyMode: 'pin', pinnedEmail: 'a@example.com' })
+  assert.equal(us.getByUsername('alice').stickyMode, 'pin')
+  us.recordStickySuccess('alice', 'b@example.com') // pin mode → no learn
+  assert.equal(us.getByUsername('alice').lastStickyEmail, null)
+  us.setSticky('alice', { stickyMode: 'auto' })
+  us.recordStickySuccess('alice', 'b@example.com')
+  assert.equal(us.getByUsername('alice').lastStickyEmail, 'b@example.com')
+  // persistence across instances
+  const us2 = new UserStore(path.join(tmpDir, 'users.json'))
+  assert.equal(us2.getByUsername('alice').lastStickyEmail, 'b@example.com')
+  us2.delete('alice')
+  assert.equal(us2.getByUsername('alice'), null)
+
+  const ws = new WebSessionStore(path.join(tmpDir, 'web-sessions.json'), 60_000)
+  const tok = ws.create('alice')
+  assert.equal(ws.get(tok), 'alice')
+  ws.destroy(tok)
+  assert.equal(ws.get(tok), null)
+}
+
+// --- sticky: preferredEmail tried first, falls back when cooling ---
+{
+  const stickyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-sticky-'))
+  saveAccountUser(stickyDir, {
+    id: 'a',
+    email: 'sticky-a@example.com',
+    authToken: 'token-a',
+  })
+  saveAccountUser(stickyDir, {
+    id: 'b',
+    email: 'sticky-b@example.com',
+    authToken: 'token-b',
+  })
+  const stickyConfig = loadConfig()
+  stickyConfig.upstream.credentialsDir = stickyDir
+  stickyConfig.session.pollIntervalSec = 3600
+  const pool = new AccountRuntimes(stickyConfig)
+  mockMode = 'ok'
+  sessionPosts = 0
+  const rt1 = await pool.acquireForModel('deepseek/deepseek-v4-flash', {
+    preferredEmail: 'sticky-b@example.com',
+  })
+  assert.equal(rt1.email, 'sticky-b@example.com')
+  const rt2 = await pool.acquireForModel('deepseek/deepseek-v4-flash', {
+    preferredEmail: 'sticky-b@example.com',
+  })
+  assert.equal(rt2.email, 'sticky-b@example.com')
+  pool.markCooldown('sticky-b@example.com', {
+    code: 'rate_limited',
+    retryAfterMs: 60_000,
+  })
+  const rt3 = await pool.acquireForModel('deepseek/deepseek-v4-flash', {
+    preferredEmail: 'sticky-b@example.com',
+  })
+  assert.equal(rt3.email, 'sticky-a@example.com')
+  await pool.shutdown()
+  fs.rmSync(stickyDir, { recursive: true, force: true })
+}
+
+// --- per-account proxy (多代理粘性: 账号绑定专属出口) ---
+{
+  const pDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-acc-'))
+  saveAccountUser(pDir, {
+    id: 'pa',
+    email: 'pa@example.com',
+    authToken: 'token-pa',
+    proxy: 'http://127.0.0.1:7890',
+  })
+  saveAccountUser(pDir, { id: 'pb', email: 'pb@example.com', authToken: 'token-pb' })
+  const pConfig = loadConfig()
+  pConfig.upstream.credentialsDir = pDir
+  pConfig.session.pollIntervalSec = 3600
+  const pool = new AccountRuntimes(pConfig)
+
+  // rows surface proxy
+  const rows = pool.list()
+  const rowA = rows.find((x) => x.email === 'pa@example.com')
+  assert.equal(rowA.proxy, 'http://127.0.0.1:7890')
+  assert.equal(rows.find((x) => x.email === 'pb@example.com').proxy, null)
+
+  // runtime uses the per-account proxy
+  const rtA = pool.get('pa@example.com')
+  assert.equal(rtA.proxy, 'http://127.0.0.1:7890')
+
+  // proxy change → cached runtime recreated with the new proxy
+  pool.get('pa@example.com').sessions.quota = { byModel: {}, rateLimit: null, updatedAt: 'x' }
+  const before = pool.get('pa@example.com')
+  const file = path.join(pDir, 'pa@example.com.json')
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+  raw.proxy = null
+  fs.writeFileSync(file, JSON.stringify(raw))
+  const after = pool.get('pa@example.com')
+  assert.notEqual(after, before)
+  assert.equal(after.proxy, null)
+
+  // createUpstreamClient honors opts.proxy without throwing
+  const { createUpstreamClient } = await import('../src/upstream/client.js')
+  const cli = createUpstreamClient(pConfig, 'tok', { proxy: 'http://127.0.0.1:7890' })
+  assert.ok(cli)
+  await pool.shutdown()
+  fs.rmSync(pDir, { recursive: true, force: true })
+}
+
+// --- quota: extraction + quota-aware load balancing ---
+{
+  const qDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-quota-'))
+  saveAccountUser(qDir, { id: 'qa', email: 'qa@example.com', authToken: 'token-qa' })
+  saveAccountUser(qDir, { id: 'qb', email: 'qb@example.com', authToken: 'token-qb' })
+  const qConfig = loadConfig()
+  qConfig.upstream.credentialsDir = qDir
+  qConfig.session.pollIntervalSec = 3600
+  const pool = new AccountRuntimes(qConfig)
+  const mkQuota = (model, limit, used) => {
+    const rl = { model, limit, period: 'pacific_day', resetAt: '2026-08-09T07:00:00.000Z', recentCount: used }
+    return { byModel: { [model]: rl }, rateLimit: rl, updatedAt: new Date().toISOString() }
+  }
+  const pa = pool.get('qa@example.com')
+  const pb = pool.get('qb@example.com')
+  pa.sessions.quota = mkQuota('deepseek/deepseek-v4-flash', 6, 5)
+  pb.sessions.quota = mkQuota('deepseek/deepseek-v4-flash', 6, 1)
+
+  // more remaining quota wins
+  const order = pool.candidateEmails('deepseek/deepseek-v4-flash')
+  assert.equal(order[0], 'qb@example.com', `expected qb first, got ${order}`)
+
+  // exhausted quota is strongly deprioritized
+  pa.sessions.quota = mkQuota('deepseek/deepseek-v4-flash', 6, 6)
+  const order2 = pool.candidateEmails('deepseek/deepseek-v4-flash')
+  assert.equal(order2[0], 'qb@example.com', `expected qb first after exhaustion, got ${order2}`)
+
+  // list() surfaces quota + requests for the console
+  const rows = pool.list()
+  const rowB = rows.find((x) => x.email === 'qb@example.com')
+  assert.equal(rowB.quota.byModel['deepseek/deepseek-v4-flash'].recentCount, 1)
+  assert.equal(typeof rowB.requests, 'number')
+  await pool.shutdown()
+  fs.rmSync(qDir, { recursive: true, force: true })
 }
 
 await runtimes.shutdown()
