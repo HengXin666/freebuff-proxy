@@ -34,6 +34,18 @@ export class SessionManager {
     this.quota = null
     this._mutex = Promise.resolve()
     this._pollTimer = null
+    /** 当前正在处理中的请求数（在途 chat 时跳过轮询 GET，避免干扰活跃会话）。 */
+    this._inFlight = 0
+  }
+
+  /** 请求开始（在途计数 +1，轮询跳过）。 */
+  beginRequest() {
+    this._inFlight += 1
+  }
+
+  /** 请求结束（在途计数 -1）。 */
+  endRequest() {
+    this._inFlight = Math.max(0, this._inFlight - 1)
   }
 
   /** Serialize admit/release operations. */
@@ -229,6 +241,9 @@ export class SessionManager {
 
   async refresh() {
     return this.withLock(async () => {
+      // 上游同一个号同一时间只能有一个客户端在线：轮询 GET 若撞上在途
+      // chat 会干扰/顶掉活跃会话（428 waiting_room_required），因此跳过。
+      if (this._inFlight > 0) return this.session
       const opts = {}
       if (this.session?.instanceId) opts.instanceId = this.session.instanceId
       const body = await this.upstream.freebuffSession('GET', opts)

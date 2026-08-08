@@ -262,6 +262,24 @@ export class AccountRuntimes {
     /** @type {Array<{ key: string, email?: string, code?: string, message: string }>} */
     const failures = []
 
+    // 全部账号都在冷却/无可用账号时，把冷却明细带进报错（而不是 "Tried 0"），
+    // 让用户一眼看出每个账号冷却到几点、因为什么。
+    if (!order.length) {
+      for (const key of keys) {
+        if (this.isCoolingDown(key, model)) {
+          const cd =
+            this.cooldowns.get(key) ||
+            this.cooldowns.get(this._cooldownKey(key, model))
+          failures.push({
+            key,
+            email: emailByKey.get(key),
+            code: cd?.code || 'cooldown',
+            message: `cooling down until ${cd ? new Date(cd.until).toISOString() : '?'}`,
+          })
+        }
+      }
+    }
+
     for (const key of order) {
       if (this.isCoolingDown(key, model)) {
         const cd =
@@ -335,10 +353,11 @@ export class AccountRuntimes {
   /**
    * 换号/重试选号：
    * - switchAccount（429/5xx/403 账号级故障）→ 冷却当前账号，然后按轮询换下一个账号；
+   *   noCooldown（如 free_mode_capacity_deferred 瞬时容量）→ 换号但不冷却；
    * - 纯 gate 错误（session_expired/superseded 等）→ 同号强制 re-admit 一次（不冷却），
    *   失败则按轮询换号。
    * @param {string} model
-   * @param {{ preferredKey?: string | null, gateCode?: string | null, retryAfterMs?: number | null, switchAccount?: boolean }} [opts]
+   * @param {{ preferredKey?: string | null, gateCode?: string | null, retryAfterMs?: number | null, switchAccount?: boolean, noCooldown?: boolean }} [opts]
    */
   async reacquireAfterGate(model, opts = {}) {
     if (opts.preferredKey) {
@@ -346,15 +365,17 @@ export class AccountRuntimes {
         opts.switchAccount ||
         (opts.gateCode && SWITCHABLE_CODES.has(opts.gateCode))
       ) {
-        this.markCooldown(
-          opts.preferredKey,
-          new UpstreamError(opts.gateCode, {
-            code: opts.gateCode,
-            status: 429,
-            retryAfterMs: opts.retryAfterMs ?? 30_000,
-          }),
-          model,
-        )
+        if (!opts.noCooldown) {
+          this.markCooldown(
+            opts.preferredKey,
+            new UpstreamError(opts.gateCode, {
+              code: opts.gateCode,
+              status: 429,
+              retryAfterMs: opts.retryAfterMs ?? 30_000,
+            }),
+            model,
+          )
+        }
       } else {
         try {
           const rt = this.get(opts.preferredKey)

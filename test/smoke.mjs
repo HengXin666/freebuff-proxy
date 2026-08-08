@@ -23,7 +23,7 @@ configureLogger({ level: 'error' })
 
 const originalFetch = globalThis.fetch
 let calls = []
-/** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion' | 'err_500_a'} */
+/** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion' | 'err_500_a' | 'capacity_once' | 'capacity_all' | 'run_500_a' | 'network_err_a' | 'gate_twice_a'} */
 let mockMode = 'ok'
 let sessionPosts = 0
 let completionAttempts = 0
@@ -93,6 +93,14 @@ globalThis.fetch = async (url, init = {}) => {
   if (u.includes('/api/v1/agent-runs') && method === 'POST') {
     const body = JSON.parse(init.body || '{}')
     if (body.action === 'START') {
+      const runAuth =
+        headers.Authorization ||
+        headers.authorization ||
+        headers['x-codebuff-api-key'] ||
+        ''
+      if (mockMode === 'run_500_a' && String(runAuth).includes('token-a')) {
+        return jsonRes({ error: 'internal_error', message: 'run boom' }, 500)
+      }
       return jsonRes({ runId: '00000000-0000-4000-8000-000000000001' })
     }
     if (body.action === 'FINISH') {
@@ -149,6 +157,39 @@ globalThis.fetch = async (url, init = {}) => {
     }
     if (mockMode === 'err_500_a' && String(compAuth).includes('token-a')) {
       return jsonRes({ error: 'internal_error', message: 'boom' }, 500)
+    }
+    // free_mode_capacity_deferred：瞬时容量排队，换号重试不冷却
+    if (mockMode === 'capacity_once' && completionAttempts === 1) {
+      return jsonRes(
+        {
+          error: 'free_mode_capacity_deferred',
+          message:
+            'Free mode is briefly at capacity; your request will be retried automatically.',
+        },
+        429,
+      )
+    }
+    if (mockMode === 'capacity_all') {
+      return jsonRes(
+        {
+          error: 'free_mode_capacity_deferred',
+          message:
+            'Free mode is briefly at capacity; your request will be retried automatically.',
+        },
+        429,
+      )
+    }
+    // 同账号连续 gate 失败（session_superseded ×2）→ 升级换号
+    if (
+      mockMode === 'gate_twice_a' &&
+      String(compAuth).includes('token-a') &&
+      completionAttempts <= 2
+    ) {
+      return jsonRes({ error: 'session_superseded', message: 'taken over' }, 409)
+    }
+    // 网络层错误（fetch 抛异常）→ 换号重试
+    if (mockMode === 'network_err_a' && String(compAuth).includes('token-a')) {
+      throw new Error('ECONNRESET: socket hang up')
     }
 
     if (body.stream) {
@@ -1188,6 +1229,281 @@ assert.equal(requireModelId(''), null)
   await e5Runtimes.shutdown()
   e5Server.close()
   fs.rmSync(e5Dir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
+
+// free_mode_capacity_deferred → 换号重试且不冷却（瞬时容量，不是账号级故障）
+{
+  const capDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-cap-'))
+  saveAccountUser(capDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
+  saveAccountUser(capDir, { id: 'b', email: 'b@example.com', authToken: 'token-b' })
+  const capConfig = loadConfig()
+  capConfig.server.host = '127.0.0.1'
+  capConfig.server.port = 0
+  capConfig.server.apiKeys = ['sk-test']
+  capConfig.upstream.credentialsDir = capDir
+  capConfig.session.pollIntervalSec = 3600
+  const capRuntimes = new AccountRuntimes(capConfig)
+  const capServer = await startServer({
+    config: capConfig,
+    runtimes: capRuntimes,
+    ...(() => {
+      const rt = capRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const capPort = capServer.address().port
+  mockMode = 'capacity_once'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  const res = await fetch(`http://127.0.0.1:${capPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  // 换到 b 成功；a 被 capacity 命中但【不】冷却
+  assert.equal(res.headers.get('x-freebuff-proxy-account'), 'b@example.com')
+  const capAccounts = capRuntimes.list()
+  assert.equal(
+    capAccounts.find((x) => x.email === 'a@example.com').available,
+    true,
+    'capacity_deferred 不应冷却账号',
+  )
+  assert.equal(capAccounts.find((x) => x.email === 'b@example.com').available, true)
+  await capRuntimes.shutdown()
+  capServer.close()
+  fs.rmSync(capDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
+
+// 所有账号 capacity_deferred → 返回错误但【全部不冷却】（下次请求继续可轮询）
+{
+  const capDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-cap2-'))
+  saveAccountUser(capDir2, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
+  saveAccountUser(capDir2, { id: 'b', email: 'b@example.com', authToken: 'token-b' })
+  const capConfig2 = loadConfig()
+  capConfig2.server.host = '127.0.0.1'
+  capConfig2.server.port = 0
+  capConfig2.server.apiKeys = ['sk-test']
+  capConfig2.upstream.credentialsDir = capDir2
+  capConfig2.session.pollIntervalSec = 3600
+  const capRuntimes2 = new AccountRuntimes(capConfig2)
+  const capServer2 = await startServer({
+    config: capConfig2,
+    runtimes: capRuntimes2,
+    ...(() => {
+      const rt = capRuntimes2.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const capPort2 = capServer2.address().port
+  mockMode = 'capacity_all'
+  sessionPosts = 0
+  completionAttempts = 0
+  const res2 = await fetch(`http://127.0.0.1:${capPort2}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  assert.equal(res2.status, 429)
+  const capAccounts2 = capRuntimes2.list()
+  assert.equal(
+    capAccounts2.every((x) => x.available),
+    true,
+    '全部 capacity_deferred 也不应冷却任何账号',
+  )
+  await capRuntimes2.shutdown()
+  capServer2.close()
+  fs.rmSync(capDir2, { recursive: true, force: true })
+  mockMode = 'ok'
+}
+
+// startAgentRun 500 → 冷却当前账号换下一个，最终成功
+{
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-run500-'))
+  saveAccountUser(runDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
+  saveAccountUser(runDir, { id: 'b', email: 'b@example.com', authToken: 'token-b' })
+  const runConfig = loadConfig()
+  runConfig.server.host = '127.0.0.1'
+  runConfig.server.port = 0
+  runConfig.server.apiKeys = ['sk-test']
+  runConfig.upstream.credentialsDir = runDir
+  runConfig.session.pollIntervalSec = 3600
+  const runRuntimes = new AccountRuntimes(runConfig)
+  const runServer = await startServer({
+    config: runConfig,
+    runtimes: runRuntimes,
+    ...(() => {
+      const rt = runRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const runPort = runServer.address().port
+  mockMode = 'run_500_a'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  const res = await fetch(`http://127.0.0.1:${runPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  assert.equal(res.headers.get('x-freebuff-proxy-account'), 'b@example.com')
+  assert.equal(sessionPosts, 2, `expected 2 session POSTs, got ${sessionPosts}`)
+  const runAccounts = runRuntimes.list()
+  const runA = runAccounts.find((x) => x.email === 'a@example.com')
+  assert.equal(runA.available, false)
+  assert.equal(runA.cooldownCode, 'start_agent_run_failed')
+  await runRuntimes.shutdown()
+  runServer.close()
+  fs.rmSync(runDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
+
+// 网络错误（fetch 抛异常）→ 换号重试，最终成功
+{
+  const netDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-net-'))
+  saveAccountUser(netDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
+  saveAccountUser(netDir, { id: 'b', email: 'b@example.com', authToken: 'token-b' })
+  const netConfig = loadConfig()
+  netConfig.server.host = '127.0.0.1'
+  netConfig.server.port = 0
+  netConfig.server.apiKeys = ['sk-test']
+  netConfig.upstream.credentialsDir = netDir
+  netConfig.session.pollIntervalSec = 3600
+  const netRuntimes = new AccountRuntimes(netConfig)
+  const netServer = await startServer({
+    config: netConfig,
+    runtimes: netRuntimes,
+    ...(() => {
+      const rt = netRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const netPort = netServer.address().port
+  mockMode = 'network_err_a'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  const res = await fetch(`http://127.0.0.1:${netPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  assert.equal(res.headers.get('x-freebuff-proxy-account'), 'b@example.com')
+  assert.equal(sessionPosts, 2, `expected 2 session POSTs, got ${sessionPosts}`)
+  await netRuntimes.shutdown()
+  netServer.close()
+  fs.rmSync(netDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
+
+// 同账号 gate 连续失败两次 → 升级为换号，最终成功
+{
+  const g2Dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-gate2-'))
+  saveAccountUser(g2Dir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
+  saveAccountUser(g2Dir, { id: 'b', email: 'b@example.com', authToken: 'token-b' })
+  const g2Config = loadConfig()
+  g2Config.server.host = '127.0.0.1'
+  g2Config.server.port = 0
+  g2Config.server.apiKeys = ['sk-test']
+  g2Config.upstream.credentialsDir = g2Dir
+  g2Config.session.pollIntervalSec = 3600
+  const g2Runtimes = new AccountRuntimes(g2Config)
+  const g2Server = await startServer({
+    config: g2Config,
+    runtimes: g2Runtimes,
+    ...(() => {
+      const rt = g2Runtimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const g2Port = g2Server.address().port
+  mockMode = 'gate_twice_a'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  const res = await fetch(`http://127.0.0.1:${g2Port}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  assert.equal(res.headers.get('x-freebuff-proxy-account'), 'b@example.com')
+  // a 两次 gate（1 次会话 + 1 次同号 re-admit），b 一次 → 3 次 session POST、3 次 completions
+  assert.equal(sessionPosts, 3, `expected 3 session POSTs, got ${sessionPosts}`)
+  assert.equal(completionAttempts, 3, `expected 3 completions, got ${completionAttempts}`)
+  const g2Accounts = g2Runtimes.list()
+  const g2a = g2Accounts.find((x) => x.email === 'a@example.com')
+  assert.equal(g2a.available, false)
+  assert.equal(g2a.cooldownCode, 'session_superseded')
+  await g2Runtimes.shutdown()
+  g2Server.close()
+  fs.rmSync(g2Dir, { recursive: true, force: true })
   mockMode = 'ok'
 }
 

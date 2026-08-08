@@ -255,10 +255,12 @@ export function createProxyHandler(ctx) {
     const stream = Boolean(body.stream)
     let attempt = 0
     const maxRetry = config.limits.maxAutoRetryOnSessionError ?? 1
-    // 换号重试预算：最多试到账号数（封顶 5 次），保证一波限流/5xx 时能换到可用账号。
+    // 换号重试预算：账号数 +1（封顶 5 次）——多出的一次用于同账号 gate 重试
+    // （session 失效等先同号 re-admit 一次，再失败才升级换号），保证一波限流/5xx
+    // 时能换到可用账号，试完所有账号才把错误返回给用户。
     const maxAttempts = Math.max(
       maxRetry + 1,
-      Math.min(runtimes.allKeys().length || 1, 5),
+      Math.min((runtimes.allKeys().length || 1) + 1, 5),
     )
     /** @type {string | null} */
     let lastKey = null
@@ -268,9 +270,15 @@ export function createProxyHandler(ctx) {
     let pendingRetryAfterMs = null
     /** @type {boolean} */
     let pendingSwitchAccount = false
+    /** @type {boolean} */
+    let pendingNoCooldown = false
+    /** 同一账号连续 gate 失败计数：gate 已同号 re-admit 重试过一次仍失败 → 升级为换号。 */
+    let sameAccountGateRetries = 0
 
     // 强制轮询：每个请求按账号轮流分配，不做会话粘性/分组。
     // 上游无状态（客户端每次请求携带全量历史），所以无需为"同一会话"固定账号。
+    // 故障转移：除了 4xx 客户端错误，任何上游失败（session/run/chat/网络超时）都
+    // 冷却当前账号并继续轮询下一个，只有试完所有账号才把错误返回给用户。
     while (attempt < maxAttempts) {
       attempt++
       try {
@@ -283,10 +291,16 @@ export function createProxyHandler(ctx) {
                 gateCode: pendingGateCode,
                 retryAfterMs: pendingRetryAfterMs,
                 switchAccount: pendingSwitchAccount,
+                noCooldown: pendingNoCooldown,
               })
         pendingGateCode = null
         pendingRetryAfterMs = null
         pendingSwitchAccount = false
+        pendingNoCooldown = false
+        if (lastKey && rt.key !== lastKey) {
+          // 已经换到不同账号 → 重置同账号 gate 计数
+          sameAccountGateRetries = 0
+        }
         lastKey = rt.key
 
         // 可观测性：响应头标明本次实际使用的账号。
@@ -317,13 +331,20 @@ export function createProxyHandler(ctx) {
           snap.instanceId,
           runId,
         )
-        const result = await forwardCompletions({
-          req,
-          res,
-          forwardBody,
-          stream,
-          upstream: rt.upstream,
-        })
+        // 在途计数：轮询 GET 跳过该账号，避免干扰正在进行的 chat 会话
+        rt.sessions.beginRequest()
+        let result
+        try {
+          result = await forwardCompletions({
+            req,
+            res,
+            forwardBody,
+            stream,
+            upstream: rt.upstream,
+          })
+        } finally {
+          rt.sessions.endRequest()
+        }
 
         // Best-effort close the run registry row
         void rt.upstream.finishAgentRun({
@@ -336,21 +357,44 @@ export function createProxyHandler(ctx) {
 
         if (result.ok) return
 
-        const retryBudget = result.switchAccount ? maxAttempts : maxRetry + 1
-        if (result.recoverable && attempt < retryBudget) {
+        if (result.recoverable && attempt < maxAttempts) {
+          if (result.switchAccount) {
+            sameAccountGateRetries = 0
+          } else {
+            // 同账号 gate 重试计数：连续两次 gate 失败 → 升级为换号
+            sameAccountGateRetries += 1
+          }
           logger.warn('session error; will re-acquire', {
             code: result.gateCode,
             attempt,
-            budget: retryBudget,
+            budget: maxAttempts,
             model: upstreamModel,
             key: lastKey,
-            switchAccount: result.switchAccount === true,
+            switchAccount:
+              result.switchAccount === true || sameAccountGateRetries >= 2,
+            noCooldown: result.noCooldown === true,
             retryAfterMs: result.retryAfterMs ?? null,
           })
           pendingGateCode = result.gateCode
           pendingRetryAfterMs = result.retryAfterMs ?? null
-          pendingSwitchAccount = result.switchAccount === true
+          pendingSwitchAccount =
+            result.switchAccount === true || sameAccountGateRetries >= 2
+          pendingNoCooldown = result.noCooldown === true
           continue
+        }
+
+        // 最后一次尝试也失败：把当前账号标记冷却（gate 瞬时问题 noCooldown 除外），
+        // 避免下一个请求立刻又撞上同一个故障账号。
+        if (result.switchAccount && !result.noCooldown) {
+          runtimes.markCooldown(
+            lastKey,
+            new UpstreamError(result.gateCode || 'upstream_error', {
+              code: result.gateCode || 'upstream_error',
+              status: result.status,
+              retryAfterMs: result.retryAfterMs ?? undefined,
+            }),
+            upstreamModel,
+          )
         }
 
         if (!result.wrote) {
@@ -364,18 +408,59 @@ export function createProxyHandler(ctx) {
         return
       } catch (err) {
         if (err instanceof UpstreamError) {
-          if (isSessionRecoverableGate(err.code) && attempt < maxRetry + 1) {
-            logger.warn('recoverable session error; will re-acquire once', {
+          if (isSessionRecoverableGate(err.code) && attempt < maxAttempts) {
+            logger.warn('recoverable session error; will re-acquire', {
               code: err.code,
               attempt,
               key: lastKey,
             })
             pendingGateCode = err.code
             pendingSwitchAccount = false
+            pendingNoCooldown = false
+            continue
+          }
+          // 其他上游错误（startAgentRun 失败 / no_session / admit 后异常等）：
+          // 只要还有重试预算，就冷却当前账号换下一个，而不是直接把错误甩给用户。
+          const isTerminal =
+            err.code === 'no_available_account' ||
+            err.code === 'model_required' ||
+            err.code === 'upstream_auth_missing'
+          if (
+            !isTerminal &&
+            attempt < maxAttempts &&
+            shouldSwitchAccountOnError(err.status, err.code)
+          ) {
+            logger.warn('upstream error; switching account', {
+              code: err.code,
+              status: err.status,
+              attempt,
+              key: lastKey,
+              model: upstreamModel,
+            })
+            pendingGateCode = err.code || `http_${err.status || 502}`
+            pendingRetryAfterMs = err.retryAfterMs ?? null
+            pendingSwitchAccount = true
+            pendingNoCooldown = false
             continue
           }
           mapAndSendError(res, err)
           return
+        }
+        // 非 UpstreamError：网络错误 / 上游超时（socket 断开、代理不可达等）。
+        // 只要还有重试预算就冷却当前账号换下一个；客户端是否已断开无法可靠区分
+        // （req.destroyed 在请求体读完后就为 true），多试一轮最多浪费一次上游调用。
+        if (attempt < maxAttempts) {
+          logger.warn('upstream network error; switching account', {
+            error: err instanceof Error ? err.message : String(err),
+            attempt,
+            key: lastKey,
+            model: upstreamModel,
+          })
+          pendingGateCode = 'upstream_network_error'
+          pendingRetryAfterMs = null
+          pendingSwitchAccount = true
+          pendingNoCooldown = false
+          continue
         }
         logger.error('chat completions failed', {
           error: err instanceof Error ? err.message : String(err),
@@ -468,6 +553,47 @@ export function createProxyHandler(ctx) {
         typeof parsed === 'object' &&
         (parsed.error?.code || parsed.error || parsed.code || parsed.status)) ||
         null
+      const gateCode = extractGateError(parsed, status)
+      const parsedBody = parsed || {
+        error: { message: text, type: 'upstream_error' },
+      }
+
+      // free_mode_capacity_deferred：免费模式瞬时容量排队（上游原话
+      // "your request will be retried automatically"）。不是账号级故障——
+      // 实测同一账号同一 session 立即重试即恢复（不限量模型 flash 尤其常见）。
+      // 换下一个账号继续轮询，但绝不冷却当前账号，避免把可用账号白白钉死。
+      if (
+        errCode === 'free_mode_capacity_deferred' ||
+        gateCode === 'free_mode_capacity_deferred'
+      ) {
+        return {
+          ok: false,
+          wrote: false,
+          recoverable: true,
+          switchAccount: true,
+          noCooldown: true,
+          gateCode: 'free_mode_capacity_deferred',
+          retryAfterMs,
+          status,
+          body: parsedBody,
+          headers: respHeaders,
+        }
+      }
+      // 可恢复 gate（session_expired/superseded/waiting_room 等）：
+      // 同账号 re-admit 一次即可恢复，不属于账号级故障，不冷却不换号。
+      if (gateCode && isSessionRecoverableGate(gateCode)) {
+        return {
+          ok: false,
+          wrote: false,
+          recoverable: true,
+          switchAccount: false,
+          gateCode,
+          retryAfterMs,
+          status,
+          body: parsedBody,
+          headers: respHeaders,
+        }
+      }
       // 账号侧故障（429 限流 / 5xx / 403 账号级封禁）：冷却当前账号并换号重试，
       // 而不是把错误直接甩给用户。4xx 客户端错误（400/401/404/422 等）不换号。
       const switchAccount = shouldSwitchAccountOnError(status, errCode)
@@ -480,21 +606,7 @@ export function createProxyHandler(ctx) {
           gateCode: typeof errCode === 'string' ? errCode : `http_${status}`,
           retryAfterMs,
           status,
-          body: parsed || { error: { message: text, type: 'upstream_error' } },
-          headers: respHeaders,
-        }
-      }
-      const gateCode = extractGateError(parsed, status)
-      if (gateCode && isSessionRecoverableGate(gateCode)) {
-        return {
-          ok: false,
-          wrote: false,
-          recoverable: true,
-          switchAccount: false,
-          gateCode,
-          retryAfterMs,
-          status,
-          body: parsed || { error: { message: text, type: 'upstream_error' } },
+          body: parsedBody,
           headers: respHeaders,
         }
       }

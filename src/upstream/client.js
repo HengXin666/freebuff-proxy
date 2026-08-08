@@ -443,7 +443,15 @@ export function extractRateLimitError(body, status) {
 
 export function extractGateError(body, status) {
   if (!body || typeof body !== 'object') return null
-  const code = body.error || body.code
+  const nested =
+    body.error && typeof body.error === 'object' && !Array.isArray(body.error)
+      ? body.error
+      : null
+  const code =
+    nested?.code ||
+    (typeof body.error === 'string' ? body.error : null) ||
+    body.code ||
+    body.status
   if (typeof code !== 'string') return null
   // Status may vary; code is the source of truth.
   if (GATE_CODES.has(code)) return code
