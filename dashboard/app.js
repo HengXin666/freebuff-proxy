@@ -193,7 +193,7 @@ async function renderOverview(view) {
     }
 
     const table = el('table', {}, [
-      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '额度（今日）', '请求', '会话', '冷却', '操作'].map((t) => el('th', {}, t)))),
+      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '额度（今日）', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
       el('tbody', {}, data.accounts.map((a) => {
         const cd = a.cooldownUntil ? new Date(a.cooldownUntil).toLocaleString() : null
         const sess = a.session?.live
@@ -210,7 +210,6 @@ async function renderOverview(view) {
           el('td', { class: 'mono' }, sess),
           el('td', {}, fmtQuota(a.quota)),
           el('td', { class: 'mono' }, `${a.requests || 0} 次`),
-          el('td', { class: 'mono' }, `${a.stickyConversations || 0} 个`),
           el('td', {}, cd ? el('span', { class: 'badge warn' }, a.cooldownCode || 'cooldown') : '—'),
           el('td', {}, state.me.role === 'admin' ? el('div', { class: 'row' }, [
             el('button', { class: 'muted', onclick: () => clearCooldown(a.email) }, '解除冷却'),
@@ -512,31 +511,11 @@ function openImportModal() {
 async function renderUsers(view) {
   view.innerHTML = ''
   state.users = (await api('/api/users')).data
-  const accounts = state.accounts.length ? state.accounts : (await api('/api/accounts')).data
-  const emails = accounts.map((a) => a.email)
-
   view.append(el('h2', { style: 'margin:0 0 12px' }, '用户管理'))
 
   const table = el('table', {}, [
-    el('thead', {}, el('tr', {}, ['用户名', '角色', 'API Key', '粘性会话', '操作'].map((t) => el('th', {}, t)))),
+    el('thead', {}, el('tr', {}, ['用户名', '角色', 'API Key', '操作'].map((t) => el('th', {}, t)))),
     el('tbody', {}, state.users.map((u) => {
-      const stickySel = el('select', {
-        onchange: (e) => {
-          const mode = e.target.value
-          const pin = mode === 'pin' ? (prompt('固定到哪个上游账号？留空则自动', u.pinnedEmail || emails[0] || '') || null) : null
-          api(`/api/users/${encodeURIComponent(u.username)}`, {
-            method: 'PATCH',
-            body: JSON.stringify({ stickyMode: mode, pinnedEmail: mode === 'pin' ? pin : null }),
-          }).then(() => { toast('已更新'); renderUsers(view) }).catch((err) => toast(err.message, true))
-        },
-      }, [
-        el('option', { value: 'auto', selected: (u.stickyMode || 'auto') === 'auto' }, '自动跟随'),
-        el('option', { value: 'pin', selected: u.stickyMode === 'pin' }, '固定账号'),
-        el('option', { value: 'none', selected: u.stickyMode === 'none' }, '轮询'),
-      ])
-      const stickyText = u.stickyMode === 'pin'
-        ? `固定: ${u.pinnedEmail || '?'}`
-        : u.stickyMode === 'none' ? '轮询' : `自动: ${u.lastStickyEmail || '未定'}`
       return el('tr', {}, [
         el('td', {}, `${u.username} ${u.username === state.me.username ? el('span', { class: 'muted' }, '(我)') : ''}`),
         el('td', {}, u.role === 'admin' ? el('span', { class: 'badge admin' }, 'admin') : el('span', { class: 'badge' }, 'user')),
@@ -550,7 +529,6 @@ async function renderUsers(view) {
             renderUsers(view)
           } }, '重置'),
         ])),
-        el('td', {}, el('div', {}, [stickySel, el('div', { class: 'muted' }, stickyText)])),
         el('td', {}, el('div', { class: 'row' }, [
           el('button', { class: 'muted', onclick: () => openUserModal(u, view) }, '改密'),
           u.username !== state.me.username
@@ -569,11 +547,10 @@ async function renderUsers(view) {
   // create user
   const form = el('div', { class: 'card' }, [
     el('h3', { style: 'margin:0 0 8px' }, '新建用户'),
-    el('div', { class: 'grid', style: 'grid-template-columns:1fr 1fr 1fr 1fr' }, [
+    el('div', { class: 'grid', style: 'grid-template-columns:1fr 1fr 1fr' }, [
       el('div', {}, [el('label', {}, '用户名'), el('input', { id: 'nu-user', placeholder: 'alice' })]),
       el('div', {}, [el('label', {}, '初始密码'), el('input', { id: 'nu-pass', placeholder: '≥6 位' })]),
       el('div', {}, [el('label', {}, '角色'), el('select', { id: 'nu-role' }, [el('option', { value: 'user' }, 'user'), el('option', { value: 'admin' }, 'admin')])]),
-      el('div', {}, [el('label', {}, '粘性会话'), el('select', { id: 'nu-sticky' }, [el('option', { value: 'auto' }, '自动跟随'), el('option', { value: 'pin' }, '固定账号'), el('option', { value: 'none' }, '轮询')])]),
     ]),
     el('div', { style: 'margin-top:14px' }),
     el('button', { class: 'primary', onclick: async () => {
@@ -584,7 +561,6 @@ async function renderUsers(view) {
             username: $('#nu-user').value,
             password: $('#nu-pass').value,
             role: $('#nu-role').value,
-            stickyMode: $('#nu-sticky').value,
           }),
         })
         toast(`已创建 ${r.user.username}，API Key: ${r.user.apiKey}`)
@@ -724,8 +700,8 @@ async function renderMe(view) {
       el('button', { onclick: async () => { await navigator.clipboard.writeText(me.apiKey).catch(() => {}); toast('已复制') } }, '复制'),
     ]),
     el('div', { class: 'row' }, [
-      el('span', { class: 'muted' }, '粘性会话'),
-      el('span', {}, me.stickyMode === 'pin' ? `固定到 ${me.pinnedEmail}` : me.stickyMode === 'none' ? '轮询' : `自动跟随（当前 ${me.lastStickyEmail || '未定'}）`),
+      el('span', { class: 'muted' }, '负载均衡'),
+      el('span', {}, '强制轮询：所有请求按上游账号轮流分配（不做会话粘性/分组）'),
     ]),
     el('p', { class: 'muted', style: 'margin-top:14px' }, '下游 Agent 接入：把上面 API Key 作为 Bearer token，base_url 指向本服务，例如'),
     el('pre', { class: 'flow-url' }, 'curl http://127.0.0.1:8787/v1/chat/completions \\\n  -H "Authorization: Bearer ' + (me.apiKey || 'sk-fb-…') + '" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"model":"deepseek/deepseek-v4-flash","messages":[{"role":"user","content":"你好"}],"stream":true}\''),

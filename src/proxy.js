@@ -40,76 +40,16 @@ export function createProxyHandler(ctx) {
     throw new Error('createProxyHandler requires ctx.runtimes (AccountRuntimes)')
   }
 
-  /**
-   * Compute sticky context for a chat request (会话级负载均衡):
-   *  - 同一会话ID（conversation_id / thread_id / 常见会话头）固定同一账号
-   *    （热 session 复用、避免 superseded）；不用恒定的 client_id / user 作为会话 key；
-   *  - 不同会话按「轮询 + 最少会话数」摊到不同账号，避免所有请求压在一个账号上被风控；
-   *  - `x-sticky-account` 头显式指定账号，优先级最高；
-   *  - Web 用户 pin 模式固定到 pinnedEmail；
-   *  - none 模式 / 无会话ID：纯池子选号（轮询 + 配额感知）。
-   */
-  function resolveSticky(req, body, model) {
-    const token = readBearer(req) || ''
-    const key = token || (req.headers['x-sticky-account'] ? `hdr:${req.headers['x-sticky-account']}` : '')
-    const headerPin =
-      typeof req.headers['x-sticky-account'] === 'string'
-        ? req.headers['x-sticky-account'].trim()
-        : null
-    const username = userStore ? userByKey.get(token) : null
-    const user = username ? userStore.getByUsername(username) : null
-    const convKey = extractConversationKey(body, req.headers)
-
-    let preferredEmail = null
-    /** @type {((email: string) => void) | null} */
-    let onSuccess = null
-
-    if (headerPin) {
-      // 显式指定：只作用于本次请求，不写入会话粘性。
-      preferredEmail = headerPin
-    } else if (user) {
-      if (user.stickyMode === 'pin' && user.pinnedEmail) {
-        preferredEmail = user.pinnedEmail
-      } else if (user.stickyMode !== 'none') {
-        // auto（默认）：会话级粘性 + 哈希摊分
-        preferredEmail = runtimes.conversationPreferredEmail(convKey, model)
-        onSuccess = (email) => {
-          if (convKey) runtimes.recordConversation(convKey, email)
-          userStore.recordStickySuccess(user.username, email)
-        }
-      }
-    } else if (key) {
-      // 超级 Key / 匿名：会话级粘性 + 哈希摊分
-      preferredEmail = runtimes.conversationPreferredEmail(convKey, model)
-      onSuccess = (email) => {
-        if (convKey) runtimes.recordConversation(convKey, email)
-      }
-    }
-
-    return {
-      key: key || 'anon',
-      convKey,
-      preferredEmail,
-      onSuccess,
-    }
-  }
-  /** @type {Map<string, string>} api-key → username (resolved at auth time) */
-  const userByKey = new Map()
-
   function authorize(req, res) {
     const keys = config.server.apiKeys || []
     if (keys.length === 0 && !userStore) return true
     const token = readBearer(req)
     if (keys.length > 0 && token && apiKeyMatches(token, keys)) {
-      userByKey.set(token, null) // super key, not a web user
       return true
     }
     if (userStore) {
       const user = token ? userStore.getByApiKey(token) : null
-      if (user) {
-        userByKey.set(token, user.username)
-        return true
-      }
+      if (user) return true
     }
     sendJson(res, 401, {
       error: {
@@ -328,40 +268,28 @@ export function createProxyHandler(ctx) {
     /** @type {boolean} */
     let pendingSwitchAccount = false
 
-    // 会话级粘性：同一会话固定同一账号（热 session 复用），
-    // 不同会话按轮询 + 最少会话数摊开（不用哈希，账号少时哈希易碰撞到同一账号）。
-    const sticky = resolveSticky(req, body, upstreamModel)
-
+    // 强制轮询：每个请求按账号轮流分配，不做会话粘性/分组。
+    // 上游无状态（客户端每次请求携带全量历史），所以无需为"同一会话"固定账号。
     while (attempt < maxAttempts) {
       attempt++
       try {
         // Single reacquire path: first attempt acquires; retries use gate from previous failure.
         const rt =
           attempt === 1
-            ? await runtimes.acquireForModel(upstreamModel, {
-                preferredEmail: sticky.preferredEmail,
-                convKey: sticky.convKey,
-              })
+            ? await runtimes.acquireForModel(upstreamModel)
             : await runtimes.reacquireAfterGate(upstreamModel, {
                 preferredEmail: lastEmail,
                 gateCode: pendingGateCode,
                 retryAfterMs: pendingRetryAfterMs,
                 switchAccount: pendingSwitchAccount,
               })
-        // 首次成功记录会话粘性；gate/限流重试后账号可能已切换，同样立即更新，
-        // 避免同一会话下次又先去试旧账号。
-        sticky.onSuccess?.(rt.email)
-        sticky.preferredEmail = rt.email
         pendingGateCode = null
         pendingRetryAfterMs = null
         pendingSwitchAccount = false
         lastEmail = rt.email
 
-        // 可观测性：响应头标明本次实际使用的账号与会话 key。
+        // 可观测性：响应头标明本次实际使用的账号。
         res.setHeader('x-freebuff-proxy-account', rt.email)
-        if (sticky.convKey) {
-          res.setHeader('x-freebuff-proxy-conv-key', String(sticky.convKey))
-        }
 
         const snap = rt.sessions.getSnapshot()
         if (!snap.live || !snap.instanceId) {
@@ -644,47 +572,6 @@ export function createProxyHandler(ctx) {
   }
 
   return { handle }
-}
-
-/**
- * 从 chat 请求提取会话标识（会话级负载均衡的 key）。
- * 只用"会话级"标识：codebuff_metadata.conversation_id / thread_id、
- * 显式会话字段（conversation_id / threadId / session_id）、常见会话头。
- * 不用 codebuff_metadata.client_id（安装 ID 恒定）和 body.user
- * （sub2api 等转换层常传固定 user）——它们对同一客户端恒定，会让所有会话
- * 共享同一个 key、永远分到同一个账号。
- * 拿不到返回 null（该请求走池子轮询选号，不做会话粘性，按账号轮流分配）。
- *
- * @param {any} body
- * @param {Record<string, string | string[] | undefined>} headers
- * @returns {string | null}
- */
-export function extractConversationKey(body, headers) {
-  const meta =
-    body?.codebuff_metadata && typeof body.codebuff_metadata === 'object'
-      ? body.codebuff_metadata
-      : null
-  const h = headers || {}
-  const candidates = [
-    meta?.conversation_id,
-    meta?.thread_id,
-    body?.conversation_id,
-    body?.conversationId,
-    body?.thread_id,
-    body?.threadId,
-    body?.session_id,
-    h['x-conversation-id'],
-    h['x-conversation_id'],
-    h['x-thread-id'],
-    h['x-session-id'],
-  ]
-  for (const v of candidates) {
-    if (typeof v === 'string') {
-      const t = v.trim()
-      if (t) return t
-    }
-  }
-  return null
 }
 
 function methodHasBody(method) {

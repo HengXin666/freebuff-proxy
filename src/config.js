@@ -12,7 +12,6 @@ import { parse as parseYaml } from 'yaml'
  * @property {{defaultAdminUsername: string, defaultAdminPassword: string | null}} users
  * @property {{releaseOnShutdown: boolean, reAdmitOnExpire: boolean, pollIntervalSec: number, admitTimeoutMs: number}} session
  * @property {{maxConcurrentRequests: number, upstreamTimeoutSec: number, maxAutoRetryOnSessionError: number}} limits
- * @property {{stickyTtlSec: number}} lb  会话粘性记忆时长（秒）：同一会话 key 在该时长内固定同一账号，过期后重新轮询分配
  * @property {{level: 'debug' | 'info' | 'warn' | 'error'}} logging
  */
 
@@ -56,10 +55,6 @@ const DEFAULTS = {
     upstreamTimeoutSec: 600,
     maxAutoRetryOnSessionError: 1,
   },
-  lb: {
-    /** 会话粘性记忆 TTL：防止同一个会话 key（如恒定 conversation_id）把账号钉死。 */
-    stickyTtlSec: 60,
-  },
   logging: {
     level: 'info',
   },
@@ -83,7 +78,6 @@ const KEY_MAP = {
   max_concurrent_requests: 'maxConcurrentRequests',
   upstream_timeout_sec: 'upstreamTimeoutSec',
   max_auto_retry_on_session_error: 'maxAutoRetryOnSessionError',
-  sticky_ttl_sec: 'stickyTtlSec',
 }
 
 function isPlainObject(value) {

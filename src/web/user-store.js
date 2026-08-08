@@ -8,12 +8,10 @@ import crypto from 'node:crypto'
  *
  *   data/users.json
  *     { version: 1, users: [ { username, salt, passwordHash, role,
- *       apiKey, stickyMode, pinnedEmail, lastStickyEmail, createdAt,
- *       lastSeenAt } ] }
+ *       apiKey, createdAt, lastSeenAt } ] }
  */
 
 const SCRYPT_KEYLEN = 64
-const STICKY_MODES = ['auto', 'pin', 'none']
 
 function hashPassword(password, salt) {
   return crypto.scryptSync(String(password), salt, SCRYPT_KEYLEN).toString('hex')
@@ -33,9 +31,6 @@ export function publicUser(user) {
     username: user.username,
     role: user.role,
     apiKey: user.apiKey,
-    stickyMode: user.stickyMode,
-    pinnedEmail: user.pinnedEmail || null,
-    lastStickyEmail: user.lastStickyEmail || null,
     createdAt: user.createdAt,
     lastSeenAt: user.lastSeenAt || null,
   }
@@ -110,9 +105,9 @@ export class UserStore {
   }
 
   /**
-   * @param {{username: string, password: string, role?: 'admin'|'user', stickyMode?: string, pinnedEmail?: string|null}} input
+   * @param {{username: string, password: string, role?: 'admin'|'user'}} input
    */
-  create({ username, password, role = 'user', stickyMode = 'auto', pinnedEmail = null }) {
+  create({ username, password, role = 'user' }) {
     const name = String(username || '').trim().toLowerCase()
     if (!/^[a-z0-9._-]{2,64}$/.test(name)) {
       throw new Error('用户名只能包含小写字母、数字、._-（2-64 位）')
@@ -129,9 +124,6 @@ export class UserStore {
       passwordHash: hashPassword(password, salt),
       role,
       apiKey: generateApiKey(),
-      stickyMode: STICKY_MODES.includes(stickyMode) ? stickyMode : 'auto',
-      pinnedEmail: pinnedEmail && typeof pinnedEmail === 'string' ? pinnedEmail : null,
-      lastStickyEmail: null,
       createdAt: new Date().toISOString(),
       lastSeenAt: null,
     }
@@ -178,34 +170,6 @@ export class UserStore {
     user.role = role
     this.save()
     return true
-  }
-
-  /**
-   * @param {string} username
-   * @param {{stickyMode?: string, pinnedEmail?: string|null}} patch
-   */
-  setSticky(username, patch) {
-    const user = this.getByUsername(username)
-    if (!user) return false
-    if (patch.stickyMode !== undefined) {
-      if (!STICKY_MODES.includes(patch.stickyMode)) return false
-      user.stickyMode = patch.stickyMode
-    }
-    if (patch.pinnedEmail !== undefined) {
-      user.pinnedEmail = patch.pinnedEmail || null
-    }
-    this.save()
-    return true
-  }
-
-  /** Record a successful upstream pick for a user (auto-sticky learning). */
-  recordStickySuccess(username, email) {
-    const user = this.getByUsername(username)
-    if (!user) return
-    if (user.stickyMode === 'auto' && email && user.lastStickyEmail !== email) {
-      user.lastStickyEmail = email
-      this.save()
-    }
   }
 
   /**

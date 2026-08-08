@@ -28,7 +28,7 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 3. **一切配置走前端页面，禁止让用户改配置文件**
    - 代理（全局池）→ 前端「代理设置」：加/删/测试/保存**立即生效**，持久化 `/data/proxies.json`。
    - 账号 → 前端导入 JSON / 浏览器登录回调（服务端轮询，**不在容器内开浏览器**）。
-   - 用户 → 前端用户管理（建/删/改密/重置 Key/粘性策略）。
+   - 用户 → 前端用户管理（建/删/改密/重置 Key）。
    - 管理员密码 → `.env` 或首次启动日志。
    - `config.yaml` 只作兜底默认值，不是日常操作入口。
    - 用户原话："正常人谁会天天改配置，都是在前端页面操作的。"
@@ -57,14 +57,17 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 - 前端展示上游 `rateLimitsByModel`（每模型 `已用/上限/重置时间`）；额度仅在 admit/活跃 session 时由上游返回。
 - 提供**只读探测刷新**（`POST /api/accounts/probe`，只 GET、不创建 session、不占额度）；导入账号后自动探测。
 - 多账号池自动切号：`rate_limited / spend_limited / ip_capped / free_mode_rate_limited / banned` 整号冷却并换下一个；`model_unavailable` 只冷却该模型。chat/completions 上游报错（429 限流 / 5xx / 403 账号级封禁）按 Retry-After 冷却当前账号并换号重试（最多试到账号数，封顶 5 次）；4xx 客户端错误不换号。
-- **配额感知负载均衡**：**轮询为主**（无会话 ID 的请求按账号轮流，不做"活跃 session 加分"——那会把请求全吸到一个账号），限额模型叠加「剩余额度越多越优先、用满降权」，冷却排除。
+- **强制轮询负载均衡**：Freebuff 会话是**无状态**的（每次请求由客户端带全量历史），
+  **不做任何会话粘性/分组/记忆**。每个请求按账号**严格轮流**（第 1、第 2、第 3…个账号），
+  冷却中的账号跳过、指针推进到被选中账号的下一位；不做"活跃 session 加分"、不做配额加权
+  （那会把请求全吸到同一账号，轮询就失效了）。每个账号自己的热 session 在轮到它时仍被复用。
 - **不限量模型豁免**：目录 `pool: 'unlimited'` 的模型（`deepseek/deepseek-v4-flash`、`mimo/mimo-v2.5`）
-  **不参与配额切换**（不因上游 rateLimit 条目切号），前端显示「不限」。
+  前端显示「不限」（不再有配额切换逻辑）。
 
 ## Session 行为
 
 - 创建 session 才扣额度 → **活跃 session 尽量复用**（轮询下每个账号的 session 在轮到它时被复用，避免重复 admit 占额度）。
-- **会话记忆带 TTL**（`lb.sticky_ttl_sec`，默认 60s）：同一会话 TTL 内固定同一账号，过期后重新轮询分配，防止恒定会话 key 把账号钉死、永不轮巡。
+- **无会话记忆/分组**：同一 conversation_id 也按请求严格轮询换号（上游无状态，无需把会话固定到账号）。
 - 换模型先释放旧 session；gate 错误（session_expired/superseded/waiting room 等）自动 re-admit **一次**。
 
 ## Web 控制台
@@ -82,7 +85,7 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 ## 测试与验证（提交前必须全过）
 
 ```bash
-npm test            # smoke（mock 上游：切号/粘性/配额/flash 豁免/代理池/probe/代理测试）
+npm test            # smoke（mock 上游：强制轮询/冷却换号/代理池/probe/代理测试）
 npm run typecheck
 docker compose config --quiet
 docker build .
@@ -95,6 +98,6 @@ docker build .
 
 - [x] 轻量镜像 + compose 一键部署 + /data 持久化 + GitHub Actions 构建
 - [x] Web 控制台：登录、用户管理、账号导入/浏览器回调、playground、额度/请求/冷却/出口展示
-- [x] 多账号池 + 会话级负载均衡（新会话按「最少会话数+轮询」、同一会话固定账号；无会话 ID 请求按账号轮询，不做活跃 session 加分）+ 配额感知 + 不限量模型（flash/mimo）豁免
+- [x] 多账号池 + **强制轮询负载均衡**（无会话粘性/分组/记忆，每请求严格轮流；冷却跳过、热 session 复用）+ 不限量模型（flash/mimo）豁免
 - [x] 前端「代理设置」全局池管理：多行代理、保存立即生效、持久化 `/data/proxies.json`、重启自动加载、无需重启
 - [x] 全局代理池（config 层兜底）+ 代理测试（出口 IP/国家/延迟/codebuff 状态、底层原因码）+ 账号级 proxy 仅内部字段（无 UI）

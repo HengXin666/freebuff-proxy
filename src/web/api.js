@@ -358,8 +358,6 @@ export function createWebApi(deps) {
           username: body.username,
           password: body.password,
           role: body.role,
-          stickyMode: body.stickyMode,
-          pinnedEmail: body.pinnedEmail,
         })
         sendJson(res, 200, { ok: true, user: created })
       } catch (err) {
@@ -390,12 +388,6 @@ export function createWebApi(deps) {
         }
         try {
           if (body.role !== undefined) userStore.setRole(username, body.role)
-          if (body.stickyMode !== undefined || body.pinnedEmail !== undefined) {
-            userStore.setSticky(username, {
-              stickyMode: body.stickyMode,
-              pinnedEmail: body.pinnedEmail,
-            })
-          }
           sendJson(res, 200, { ok: true, user: sanitize(userStore.getByUsername(username)) })
         } catch (err) {
           sendJson(res, 400, {

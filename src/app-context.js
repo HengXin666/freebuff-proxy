@@ -58,25 +58,10 @@ export class AccountRuntimes {
     this._lastSuccessEmail = null
     /** Per-account success counters (in-memory, for load-balance visibility). */
     this.stats = { total: 0, byEmail: new Map() }
-    /**
-     * 会话ID → { email, until }（进程内粘性记忆，带 TTL）。
-     * TTL 内同一会话固定同一账号（热 session 复用）；过期后重新按
-     * "轮询 + 最少会话数"分配——防止恒定 conversation_id 把账号钉死、永不轮巡。
-     * @type {Map<string, { email: string, until: number }>}
-     */
-    this.stickyByConversation = new Map()
-    /** 会话粘性记忆时长（毫秒），0 = 不做粘性记忆、每请求重新轮询分配。 */
-    this._stickyTtlMs = Math.max(0, Number(config.lb?.stickyTtlSec ?? 60)) * 1000
   }
 
   list() {
     const now = Date.now()
-    const convCountByEmail = new Map()
-    for (const v of this.stickyByConversation.values()) {
-      const email = v && typeof v === 'object' ? v.email : v
-      if (!email) continue
-      convCountByEmail.set(email, (convCountByEmail.get(email) || 0) + 1)
-    }
     return listAccounts(this.dir).map((a) => {
       const cd = this.cooldowns.get(a.email)
       const cooling = Boolean(cd && cd.until > now)
@@ -89,7 +74,6 @@ export class AccountRuntimes {
         cooldownUntil: cooling ? new Date(cd.until).toISOString() : null,
         cooldownCode: cooling ? cd.code : null,
         requests: this.stats.byEmail.get(a.email) || 0,
-        stickyConversations: convCountByEmail.get(a.email) || 0,
         effectiveProxy: rt?.effectiveProxy || null,
         session: snap
           ? {
@@ -228,122 +212,31 @@ export class AccountRuntimes {
   }
 
   /**
-   * 会话级粘性选号种子：
-   * - 已有粘性记录的会话 → 返回记录账号（可用性/冷却由 acquireForModel 兜底）；
-   * - 新会话 → 从健康账号里选"当前持有会话数最少"的那个（平局按轮询次序，
-   *   从 _rr 指针开始依账号列表顺序轮流），并立即记忆，避免并发新会话
-   *   同时抢到同一个账号。冷却中的账号、已用满限额的账号（仅限额模型）不参与。
-   * 账号只有少数几个时，哈希碰撞容易导致新会话总落到同一个账号，
-   * 所以这里不用哈希，直接用最少会话 + 轮询。
-   * 无会话ID 返回 null，走池子轮询/配额选号。
-   * @param {string | null} convKey
-   * @param {string | null} [model]
-   * @returns {string | null}
-   */
-  conversationPreferredEmail(convKey, model = null) {
-    if (!convKey) return null
-    const key = String(convKey)
-    const known = this.stickyByConversation.get(key)
-    if (known && known.until > Date.now()) return known.email
-    const emails = this.allEmails()
-      .filter((e) => !this.isCoolingDown(e, model))
-      .filter((e) => {
-        if (!model || isUnlimitedModel(model)) return true
-        const rt = this.byEmail.get(e)
-        const q = rt?.sessions?.getSnapshot?.()?.quota?.byModel?.[model]
-        if (!q || !Number.isFinite(q.limit) || q.limit <= 0) return true
-        return (Number(q.recentCount) || 0) < q.limit
-      })
-      .sort()
-    if (!emails.length) return null
-
-    // 统计每个健康账号当前已固定的会话数（记忆 → 最少者优先）
-    const countByEmail = new Map()
-    for (const email of this.stickyByConversation.values()) {
-      countByEmail.set(email, (countByEmail.get(email) || 0) + 1)
-    }
-
-    // 主排序：持有会话数最少；平局按轮询次序（从 _rr 指针起循环），
-    // 新会话按 第1、第2、第3…个账号轮流分配。
-    const start = this._rr % emails.length
-    let best = null
-    let bestCount = Infinity
-    for (let i = 0; i < emails.length; i++) {
-      const email = emails[(start + i) % emails.length]
-      const count = countByEmail.get(email) || 0
-      if (count < bestCount) {
-        best = email
-        bestCount = count
-      }
-    }
-    this._rr = (this._rr + 1) % Math.max(emails.length, 1)
-
-    // 立即记忆（预订），避免并发的新会话同时选中同一个账号；
-    // 若最终请求失败回落到其他账号，recordConversation 会更新为新账号。
-    this.stickyByConversation.set(key, {
-      email: best,
-      until: Date.now() + this._stickyTtlMs,
-    })
-    return best
-  }
-
-  /** 记录 会话ID → 账号 粘性（首次成功或账号回落后更新，刷新 TTL）。 */
-  recordConversation(convKey, email) {
-    if (!convKey) return
-    this.stickyByConversation.set(String(convKey), {
-      email,
-      until: Date.now() + this._stickyTtlMs,
-    })
-  }
-
-  /** 手动解除某会话的粘性（一般由冷却回落自动更新，无需外部调用）。 */
-  forgetConversation(convKey) {
-    if (!convKey) return
-    this.stickyByConversation.delete(String(convKey))
-  }
-
-  /**
    * @param {string} model
    */
   candidateEmails(model) {
     const emails = this.allEmails()
     if (!emails.length) return []
-
-    const scored = emails.map((email, idx) => {
-      let score = 0
-      const rt = this.byEmail.get(email)
-      // 轮询为主：无会话ID 的请求按 第1、第2、第3…个账号轮流分配。
-      // 注意：不给“已有活跃 session”/“最近成功账号”加分——那会让所有请求
-      // 持续吸到同一个账号（旧行为：一个账号 128 次、其余 0 次）。
-      // 轮询下每个账号自己的 session 仍会在轮到它时被复用，热 session 不丢。
-      const rot =
-        (idx + emails.length - (this._rr % emails.length)) % emails.length
-      score += (emails.length - rot) / 100
-      if (this.isCoolingDown(email, model)) score -= 1000
-      // 配额感知：仅对"限额"模型生效（flash/mimo 等 unlimited 池不限量，
-      // 不应按 rateLimitsByModel 的已用/上限来切换账号，避免无谓的 session 替换）
-      if (!isUnlimitedModel(model)) {
-        const q = rt?.sessions?.getSnapshot?.()?.quota?.byModel?.[model]
-        if (q && Number.isFinite(q.limit) && q.limit > 0) {
-          const used = Number(q.recentCount) || 0
-          const remaining = Math.max(0, q.limit - used)
-          score += Math.min(10, (remaining / q.limit) * 10)
-          if (remaining <= 0) score -= 500
-        }
-      }
-      return { email, score }
-    })
-    scored.sort((a, b) => b.score - a.score)
-    return scored.map((s) => s.email)
+    // 强制轮询：每次请求按 第1、第2、第3…个账号轮流分配，
+    // 冷却中的账号跳过。上游无状态（每次请求带全量历史），
+    // 不做会话粘性/分组，也不做配额加权（否则会打破轮询，把请求吸回同一账号）。
+    // 每个账号自己的 free session 仍会在轮到它时被复用，热 session 不丢。
+    const start = this._rr % emails.length
+    const order = []
+    for (let i = 0; i < emails.length; i++) {
+      const email = emails[(start + i) % emails.length]
+      if (this.isCoolingDown(email, model)) continue
+      order.push(email)
+    }
+    return order
   }
 
   /**
+   * 强制轮询选号：从轮询指针开始按账号顺序尝试，冷却中的账号跳过。
+   * 上游无状态（每次请求带全量历史），不做会话粘性/分组。
    * @param {string} model
-   * @param {{ preferredEmail?: string | null, convKey?: string | null }} [opts]
-   *   sticky pin: try this account first when it is not cooling down;
-   *   fall back to the pool. convKey 仅用于日志（会话级负载均衡的可观测性）。
    */
-  async acquireForModel(model, opts = {}) {
+  async acquireForModel(model) {
     if (!model) {
       throw new UpstreamError('model is required', {
         status: 400,
@@ -362,41 +255,6 @@ export class AccountRuntimes {
     const order = this.candidateEmails(model)
     /** @type {Array<{ email: string, code?: string, message: string }>} */
     const failures = []
-
-    // Sticky path: honor the caller's preferred (sticky) account first.
-    const preferred = opts.preferredEmail
-    if (
-      preferred &&
-      emails.includes(preferred) &&
-      !this.isCoolingDown(preferred, model)
-    ) {
-      try {
-        const rt = this.get(preferred)
-        await rt.sessions.ensureSession(model)
-        this.clearCooldown(preferred, model)
-        this._lastSuccessEmail = preferred
-        this._recordSuccess(preferred)
-        logger.info('sticky account selected', {
-          email: preferred,
-          model,
-          convKey: opts.convKey || null,
-        })
-        return rt
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        failures.push({ email: preferred, code: err?.code, message })
-        const wrap =
-          err instanceof UpstreamError
-            ? err
-            : new UpstreamError(message, { status: 502, code: 'admit_failed' })
-        this.markCooldown(preferred, wrap, model)
-        logger.warn('sticky account failed; falling back to pool', {
-          email: preferred,
-          model,
-          error: message,
-        })
-      }
-    }
 
     for (const email of order) {
       if (this.isCoolingDown(email, model)) {
@@ -427,12 +285,13 @@ export class AccountRuntimes {
         await rt.sessions.ensureSession(model)
         this.clearCooldown(email, model)
         this._lastSuccessEmail = email
-        this._rr = (this._rr + 1) % Math.max(emails.length, 1)
+        // 指针推进到"被选中账号"的下一位：冷却账号被跳过时依然保持公平轮询
+        // （若只按 +1 推进，跳过冷却账号会让列表末尾的账号被选中两次）。
+        this._rr = (emails.indexOf(email) + 1) % Math.max(emails.length, 1)
         this._recordSuccess(email)
         logger.info('selected account for model', {
           email,
           model,
-          convKey: opts.convKey || null,
         })
         return rt
       } catch (err) {
@@ -464,10 +323,12 @@ export class AccountRuntimes {
   }
 
   /**
+   * 换号/重试选号：
+   * - switchAccount（429/5xx/403 账号级故障）→ 冷却当前账号，然后按轮询换下一个账号；
+   * - 纯 gate 错误（session_expired/superseded 等）→ 同号强制 re-admit 一次（不冷却），
+   *   失败则按轮询换号。
    * @param {string} model
    * @param {{ preferredEmail?: string | null, gateCode?: string | null, retryAfterMs?: number | null, switchAccount?: boolean }} [opts]
-   *   retryAfterMs: 上游返回的限流等待时间（用于设置账号冷却时长）；
-   *   switchAccount: 上游报错（429/5xx 等）时强制冷却当前账号并换号，而不是同号重试。
    */
   async reacquireAfterGate(model, opts = {}) {
     if (opts.preferredEmail) {
