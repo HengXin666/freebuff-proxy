@@ -1,0 +1,658 @@
+import {
+  requireModelId,
+  buildModelsListResponse,
+  modelIdsFromSession,
+  agentIdForModel,
+} from './model.js'
+import {
+  extractGateError,
+  isSessionRecoverableGate,
+  UpstreamError,
+} from './upstream/client.js'
+import { timingSafeEqual } from 'node:crypto'
+import {
+  filterRequestHeaders,
+  filterResponseHeaders,
+  newIds,
+  readBearer,
+  readRequestBody,
+  sendJson,
+} from './util/http.js'
+import { freebuffAuthHeaders } from './auth-store.js'
+import {
+  ensureFreebuffSystemMessages,
+  normalizeReasoningFields,
+} from './free-mode.js'
+import { logger } from './util/log.js'
+
+/**
+ * OpenAI-compatible surface under /v1 only.
+ * Freebuff upstream calls are internal (/api/v1/...).
+ *
+ * @param {object} ctx
+ * @param {import('./config.js').ProxyConfig} ctx.config
+ * @param {import('./app-context.js').AccountRuntimes} ctx.runtimes
+ */
+export function createProxyHandler(ctx) {
+  const { config, runtimes } = ctx
+  if (!runtimes) {
+    throw new Error('createProxyHandler requires ctx.runtimes (AccountRuntimes)')
+  }
+
+  function authorize(req, res) {
+    const keys = config.server.apiKeys || []
+    if (keys.length === 0) return true
+    const token = readBearer(req)
+    if (!token || !apiKeyMatches(token, keys)) {
+      sendJson(res, 401, {
+        error: {
+          message: 'Invalid proxy API key',
+          type: 'auth_error',
+          code: 'invalid_api_key',
+        },
+      })
+      return false
+    }
+    return true
+  }
+
+  async function handle(req, res) {
+    const url = new URL(
+      req.url || '/',
+      `http://${req.headers.host || 'localhost'}`,
+    )
+    const path = url.pathname
+    const method = (req.method || 'GET').toUpperCase()
+
+    if (method === 'GET' && (path === '/healthz' || path === '/health')) {
+      sendJson(res, 200, { status: 'ok' })
+      return
+    }
+
+    if (!authorize(req, res)) return
+
+    if (method === 'GET' && path === '/v1/models') {
+      await handleModels(res)
+      return
+    }
+
+    if (method === 'GET' && path === '/v1/freebuff/status') {
+      await handleStatus(res)
+      return
+    }
+
+    if (method === 'GET' && path === '/v1/freebuff/accounts') {
+      sendJson(res, 200, { object: 'list', data: runtimes.list() })
+      return
+    }
+
+    if (method === 'POST' && path === '/v1/freebuff/session/end') {
+      // End sessions on all cached runtimes (best-effort)
+      const accounts = []
+      for (const row of runtimes.list()) {
+        try {
+          const rt = runtimes.get(row.email)
+          await rt.sessions.release()
+          accounts.push({ email: row.email, ok: true })
+        } catch (err) {
+          accounts.push({
+            email: row.email,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
+      sendJson(res, 200, { ok: true, accounts })
+      return
+    }
+
+    if (method === 'POST' && path === '/v1/chat/completions') {
+      await handleChatCompletions(req, res)
+      return
+    }
+
+    // Auth-injected passthrough for other OpenAI-shaped /v1 routes only.
+    // Chat completions are NOT handled here.
+    if (path.startsWith('/v1/')) {
+      await handleGenericPassthrough(req, res, url)
+      return
+    }
+
+    sendJson(res, 404, {
+      error: {
+        message: `No route for ${method} ${path}. Public API is under /v1.`,
+        type: 'invalid_request_error',
+        code: 'not_found',
+      },
+    })
+  }
+
+  async function handleModels(res) {
+    let accessTier = null
+    /** @type {string[]} */
+    let extraIds = []
+    try {
+      const rt = runtimes.getAny()
+      const session = await rt.upstream.freebuffSession('GET')
+      if (session && typeof session === 'object') {
+        if (session.accessTier === 'full' || session.accessTier === 'limited') {
+          accessTier = session.accessTier
+        }
+        extraIds = modelIdsFromSession(session)
+      }
+    } catch (err) {
+      logger.warn('models: session probe failed; returning static catalog', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+    sendJson(
+      res,
+      200,
+      buildModelsListResponse({
+        accessTier,
+        extraIds,
+        includeAllCatalog: true,
+      }),
+    )
+  }
+
+  async function handleStatus(res) {
+    const rt = runtimes.getAny()
+    let me = null
+    try {
+      me = await rt.upstream.me(['id', 'email'])
+    } catch (err) {
+      me = { error: err instanceof Error ? err.message : String(err) }
+    }
+    sendJson(res, 200, {
+      upstream: {
+        apiBase: config.upstream.apiBase,
+        loginBase: config.upstream.loginBase,
+      },
+      account: rt.email,
+      accounts: runtimes.list(),
+      user: me,
+      session: rt.sessions.getSnapshot(),
+    })
+  }
+
+  async function handleChatCompletions(req, res) {
+    const releaseSlot = await acquireRequestSlot(config.limits.maxConcurrentRequests)
+    try {
+      await handleChatCompletionsInner(req, res)
+    } finally {
+      releaseSlot()
+    }
+  }
+
+  async function handleChatCompletionsInner(req, res) {
+    let rawBuf
+    try {
+      rawBuf = await readRequestBody(req)
+    } catch (err) {
+      if (err && err.statusCode === 413) {
+        sendJson(res, 413, {
+          error: {
+            message: 'Request body too large',
+            type: 'invalid_request_error',
+            code: 'body_too_large',
+          },
+        })
+        return
+      }
+      throw err
+    }
+    let body
+    try {
+      body = JSON.parse(rawBuf.toString('utf8') || '{}')
+    } catch {
+      sendJson(res, 400, {
+        error: {
+          message: 'Invalid JSON body',
+          type: 'invalid_request_error',
+          code: 'invalid_json',
+        },
+      })
+      return
+    }
+
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      sendJson(res, 400, {
+        error: {
+          message: 'Body must be a JSON object',
+          type: 'invalid_request_error',
+        },
+      })
+      return
+    }
+
+    const upstreamModel = requireModelId(body.model)
+    if (!upstreamModel) {
+      sendJson(res, 400, {
+        error: {
+          message:
+            'model is required. This proxy does not select a default model; pass the Freebuff model id chosen by your Agent.',
+          type: 'invalid_request_error',
+          code: 'model_required',
+        },
+      })
+      return
+    }
+
+    const stream = Boolean(body.stream)
+    let attempt = 0
+    const maxRetry = config.limits.maxAutoRetryOnSessionError ?? 1
+    /** @type {string | null} */
+    let lastEmail = null
+    /** @type {string | null} */
+    let pendingGateCode = null
+
+    while (attempt <= maxRetry) {
+      attempt++
+      try {
+        // Single reacquire path: first attempt acquires; retries use gate from previous failure.
+        const rt =
+          attempt === 1
+            ? await runtimes.acquireForModel(upstreamModel)
+            : await runtimes.reacquireAfterGate(upstreamModel, {
+                preferredEmail: lastEmail,
+                gateCode: pendingGateCode,
+              })
+        pendingGateCode = null
+        lastEmail = rt.email
+
+        const snap = rt.sessions.getSnapshot()
+        if (!snap.live || !snap.instanceId) {
+          throw new UpstreamError(
+            'No live freebuff session after admit.',
+            { status: 503, code: 'no_session' },
+          )
+        }
+
+        const agentId = agentIdForModel(upstreamModel)
+        const runId = await rt.upstream.startAgentRun({ agentId })
+        logger.info('started agent run', {
+          runId,
+          agentId,
+          model: upstreamModel,
+          account: rt.email,
+        })
+
+        const forwardBody = buildForwardBody(
+          body,
+          upstreamModel,
+          snap.instanceId,
+          runId,
+        )
+        const result = await forwardCompletions({
+          req,
+          res,
+          forwardBody,
+          stream,
+          upstream: rt.upstream,
+        })
+
+        // Best-effort close the run registry row
+        void rt.upstream.finishAgentRun({
+          runId,
+          status: result.ok ? 'completed' : 'failed',
+          errorMessage: result.ok
+            ? undefined
+            : result.gateCode || 'completions_failed',
+        })
+
+        if (result.ok) return
+
+        if (result.recoverable && attempt <= maxRetry) {
+          logger.warn('session gate error; will re-acquire once', {
+            code: result.gateCode,
+            attempt,
+            model: upstreamModel,
+            account: lastEmail,
+          })
+          pendingGateCode = result.gateCode
+          continue
+        }
+
+        if (!result.wrote) {
+          await writeUpstreamError(
+            res,
+            result.status,
+            result.body,
+            result.headers,
+          )
+        }
+        return
+      } catch (err) {
+        if (err instanceof UpstreamError) {
+          if (
+            isSessionRecoverableGate(err.code) &&
+            attempt <= maxRetry
+          ) {
+            logger.warn('recoverable session error; will re-acquire once', {
+              code: err.code,
+              attempt,
+              account: lastEmail,
+            })
+            pendingGateCode = err.code
+            continue
+          }
+          mapAndSendError(res, err)
+          return
+        }
+        logger.error('chat completions failed', {
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        })
+        if (!res.headersSent) {
+          sendJson(res, 500, {
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+              type: 'proxy_error',
+            },
+          })
+        } else {
+          res.end()
+        }
+        return
+      }
+    }
+  }
+
+  function buildForwardBody(clientBody, upstreamModel, instanceId, runId) {
+    const { clientId } = newIds()
+    let body = { ...clientBody, model: upstreamModel }
+    // One reasoning field only — avoids Freebuff default + client dual fields.
+    body = normalizeReasoningFields(body)
+    // Free mode requires a system message opening with the Freebuff CLI marker
+    // ("You are Buffy, the strategic coding assistant."). Without it the
+    // upstream returns free_mode_cli_required.
+    body.messages = ensureFreebuffSystemMessages(body.messages)
+
+    const existingMeta =
+      body.codebuff_metadata && typeof body.codebuff_metadata === 'object'
+        ? { ...body.codebuff_metadata }
+        : {}
+    // run_id MUST be server-issued via POST /api/v1/agent-runs (START).
+    body.codebuff_metadata = {
+      ...existingMeta,
+      run_id: runId,
+      client_id: existingMeta.client_id || clientId,
+      cost_mode: 'free',
+      freebuff_instance_id: instanceId,
+    }
+    if (body.provider && typeof body.provider === 'object') {
+      body.provider = { ...body.provider }
+    }
+    return body
+  }
+
+  async function forwardCompletions({
+    req,
+    res,
+    forwardBody,
+    stream,
+    upstream,
+  }) {
+    const headers = {
+      ...filterRequestHeaders(req.headers),
+      'content-type': 'application/json',
+      accept:
+        stream
+          ? 'text/event-stream'
+          : req.headers.accept || 'application/json',
+      // Match Codebuff/Freebuff SDK UA used on the official free path.
+      'user-agent': 'ai-sdk/openai-compatible/freebuff-proxy/codebuff',
+      ...freebuffAuthHeaders(upstream.token),
+    }
+
+    const upstreamRes = await upstream.raw('/api/v1/chat/completions', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(forwardBody),
+      signal: reqToAbortSignal(req),
+      timeoutMs: config.limits.upstreamTimeoutSec * 1000,
+    })
+
+    const status = upstreamRes.status
+    const respHeaders = filterResponseHeaders(upstreamRes.headers)
+
+    if (!upstreamRes.ok) {
+      const text = await upstreamRes.text()
+      let parsed = null
+      try {
+        parsed = text ? JSON.parse(text) : null
+      } catch {
+        parsed = null
+      }
+      const gateCode = extractGateError(parsed, status)
+      if (gateCode && isSessionRecoverableGate(gateCode)) {
+        return {
+          ok: false,
+          wrote: false,
+          recoverable: true,
+          gateCode,
+          status,
+          body: parsed || { error: { message: text, type: 'upstream_error' } },
+          headers: respHeaders,
+        }
+      }
+      return {
+        ok: false,
+        wrote: false,
+        recoverable: false,
+        gateCode,
+        status,
+        body: parsed || text,
+        headers: respHeaders,
+      }
+    }
+
+    res.writeHead(status, respHeaders)
+    if (!upstreamRes.body) {
+      res.end()
+      return { ok: true, wrote: true }
+    }
+    await pipeWebStreamToNode(upstreamRes.body, res, req)
+    return { ok: true, wrote: true }
+  }
+
+  /**
+   * Non-chat /v1/* → upstream /api/v1/* with Freebuff auth only.
+   * No session admit (chat has its own handler).
+   */
+  async function handleGenericPassthrough(req, res, url) {
+    if (
+      url.pathname === '/v1/chat/completions' ||
+      url.pathname.startsWith('/v1/chat/completions/')
+    ) {
+      sendJson(res, 404, {
+        error: {
+          message: 'Use POST /v1/chat/completions',
+          type: 'invalid_request_error',
+          code: 'not_found',
+        },
+      })
+      return
+    }
+
+    const rt = runtimes.getAny()
+    const upstreamPath = `/api/v1${url.pathname.slice('/v1'.length)}${url.search}`
+    const rawBuf = methodHasBody(req.method)
+      ? await readRequestBody(req)
+      : null
+
+    const headers = {
+      ...filterRequestHeaders(req.headers),
+      ...freebuffAuthHeaders(rt.upstream.token),
+    }
+    if (rawBuf?.length && !headers['content-type']) {
+      headers['content-type'] = 'application/json'
+    }
+
+    let upstreamRes
+    try {
+      upstreamRes = await rt.upstream.raw(upstreamPath, {
+        method: req.method || 'GET',
+        headers,
+        body: rawBuf?.length ? rawBuf : undefined,
+        signal: reqToAbortSignal(req),
+      })
+    } catch (err) {
+      mapAndSendError(res, err)
+      return
+    }
+
+    const respHeaders = filterResponseHeaders(upstreamRes.headers)
+    res.writeHead(upstreamRes.status, respHeaders)
+    if (!upstreamRes.body) {
+      res.end()
+      return
+    }
+    await pipeWebStreamToNode(upstreamRes.body, res, req)
+  }
+
+  return { handle }
+}
+
+function methodHasBody(method) {
+  const m = (method || 'GET').toUpperCase()
+  return m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE'
+}
+
+/** Constant-time-ish compare against configured proxy keys. */
+function apiKeyMatches(token, keys) {
+  const a = Buffer.from(String(token))
+  for (const key of keys) {
+    const b = Buffer.from(String(key))
+    if (a.length === b.length && timingSafeEqual(a, b)) return true
+  }
+  return false
+}
+
+/** Simple in-process semaphore for chat completions. */
+let _inFlight = 0
+/** @type {Array<() => void>} */
+const _waitQueue = []
+
+/**
+ * @param {number} max
+ * @returns {Promise<() => void>}
+ */
+function acquireRequestSlot(max) {
+  const limit = Number.isFinite(max) && max > 0 ? max : 32
+  if (_inFlight < limit) {
+    _inFlight++
+    return Promise.resolve(releaseRequestSlot)
+  }
+  return new Promise((resolve) => {
+    _waitQueue.push(() => {
+      _inFlight++
+      resolve(releaseRequestSlot)
+    })
+  })
+}
+
+function releaseRequestSlot() {
+  _inFlight = Math.max(0, _inFlight - 1)
+  const next = _waitQueue.shift()
+  if (next) next()
+}
+
+function reqToAbortSignal(req) {
+  const controller = new AbortController()
+  req.on('close', () => {
+    if (!req.complete) controller.abort()
+  })
+  return controller.signal
+}
+
+async function pipeWebStreamToNode(webBody, nodeRes, nodeReq) {
+  const reader = webBody.getReader()
+  nodeReq.on('close', () => {
+    reader.cancel().catch(() => {})
+  })
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) {
+        const ok = nodeRes.write(Buffer.from(value))
+        if (!ok) await onceDrain(nodeRes)
+      }
+    }
+    nodeRes.end()
+  } catch (err) {
+    try {
+      nodeRes.destroy(err instanceof Error ? err : undefined)
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function onceDrain(res) {
+  return new Promise((resolve) => res.once('drain', resolve))
+}
+
+async function writeUpstreamError(res, status, body, headers = {}) {
+  if (res.headersSent) {
+    res.end()
+    return
+  }
+  if (body && typeof body === 'object') {
+    sendJson(res, status || 502, body, headers)
+    return
+  }
+  sendJson(res, status || 502, {
+    error: {
+      message: typeof body === 'string' ? body : 'Upstream error',
+      type: 'upstream_error',
+    },
+  })
+}
+
+function mapAndSendError(res, err) {
+  if (res.headersSent) {
+    try {
+      res.end()
+    } catch {
+      // ignore
+    }
+    return
+  }
+  if (err instanceof UpstreamError) {
+    const status = err.status || 502
+    const body =
+      err.body && typeof err.body === 'object'
+        ? err.body.error
+          ? err.body
+          : {
+              error: {
+                message: err.message,
+                type: 'freebuff_error',
+                code: err.code,
+                details: err.body,
+              },
+            }
+        : {
+            error: {
+              message: err.message,
+              type: 'freebuff_error',
+              code: err.code,
+            },
+          }
+    const headers = {}
+    if (err.retryAfterMs != null) {
+      headers['retry-after'] = String(Math.ceil(err.retryAfterMs / 1000))
+    }
+    sendJson(res, status, body, headers)
+    return
+  }
+  sendJson(res, 500, {
+    error: {
+      message: err instanceof Error ? err.message : String(err),
+      type: 'proxy_error',
+    },
+  })
+}

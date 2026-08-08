@@ -1,0 +1,25 @@
+{
+  "name": "freebuff-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OpenAI-compatible reverse proxy that handles Freebuff auth and free-session admission",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node bin/serve.js",
+    "serve": "node bin/serve.js",
+    "login": "node bin/login.js",
+    "doctor": "node bin/doctor.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node test/smoke.mjs"
+  },
+  "dependencies": {
+    "yaml": "^2.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.2.0",
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,29 @@
+# freebuff-proxy — single-track config
+
+server:
+  # Loopback default. Non-loopback requires api_keys (serve refuses otherwise).
+  host: 127.0.0.1
+  port: 8787
+  # Optional Agent gate (not Freebuff auth). Empty = open on loopback only.
+  api_keys: ["sk-proxy-local"]
+
+upstream:
+  # Freebuff API + login origins (config only; no env dual override)
+  api_base: https://codebuff.com
+  login_base: https://freebuff.com
+  # Default: <project>/credentials  →  <email>.json per account
+  # credentials_dir: ./credentials
+
+session:
+  release_on_shutdown: true
+  re_admit_on_expire: true
+  poll_interval_sec: 30
+  admit_timeout_ms: 30000
+
+limits:
+  max_concurrent_requests: 32
+  upstream_timeout_sec: 600
+  max_auto_retry_on_session_error: 1
+
+logging:
+  level: info
