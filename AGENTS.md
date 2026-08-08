@@ -56,7 +56,7 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 
 - 前端展示上游 `rateLimitsByModel`（每模型 `已用/上限/重置时间`）；额度仅在 admit/活跃 session 时由上游返回。
 - 提供**只读探测刷新**（`POST /api/accounts/probe`，只 GET、不创建 session、不占额度）；导入账号后自动探测。
-- 多账号池自动切号：`rate_limited / spend_limited / ip_capped / banned` 整号冷却并换下一个；`model_unavailable` 只冷却该模型。
+- 多账号池自动切号：`rate_limited / spend_limited / ip_capped / free_mode_rate_limited / banned` 整号冷却并换下一个；`model_unavailable` 只冷却该模型。chat/completions 返回 429 限流（如 `free_mode_rate_limited`）时同样按 Retry-After 冷却并换号重试一次。
 - **配额感知负载均衡**：限额模型按「剩余额度越多越优先、用满降权」，轮询兜底，冷却排除。
 - **不限量模型豁免**：目录 `pool: 'unlimited'` 的模型（`deepseek/deepseek-v4-flash`、`mimo/mimo-v2.5`）
   **不参与配额切换**（不因上游 rateLimit 条目切号），前端显示「不限」。
@@ -94,6 +94,6 @@ docker build .
 
 - [x] 轻量镜像 + compose 一键部署 + /data 持久化 + GitHub Actions 构建
 - [x] Web 控制台：登录、用户管理、账号导入/浏览器回调、playground、额度/请求/冷却/出口展示
-- [x] 多账号池 + 会话级负载均衡（不同会话按哈希摊开、同一会话固定账号，防单账号风控）+ 配额感知 + 不限量模型（flash/mimo）豁免
+- [x] 多账号池 + 会话级负载均衡（不同会话按「最少会话数+轮询」摊开、同一会话固定账号，防单账号风控）+ 配额感知 + 不限量模型（flash/mimo）豁免
 - [x] 前端「代理设置」全局池管理：多行代理、保存立即生效、持久化 `/data/proxies.json`、重启自动加载、无需重启
 - [x] 全局代理池（config 层兜底）+ 代理测试（出口 IP/国家/延迟/codebuff 状态、底层原因码）+ 账号级 proxy 仅内部字段（无 UI）

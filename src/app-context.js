@@ -10,22 +10,12 @@ import { UpstreamError } from './upstream/client.js'
 import { isUnlimitedModel } from './model.js'
 import { logger } from './util/log.js'
 
-/** 稳定的 32-bit FNV-1a 哈希 → [0, n)。会话摊分用：同一会话同一账号，账号列表不变时结果稳定。 */
-function stableIndex(key, n) {
-  let h = 2166136261 >>> 0
-  const bytes = Buffer.from(String(key), 'utf8')
-  for (let i = 0; i < bytes.length; i++) {
-    h ^= bytes[i]
-    h = Math.imul(h, 16777619) >>> 0
-  }
-  return n > 0 ? h % n : 0
-}
-
 /** Errors where trying another logged-in account may succeed. */
 const SWITCHABLE_CODES = new Set([
   'rate_limited',
   'spend_limited',
   'ip_capped',
+  'free_mode_rate_limited',
   'premium_slot_taken',
   'model_unavailable',
   'banned',
@@ -38,6 +28,7 @@ const ACCOUNT_COOLDOWN_CODES = new Set([
   'rate_limited',
   'spend_limited',
   'ip_capped',
+  'free_mode_rate_limited',
   'banned',
   'premium_slot_taken',
 ])
@@ -68,8 +59,9 @@ export class AccountRuntimes {
     /** Per-account success counters (in-memory, for load-balance visibility). */
     this.stats = { total: 0, byEmail: new Map() }
     /**
-     * 会话ID → 账号（进程内粘性）。同一会话固定同一账号（热 session 复用），
-     * 不同会话按稳定哈希摊到不同账号，避免全部请求压在一个账号上被风控。
+     * 会话ID → 账号（进程内粘性）。同一会话固定同一账号（热 session 复用）；
+     * 新会话按"轮询 + 最少会话数"分到不同账号，避免账号少时哈希碰撞导致
+     * 所有会话总落到同一个账号。
      * @type {Map<string, string>}
      */
     this.stickyByConversation = new Map()
@@ -234,8 +226,11 @@ export class AccountRuntimes {
   /**
    * 会话级粘性选号种子：
    * - 已有粘性记录的会话 → 返回记录账号（可用性/冷却由 acquireForModel 兜底）；
-   * - 新会话 → 对健康账号列表做稳定哈希（FNV-1a）摊开：不同会话落到不同账号；
-   *   冷却中的账号、已用满限额的账号（仅限额模型）不参与哈希摊分。
+   * - 新会话 → 从健康账号里选"当前持有会话数最少"的那个（平局按轮询次序，
+   *   从 _rr 指针开始依账号列表顺序轮流），并立即记忆，避免并发新会话
+   *   同时抢到同一个账号。冷却中的账号、已用满限额的账号（仅限额模型）不参与。
+   * 账号只有少数几个时，哈希碰撞容易导致新会话总落到同一个账号，
+   * 所以这里不用哈希，直接用最少会话 + 轮询。
    * 无会话ID 返回 null，走池子轮询/配额选号。
    * @param {string | null} convKey
    * @param {string | null} [model]
@@ -256,7 +251,32 @@ export class AccountRuntimes {
       })
       .sort()
     if (!emails.length) return null
-    return emails[stableIndex(convKey, emails.length)]
+
+    // 统计每个健康账号当前已固定的会话数（记忆 → 最少者优先）
+    const countByEmail = new Map()
+    for (const email of this.stickyByConversation.values()) {
+      countByEmail.set(email, (countByEmail.get(email) || 0) + 1)
+    }
+
+    // 主排序：持有会话数最少；平局按轮询次序（从 _rr 指针起循环），
+    // 新会话按 第1、第2、第3…个账号轮流分配。
+    const start = this._rr % emails.length
+    let best = null
+    let bestCount = Infinity
+    for (let i = 0; i < emails.length; i++) {
+      const email = emails[(start + i) % emails.length]
+      const count = countByEmail.get(email) || 0
+      if (count < bestCount) {
+        best = email
+        bestCount = count
+      }
+    }
+    this._rr = (this._rr + 1) % Math.max(emails.length, 1)
+
+    // 立即记忆（预订），避免并发的新会话同时选中同一个账号；
+    // 若最终请求失败回落到其他账号，recordConversation 会更新为新账号。
+    this.stickyByConversation.set(String(convKey), best)
+    return best
   }
 
   /** 记录 会话ID → 账号 粘性（首次成功或账号回落后更新）。 */
@@ -307,8 +327,9 @@ export class AccountRuntimes {
 
   /**
    * @param {string} model
-   * @param {{ preferredEmail?: string | null }} [opts] sticky pin: try this
-   *   account first when it is not cooling down; fall back to the pool.
+   * @param {{ preferredEmail?: string | null, convKey?: string | null }} [opts]
+   *   sticky pin: try this account first when it is not cooling down;
+   *   fall back to the pool. convKey 仅用于日志（会话级负载均衡的可观测性）。
    */
   async acquireForModel(model, opts = {}) {
     if (!model) {
@@ -343,7 +364,11 @@ export class AccountRuntimes {
         this.clearCooldown(preferred, model)
         this._lastSuccessEmail = preferred
         this._recordSuccess(preferred)
-        logger.info('sticky account selected', { email: preferred, model })
+        logger.info('sticky account selected', {
+          email: preferred,
+          model,
+          convKey: opts.convKey || null,
+        })
         return rt
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -392,7 +417,11 @@ export class AccountRuntimes {
         this._lastSuccessEmail = email
         this._rr = (this._rr + 1) % Math.max(emails.length, 1)
         this._recordSuccess(email)
-        logger.info('selected account for model', { email, model })
+        logger.info('selected account for model', {
+          email,
+          model,
+          convKey: opts.convKey || null,
+        })
         return rt
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -424,7 +453,8 @@ export class AccountRuntimes {
 
   /**
    * @param {string} model
-   * @param {{ preferredEmail?: string | null, gateCode?: string | null }} [opts]
+   * @param {{ preferredEmail?: string | null, gateCode?: string | null, retryAfterMs?: number | null }} [opts]
+   *   retryAfterMs: 上游返回的限流等待时间（用于设置账号冷却时长）。
    */
   async reacquireAfterGate(model, opts = {}) {
     if (opts.preferredEmail) {
@@ -434,7 +464,7 @@ export class AccountRuntimes {
           new UpstreamError(opts.gateCode, {
             code: opts.gateCode,
             status: 429,
-            retryAfterMs: 30_000,
+            retryAfterMs: opts.retryAfterMs ?? 30_000,
           }),
           model,
         )

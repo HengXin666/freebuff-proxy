@@ -15,14 +15,16 @@ import {
 } from '../src/free-mode.js'
 import {
   extractGateError,
+  extractRateLimitError,
   isSessionRecoverableGate,
 } from '../src/upstream/client.js'
+import { extractConversationKey } from '../src/proxy.js'
 
 configureLogger({ level: 'error' })
 
 const originalFetch = globalThis.fetch
 let calls = []
-/** @type {'ok' | 'gate_once' | 'rate_limit_a'} */
+/** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion'} */
 let mockMode = 'ok'
 let sessionPosts = 0
 let completionAttempts = 0
@@ -126,6 +128,26 @@ globalThis.fetch = async (url, init = {}) => {
         409,
       )
     }
+    // Account a is free-mode rate limited at the completions layer (not admit).
+    const compAuth =
+      headers.Authorization ||
+      headers.authorization ||
+      headers['x-codebuff-api-key'] ||
+      ''
+    if (
+      mockMode === 'rate_limit_completion' &&
+      String(compAuth).includes('token-a')
+    ) {
+      return jsonRes(
+        {
+          error: 'free_mode_rate_limited',
+          message:
+            'Free mode rate limit exceeded (30 minutes limit). Try again in 1 minute.',
+        },
+        429,
+        { 'retry-after': '60' },
+      )
+    }
 
     if (body.stream) {
       const stream = new ReadableStream({
@@ -154,10 +176,10 @@ globalThis.fetch = async (url, init = {}) => {
   return jsonRes({ error: 'unexpected ' + u }, 500)
 }
 
-function jsonRes(obj, status = 200) {
+function jsonRes(obj, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...extraHeaders },
   })
 }
 
@@ -199,6 +221,43 @@ function jsonRes(obj, status = 200) {
   assert.equal(isSessionRecoverableGate('session_superseded'), true)
   assert.equal(isSessionRecoverableGate('session_expired'), true)
   assert.equal(isSessionRecoverableGate('nope'), false)
+
+  // account-level rate-limit codes (chat completions 429) → switch account
+  assert.equal(
+    extractRateLimitError({ error: 'free_mode_rate_limited' }),
+    'free_mode_rate_limited',
+  )
+  assert.equal(
+    extractRateLimitError({ error: { code: 'rate_limited' } }),
+    'rate_limited',
+  )
+  assert.equal(extractRateLimitError({ code: 'spend_limited' }), 'spend_limited')
+  assert.equal(extractRateLimitError({ status: 'ip_capped' }), 'ip_capped')
+  assert.equal(extractRateLimitError({ error: 'session_superseded' }), null)
+  assert.equal(extractRateLimitError({ error: 'free_mode_cli_required' }), null)
+  assert.equal(extractRateLimitError(null), null)
+}
+
+// --- unit: 会话 key 提取（conversation_id / thread_id 优先于恒定的 client_id） ---
+{
+  const mk = (meta, extra = {}) => ({ codebuff_metadata: meta, ...extra })
+  assert.equal(
+    extractConversationKey(
+      mk({ client_id: 'install-1', conversation_id: 'conv-a' }),
+      {},
+    ),
+    'conv-a',
+  )
+  assert.equal(
+    extractConversationKey(mk({ client_id: 'install-1', thread_id: 'thread-b' }), {}),
+    'thread-b',
+  )
+  // client_id 只作兜底
+  assert.equal(extractConversationKey(mk({ client_id: 'install-1' }), {}), 'install-1')
+  assert.equal(extractConversationKey({ conversation_id: 'cv' }, {}), 'cv')
+  assert.equal(extractConversationKey({}, { 'x-conversation-id': 'xc' }), 'xc')
+  assert.equal(extractConversationKey({ user: 'u1' }, {}), 'u1')
+  assert.equal(extractConversationKey({}, {}), null)
 }
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-'))
@@ -404,6 +463,78 @@ assert.equal(requireModelId(''), null)
   await multiRuntimes.shutdown()
   multiServer.close()
   fs.rmSync(multiDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
+
+// completions 返回 free_mode_rate_limited → 冷却当前账号并换号重试一次
+{
+  const rlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-rlcomp-'))
+  saveAccountUser(rlDir, {
+    id: 'a',
+    email: 'a@example.com',
+    authToken: 'token-a',
+  })
+  saveAccountUser(rlDir, {
+    id: 'b',
+    email: 'b@example.com',
+    authToken: 'token-b',
+  })
+  const rlConfig = loadConfig()
+  rlConfig.server.host = '127.0.0.1'
+  rlConfig.server.port = 0
+  rlConfig.server.apiKeys = ['sk-test']
+  rlConfig.upstream.credentialsDir = rlDir
+  rlConfig.session.pollIntervalSec = 3600
+  const rlRuntimes = new AccountRuntimes(rlConfig)
+  const rlServer = await startServer({
+    config: rlConfig,
+    runtimes: rlRuntimes,
+    ...(() => {
+      const rt = rlRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const rlPort = rlServer.address().port
+  mockMode = 'rate_limit_completion'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  const res = await fetch(`http://127.0.0.1:${rlPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  // a 完成被 429 后换到 b 重试：2 次 session POST、2 次 completions
+  assert.equal(sessionPosts, 2, `expected 2 session POSTs, got ${sessionPosts}`)
+  assert.equal(completionAttempts, 2)
+  const rlAccounts = rlRuntimes.list()
+  const rlA = rlAccounts.find((x) => x.email === 'a@example.com')
+  assert.equal(rlA.available, false)
+  assert.equal(rlA.cooldownCode, 'free_mode_rate_limited')
+  // 冷却时长采用上游 retry-after（60s）
+  const cd = rlRuntimes.cooldowns.get('a@example.com')
+  assert.ok(
+    cd.until - Date.now() >= 58_000,
+    `cooldown should honor retry-after 60s, got ${cd.until - Date.now()}ms`,
+  )
+  // 可观测性：响应头标明实际账号；换号后是 b
+  assert.equal(res.headers.get('x-freebuff-proxy-account'), 'b@example.com')
+  await rlRuntimes.shutdown()
+  rlServer.close()
+  fs.rmSync(rlDir, { recursive: true, force: true })
   mockMode = 'ok'
 }
 
@@ -765,7 +896,7 @@ assert.equal(requireModelId(''), null)
   fs.rmSync(qDir, { recursive: true, force: true })
 }
 
-// --- 会话级负载均衡：不同会话哈希摊分到不同账号，同一会话固定账号 ---
+// --- 会话级负载均衡：不同会话按轮询+最少会话数摊分，同一会话固定账号 ---
 {
   const convDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-conv-'))
   saveAccountUser(convDir, { id: 'da', email: 'da@example.com', authToken: 'token-da' })
@@ -794,7 +925,7 @@ assert.equal(requireModelId(''), null)
   })
   const convPort = convServer.address().port
 
-  // unit: 不同会话稳定哈希摊开，覆盖全部账号；同一会话返回同一账号
+  // unit: 新会话按最少会话数+轮询摊开，覆盖全部账号；同一会话返回同一账号
   const picks = new Map()
   for (let i = 1; i <= 12; i++) {
     const key = `conv-${i}`
@@ -802,6 +933,16 @@ assert.equal(requireModelId(''), null)
   }
   const used = new Set(picks.values())
   assert.equal(used.size, 3, `12 个会话应摊到全部 3 个账号, got ${[...used]}`)
+  // 平均分配：12 个新会话应 4/4/4（轮询+最少会话，而不是哈希碰撞堆在一个账号）
+  const dist = new Map()
+  for (const email of picks.values()) {
+    dist.set(email, (dist.get(email) || 0) + 1)
+  }
+  assert.deepEqual(
+    [...dist.values()].sort((a, b) => a - b),
+    [4, 4, 4],
+    `12 个新会话应 4/4/4 平均分配, got ${JSON.stringify([...dist])}`,
+  )
   for (let i = 1; i <= 12; i++) {
     const key = `conv-${i}`
     assert.equal(convRuntimes.conversationPreferredEmail(key), picks.get(key))
@@ -809,7 +950,7 @@ assert.equal(requireModelId(''), null)
   // recordConversation 覆盖哈希种子（会话回落后固定到新账号）
   convRuntimes.recordConversation('conv-1', 'db@example.com')
   assert.equal(convRuntimes.conversationPreferredEmail('conv-1'), 'db@example.com')
-  // 冷却中的账号不参与新会话的哈希摊分
+  // 冷却中的账号不参与新会话的分配
   convRuntimes.markCooldown('da@example.com', {
     code: 'rate_limited',
     retryAfterMs: 60_000,
@@ -821,7 +962,7 @@ assert.equal(requireModelId(''), null)
   assert.ok(!fresh.has('da@example.com'), '冷却账号不应作为新会话种子')
   convRuntimes.clearCooldown('da@example.com')
 
-  // integration: 12 个不同 client_id 会话 → 每个账号至少 1 次请求
+  // integration: 12 个不同 client_id 新会话 → 平均分配到 3 个账号
   mockMode = 'ok'
   sessionPosts = 0
   completionAttempts = 0

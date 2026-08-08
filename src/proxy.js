@@ -6,6 +6,7 @@ import {
 } from './model.js'
 import {
   extractGateError,
+  extractRateLimitError,
   isSessionRecoverableGate,
   UpstreamError,
 } from './upstream/client.js'
@@ -41,9 +42,9 @@ export function createProxyHandler(ctx) {
 
   /**
    * Compute sticky context for a chat request (会话级负载均衡):
-   *  - 同一会话ID（codebuff_metadata.client_id / conversation_id / 常见会话头 / user）
+   *  - 同一会话ID（conversation_id / thread_id 优先，client_id 兜底；常见会话头 / user）
    *    固定同一账号（热 session 复用、避免 superseded）；
-   *  - 不同会话按稳定哈希摊到不同账号，避免所有请求压在一个账号上被风控；
+   *  - 不同会话按「轮询 + 最少会话数」摊到不同账号，避免所有请求压在一个账号上被风控；
    *  - `x-sticky-account` 头显式指定账号，优先级最高；
    *  - Web 用户 pin 模式固定到 pinnedEmail；
    *  - none 模式 / 无会话ID：纯池子选号（轮询 + 配额感知）。
@@ -317,8 +318,11 @@ export function createProxyHandler(ctx) {
     let lastEmail = null
     /** @type {string | null} */
     let pendingGateCode = null
+    /** @type {number | null} */
+    let pendingRetryAfterMs = null
 
-    // 会话级粘性：同一会话固定同一账号（热 session 复用），不同会话按哈希摊开。
+    // 会话级粘性：同一会话固定同一账号（热 session 复用），
+    // 不同会话按轮询 + 最少会话数摊开（不用哈希，账号少时哈希易碰撞到同一账号）。
     const sticky = resolveSticky(req, body, upstreamModel)
 
     while (attempt <= maxRetry) {
@@ -329,17 +333,26 @@ export function createProxyHandler(ctx) {
           attempt === 1
             ? await runtimes.acquireForModel(upstreamModel, {
                 preferredEmail: sticky.preferredEmail,
+                convKey: sticky.convKey,
               })
             : await runtimes.reacquireAfterGate(upstreamModel, {
                 preferredEmail: lastEmail,
                 gateCode: pendingGateCode,
+                retryAfterMs: pendingRetryAfterMs,
               })
-        // 首次成功记录会话粘性；gate 重试后账号可能已切换，同样立即更新，
+        // 首次成功记录会话粘性；gate/限流重试后账号可能已切换，同样立即更新，
         // 避免同一会话下次又先去试旧账号。
         sticky.onSuccess?.(rt.email)
         sticky.preferredEmail = rt.email
         pendingGateCode = null
+        pendingRetryAfterMs = null
         lastEmail = rt.email
+
+        // 可观测性：响应头标明本次实际使用的账号与会话 key。
+        res.setHeader('x-freebuff-proxy-account', rt.email)
+        if (sticky.convKey) {
+          res.setHeader('x-freebuff-proxy-conv-key', String(sticky.convKey))
+        }
 
         const snap = rt.sessions.getSnapshot()
         if (!snap.live || !snap.instanceId) {
@@ -384,13 +397,15 @@ export function createProxyHandler(ctx) {
         if (result.ok) return
 
         if (result.recoverable && attempt <= maxRetry) {
-          logger.warn('session gate error; will re-acquire once', {
+          logger.warn('session error; will re-acquire once', {
             code: result.gateCode,
             attempt,
             model: upstreamModel,
             account: lastEmail,
+            retryAfterMs: result.retryAfterMs ?? null,
           })
           pendingGateCode = result.gateCode
+          pendingRetryAfterMs = result.retryAfterMs ?? null
           continue
         }
 
@@ -505,6 +520,22 @@ export function createProxyHandler(ctx) {
       } catch {
         parsed = null
       }
+      const retryAfterMs = parseRetryAfterMsHeader(respHeaders['retry-after'])
+      // 账号级限流（free_mode_rate_limited / rate_limited / spend_limited /
+      // ip_capped）：冷却当前账号并换号重试一次，而不是把 429 直接甩给用户。
+      const rateCode = extractRateLimitError(parsed, status)
+      if (rateCode) {
+        return {
+          ok: false,
+          wrote: false,
+          recoverable: true,
+          gateCode: rateCode,
+          retryAfterMs,
+          status,
+          body: parsed || { error: { message: text, type: 'upstream_error' } },
+          headers: respHeaders,
+        }
+      }
       const gateCode = extractGateError(parsed, status)
       if (gateCode && isSessionRecoverableGate(gateCode)) {
         return {
@@ -512,6 +543,7 @@ export function createProxyHandler(ctx) {
           wrote: false,
           recoverable: true,
           gateCode,
+          retryAfterMs,
           status,
           body: parsed || { error: { message: text, type: 'upstream_error' } },
           headers: respHeaders,
@@ -597,23 +629,25 @@ export function createProxyHandler(ctx) {
 
 /**
  * 从 chat 请求提取会话标识（会话级负载均衡的 key）。
- * 优先级：Codebuff 原生 codebuff_metadata → 显式会话字段 → 常见会话头 → user 兜底。
+ * 优先级：按"会话级"标识优先（conversation_id / thread_id），
+ * client_id 只是客户端安装 ID（对同一客户端恒定，会让所有会话共享同一个 key、
+ * 永远分到同一个账号），所以只作兜底；再回落显式会话字段 → 常见会话头 → user。
  * 拿不到返回 null（该请求走池子轮询/配额选号，不做会话粘性）。
  *
  * @param {any} body
  * @param {Record<string, string | string[] | undefined>} headers
  * @returns {string | null}
  */
-function extractConversationKey(body, headers) {
+export function extractConversationKey(body, headers) {
   const meta =
     body?.codebuff_metadata && typeof body.codebuff_metadata === 'object'
       ? body.codebuff_metadata
       : null
   const h = headers || {}
   const candidates = [
-    meta?.client_id,
     meta?.conversation_id,
     meta?.thread_id,
+    meta?.client_id,
     body?.conversation_id,
     body?.conversationId,
     body?.thread_id,
@@ -637,6 +671,15 @@ function extractConversationKey(body, headers) {
 function methodHasBody(method) {
   const m = (method || 'GET').toUpperCase()
   return m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE'
+}
+
+/** Parse Retry-After header (seconds or HTTP-date) into ms, or null. */
+function parseRetryAfterMsHeader(value) {
+  if (!value) return null
+  const secs = Number(value)
+  if (Number.isFinite(secs) && secs >= 0) return Math.ceil(secs * 1000)
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) ? Math.max(0, ms - Date.now()) : null
 }
 
 /** Constant-time-ish compare against configured proxy keys. */

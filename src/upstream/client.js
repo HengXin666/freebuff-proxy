@@ -273,7 +273,8 @@ export function createUpstreamClient(config, token, opts = {}) {
         body &&
         (body.status === 'rate_limited' ||
           body.status === 'spend_limited' ||
-          body.status === 'ip_capped')
+          body.status === 'ip_capped' ||
+          body.status === 'free_mode_rate_limited')
       ) {
         return body
       }
@@ -407,6 +408,38 @@ const GATE_CODES = new Set([
   'session_expired',
   'free_mode_capacity_deferred',
 ])
+
+/**
+ * chat/completions 返回的账号级限流/配额错误：当前账号被上游限流，
+ * 换一个账号重试可能成功（free_mode_rate_limited = 免费模式 30 分钟窗口限流，
+ * 例如 "Free mode rate limit exceeded (30 minutes limit). Try again in 1 minute."）。
+ */
+const RATE_LIMIT_CODES = new Set([
+  'free_mode_rate_limited',
+  'rate_limited',
+  'spend_limited',
+  'ip_capped',
+])
+
+/**
+ * 从 chat/completions 错误响应里提取"应换号重试"的限流 code。
+ * 兼容多种返回形态：{ error: 'free_mode_rate_limited' } /
+ * { error: { code: 'rate_limited' } } / { code: ... } / { status: ... }。
+ * @param {any} body
+ * @param {number} [status]
+ * @returns {string | null}
+ */
+export function extractRateLimitError(body, status) {
+  if (!body || typeof body !== 'object') return null
+  const nested =
+    body.error && typeof body.error === 'object' && !Array.isArray(body.error)
+      ? body.error
+      : null
+  const code = nested?.code || body.error || body.code || body.status
+  if (typeof code !== 'string') return null
+  if (RATE_LIMIT_CODES.has(code)) return code
+  return null
+}
 
 export function extractGateError(body, status) {
   if (!body || typeof body !== 'object') return null
