@@ -72,6 +72,18 @@ export const FREEBUFF_AVAILABLE_MODELS = /** @type {const} */ ([
 ])
 
 /**
+ * 该模型是否属于"不限量"池（如 deepseek-v4-flash / mimo-v2.5）。
+ * 上游对这类模型不应计入每日 session 限额（rateLimitsByModel），
+ * 代理的配额感知切换/展示应对其豁免，避免误把不限量模型当限额模型来回切号。
+ * @param {string} modelId
+ * @returns {boolean}
+ */
+export function isUnlimitedModel(modelId) {
+  const m = FREEBUFF_AVAILABLE_MODELS.find((x) => x.id === modelId)
+  return Boolean(m && m.pool === 'unlimited')
+}
+
+/**
  * Normalize client model field. No alias mapping — pass through as provided.
  * @param {unknown} requested
  * @returns {string | null}

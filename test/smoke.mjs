@@ -565,22 +565,47 @@ assert.equal(requireModelId(''), null)
   }
   const pa = pool.get('qa@example.com')
   const pb = pool.get('qb@example.com')
-  pa.sessions.quota = mkQuota('deepseek/deepseek-v4-flash', 6, 5)
-  pb.sessions.quota = mkQuota('deepseek/deepseek-v4-flash', 6, 1)
+  pa.sessions.quota = mkQuota('openai/gpt-5.6-luna', 6, 5)
+  pb.sessions.quota = mkQuota('openai/gpt-5.6-luna', 6, 1)
 
-  // more remaining quota wins
-  const order = pool.candidateEmails('deepseek/deepseek-v4-flash')
+  // 限额模型（luna）：剩余额度多的账号优先
+  const order = pool.candidateEmails('openai/gpt-5.6-luna')
   assert.equal(order[0], 'qb@example.com', `expected qb first, got ${order}`)
 
-  // exhausted quota is strongly deprioritized
-  pa.sessions.quota = mkQuota('deepseek/deepseek-v4-flash', 6, 6)
-  const order2 = pool.candidateEmails('deepseek/deepseek-v4-flash')
+  // 限额模型：已用满被大幅降权
+  pa.sessions.quota = mkQuota('openai/gpt-5.6-luna', 6, 6)
+  const order2 = pool.candidateEmails('openai/gpt-5.6-luna')
   assert.equal(order2[0], 'qb@example.com', `expected qb first after exhaustion, got ${order2}`)
 
-  // list() surfaces quota + requests for the console
+  // 不限量模型（flash/mimo）：配额不影响选号（不因已用/上限切号）
+  pa.sessions.quota = mkQuota('deepseek/deepseek-v4-flash', 6, 6)
+  pb.sessions.quota = mkQuota('deepseek/deepseek-v4-flash', 6, 6)
+  const orderFlash = pool.candidateEmails('deepseek/deepseek-v4-flash')
+  // 无配额惩罚，仅轮询偏移 → 字典序 qa 在前
+  assert.equal(orderFlash[0], 'qa@example.com', `flash must ignore quota, got ${orderFlash}`)
+
+  // list() surfaces quota + requests；flash 条目被标注 unlimited
+  pa.sessions.quota = {
+    byModel: {
+      'openai/gpt-5.6-luna': mkQuota('openai/gpt-5.6-luna', 6, 5).byModel['openai/gpt-5.6-luna'],
+      'deepseek/deepseek-v4-flash': mkQuota('deepseek/deepseek-v4-flash', 6, 6).byModel['deepseek/deepseek-v4-flash'],
+    },
+    rateLimit: null,
+    updatedAt: new Date().toISOString(),
+  }
+  pb.sessions.quota = {
+    byModel: {
+      'openai/gpt-5.6-luna': mkQuota('openai/gpt-5.6-luna', 6, 1).byModel['openai/gpt-5.6-luna'],
+      'deepseek/deepseek-v4-flash': mkQuota('deepseek/deepseek-v4-flash', 6, 6).byModel['deepseek/deepseek-v4-flash'],
+    },
+    rateLimit: null,
+    updatedAt: new Date().toISOString(),
+  }
   const rows = pool.list()
   const rowB = rows.find((x) => x.email === 'qb@example.com')
-  assert.equal(rowB.quota.byModel['deepseek/deepseek-v4-flash'].recentCount, 1)
+  assert.equal(rowB.quota.byModel['openai/gpt-5.6-luna'].recentCount, 1)
+  assert.equal(rowB.quota.byModel['deepseek/deepseek-v4-flash'].unlimited, true)
+  assert.equal(rowB.quota.byModel['openai/gpt-5.6-luna'].unlimited, undefined)
   assert.equal(typeof rowB.requests, 'number')
   await pool.shutdown()
   fs.rmSync(qDir, { recursive: true, force: true })

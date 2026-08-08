@@ -151,10 +151,10 @@ data/
 
 选号不是纯随机，而是综合打分：
 
-1. 已有该模型活跃 session 的账号 **优先**（避免重复 admit 占配额）；
-2. **剩余每日额度越多越优先**（`rateLimitsByModel` 的 `limit - recentCount`），已用满的账号当周期内大幅降权；
-3. 同等条件下**轮询**（round-robin）分摊；
-4. 冷却中的账号排除在外。
+1. 已有该模型活跃 session 的账号 **优先**（创建 session 才扣额度，活跃 session 尽量复用）；
+2. **限额模型**（premium 池，如 luna / v4-pro）按「剩余每日额度越多越优先」（`rateLimitsByModel` 的 `limit - recentCount`），已用满的账号当周期内大幅降权；
+3. **不限量模型**（unlimited 池，如 `deepseek/deepseek-v4-flash` / `mimo/mimo-v2.5`）**豁免配额逻辑**——不会因为上游返回的 rateLimit 条目而切换账号，避免无谓的 session 替换；
+4. 同等条件下**轮询**（round-robin）分摊；冷却中的账号排除在外。
 
 控制台「总览」顶部有各账号选号占比的负载均衡条（每次成功 admit 计入对应账号），便于观察分布是否均匀。
 
@@ -179,7 +179,11 @@ data/
 Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByModel`，如
 `limit: 6 / recentCount: 已用 / resetAt: 重置时间`，按太平洋日重置）。
 
-- 控制台「总览」每个账号有一列 **额度（今日）**：显示各模型 `已用/上限` 与重置时间（`已用满` 红色、`≤2` 黄色、正常绿色）。
+> ⚠️ 实测（参考 [freebuff2api-workers](https://github.com/pingmike2/freebuff2api-wokers) 的逆向结论）：
+> `deepseek/deepseek-v4-flash` 与 `mimo/mimo-v2.5` 属于 **unlimited 池，不限量**，
+> 不在每日限额表内。代理据此对这两个模型**豁免配额切换与额度展示**（显示为「不限」绿色徽章）。
+
+- 控制台「总览」每个账号有一列 **额度（今日）**：限额模型显示 `已用/上限` 与重置时间（`已用满` 红色、`≤2` 黄色、正常绿色），不限量模型显示「不限」。
 - 额度在 **admit 时自动抓取**（上游仅在 session 活跃时返回）；活跃 session 每 30s 轮询刷新，session 结束后保留最后一次缓存值直到下次 admit。
 - 同样可通过 `GET /v1/freebuff/status` 或 `GET /v1/freebuff/accounts` 拿到每个账号的 `quota`。
 

@@ -7,6 +7,7 @@ import {
 import { createUpstreamClient } from './upstream/client.js'
 import { SessionManager } from './session-manager.js'
 import { UpstreamError } from './upstream/client.js'
+import { isUnlimitedModel } from './model.js'
 import { logger } from './util/log.js'
 
 /** Errors where trying another logged-in account may succeed. */
@@ -80,7 +81,7 @@ export class AccountRuntimes {
             }
           : null,
         // 每日免费 session 额度（来自最近一次 admit/refresh 的上游返回）
-        quota: snap?.quota || null,
+        quota: decorateQuota(snap?.quota),
       }
     })
   }
@@ -220,13 +221,16 @@ export class AccountRuntimes {
         (idx + emails.length - (this._rr % emails.length)) % emails.length
       score += (emails.length - rot) / 100
       if (this.isCoolingDown(email, model)) score -= 1000
-      // 配额感知：剩余额度越多的账号越优先；已用完的整周期内大幅降权
-      const q = rt?.sessions?.getSnapshot?.()?.quota?.byModel?.[model]
-      if (q && Number.isFinite(q.limit) && q.limit > 0) {
-        const used = Number(q.recentCount) || 0
-        const remaining = Math.max(0, q.limit - used)
-        score += Math.min(10, (remaining / q.limit) * 10)
-        if (remaining <= 0) score -= 500
+      // 配额感知：仅对"限额"模型生效（flash/mimo 等 unlimited 池不限量，
+      // 不应按 rateLimitsByModel 的已用/上限来切换账号，避免无谓的 session 替换）
+      if (!isUnlimitedModel(model)) {
+        const q = rt?.sessions?.getSnapshot?.()?.quota?.byModel?.[model]
+        if (q && Number.isFinite(q.limit) && q.limit > 0) {
+          const used = Number(q.recentCount) || 0
+          const remaining = Math.max(0, q.limit - used)
+          score += Math.min(10, (remaining / q.limit) * 10)
+          if (remaining <= 0) score -= 500
+        }
       }
       return { email, score }
     })
@@ -416,6 +420,25 @@ export class AccountRuntimes {
     await Promise.allSettled(tasks)
     this.byEmail.clear()
   }
+}
+
+/**
+ * 标注额度中的不限量模型（upstream 可能仍返回 limit 条目，但按目录 pool 视为不限）。
+ * @param {any} quota
+ */
+function decorateQuota(quota) {
+  if (!quota || typeof quota !== 'object') return null
+  const byModel = {}
+  for (const [model, entry] of Object.entries(quota.byModel || {})) {
+    if (entry && typeof entry === 'object') {
+      byModel[model] = isUnlimitedModel(model)
+        ? { ...entry, unlimited: true }
+        : entry
+    } else {
+      byModel[model] = entry
+    }
+  }
+  return { ...quota, byModel }
 }
 
 /**
