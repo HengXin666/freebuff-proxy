@@ -184,7 +184,7 @@ async function renderOverview(view) {
         el('div', { class: 'row spread' }, [
           el('div', {}, [
             el('span', { class: 'muted' }, `负载均衡 · 共 ${totalReq} 次选号 `),
-            el('span', { class: 'muted' }, '（配额感知：仅限额模型生效；flash/mimo 不限量）'),
+            el('span', { class: 'muted' }, '（会话级：不同会话按哈希摊开，同一会话固定账号；配额感知仅限额模型生效）'),
           ]),
           el('button', { class: 'muted', onclick: () => render() }, '刷新'),
         ]),
@@ -193,7 +193,7 @@ async function renderOverview(view) {
     }
 
     const table = el('table', {}, [
-      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '额度（今日）', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
+      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '额度（今日）', '请求', '会话', '冷却', '操作'].map((t) => el('th', {}, t)))),
       el('tbody', {}, data.accounts.map((a) => {
         const cd = a.cooldownUntil ? new Date(a.cooldownUntil).toLocaleString() : null
         const sess = a.session?.live
@@ -210,6 +210,7 @@ async function renderOverview(view) {
           el('td', { class: 'mono' }, sess),
           el('td', {}, fmtQuota(a.quota)),
           el('td', { class: 'mono' }, `${a.requests || 0} 次`),
+          el('td', { class: 'mono' }, `${a.stickyConversations || 0} 个`),
           el('td', {}, cd ? el('span', { class: 'badge warn' }, a.cooldownCode || 'cooldown') : '—'),
           el('td', {}, state.me.role === 'admin' ? el('div', { class: 'row' }, [
             el('button', { class: 'muted', onclick: () => clearCooldown(a.email) }, '解除冷却'),

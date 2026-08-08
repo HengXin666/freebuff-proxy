@@ -10,6 +10,17 @@ import { UpstreamError } from './upstream/client.js'
 import { isUnlimitedModel } from './model.js'
 import { logger } from './util/log.js'
 
+/** 稳定的 32-bit FNV-1a 哈希 → [0, n)。会话摊分用：同一会话同一账号，账号列表不变时结果稳定。 */
+function stableIndex(key, n) {
+  let h = 2166136261 >>> 0
+  const bytes = Buffer.from(String(key), 'utf8')
+  for (let i = 0; i < bytes.length; i++) {
+    h ^= bytes[i]
+    h = Math.imul(h, 16777619) >>> 0
+  }
+  return n > 0 ? h % n : 0
+}
+
 /** Errors where trying another logged-in account may succeed. */
 const SWITCHABLE_CODES = new Set([
   'rate_limited',
@@ -56,10 +67,20 @@ export class AccountRuntimes {
     this._lastSuccessEmail = null
     /** Per-account success counters (in-memory, for load-balance visibility). */
     this.stats = { total: 0, byEmail: new Map() }
+    /**
+     * 会话ID → 账号（进程内粘性）。同一会话固定同一账号（热 session 复用），
+     * 不同会话按稳定哈希摊到不同账号，避免全部请求压在一个账号上被风控。
+     * @type {Map<string, string>}
+     */
+    this.stickyByConversation = new Map()
   }
 
   list() {
     const now = Date.now()
+    const convCountByEmail = new Map()
+    for (const email of this.stickyByConversation.values()) {
+      convCountByEmail.set(email, (convCountByEmail.get(email) || 0) + 1)
+    }
     return listAccounts(this.dir).map((a) => {
       const cd = this.cooldowns.get(a.email)
       const cooling = Boolean(cd && cd.until > now)
@@ -72,6 +93,7 @@ export class AccountRuntimes {
         cooldownUntil: cooling ? new Date(cd.until).toISOString() : null,
         cooldownCode: cooling ? cd.code : null,
         requests: this.stats.byEmail.get(a.email) || 0,
+        stickyConversations: convCountByEmail.get(a.email) || 0,
         effectiveProxy: rt?.effectiveProxy || null,
         session: snap
           ? {
@@ -210,6 +232,46 @@ export class AccountRuntimes {
   }
 
   /**
+   * 会话级粘性选号种子：
+   * - 已有粘性记录的会话 → 返回记录账号（可用性/冷却由 acquireForModel 兜底）；
+   * - 新会话 → 对健康账号列表做稳定哈希（FNV-1a）摊开：不同会话落到不同账号；
+   *   冷却中的账号、已用满限额的账号（仅限额模型）不参与哈希摊分。
+   * 无会话ID 返回 null，走池子轮询/配额选号。
+   * @param {string | null} convKey
+   * @param {string | null} [model]
+   * @returns {string | null}
+   */
+  conversationPreferredEmail(convKey, model = null) {
+    if (!convKey) return null
+    const known = this.stickyByConversation.get(String(convKey))
+    if (known) return known
+    const emails = this.allEmails()
+      .filter((e) => !this.isCoolingDown(e, model))
+      .filter((e) => {
+        if (!model || isUnlimitedModel(model)) return true
+        const rt = this.byEmail.get(e)
+        const q = rt?.sessions?.getSnapshot?.()?.quota?.byModel?.[model]
+        if (!q || !Number.isFinite(q.limit) || q.limit <= 0) return true
+        return (Number(q.recentCount) || 0) < q.limit
+      })
+      .sort()
+    if (!emails.length) return null
+    return emails[stableIndex(convKey, emails.length)]
+  }
+
+  /** 记录 会话ID → 账号 粘性（首次成功或账号回落后更新）。 */
+  recordConversation(convKey, email) {
+    if (!convKey) return
+    this.stickyByConversation.set(String(convKey), email)
+  }
+
+  /** 手动解除某会话的粘性（一般由冷却回落自动更新，无需外部调用）。 */
+  forgetConversation(convKey) {
+    if (!convKey) return
+    this.stickyByConversation.delete(String(convKey))
+  }
+
+  /**
    * @param {string} model
    */
   candidateEmails(model) {
@@ -220,7 +282,8 @@ export class AccountRuntimes {
       let score = 0
       const rt = this.byEmail.get(email)
       if (rt?.sessions?.isUsableForModel?.(model)) score += 100
-      if (email === this._lastSuccessEmail) score += 10
+      // 注意：不再给“最近成功账号”加分——那会把新请求持续吸到同一个账号，
+      // 破坏会话级负载均衡（旧行为：一个账号 128 次、其余 0 次）。
       const rot =
         (idx + emails.length - (this._rr % emails.length)) % emails.length
       score += (emails.length - rot) / 100

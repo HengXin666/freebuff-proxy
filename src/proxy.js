@@ -40,12 +40,15 @@ export function createProxyHandler(ctx) {
   }
 
   /**
-   * Compute sticky context for a chat request:
-   *  - web user api key → user.stickyMode (pin / auto-learn / none)
-   *  - super (admin) key → remembered last account, or explicit header
-   *  - explicit `x-sticky-account` header wins over everything
+   * Compute sticky context for a chat request (会话级负载均衡):
+   *  - 同一会话ID（codebuff_metadata.client_id / conversation_id / 常见会话头 / user）
+   *    固定同一账号（热 session 复用、避免 superseded）；
+   *  - 不同会话按稳定哈希摊到不同账号，避免所有请求压在一个账号上被风控；
+   *  - `x-sticky-account` 头显式指定账号，优先级最高；
+   *  - Web 用户 pin 模式固定到 pinnedEmail；
+   *  - none 模式 / 无会话ID：纯池子选号（轮询 + 配额感知）。
    */
-  function resolveSticky(req) {
+  function resolveSticky(req, body, model) {
     const token = readBearer(req) || ''
     const key = token || (req.headers['x-sticky-account'] ? `hdr:${req.headers['x-sticky-account']}` : '')
     const headerPin =
@@ -54,35 +57,41 @@ export function createProxyHandler(ctx) {
         : null
     const username = userStore ? userByKey.get(token) : null
     const user = username ? userStore.getByUsername(username) : null
+    const convKey = extractConversationKey(body, req.headers)
 
     let preferredEmail = null
     /** @type {((email: string) => void) | null} */
     let onSuccess = null
 
     if (headerPin) {
+      // 显式指定：只作用于本次请求，不写入会话粘性。
       preferredEmail = headerPin
     } else if (user) {
       if (user.stickyMode === 'pin' && user.pinnedEmail) {
         preferredEmail = user.pinnedEmail
-      } else if (user.stickyMode === 'auto') {
-        preferredEmail = user.lastStickyEmail || null
-        onSuccess = (email) => userStore.recordStickySuccess(user.username, email)
+      } else if (user.stickyMode !== 'none') {
+        // auto（默认）：会话级粘性 + 哈希摊分
+        preferredEmail = runtimes.conversationPreferredEmail(convKey, model)
+        onSuccess = (email) => {
+          if (convKey) runtimes.recordConversation(convKey, email)
+          userStore.recordStickySuccess(user.username, email)
+        }
       }
     } else if (key) {
-      preferredEmail = lastAccountByKey.get(key) || null
+      // 超级 Key / 匿名：会话级粘性 + 哈希摊分
+      preferredEmail = runtimes.conversationPreferredEmail(convKey, model)
+      onSuccess = (email) => {
+        if (convKey) runtimes.recordConversation(convKey, email)
+      }
     }
 
     return {
       key: key || 'anon',
+      convKey,
       preferredEmail,
       onSuccess,
     }
   }
-
-  /**
-   * @type {Map<string, string>} api-key → last upstream account (in-memory sticky)
-   */
-  const lastAccountByKey = new Map()
   /** @type {Map<string, string>} api-key → username (resolved at auth time) */
   const userByKey = new Map()
 
@@ -309,9 +318,8 @@ export function createProxyHandler(ctx) {
     /** @type {string | null} */
     let pendingGateCode = null
 
-    // Sticky session: pin this caller to one upstream account so a
-    // conversation keeps the same warm free session.
-    const sticky = resolveSticky(req)
+    // 会话级粘性：同一会话固定同一账号（热 session 复用），不同会话按哈希摊开。
+    const sticky = resolveSticky(req, body, upstreamModel)
 
     while (attempt <= maxRetry) {
       attempt++
@@ -326,11 +334,10 @@ export function createProxyHandler(ctx) {
                 preferredEmail: lastEmail,
                 gateCode: pendingGateCode,
               })
-        if (attempt === 1) {
-          sticky.onSuccess?.(rt.email)
-          sticky.preferredEmail = rt.email
-          lastAccountByKey.set(sticky.key, rt.email)
-        }
+        // 首次成功记录会话粘性；gate 重试后账号可能已切换，同样立即更新，
+        // 避免同一会话下次又先去试旧账号。
+        sticky.onSuccess?.(rt.email)
+        sticky.preferredEmail = rt.email
         pendingGateCode = null
         lastEmail = rt.email
 
@@ -586,6 +593,45 @@ export function createProxyHandler(ctx) {
   }
 
   return { handle }
+}
+
+/**
+ * 从 chat 请求提取会话标识（会话级负载均衡的 key）。
+ * 优先级：Codebuff 原生 codebuff_metadata → 显式会话字段 → 常见会话头 → user 兜底。
+ * 拿不到返回 null（该请求走池子轮询/配额选号，不做会话粘性）。
+ *
+ * @param {any} body
+ * @param {Record<string, string | string[] | undefined>} headers
+ * @returns {string | null}
+ */
+function extractConversationKey(body, headers) {
+  const meta =
+    body?.codebuff_metadata && typeof body.codebuff_metadata === 'object'
+      ? body.codebuff_metadata
+      : null
+  const h = headers || {}
+  const candidates = [
+    meta?.client_id,
+    meta?.conversation_id,
+    meta?.thread_id,
+    body?.conversation_id,
+    body?.conversationId,
+    body?.thread_id,
+    body?.threadId,
+    body?.session_id,
+    h['x-conversation-id'],
+    h['x-conversation_id'],
+    h['x-thread-id'],
+    h['x-session-id'],
+    body?.user,
+  ]
+  for (const v of candidates) {
+    if (typeof v === 'string') {
+      const t = v.trim()
+      if (t) return t
+    }
+  }
+  return null
 }
 
 function methodHasBody(method) {

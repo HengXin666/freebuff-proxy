@@ -765,6 +765,119 @@ assert.equal(requireModelId(''), null)
   fs.rmSync(qDir, { recursive: true, force: true })
 }
 
+// --- 会话级负载均衡：不同会话哈希摊分到不同账号，同一会话固定账号 ---
+{
+  const convDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-conv-'))
+  saveAccountUser(convDir, { id: 'da', email: 'da@example.com', authToken: 'token-da' })
+  saveAccountUser(convDir, { id: 'db', email: 'db@example.com', authToken: 'token-db' })
+  saveAccountUser(convDir, { id: 'dc', email: 'dc@example.com', authToken: 'token-dc' })
+  const convConfig = loadConfig()
+  convConfig.server.host = '127.0.0.1'
+  convConfig.server.port = 0
+  convConfig.server.apiKeys = ['sk-test']
+  convConfig.upstream.credentialsDir = convDir
+  convConfig.session.pollIntervalSec = 3600
+  const convRuntimes = new AccountRuntimes(convConfig)
+  const convServer = await startServer({
+    config: convConfig,
+    runtimes: convRuntimes,
+    ...(() => {
+      const rt = convRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const convPort = convServer.address().port
+
+  // unit: 不同会话稳定哈希摊开，覆盖全部账号；同一会话返回同一账号
+  const picks = new Map()
+  for (let i = 1; i <= 12; i++) {
+    const key = `conv-${i}`
+    picks.set(key, convRuntimes.conversationPreferredEmail(key))
+  }
+  const used = new Set(picks.values())
+  assert.equal(used.size, 3, `12 个会话应摊到全部 3 个账号, got ${[...used]}`)
+  for (let i = 1; i <= 12; i++) {
+    const key = `conv-${i}`
+    assert.equal(convRuntimes.conversationPreferredEmail(key), picks.get(key))
+  }
+  // recordConversation 覆盖哈希种子（会话回落后固定到新账号）
+  convRuntimes.recordConversation('conv-1', 'db@example.com')
+  assert.equal(convRuntimes.conversationPreferredEmail('conv-1'), 'db@example.com')
+  // 冷却中的账号不参与新会话的哈希摊分
+  convRuntimes.markCooldown('da@example.com', {
+    code: 'rate_limited',
+    retryAfterMs: 60_000,
+  })
+  const fresh = new Set()
+  for (let i = 100; i <= 130; i++) {
+    fresh.add(convRuntimes.conversationPreferredEmail(`fresh-${i}`))
+  }
+  assert.ok(!fresh.has('da@example.com'), '冷却账号不应作为新会话种子')
+  convRuntimes.clearCooldown('da@example.com')
+
+  // integration: 12 个不同 client_id 会话 → 每个账号至少 1 次请求
+  mockMode = 'ok'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  for (let i = 1; i <= 12; i++) {
+    const res = await fetch(`http://127.0.0.1:${convPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer sk-test',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'deepseek/deepseek-v4-flash',
+        codebuff_metadata: { client_id: `conv-${i}` },
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    })
+    assert.equal(res.status, 200, await res.clone().text())
+  }
+  const reqByEmail = new Map(convRuntimes.list().map((a) => [a.email, a.requests]))
+  for (const email of ['da@example.com', 'db@example.com', 'dc@example.com']) {
+    assert.ok(
+      (reqByEmail.get(email) || 0) >= 1,
+      `${email} 应至少命中 1 次请求, got ${reqByEmail.get(email)}`,
+    )
+  }
+
+  // integration: 同一会话连续 3 次 → 只增长同一个账号
+  const before = new Map(convRuntimes.list().map((a) => [a.email, a.requests]))
+  for (let i = 0; i < 3; i++) {
+    const res = await fetch(`http://127.0.0.1:${convPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer sk-test',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'deepseek/deepseek-v4-flash',
+        codebuff_metadata: { client_id: 'conv-3' },
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    })
+    assert.equal(res.status, 200, await res.clone().text())
+  }
+  const after = new Map(convRuntimes.list().map((a) => [a.email, a.requests]))
+  const delta = [...after.entries()]
+    .map(([email, n]) => [email, n - (before.get(email) || 0)])
+    .filter(([, n]) => n > 0)
+  assert.equal(delta.length, 1, `同一会话应只增长一个账号, got ${JSON.stringify(delta)}`)
+  assert.equal(delta[0][1], 3)
+
+  await convRuntimes.shutdown()
+  convServer.close()
+  fs.rmSync(convDir, { recursive: true, force: true })
+}
+
 await runtimes.shutdown()
 server.close()
 globalThis.fetch = originalFetch
