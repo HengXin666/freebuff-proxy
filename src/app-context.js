@@ -419,6 +419,15 @@ export class AccountRuntimes {
     return this.get(preferred)
   }
 
+  /** 代理池变更后调用：释放并重建所有缓存 runtime，让新出口立即生效 */
+  async invalidateProxies() {
+    const tasks = [...this.byEmail.values()].map((rt) => rt.sessions.shutdown())
+    await Promise.allSettled(tasks)
+    const count = this.byEmail.size
+    this.byEmail.clear()
+    logger.info('proxy pool changed; cached runtimes invalidated', { count })
+  }
+
   async shutdown() {
     const tasks = [...this.byEmail.values()].map((rt) => rt.sessions.shutdown())
     await Promise.allSettled(tasks)

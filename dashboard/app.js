@@ -1,7 +1,7 @@
 /* Freebuff Proxy 控制台 — 零依赖原生 JS SPA */
 'use strict'
 
-const state = { me: null, accounts: [], users: [], models: [], flows: [] }
+const state = { me: null, accounts: [], users: [], models: [], flows: [], proxies: [] }
 
 const $ = (sel) => document.querySelector(sel)
 const el = (tag, attrs = {}, children = []) => {
@@ -223,8 +223,8 @@ async function renderOverview(view) {
     view.append(el('div', { class: 'card', style: 'margin-top:12px;overflow:auto' }, table))
   }
 
-  // 代理测试
-  view.append(renderProxyTest())
+  // 代理设置（全局池，前端管理）
+  await renderProxySettings(view)
 
   // login flows
   if (state.me.role === 'admin') {
@@ -242,24 +242,60 @@ async function renderOverview(view) {
   }
 }
 
-/* ---------------- proxy test ---------------- */
-function renderProxyTest() {
+/* ---------------- proxy settings ---------------- */
+async function renderProxySettings(view) {
+  let data = null
+  try {
+    data = await api('/api/proxy')
+  } catch {
+    data = { proxies: [], effective: [], accounts: [] }
+  }
+  state.proxies = data.proxies || []
+
   const card = el('div', { class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
-      el('h3', { style: 'margin:0' }, '代理测试'),
-      el('button', { class: 'muted', onclick: () => runProxyTest(null) }, '测试已配置代理'),
+      el('div', {}, [
+        el('h3', { style: 'margin:0 0 2px' }, '代理设置（全局代理池）'),
+        el('span', { class: 'muted' }, '保存后立即生效，无需重启；账号自动分配到池内代理，保持同一出口'),
+      ]),
+      el('button', { class: 'primary', onclick: saveProxyPool }, '保存并生效'),
     ]),
+    el('textarea', {
+      id: 'proxy-pool',
+      rows: 3,
+      class: 'mono',
+      style: 'margin-top:8px',
+      placeholder: '一行一个代理，例如：\nhttp://user:pass@172.17.0.1:7890\nsocks5://127.0.0.1:1080\n（留空保存 = 清除全局池，走环境变量/直连）',
+    }, (data.proxies || []).join('\n')),
     el('div', { class: 'row', style: 'margin-top:8px' }, [
       el('input', {
         id: 'proxy-test-url',
-        placeholder: 'http://user:pass@172.17.0.1:7890 或 http://host.docker.internal:7890（留空测试已配置）',
+        placeholder: '测试单个代理，如 http://172.17.0.1:2334',
         class: 'mono',
+        style: 'flex:1',
       }),
-      el('button', { class: 'primary', onclick: () => runProxyTest($('#proxy-test-url').value.trim() || null) }, '测 试'),
+      el('button', { onclick: () => runProxyTest($('#proxy-test-url').value.trim() || null) }, '测 试'),
+      el('button', { class: 'muted', onclick: () => runProxyTest(null) }, '测试已配置'),
     ]),
     el('div', { id: 'proxy-test-result', style: 'margin-top:8px' }),
+    data.effective && data.effective.length
+      ? el('div', { class: 'muted', style: 'margin-top:8px' }, `当前生效代理：${data.effective.map(shortProxy).join('、')}`)
+      : null,
   ])
-  return card
+  view.append(card)
+}
+
+async function saveProxyPool() {
+  const textarea = $('#proxy-pool')
+  if (!textarea) return
+  const proxies = textarea.value.split('\n').map((x) => x.trim()).filter(Boolean)
+  try {
+    const r = await api('/api/proxy', { method: 'POST', body: JSON.stringify({ proxies }) })
+    toast(r.note || '已保存')
+    render()
+  } catch (err) {
+    toast(err.message, true)
+  }
 }
 
 async function runProxyTest(proxy) {

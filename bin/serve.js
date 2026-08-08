@@ -8,6 +8,7 @@ import { configureLogger, logger } from '../src/util/log.js'
 import { UserStore } from '../src/web/user-store.js'
 import { WebSessionStore } from '../src/web/session-store.js'
 import { LoginFlowManager } from '../src/web/login-flows.js'
+import { ProxyStore } from '../src/web/proxy-store.js'
 import { listAccounts } from '../src/auth-store.js'
 
 function isLoopbackHost(host) {
@@ -31,6 +32,11 @@ async function main() {
     path.join(dataDir, 'web-sessions.json'),
     (config.web.sessionTtlHours || 24 * 7) * 3600 * 1000,
   )
+  // 前端「代理设置」管理的全局代理池（优先于 config.yaml 的 upstream.proxies）
+  const proxyStore = new ProxyStore(path.join(dataDir, 'proxies.json'))
+  if (proxyStore.list().length) {
+    config.upstream.proxies = proxyStore.list()
+  }
 
   // First-run admin bootstrap (or env-driven rotation)
   const admin = userStore.ensureDefaultAdmin(
@@ -108,6 +114,7 @@ async function main() {
     userStore,
     webSessions,
     loginFlows,
+    proxyStore,
   })
 
   const shutdown = async (signal) => {

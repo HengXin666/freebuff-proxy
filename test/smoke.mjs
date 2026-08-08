@@ -595,6 +595,7 @@ assert.equal(requireModelId(''), null)
   const { UserStore } = await import('../src/web/user-store.js')
   const { WebSessionStore } = await import('../src/web/session-store.js')
   const { LoginFlowManager } = await import('../src/web/login-flows.js')
+  const { ProxyStore } = await import('../src/web/proxy-store.js')
   const userStore = new UserStore(path.join(wDir, 'users.json'))
   const webSessions = new WebSessionStore(path.join(wDir, 'web-sessions.json'), 3600_000)
   userStore.create({ username: 'admin', password: 'secret123', role: 'admin' })
@@ -603,6 +604,8 @@ assert.equal(requireModelId(''), null)
     credentialsDir: wDir,
     config: wConfig,
   })
+  const proxyStore = new ProxyStore(path.join(wDir, 'proxies.json'))
+  const poolUrls = ['http://p1.example:7890', 'http://p2.example:7890']
   const wruntimes = new AccountRuntimes(wConfig)
   const wserver = await startServer({
     config: wConfig,
@@ -615,6 +618,7 @@ assert.equal(requireModelId(''), null)
     userStore,
     webSessions,
     loginFlows,
+    proxyStore,
   })
   const wport = wserver.address().port
   const lr = await fetch(`http://127.0.0.1:${wport}/api/auth/login`, {
@@ -635,6 +639,43 @@ assert.equal(requireModelId(''), null)
   assert.equal(pj.accounts[0].email, 'w@example.com')
   // mock GET 返回 status none → 探测后 session 状态可见
   assert.equal(pj.accounts[0].session.status, 'none')
+  // 代理管理 API：GET 空池 → POST 保存（持久化 + 立即生效）→ GET 返回
+  {
+    const g1 = await fetch(`http://127.0.0.1:${wport}/api/proxy`, { headers: { cookie } })
+    assert.equal(g1.status, 200)
+    assert.deepEqual((await g1.json()).proxies, [])
+
+    const post = await fetch(`http://127.0.0.1:${wport}/api/proxy`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ proxies: ['http://p1.example:7890', 'http://p2.example:7890', '  '] }),
+    })
+    assert.equal(post.status, 200)
+    const pj = await post.json()
+    assert.deepEqual(pj.proxies, ['http://p1.example:7890', 'http://p2.example:7890'])
+    assert.ok(pj.note)
+
+    // 持久化到 /data/proxies.json，且运行配置已更新
+    const saved = JSON.parse(fs.readFileSync(path.join(wDir, 'proxies.json'), 'utf8'))
+    assert.deepEqual(saved.proxies, ['http://p1.example:7890', 'http://p2.example:7890'])
+    assert.deepEqual(wConfig.upstream.proxies, ['http://p1.example:7890', 'http://p2.example:7890'])
+
+    // 新 runtime 使用新池（invalidateProxies 后重建）
+    const rt = wruntimes.get('w@example.com')
+    assert.ok(poolUrls.includes(rt.effectiveProxy))
+
+    const g2 = await fetch(`http://127.0.0.1:${wport}/api/proxy`, { headers: { cookie } })
+    assert.deepEqual((await g2.json()).proxies, ['http://p1.example:7890', 'http://p2.example:7890'])
+
+    // 清空 → 全局池空
+    await fetch(`http://127.0.0.1:${wport}/api/proxy`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ proxies: [] }),
+    })
+    assert.deepEqual(wConfig.upstream.proxies, [])
+  }
+
   // proxy test: 未配置代理 → 空结果
   const pt1 = await fetch(`http://127.0.0.1:${wport}/api/proxy/test`, {
     method: 'POST',

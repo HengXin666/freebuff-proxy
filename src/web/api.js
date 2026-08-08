@@ -32,7 +32,7 @@ const SESSION_COOKIE = 'fb_session'
  * }} deps
  */
 export function createWebApi(deps) {
-  const { config, userStore, webSessions, loginFlows, runtimes } = deps
+  const { config, userStore, webSessions, loginFlows, runtimes, proxyStore } = deps
 
   function getSessionUser(req) {
     const cookies = parseCookies(req.headers.cookie)
@@ -466,6 +466,56 @@ export function createWebApi(deps) {
       return true
     }
 
+    if (method === 'GET' && path === '/api/proxy') {
+      const configured = proxyStore ? proxyStore.list() : config.upstream.proxies || []
+      sendJson(res, 200, {
+        proxies: configured,
+        // 实际生效的代理（含单代理/环境变量），用于前端展示
+        effective: uniqueStrings([
+          ...(configured || []),
+          ...(config.upstream.proxy ? [config.upstream.proxy] : []),
+          ...(envProxyOrNull() ? [envProxyOrNull()] : []),
+        ]),
+        accounts: runtimes.list().map((a) => ({
+          email: a.email,
+          proxy: a.proxy || null,
+          effectiveProxy: a.effectiveProxy || null,
+        })),
+      })
+      return true
+    }
+
+    if (method === 'POST' && path === '/api/proxy') {
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      if (!proxyStore) {
+        sendJson(res, 501, { error: '当前进程未启用代理存储' })
+        return true
+      }
+      let body
+      try {
+        body = await readJson(req)
+      } catch {
+        sendJson(res, 400, { error: '无效的 JSON' })
+        return true
+      }
+      const proxies = proxyStore.save(body.proxies)
+      // 立即生效：更新运行配置并重建缓存 runtime（释放旧 session、走新出口）
+      config.upstream.proxies = proxies
+      await runtimes.invalidateProxies()
+      logger.info('proxy pool updated via web', { proxies })
+      sendJson(res, 200, {
+        ok: true,
+        proxies,
+        note: proxies.length
+          ? '已保存并立即生效（账号出口已切换）'
+          : '已清空全局代理池（将走环境变量/直连）',
+      })
+      return true
+    }
+
     if (method === 'POST' && path === '/api/proxy/test') {
       // 代理连通性测试：走该代理访问 Cloudflare trace 拿出口 IP/地区，再探测 codebuff。
       // 只读、无副作用；body.proxy 为空时测试当前生效的代理配置。
@@ -483,7 +533,8 @@ export function createWebApi(deps) {
       if (requested) {
         candidates = [requested]
       } else {
-        for (const p of config.upstream.proxies || []) if (p) candidates.push(p)
+        const pool = proxyStore ? proxyStore.list() : config.upstream.proxies || []
+        for (const p of pool) if (p) candidates.push(p)
         if (config.upstream.proxy) candidates.push(config.upstream.proxy)
         const envProxy = envProxyOrNull()
         if (envProxy && !candidates.includes(envProxy)) candidates.push(envProxy)
@@ -631,6 +682,10 @@ async function testProxyUrl(proxyUrl, timeoutMs = 12_000) {
       '如果你的代理在其他机器上，直接填它的真实 IP，例如 http://192.168.1.10:2334。'
   }
   return out
+}
+
+function uniqueStrings(arr) {
+  return [...new Set((arr || []).filter(Boolean).map(String))]
 }
 
 function envProxyOrNull() {
