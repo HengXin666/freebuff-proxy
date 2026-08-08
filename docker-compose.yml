@@ -20,11 +20,15 @@ services:
       # 首次启动管理员（不设 ADMIN_PASSWORD 则随机生成，打印在 docker compose logs 里）
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      # 上游代理（可选）：支持 HTTP(S)_PROXY / NO_PROXY，或编辑 /data/config.yaml 的 upstream.proxy
+      # 上游代理（可选）：支持 HTTP(S)_PROXY / NO_PROXY，或编辑 /data/config.yaml 的 upstream.proxies
+      # 172.16.0.0/12 = docker 网关/内网网段，默认不走代理
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-127.0.0.1,localhost}
+      NO_PROXY: ${NO_PROXY:-127.0.0.1,localhost,172.16.0.0/12}
       TZ: ${TZ:-Asia/Shanghai}
+    extra_hosts:
+      # 容器内用 http://host.docker.internal:7890 访问宿主机上的代理（映射到 docker 网关 IP）
+      - "host.docker.internal:host-gateway"
     volumes:
       # 宿主机 ./data → 容器 /data（凭据/配置/用户/会话/登录流程都在这）
       - ./data:/data

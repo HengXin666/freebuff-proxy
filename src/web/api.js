@@ -6,6 +6,7 @@ import {
   parseCookies,
   serializeCookie,
 } from '../util/http.js'
+import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import { buildModelsListResponse } from '../model.js'
 import {
   saveAccountUser,
@@ -465,6 +466,44 @@ export function createWebApi(deps) {
       return true
     }
 
+    if (method === 'POST' && path === '/api/proxy/test') {
+      // 代理连通性测试：走该代理访问 Cloudflare trace 拿出口 IP/地区，再探测 codebuff。
+      // 只读、无副作用；body.proxy 为空时测试当前生效的代理配置。
+      let body = {}
+      try {
+        body = await readJson(req)
+      } catch {
+        // ignore
+      }
+      const requested =
+        typeof body.proxy === 'string' && body.proxy.trim()
+          ? body.proxy.trim()
+          : null
+      let candidates = []
+      if (requested) {
+        candidates = [requested]
+      } else {
+        for (const p of config.upstream.proxies || []) if (p) candidates.push(p)
+        if (config.upstream.proxy) candidates.push(config.upstream.proxy)
+        const envProxy = envProxyOrNull()
+        if (envProxy && !candidates.includes(envProxy)) candidates.push(envProxy)
+      }
+      if (!candidates.length) {
+        sendJson(res, 200, {
+          ok: true,
+          results: [],
+          note: '未配置任何代理（当前直连）。可在 config 配 upstream.proxies 或给本接口传 proxy。',
+        })
+        return true
+      }
+      const results = []
+      for (const p of candidates) {
+        results.push(await testProxyUrl(p))
+      }
+      sendJson(res, 200, { ok: true, results })
+      return true
+    }
+
     sendJson(res, 404, { error: `未知接口 ${method} ${path}` })
     return true
   }
@@ -521,6 +560,64 @@ function sanitize(user) {
   if (!user) return null
   const { salt, passwordHash, ...rest } = user
   return rest
+}
+
+/**
+ * 通过指定代理做连通性测试：
+ * 1. GET https://www.cloudflare.com/cdn-cgi/trace → 出口 IP + 国家（证明真的走了该代理）
+ * 2. GET https://codebuff.com/ → 真实目标可达性
+ * @param {string} proxyUrl
+ * @param {number} [timeoutMs]
+ */
+async function testProxyUrl(proxyUrl, timeoutMs = 12_000) {
+  const started = Date.now()
+  /** @type {{proxy: string, ok: boolean, error: string | null, ip: string | null, country: string | null, latencyMs: number | null, codebuffStatus: number | null}} */
+  const out = {
+    proxy: proxyUrl,
+    ok: false,
+    error: null,
+    ip: null,
+    country: null,
+    latencyMs: null,
+    codebuffStatus: null,
+  }
+  let agent
+  try {
+    agent = new ProxyAgent({ uri: proxyUrl })
+  } catch (err) {
+    out.error = `代理地址解析失败: ${err instanceof Error ? err.message : String(err)}`
+    out.latencyMs = Date.now() - started
+    return out
+  }
+  try {
+    const traceRes = await undiciFetch('https://www.cloudflare.com/cdn-cgi/trace', {
+      dispatcher: agent,
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    if (traceRes.ok) {
+      const text = await traceRes.text()
+      out.ip = text.match(/^ip=(.+)$/m)?.[1] || null
+      out.country = text.match(/^loc=(.+)$/m)?.[1] || null
+    } else {
+      out.error = `trace HTTP ${traceRes.status}`
+    }
+    try {
+      const cbRes = await undiciFetch('https://codebuff.com/', {
+        dispatcher: agent,
+        signal: AbortSignal.timeout(timeoutMs),
+        redirect: 'follow',
+      })
+      out.codebuffStatus = cbRes.status
+    } catch {
+      out.codebuffStatus = null
+    }
+    out.ok = true
+  } catch (err) {
+    out.error = err instanceof Error ? err.message : String(err)
+  } finally {
+    out.latencyMs = Date.now() - started
+  }
+  return out
 }
 
 function envProxyOrNull() {

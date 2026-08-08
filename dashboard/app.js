@@ -223,6 +223,9 @@ async function renderOverview(view) {
     view.append(el('div', { class: 'card', style: 'margin-top:12px;overflow:auto' }, table))
   }
 
+  // 代理测试
+  view.append(renderProxyTest())
+
   // login flows
   if (state.me.role === 'admin') {
     state.flows = (await api('/api/accounts/login')).data
@@ -236,6 +239,69 @@ async function renderOverview(view) {
         ])),
       ]))
     }
+  }
+}
+
+/* ---------------- proxy test ---------------- */
+function renderProxyTest() {
+  const card = el('div', { class: 'card', style: 'margin-top:12px' }, [
+    el('div', { class: 'row spread' }, [
+      el('h3', { style: 'margin:0' }, '代理测试'),
+      el('button', { class: 'muted', onclick: () => runProxyTest(null) }, '测试已配置代理'),
+    ]),
+    el('div', { class: 'row', style: 'margin-top:8px' }, [
+      el('input', {
+        id: 'proxy-test-url',
+        placeholder: 'http://user:pass@172.17.0.1:7890 或 http://host.docker.internal:7890（留空测试已配置）',
+        class: 'mono',
+      }),
+      el('button', { class: 'primary', onclick: () => runProxyTest($('#proxy-test-url').value.trim() || null) }, '测 试'),
+    ]),
+    el('div', { id: 'proxy-test-result', style: 'margin-top:8px' }),
+  ])
+  return card
+}
+
+async function runProxyTest(proxy) {
+  const box = $('#proxy-test-result')
+  if (!box) return
+  box.innerHTML = ''
+  box.append(el('span', { class: 'muted' }, '测试中…（最多 ~12s/个）'))
+  try {
+    const r = await api('/api/proxy/test', {
+      method: 'POST',
+      body: JSON.stringify(proxy ? { proxy } : {}),
+    })
+    box.innerHTML = ''
+    if (!r.results.length) {
+      box.append(el('div', { class: 'muted' }, r.note || '当前未配置代理（直连）'))
+      return
+    }
+    for (const res of r.results) {
+      const head = res.ok
+        ? el('span', { class: 'badge ok' }, '✅ 可用')
+        : el('span', { class: 'badge err' }, '❌ 不可用')
+      const lines = [
+        el('div', {}, [
+          head,
+          el('code', { class: 'mono muted', style: 'margin-left:8px;font-size:12px' }, res.proxy),
+        ]),
+      ]
+      if (res.ok) {
+        lines.push(el('div', { class: 'muted' }, [
+          `出口 IP: ${res.ip || '?'}`,
+          res.country ? `（${res.country}）` : '',
+          ` · 延迟 ${res.latencyMs}ms`,
+          ` · codebuff 状态 ${res.codebuffStatus ?? '?'}`,
+        ].join('')))
+      } else {
+        lines.push(el('div', { class: 'muted', style: 'color:var(--red)' }, `失败: ${res.error || '连接失败'}（${res.latencyMs}ms）`))
+      }
+      box.append(el('div', { style: 'padding:8px 0;border-bottom:1px solid var(--border)' }, lines))
+    }
+  } catch (err) {
+    box.innerHTML = ''
+    box.append(el('div', { class: 'muted', style: 'color:var(--red)' }, `测试失败: ${err.message}`))
   }
 }
 

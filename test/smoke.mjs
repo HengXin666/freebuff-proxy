@@ -635,6 +635,28 @@ assert.equal(requireModelId(''), null)
   assert.equal(pj.accounts[0].email, 'w@example.com')
   // mock GET 返回 status none → 探测后 session 状态可见
   assert.equal(pj.accounts[0].session.status, 'none')
+  // proxy test: 未配置代理 → 空结果
+  const pt1 = await fetch(`http://127.0.0.1:${wport}/api/proxy/test`, {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: '{}',
+  })
+  assert.equal(pt1.status, 200)
+  const ptj1 = await pt1.json()
+  assert.equal(ptj1.results.length, 0)
+  assert.ok(ptj1.note)
+  // proxy test: 死代理 → ok:false + 错误信息（真连接尝试，localhost 立即拒绝）
+  const pt2 = await fetch(`http://127.0.0.1:${wport}/api/proxy/test`, {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ proxy: 'http://127.0.0.1:9' }),
+  })
+  assert.equal(pt2.status, 200)
+  const ptj2 = await pt2.json()
+  assert.equal(ptj2.results.length, 1)
+  assert.equal(ptj2.results[0].ok, false)
+  assert.equal(ptj2.results[0].proxy, 'http://127.0.0.1:9')
+  assert.ok(ptj2.results[0].error)
   loginFlows.shutdown()
   await wruntimes.shutdown()
   wserver.close()

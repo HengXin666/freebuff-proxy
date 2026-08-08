@@ -9,7 +9,8 @@ RUN apk add --no-cache su-exec && \
 ENV NODE_ENV=production \
     FREEBUFF_PROXY_DATA_DIR=/data \
     FREEBUFF_PROXY_CONFIG=/data/config.yaml \
-    NO_PROXY=127.0.0.1,localhost \
+    # 172.16.0.0/12：docker 网关/内网地址不走代理（代理本身若在宿主机网关不受影响）
+    NO_PROXY=127.0.0.1,localhost,172.16.0.0/12 \
     npm_config_update_notifier=false
 
 WORKDIR /app

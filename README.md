@@ -218,8 +218,34 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 
 以上都未配置时直连。
 
-> 注意：代理是**容器出网**代理（例如宿主机上的 Clash）。若代理跑在宿主机，需把代理监听 0.0.0.0 并用宿主机网关 IP，或使用
-> `network_mode: host` / 额外 compose 网络。容器健康检查走 `NO_PROXY=127.0.0.1,localhost`，不受代理影响。
+### 测试代理是否生效
+
+控制台「总览 → 代理测试」：
+
+- 输入代理地址点「测试」（或点「测试已配置代理」测全部已配置项）；
+- 结果会显示：**出口 IP + 国家地区**（通过 Cloudflare trace 验证确实走了该代理）、延迟、以及 codebuff 可达状态；
+- 看到出口 IP/地区 ≠ 本机 IP，就说明代理生效了。
+
+> 也可以直接 curl 后端接口：`POST /api/proxy/test`，`{"proxy":"http://..."}` 测试指定代理，空 body 测试已配置代理。
+
+### 用宿主机上的代理（Clash 等）
+
+代理跑在宿主机、服务在容器里时，两种写法：
+
+```yaml
+# 方式 A（推荐）：compose 已映射 host.docker.internal → 宿主机网关
+upstream:
+  proxies:
+    - http://host.docker.internal:7890
+
+# 方式 B：直接写 docker 网关 IP（老式；网段不同时先 docker network inspect bridge 查 gateway）
+upstream:
+  proxies:
+    - http://172.17.0.1:7890
+```
+
+注意：宿主机代理需**监听 0.0.0.0**（Clash 默认只监听 127.0.0.1，需开 Allow LAN）。容器健康检查走
+`NO_PROXY=127.0.0.1,localhost,172.16.0.0/12`（docker 网关/内网段默认不走代理），不受影响。
 
 ---
 
