@@ -230,20 +230,27 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 
 ### 代理地址怎么写（重要）
 
-**直接用代理的真实 IP**——和你其他容器里的写法一样，本代理没有任何特殊要求：
+**默认 host 网络模式**：容器与宿主机共享网络栈，代理跑在这台机器（本机 / VPS 宿主机）时，
+配置里**直接写 `127.0.0.1`**，和 VPS 上任何进程一样，Clash 只监听 127.0.0.1 也能通：
 
 ```yaml
 # /data/config.yaml
 upstream:
   proxies:
-    - http://192.168.1.10:2334      # 你代理的实际 IP（局域网/公网都行）
+    - http://127.0.0.1:2334        # 代理就在本机/本 VPS 时
 ```
 
-> 不要用 `host.docker.internal`——它只在你代理**就运行在跑容器的这台宿主机上**时才成立，
-> 而且还需要宿主机代理监听 0.0.0.0（Clash 开 Allow LAN）。代理在其他机器上时填它的真实 IP 即可。
->
-> 如果代理确实在本机：`docker network inspect bridge` 查网关（通常 172.17.0.1），写
-> `http://172.17.0.1:7890`；或直接用 compose 里已映射的 `http://host.docker.internal:7890`。
+代理在**另一台机器**时，填它的真实 IP：
+
+```yaml
+upstream:
+  proxies:
+    - http://192.168.1.10:2334     # 局域网/公网都行，和其他容器里的写法一致
+```
+
+> 如果用了 `NETWORK_MODE=bridge`（默认桥接网络）：容器内 `127.0.0.1` 是容器自己，访问宿主机代理要用
+> docker 网关 IP（`docker network inspect bridge` 查，通常 172.17.0.1）或 compose 已映射的
+> `host.docker.internal`。
 
 容器健康检查走 `NO_PROXY=127.0.0.1,localhost,172.16.0.0/12`（docker 网关/内网段默认不走代理），不受影响。
 
