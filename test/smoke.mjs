@@ -252,8 +252,8 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
     extractConversationKey(mk({ client_id: 'install-1', thread_id: 'thread-b' }), {}),
     'thread-b',
   )
-  // client_id 只作兜底
-  assert.equal(extractConversationKey(mk({ client_id: 'install-1' }), {}), 'install-1')
+  // client_id（安装 ID，恒定）不参与会话 key，否则所有会话共享同一个 key
+  assert.equal(extractConversationKey(mk({ client_id: 'install-1' }), {}), null)
   assert.equal(extractConversationKey({ conversation_id: 'cv' }, {}), 'cv')
   assert.equal(extractConversationKey({}, { 'x-conversation-id': 'xc' }), 'xc')
   assert.equal(extractConversationKey({ user: 'u1' }, {}), 'u1')
@@ -976,7 +976,7 @@ assert.equal(requireModelId(''), null)
       },
       body: JSON.stringify({
         model: 'deepseek/deepseek-v4-flash',
-        codebuff_metadata: { client_id: `conv-${i}` },
+        codebuff_metadata: { conversation_id: `conv-${i}` },
         messages: [{ role: 'user', content: 'hello' }],
       }),
     })
@@ -1001,7 +1001,7 @@ assert.equal(requireModelId(''), null)
       },
       body: JSON.stringify({
         model: 'deepseek/deepseek-v4-flash',
-        codebuff_metadata: { client_id: 'conv-3' },
+        codebuff_metadata: { conversation_id: 'conv-3' },
         messages: [{ role: 'user', content: 'hello' }],
       }),
     })
@@ -1017,6 +1017,69 @@ assert.equal(requireModelId(''), null)
   await convRuntimes.shutdown()
   convServer.close()
   fs.rmSync(convDir, { recursive: true, force: true })
+}
+
+// 无会话ID 的请求（纯池子选号）：轮询均分，不因“活跃 session”一直压在一个账号
+{
+  const rrDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-rr-'))
+  saveAccountUser(rrDir, { id: 'ra', email: 'ra@example.com', authToken: 'token-ra' })
+  saveAccountUser(rrDir, { id: 'rb', email: 'rb@example.com', authToken: 'token-rb' })
+  saveAccountUser(rrDir, { id: 'rc', email: 'rc@example.com', authToken: 'token-rc' })
+  const rrConfig = loadConfig()
+  rrConfig.server.host = '127.0.0.1'
+  rrConfig.server.port = 0
+  rrConfig.server.apiKeys = ['sk-test']
+  rrConfig.upstream.credentialsDir = rrDir
+  rrConfig.session.pollIntervalSec = 3600
+  const rrRuntimes = new AccountRuntimes(rrConfig)
+  const rrServer = await startServer({
+    config: rrConfig,
+    runtimes: rrRuntimes,
+    ...(() => {
+      const rt = rrRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const rrPort = rrServer.address().port
+  mockMode = 'ok'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  // 9 个无会话 key 的请求：轮询 a→b→c→a→b→c…，每个账号 3 次，
+  // 而不是第一个拿到 session 的账号被活跃 session 加分持续吸走全部请求。
+  for (let i = 0; i < 9; i++) {
+    const res = await fetch(`http://127.0.0.1:${rrPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer sk-test',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'deepseek/deepseek-v4-flash',
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    })
+    assert.equal(res.status, 200, await res.clone().text())
+  }
+  const rrByEmail = new Map(
+    rrRuntimes.list().map((a) => [a.email, a.requests]),
+  )
+  for (const email of ['ra@example.com', 'rb@example.com', 'rc@example.com']) {
+    assert.equal(
+      rrByEmail.get(email),
+      3,
+      `${email} 应收到 3 个轮询请求, got ${rrByEmail.get(email)}`,
+    )
+  }
+  await rrRuntimes.shutdown()
+  rrServer.close()
+  fs.rmSync(rrDir, { recursive: true, force: true })
 }
 
 await runtimes.shutdown()

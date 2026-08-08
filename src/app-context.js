@@ -301,9 +301,10 @@ export class AccountRuntimes {
     const scored = emails.map((email, idx) => {
       let score = 0
       const rt = this.byEmail.get(email)
-      if (rt?.sessions?.isUsableForModel?.(model)) score += 100
-      // 注意：不再给“最近成功账号”加分——那会把新请求持续吸到同一个账号，
-      // 破坏会话级负载均衡（旧行为：一个账号 128 次、其余 0 次）。
+      // 轮询为主：无会话ID 的请求按 第1、第2、第3…个账号轮流分配。
+      // 注意：不给“已有活跃 session”/“最近成功账号”加分——那会让所有请求
+      // 持续吸到同一个账号（旧行为：一个账号 128 次、其余 0 次）。
+      // 轮询下每个账号自己的 session 仍会在轮到它时被复用，热 session 不丢。
       const rot =
         (idx + emails.length - (this._rr % emails.length)) % emails.length
       score += (emails.length - rot) / 100
