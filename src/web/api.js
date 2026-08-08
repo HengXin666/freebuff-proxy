@@ -626,9 +626,9 @@ async function testProxyUrl(proxyUrl, timeoutMs = 12_000) {
   }
   if (!out.ok && String(proxyUrl).includes('host.docker.internal')) {
     out.hint =
-      'host.docker.internal 需要 compose 里有 extra_hosts: host.docker.internal:host-gateway，' +
-      '且宿主机代理必须监听 0.0.0.0（Clash 需开 Allow LAN / 允许局域网连接）。' +
-      '更稳妥的做法：换成 docker 网关 IP，例如 http://172.17.0.1:2334（用 docker network inspect bridge 查实际网关）。'
+      'host.docker.internal 只表示"跑容器的那台宿主机本身"：仅当代理就运行在这台宿主机上才可能通' +
+      '（且需代理监听 0.0.0.0 / Clash 开 Allow LAN）。' +
+      '如果你的代理在其他机器上，直接填它的真实 IP，例如 http://192.168.1.10:2334。'
   }
   return out
 }

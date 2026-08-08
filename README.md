@@ -228,24 +228,24 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 
 > 也可以直接 curl 后端接口：`POST /api/proxy/test`，`{"proxy":"http://..."}` 测试指定代理，空 body 测试已配置代理。
 
-### 用宿主机上的代理（Clash 等）
+### 代理地址怎么写（重要）
 
-代理跑在宿主机、服务在容器里时，两种写法：
+**直接用代理的真实 IP**——和你其他容器里的写法一样，本代理没有任何特殊要求：
 
 ```yaml
-# 方式 A（推荐）：compose 已映射 host.docker.internal → 宿主机网关
+# /data/config.yaml
 upstream:
   proxies:
-    - http://host.docker.internal:7890
-
-# 方式 B：直接写 docker 网关 IP（老式；网段不同时先 docker network inspect bridge 查 gateway）
-upstream:
-  proxies:
-    - http://172.17.0.1:7890
+    - http://192.168.1.10:2334      # 你代理的实际 IP（局域网/公网都行）
 ```
 
-注意：宿主机代理需**监听 0.0.0.0**（Clash 默认只监听 127.0.0.1，需开 Allow LAN）。容器健康检查走
-`NO_PROXY=127.0.0.1,localhost,172.16.0.0/12`（docker 网关/内网段默认不走代理），不受影响。
+> 不要用 `host.docker.internal`——它只在你代理**就运行在跑容器的这台宿主机上**时才成立，
+> 而且还需要宿主机代理监听 0.0.0.0（Clash 开 Allow LAN）。代理在其他机器上时填它的真实 IP 即可。
+>
+> 如果代理确实在本机：`docker network inspect bridge` 查网关（通常 172.17.0.1），写
+> `http://172.17.0.1:7890`；或直接用 compose 里已映射的 `http://host.docker.internal:7890`。
+
+容器健康检查走 `NO_PROXY=127.0.0.1,localhost,172.16.0.0/12`（docker 网关/内网段默认不走代理），不受影响。
 
 ---
 
