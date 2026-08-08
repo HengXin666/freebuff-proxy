@@ -68,7 +68,7 @@ docker compose down          # 停止（数据保留在 ./data）
 ### 不想本地构建？用 GHCR 预构建镜像（可选）
 
 本仓库默认 `build: .` 本地构建（镜像很小，构建很快）。发版（`v*` tag）时 GitHub
-Actions 也会自动推送 `ghcr.io/HengXin666/freebuff-proxy`（`latest` + `vX.Y.Z`），
+Actions 也会自动推送 `ghcr.io/HengXin666/freebuff-proxy`（`latest` + 版本号 tag，如 `1.0.0`，semver 去 `v` 前缀），
 不想本地构建的话，把 compose 里的 `build: .` 换成 `image` 即可：
 
 ```yaml
