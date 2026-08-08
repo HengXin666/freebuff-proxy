@@ -228,29 +228,21 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 
 > 也可以直接 curl 后端接口：`POST /api/proxy/test`，`{"proxy":"http://..."}` 测试指定代理，空 body 测试已配置代理。
 
-### 代理地址怎么写（重要）
+### 代理地址怎么写
 
-**默认 host 网络模式**：容器与宿主机共享网络栈，代理跑在这台机器（本机 / VPS 宿主机）时，
-配置里**直接写 `127.0.0.1`**，和 VPS 上任何进程一样，Clash 只监听 127.0.0.1 也能通：
+默认 **bridge 网络**（`ports` 映射、`PORT` 都生效），代理地址写法和你其他容器完全一致：
 
 ```yaml
 # /data/config.yaml
 upstream:
   proxies:
-    - http://127.0.0.1:2334        # 代理就在本机/本 VPS 时
+    - http://192.168.1.10:2334      # 代理在其他机器：填真实 IP（局域网/公网都行）
+    - http://172.17.0.1:2334        # 代理在本机且监听 0.0.0.0：docker 网关 IP（docker network inspect bridge 查）
+    - http://host.docker.internal:2334  # 同上，compose 已映射，需代理监听 0.0.0.0
 ```
 
-代理在**另一台机器**时，填它的真实 IP：
-
-```yaml
-upstream:
-  proxies:
-    - http://192.168.1.10:2334     # 局域网/公网都行，和其他容器里的写法一致
-```
-
-> 如果用了 `NETWORK_MODE=bridge`（默认桥接网络）：容器内 `127.0.0.1` 是容器自己，访问宿主机代理要用
-> docker 网关 IP（`docker network inspect bridge` 查，通常 172.17.0.1）或 compose 已映射的
-> `host.docker.internal`。
+- 容器内 `127.0.0.1` 是容器自己，**不代表宿主机的代理**；bridge 模式下访问宿主机代理请用网关 IP / `host.docker.internal`（前提：代理监听 0.0.0.0，Clash 开 Allow LAN）。
+- 如果你的代理**只监听 127.0.0.1**（Clash 默认不开 Allow LAN），容器桥接网络永远够不到它：设 `NETWORK_MODE=host` 让容器共享宿主网络，此时 `http://127.0.0.1:<端口>` 可直接用（`PORT` 仍然生效，服务监听宿主 0.0.0.0）。
 
 容器健康检查走 `NO_PROXY=127.0.0.1,localhost,172.16.0.0/12`（docker 网关/内网段默认不走代理），不受影响。
 
