@@ -88,7 +88,7 @@ docker compose up -d --build
 ```text
 data/
 ├── config.yaml            # 首次启动自动生成，可直接编辑（重启生效）
-├── credentials/           # Freebuff 账号凭据（每账号一个 <email>.json）
+├── credentials/           # Freebuff 账号凭据（每账号一个 <账号ID>.json，见下）
 ├── users.json             # Web 控制台用户（密码 scrypt 哈希）
 ├── web-sessions.json      # Web 登录会话
 └── login-flows.json       # 浏览器登录回调流程（重启不丢）
@@ -131,9 +131,14 @@ data/
 1. 管理员在「总览 → + 添加账号」发起登录；
 2. 服务端向 Freebuff 申请 CLI 登录链接并返回；
 3. **在你自己电脑的浏览器**打开该链接完成登录授权（页面会持续轮询显示状态）；
-4. 服务端收到回调后把凭据保存到 `/data/credentials/<email>.json`，控制台自动刷新。
+4. 服务端收到回调后把凭据保存到 `/data/credentials/<账号ID>.json`，控制台自动刷新。
 
-> 也支持「导入账号」：从旧环境导出的 `{"email":"...","authToken":"..."}` JSON 可直接粘贴导入。
+> 账号以 **Freebuff 用户 `id` 唯一标识**（老数据无 `id` 时回落邮箱）。即使 GitHub 和 Google
+> 登录使用**同一个邮箱**，Freebuff 也会返回不同的 `id`，两个账号会并存互不覆盖（历史上按邮箱
+> 存文件会导致互相覆盖）。旧版 `<email>.json` 文件会在首次读取时自动迁移为 `<id>.json`。
+>
+> 也支持「导入账号」：从旧环境导出的 `{"email":"...","authToken":"..."}` JSON 可直接
+> 粘贴导入（如同时导入了同邮箱的 GitHub/Google 两个账号，请带上各自的 `"id"` 以免互相覆盖）。
 
 ### 用户管理（管理员）
 
@@ -205,7 +210,7 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 ### 兜底配置（一般不用动）
 
 代理优先级：控制台全局池（`/data/proxies.json`）> `config.yaml` 的 `upstream.proxies` > 账号凭据文件
-`credentials/<email>.json#proxy`（内部字段，仅脚本/手工维护，无 UI）> `upstream.proxy` > `HTTP(S)_PROXY` 环境变量 > 直连。
+`credentials/<账号ID>.json#proxy`（内部字段，仅脚本/手工维护，无 UI）> `upstream.proxy` > `HTTP(S)_PROXY` 环境变量 > 直连。
 
 `config.yaml` 里的 `upstream.proxies` / `upstream.proxy` 只作**兜底默认值**（控制台保存后会覆盖并优先），
 改完需要重启容器才生效——日常加/删代理请在控制台操作。

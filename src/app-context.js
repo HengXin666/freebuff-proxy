@@ -2,6 +2,7 @@ import {
   resolveCredentialsDir,
   listAccounts,
   readAccountUser,
+  accountKeyOf,
   freebuffAuthHeaders,
 } from './auth-store.js'
 import { createUpstreamClient } from './upstream/client.js'
@@ -38,7 +39,9 @@ const DEFAULT_COOLDOWN_MS = 60_000
 const BANNED_COOLDOWN_MS = DAY_MS
 
 /**
- * Multi-account pool. Single selection path: availability-based auto pick.
+ * Multi-account pool. 账号以「account key」标识：
+ * key = Freebuff 用户 id（优先），无 id（历史数据）回落邮箱。
+ * GitHub / Google 登录同一邮箱但 id 不同 → 两个独立账号，互不覆盖。
  */
 export class AccountRuntimes {
   /**
@@ -47,33 +50,33 @@ export class AccountRuntimes {
   constructor(config) {
     this.config = config
     this.dir = resolveCredentialsDir(config)
-    /** @type {Map<string, { email: string, authToken: string, user: any, upstream: any, sessions: SessionManager, source: string }>} */
-    this.byEmail = new Map()
+    /** @type {Map<string, { key: string, email: string, id: string | null, authToken: string, user: any, upstream: any, sessions: SessionManager, source: string }>} */
+    this.byKey = new Map()
     /**
-     * Cooldown key: email  (whole account) or email\0model (per-model).
+     * Cooldown key: account key  (whole account) or key\0model (per-model).
      * @type {Map<string, { until: number, code?: string, model?: string }>}
      */
     this.cooldowns = new Map()
     this._rr = 0
-    this._lastSuccessEmail = null
+    this._lastSuccessKey = null
     /** Per-account success counters (in-memory, for load-balance visibility). */
-    this.stats = { total: 0, byEmail: new Map() }
+    this.stats = { total: 0, byKey: new Map() }
   }
 
   list() {
     const now = Date.now()
     return listAccounts(this.dir).map((a) => {
-      const cd = this.cooldowns.get(a.email)
+      const cd = this.cooldowns.get(a.key)
       const cooling = Boolean(cd && cd.until > now)
-      const rt = this.byEmail.get(a.email)
+      const rt = this.byKey.get(a.key)
       const snap = rt?.sessions?.getSnapshot?.()
       return {
         ...a,
-        lastUsed: this._lastSuccessEmail === a.email,
+        lastUsed: this._lastSuccessKey === a.key,
         available: !cooling,
         cooldownUntil: cooling ? new Date(cd.until).toISOString() : null,
         cooldownCode: cooling ? cd.code : null,
-        requests: this.stats.byEmail.get(a.email) || 0,
+        requests: this.stats.byKey.get(a.key) || 0,
         effectiveProxy: rt?.effectiveProxy || null,
         session: snap
           ? {
@@ -90,21 +93,19 @@ export class AccountRuntimes {
   }
 
   /**
-   * @param {string} email
+   * @param {string} key 账号 key（id 或历史邮箱）
    */
-  get(email) {
-    const normalized = String(email || '')
-      .trim()
-      .toLowerCase()
-    const user = readAccountUser(this.dir, normalized)
+  get(key) {
+    const user = readAccountUser(this.dir, key)
     if (!user?.authToken) {
-      throw new UpstreamError(`Account not found or not logged in: ${email}`, {
+      throw new UpstreamError(`Account not found or not logged in: ${key}`, {
         status: 401,
         code: 'upstream_auth_missing',
       })
     }
+    const accountKey = accountKeyOf(user)
 
-    const existing = this.byEmail.get(user.email)
+    const existing = this.byKey.get(accountKey)
     if (
       existing &&
       existing.authToken === user.authToken &&
@@ -114,15 +115,17 @@ export class AccountRuntimes {
     }
     if (existing) {
       existing.sessions.shutdown().catch(() => {})
-      this.byEmail.delete(user.email)
+      this.byKey.delete(accountKey)
     }
 
     const upstream = createUpstreamClient(this.config, user.authToken, {
       proxy: user.proxy || null,
-      accountId: user.email,
+      accountId: accountKey,
     })
     const sessions = new SessionManager({ upstream, config: this.config })
     const runtime = {
+      key: accountKey,
+      id: user.id || null,
       email: user.email,
       authToken: user.authToken,
       proxy: user.proxy || null,
@@ -131,32 +134,33 @@ export class AccountRuntimes {
       user,
       upstream,
       sessions,
-      source: `credentials:${user.email}`,
+      source: `credentials:${accountKey}`,
     }
-    this.byEmail.set(user.email, runtime)
+    this.byKey.set(accountKey, runtime)
     return runtime
   }
 
-  allEmails() {
-    return listAccounts(this.dir).map((a) => a.email)
+  /** 账号 key 列表（id 优先，历史账号为邮箱）。 */
+  allKeys() {
+    return listAccounts(this.dir).map((a) => a.key)
   }
 
-  _cooldownKey(email, model) {
-    return model ? `${email}\0${model}` : email
+  _cooldownKey(key, model) {
+    return model ? `${key}\0${model}` : key
   }
 
   /**
    * Account-level OR (if model given) model-level cooldown blocks selection.
-   * @param {string} email
+   * @param {string} key
    * @param {string | null} [model]
    */
-  isCoolingDown(email, model = null) {
-    this._pruneCooldown(email)
-    if (this.cooldowns.has(email)) return true
+  isCoolingDown(key, model = null) {
+    this._pruneCooldown(key)
+    if (this.cooldowns.has(key)) return true
     if (model) {
-      const key = this._cooldownKey(email, model)
-      this._pruneCooldown(key)
-      if (this.cooldowns.has(key)) return true
+      const k = this._cooldownKey(key, model)
+      this._pruneCooldown(k)
+      if (this.cooldowns.has(k)) return true
     }
     return false
   }
@@ -167,11 +171,11 @@ export class AccountRuntimes {
   }
 
   /**
-   * @param {string} email
+   * @param {string} key
    * @param {import('./upstream/client.js').UpstreamError | { code?: string, retryAfterMs?: number }} err
    * @param {string | null} [model]
    */
-  markCooldown(email, err, model = null) {
+  markCooldown(key, err, model = null) {
     const code = err?.code
     let ms =
       typeof err?.retryAfterMs === 'number' && err.retryAfterMs > 0
@@ -185,15 +189,15 @@ export class AccountRuntimes {
     // model_unavailable / similar: only block that model on this account
     const perModel =
       code === 'model_unavailable' && model && !ACCOUNT_COOLDOWN_CODES.has(code)
-    const key = perModel ? this._cooldownKey(email, model) : email
+    const k = perModel ? this._cooldownKey(key, model) : key
     const until = Date.now() + Math.min(ms, DAY_MS)
-    this.cooldowns.set(key, {
+    this.cooldowns.set(k, {
       until,
       code,
       model: perModel ? model : undefined,
     })
     logger.info('account cooling down; will try others', {
-      email,
+      key,
       code,
       until: new Date(until).toISOString(),
       model: perModel ? model : null,
@@ -201,32 +205,32 @@ export class AccountRuntimes {
     })
   }
 
-  clearCooldown(email, model = null) {
-    this.cooldowns.delete(email)
-    if (model) this.cooldowns.delete(this._cooldownKey(email, model))
+  clearCooldown(key, model = null) {
+    this.cooldowns.delete(key)
+    if (model) this.cooldowns.delete(this._cooldownKey(key, model))
   }
 
-  _recordSuccess(email) {
+  _recordSuccess(key) {
     this.stats.total += 1
-    this.stats.byEmail.set(email, (this.stats.byEmail.get(email) || 0) + 1)
+    this.stats.byKey.set(key, (this.stats.byKey.get(key) || 0) + 1)
   }
 
   /**
    * @param {string} model
    */
-  candidateEmails(model) {
-    const emails = this.allEmails()
-    if (!emails.length) return []
+  candidateKeys(model) {
+    const keys = this.allKeys()
+    if (!keys.length) return []
     // 强制轮询：每次请求按 第1、第2、第3…个账号轮流分配，
     // 冷却中的账号跳过。上游无状态（每次请求带全量历史），
     // 不做会话粘性/分组，也不做配额加权（否则会打破轮询，把请求吸回同一账号）。
     // 每个账号自己的 free session 仍会在轮到它时被复用，热 session 不丢。
-    const start = this._rr % emails.length
+    const start = this._rr % keys.length
     const order = []
-    for (let i = 0; i < emails.length; i++) {
-      const email = emails[(start + i) % emails.length]
-      if (this.isCoolingDown(email, model)) continue
-      order.push(email)
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[(start + i) % keys.length]
+      if (this.isCoolingDown(key, model)) continue
+      order.push(key)
     }
     return order
   }
@@ -244,25 +248,28 @@ export class AccountRuntimes {
       })
     }
 
-    const emails = this.allEmails()
-    if (!emails.length) {
+    const rows = listAccounts(this.dir)
+    const keys = rows.map((r) => r.key)
+    if (!keys.length) {
       throw new UpstreamError(
         'No Freebuff accounts. Add one via the web console (账号管理 → 添加账号) or run `npm run login`.',
         { status: 401, code: 'upstream_auth_missing' },
       )
     }
+    const emailByKey = new Map(rows.map((r) => [r.key, r.email]))
 
-    const order = this.candidateEmails(model)
-    /** @type {Array<{ email: string, code?: string, message: string }>} */
+    const order = this.candidateKeys(model)
+    /** @type {Array<{ key: string, email?: string, code?: string, message: string }>} */
     const failures = []
 
-    for (const email of order) {
-      if (this.isCoolingDown(email, model)) {
+    for (const key of order) {
+      if (this.isCoolingDown(key, model)) {
         const cd =
-          this.cooldowns.get(email) ||
-          this.cooldowns.get(this._cooldownKey(email, model))
+          this.cooldowns.get(key) ||
+          this.cooldowns.get(this._cooldownKey(key, model))
         failures.push({
-          email,
+          key,
+          email: emailByKey.get(key),
           code: cd?.code || 'cooldown',
           message: `cooling down until ${cd ? new Date(cd.until).toISOString() : '?'}`,
         })
@@ -271,10 +278,11 @@ export class AccountRuntimes {
 
       let rt
       try {
-        rt = this.get(email)
+        rt = this.get(key)
       } catch (err) {
         failures.push({
-          email,
+          key,
+          email: emailByKey.get(key),
           code: err?.code,
           message: err instanceof Error ? err.message : String(err),
         })
@@ -283,27 +291,29 @@ export class AccountRuntimes {
 
       try {
         await rt.sessions.ensureSession(model)
-        this.clearCooldown(email, model)
-        this._lastSuccessEmail = email
+        this.clearCooldown(key, model)
+        this._lastSuccessKey = key
         // 指针推进到"被选中账号"的下一位：冷却账号被跳过时依然保持公平轮询
         // （若只按 +1 推进，跳过冷却账号会让列表末尾的账号被选中两次）。
-        this._rr = (emails.indexOf(email) + 1) % Math.max(emails.length, 1)
-        this._recordSuccess(email)
+        this._rr = (keys.indexOf(key) + 1) % Math.max(keys.length, 1)
+        this._recordSuccess(key)
         logger.info('selected account for model', {
-          email,
+          key,
+          email: rt.email,
           model,
         })
         return rt
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        failures.push({ email, code: err?.code, message })
+        failures.push({ key, email: emailByKey.get(key), code: err?.code, message })
         const wrap =
           err instanceof UpstreamError
             ? err
             : new UpstreamError(message, { status: 502, code: 'admit_failed' })
-        this.markCooldown(email, wrap, model)
+        this.markCooldown(key, wrap, model)
         logger.warn('account ensureSession failed; trying next', {
-          email,
+          key,
+          email: emailByKey.get(key),
           model,
           error: message,
           code: err?.code,
@@ -328,16 +338,16 @@ export class AccountRuntimes {
    * - 纯 gate 错误（session_expired/superseded 等）→ 同号强制 re-admit 一次（不冷却），
    *   失败则按轮询换号。
    * @param {string} model
-   * @param {{ preferredEmail?: string | null, gateCode?: string | null, retryAfterMs?: number | null, switchAccount?: boolean }} [opts]
+   * @param {{ preferredKey?: string | null, gateCode?: string | null, retryAfterMs?: number | null, switchAccount?: boolean }} [opts]
    */
   async reacquireAfterGate(model, opts = {}) {
-    if (opts.preferredEmail) {
+    if (opts.preferredKey) {
       if (
         opts.switchAccount ||
         (opts.gateCode && SWITCHABLE_CODES.has(opts.gateCode))
       ) {
         this.markCooldown(
-          opts.preferredEmail,
+          opts.preferredKey,
           new UpstreamError(opts.gateCode, {
             code: opts.gateCode,
             status: 429,
@@ -347,17 +357,17 @@ export class AccountRuntimes {
         )
       } else {
         try {
-          const rt = this.get(opts.preferredEmail)
+          const rt = this.get(opts.preferredKey)
           await rt.sessions.forceReadmit(model)
-          this.clearCooldown(opts.preferredEmail, model)
-          this._lastSuccessEmail = opts.preferredEmail
+          this.clearCooldown(opts.preferredKey, model)
+          this._lastSuccessKey = opts.preferredKey
           return rt
         } catch (err) {
           const wrap =
             err instanceof UpstreamError
               ? err
               : new UpstreamError(String(err), { code: 'admit_failed' })
-          this.markCooldown(opts.preferredEmail, wrap, model)
+          this.markCooldown(opts.preferredKey, wrap, model)
         }
       }
     }
@@ -378,30 +388,45 @@ export class AccountRuntimes {
 
   /** Any account for status/doctor (not used for chat selection). */
   getAny() {
-    const emails = this.allEmails()
-    if (!emails.length) {
+    const keys = this.allKeys()
+    if (!keys.length) {
       throw new UpstreamError(
-        'No Freebuff accounts. Run `npm run login` (saves credentials/<email>.json).',
+        'No Freebuff accounts. Run `npm run login` (saves credentials/<key>.json).',
         { status: 401, code: 'upstream_auth_missing' },
       )
     }
-    const preferred = this._lastSuccessEmail || emails[0]
+    const preferred = this._lastSuccessKey || keys[0]
     return this.get(preferred)
+  }
+
+  /**
+   * 丢弃单个账号的缓存 runtime（删除/改代理后调用，让新状态立即生效）。
+   * @param {string} key
+   */
+  async invalidate(key) {
+    const rt = this.byKey.get(key)
+    if (!rt) return
+    try {
+      await rt.sessions.shutdown()
+    } catch {
+      // ignore
+    }
+    this.byKey.delete(key)
   }
 
   /** 代理池变更后调用：释放并重建所有缓存 runtime，让新出口立即生效 */
   async invalidateProxies() {
-    const tasks = [...this.byEmail.values()].map((rt) => rt.sessions.shutdown())
+    const tasks = [...this.byKey.values()].map((rt) => rt.sessions.shutdown())
     await Promise.allSettled(tasks)
-    const count = this.byEmail.size
-    this.byEmail.clear()
+    const count = this.byKey.size
+    this.byKey.clear()
     logger.info('proxy pool changed; cached runtimes invalidated', { count })
   }
 
   async shutdown() {
-    const tasks = [...this.byEmail.values()].map((rt) => rt.sessions.shutdown())
+    const tasks = [...this.byKey.values()].map((rt) => rt.sessions.shutdown())
     await Promise.allSettled(tasks)
-    this.byEmail.clear()
+    this.byKey.clear()
   }
 }
 
@@ -429,8 +454,8 @@ function decorateQuota(quota) {
  */
 export function buildAppContext(config) {
   const runtimes = new AccountRuntimes(config)
-  const emails = runtimes.allEmails()
-  if (!emails.length) {
+  const keys = runtimes.allKeys()
+  if (!keys.length) {
     // Zero-account startup is allowed: the web console can add Freebuff
     // accounts later. Runtime endpoints report 401 until one exists.
     return {
@@ -440,6 +465,7 @@ export function buildAppContext(config) {
       authToken: null,
       authSource: null,
       authEmail: null,
+      authKey: null,
       upstream: null,
       sessions: null,
     }
@@ -453,6 +479,7 @@ export function buildAppContext(config) {
     authToken: current.authToken,
     authSource: current.source,
     authEmail: current.email,
+    authKey: current.key,
     upstream: current.upstream,
     sessions: current.sessions,
   }

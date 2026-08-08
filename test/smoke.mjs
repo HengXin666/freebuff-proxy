@@ -7,7 +7,7 @@ import { AccountRuntimes } from '../src/app-context.js'
 import { startServer } from '../src/server.js'
 import { configureLogger } from '../src/util/log.js'
 import { requireModelId } from '../src/model.js'
-import { saveAccountUser } from '../src/auth-store.js'
+import { saveAccountUser, listAccounts, readAccountUser } from '../src/auth-store.js'
 import {
   ensureFreebuffSystemMessages,
   normalizeReasoningFields,
@@ -359,7 +359,7 @@ assert.equal(requireModelId(''), null)
 // recoverable gate: exactly one re-admit (session POST again), one extra completion
 {
   // Force fresh session path by releasing
-  await runtimes.get('smoke@example.com').sessions.release()
+  await runtimes.get('u1').sessions.release()
   calls = []
   sessionPosts = 0
   completionAttempts = 0
@@ -505,7 +505,7 @@ assert.equal(requireModelId(''), null)
   assert.equal(rlA.available, false)
   assert.equal(rlA.cooldownCode, 'free_mode_rate_limited')
   // 冷却时长采用上游 retry-after（60s）
-  const cd = rlRuntimes.cooldowns.get('a@example.com')
+  const cd = rlRuntimes.cooldowns.get('a')
   assert.ok(
     cd.until - Date.now() >= 58_000,
     `cooldown should honor retry-after 60s, got ${cd.until - Date.now()}ms`,
@@ -522,24 +522,24 @@ assert.equal(requireModelId(''), null)
 {
   const pool = new AccountRuntimes(config)
   pool.markCooldown(
-    'smoke@example.com',
+    'u1',
     { code: 'model_unavailable', retryAfterMs: 60_000 },
     'openai/gpt-5.6-luna',
   )
   assert.equal(
-    pool.isCoolingDown('smoke@example.com', 'openai/gpt-5.6-luna'),
+    pool.isCoolingDown('u1', 'openai/gpt-5.6-luna'),
     true,
   )
   assert.equal(
-    pool.isCoolingDown('smoke@example.com', 'deepseek/deepseek-v4-flash'),
+    pool.isCoolingDown('u1', 'deepseek/deepseek-v4-flash'),
     false,
   )
-  pool.markCooldown('smoke@example.com', {
+  pool.markCooldown('u1', {
     code: 'banned',
     retryAfterMs: 1000,
   })
-  assert.equal(pool.isCoolingDown('smoke@example.com', 'any'), true)
-  const cd = pool.cooldowns.get('smoke@example.com')
+  assert.equal(pool.isCoolingDown('u1', 'any'), true)
+  const cd = pool.cooldowns.get('u1')
   assert.ok(cd.until - Date.now() > 60_000) // banned floors to 1 day
 }
 
@@ -602,7 +602,7 @@ assert.equal(requireModelId(''), null)
     `强制轮询应严格轮流, got ${JSON.stringify(emails)}`,
   )
   // 冷却中的账号跳过：b 冷却后 a → c → a → c
-  pool.markCooldown('rr-b@example.com', {
+  pool.markCooldown('b', {
     code: 'rate_limited',
     retryAfterMs: 60_000,
   })
@@ -618,6 +618,46 @@ assert.equal(requireModelId(''), null)
   )
   await pool.shutdown()
   fs.rmSync(rrDir, { recursive: true, force: true })
+}
+
+// --- regression: GitHub/Google 同一邮箱但 id 不同 → 两个账号并存，不互相覆盖 ---
+{
+  const dupDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-dup-'))
+  // 模拟 GitHub 登录 + Google 登录（同一邮箱、不同 Freebuff id）
+  saveAccountUser(dupDir, { id: 'github-u1', email: 'same@example.com', name: 'GitHub', authToken: 'token-gh' })
+  saveAccountUser(dupDir, { id: 'google-u1', email: 'same@example.com', name: 'Google', authToken: 'token-google' })
+  let rows = listAccounts(dupDir)
+  assert.equal(rows.length, 2, `同邮箱不同 id 应并存, got ${JSON.stringify(rows.map((r) => r.id))}`)
+  assert.equal(rows.filter((r) => r.email === 'same@example.com').length, 2)
+  assert.ok(rows.some((r) => r.id === 'github-u1') && rows.some((r) => r.id === 'google-u1'))
+  // 各自独立文件，互不覆盖
+  assert.ok(fs.existsSync(path.join(dupDir, 'github-u1.json')))
+  assert.ok(fs.existsSync(path.join(dupDir, 'google-u1.json')))
+  // 重登 GitHub（同 id）→ 只更新 GitHub 那份，Google 那份原样保留
+  saveAccountUser(dupDir, { id: 'github-u1', email: 'same@example.com', name: 'GitHub', authToken: 'token-gh-2' })
+  rows = listAccounts(dupDir)
+  assert.equal(rows.length, 2)
+  assert.equal(readAccountUser(dupDir, 'github-u1').authToken, 'token-gh-2')
+  assert.equal(readAccountUser(dupDir, 'google-u1').authToken, 'token-google')
+  // 轮询选号能分别选中两个账号（各获得一次）
+  const dupConfig = loadConfig()
+  dupConfig.upstream.credentialsDir = dupDir
+  dupConfig.session.pollIntervalSec = 3600
+  const dupPool = new AccountRuntimes(dupConfig)
+  mockMode = 'ok'
+  sessionPosts = 0
+  const seen = []
+  for (let i = 0; i < 2; i++) {
+    const rt = await dupPool.acquireForModel('deepseek/deepseek-v4-flash')
+    seen.push(rt.key)
+  }
+  assert.deepEqual(
+    [...seen].sort(),
+    ['github-u1', 'google-u1'],
+    `两个同邮箱账号都应被轮询到, got ${JSON.stringify(seen)}`,
+  )
+  await dupPool.shutdown()
+  fs.rmSync(dupDir, { recursive: true, force: true })
 }
 
 // --- per-account proxy (多代理粘性: 账号绑定专属出口) ---
@@ -636,7 +676,7 @@ assert.equal(requireModelId(''), null)
   const pool = new AccountRuntimes(pConfig)
 
   // runtime uses the per-account proxy
-  const rtA = pool.get('pa@example.com')
+  const rtA = pool.get('pa')
   assert.equal(rtA.proxy, 'http://127.0.0.1:7890')
   assert.equal(rtA.effectiveProxy, 'http://127.0.0.1:7890')
 
@@ -649,13 +689,13 @@ assert.equal(requireModelId(''), null)
   assert.equal(rows.find((x) => x.email === 'pb@example.com').effectiveProxy, null)
 
   // proxy change → cached runtime recreated with the new proxy
-  pool.get('pa@example.com').sessions.quota = { byModel: {}, rateLimit: null, updatedAt: 'x' }
-  const before = pool.get('pa@example.com')
-  const file = path.join(pDir, 'pa@example.com.json')
+  pool.get('pa').sessions.quota = { byModel: {}, rateLimit: null, updatedAt: 'x' }
+  const before = pool.get('pa')
+  const file = path.join(pDir, 'pa.json')
   const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
   raw.proxy = null
   fs.writeFileSync(file, JSON.stringify(raw))
-  const after = pool.get('pa@example.com')
+  const after = pool.get('pa')
   assert.notEqual(after, before)
   assert.equal(after.proxy, null)
 
@@ -775,7 +815,7 @@ assert.equal(requireModelId(''), null)
     assert.deepEqual(wConfig.upstream.proxies, ['http://p1.example:7890', 'http://p2.example:7890'])
 
     // 新 runtime 使用新池（invalidateProxies 后重建）
-    const rt = wruntimes.get('w@example.com')
+    const rt = wruntimes.get('w')
     assert.ok(poolUrls.includes(rt.effectiveProxy))
 
     const g2 = await fetch(`http://127.0.0.1:${wport}/api/proxy`, { headers: { cookie } })
@@ -831,19 +871,19 @@ assert.equal(requireModelId(''), null)
     const rl = { model, limit, period: 'pacific_day', resetAt: '2026-08-09T07:00:00.000Z', recentCount: used }
     return { byModel: { [model]: rl }, rateLimit: rl, updatedAt: new Date().toISOString() }
   }
-  const pa = pool.get('qa@example.com')
-  const pb = pool.get('qb@example.com')
+  const pa = pool.get('qa')
+  const pb = pool.get('qb')
   pa.sessions.quota = mkQuota('openai/gpt-5.6-luna', 6, 5)
   pb.sessions.quota = mkQuota('openai/gpt-5.6-luna', 6, 1)
 
   // 强制轮询：即使 qa 剩余额度更少/更多，选号顺序也只按轮询指针走（qa → qb）
-  const order = pool.candidateEmails('openai/gpt-5.6-luna')
-  assert.deepEqual(order, ['qa@example.com', 'qb@example.com'], `expected strict round-robin, got ${order}`)
+  const order = pool.candidateKeys('openai/gpt-5.6-luna')
+  assert.deepEqual(order, ['qa', 'qb'], `expected strict round-robin, got ${order}`)
 
   // 已用满也不影响选号（429 会走冷却换号兜底，而不是选号阶段加权）
   pa.sessions.quota = mkQuota('openai/gpt-5.6-luna', 6, 6)
-  const order2 = pool.candidateEmails('openai/gpt-5.6-luna')
-  assert.deepEqual(order2, ['qa@example.com', 'qb@example.com'], `exhaustion must not alter round-robin, got ${order2}`)
+  const order2 = pool.candidateKeys('openai/gpt-5.6-luna')
+  assert.deepEqual(order2, ['qa', 'qb'], `exhaustion must not alter round-robin, got ${order2}`)
 
   // list() surfaces quota + requests；flash 条目被标注 unlimited
   pa.sessions.quota = {
@@ -940,7 +980,7 @@ assert.equal(requireModelId(''), null)
   assert.equal(res.headers.get('x-freebuff-proxy-conv-key'), null)
 
   // 冷却中的账号在轮到它时被跳过
-  convRuntimes.markCooldown('db@example.com', {
+  convRuntimes.markCooldown('db', {
     code: 'rate_limited',
     retryAfterMs: 60_000,
   })

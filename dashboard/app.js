@@ -202,6 +202,9 @@ async function renderOverview(view) {
         return el('tr', {}, [
           el('td', {}, [
             a.email,
+            a.id && a.id !== a.email
+              ? el('div', { class: 'muted', style: 'font-size:11px' }, `ID ${a.id}`)
+              : '',
             a.lastUsed ? el('span', { class: 'badge ok', style: 'margin-left:6px' }, '最近使用') : '',
           ]),
           el('td', {}, a.available
@@ -212,8 +215,8 @@ async function renderOverview(view) {
           el('td', { class: 'mono' }, `${a.requests || 0} 次`),
           el('td', {}, cd ? el('span', { class: 'badge warn' }, a.cooldownCode || 'cooldown') : '—'),
           el('td', {}, state.me.role === 'admin' ? el('div', { class: 'row' }, [
-            el('button', { class: 'muted', onclick: () => clearCooldown(a.email) }, '解除冷却'),
-            el('button', { class: 'danger', onclick: () => removeAccount(a.email) }, '删除'),
+            el('button', { class: 'muted', onclick: () => clearCooldown(a.key) }, '解除冷却'),
+            el('button', { class: 'danger', onclick: () => removeAccount(a.key, a.email) }, '删除'),
           ]) : '—'),
         ])
       })),
@@ -460,7 +463,7 @@ async function pollFlow(id, body, backdrop) {
     if (flow.status === 'done') {
       if (statusEl) {
         statusEl.textContent = ''
-        statusEl.append(el('span', { class: 'badge ok' }, `登录成功：${flow.user?.email || ''}`))
+        statusEl.append(el('span', { class: 'badge ok' }, `登录成功：${flow.user?.email || ''}${flow.user?.id ? `（ID ${flow.user.id}）` : ''}`))
       }
       toast(`账号 ${flow.user?.email} 已添加，正在探测上游…`)
       setTimeout(() => { backdrop.remove(); api('/api/accounts/probe', { method: 'POST' }).catch(() => {}).then(render) }, 1200)

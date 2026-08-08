@@ -1,5 +1,3 @@
-import fs from 'node:fs'
-import path from 'node:path'
 import {
   readRequestBody,
   sendJson,
@@ -11,8 +9,9 @@ import { buildModelsListResponse } from '../model.js'
 import {
   saveAccountUser,
   coerceUser,
-  emailToFilename,
-  accountCredentialsPath,
+  accountKeyOf,
+  deleteAccountUser,
+  listAccounts,
   readJsonFile,
   writeJsonFile,
 } from '../auth-store.js'
@@ -136,7 +135,7 @@ export function createWebApi(deps) {
       }
       sendJson(res, 200, {
         accounts: runtimes.list(),
-        accountCount: runtimes.allEmails().length,
+        accountCount: runtimes.allKeys().length,
         models: models.length,
         upstream: {
           apiBase: config.upstream.apiBase,
@@ -210,26 +209,26 @@ export function createWebApi(deps) {
       if (!u) {
         sendJson(res, 400, {
           error: '缺少 email / authToken（或格式不对）',
-          hint: '期望形如 {"email":"you@example.com","authToken":"..."}',
+          hint: '期望形如 {"email":"you@example.com","authToken":"..."}，可带 "id"（Freebuff 用户ID，GitHub/Google 同邮箱的两个账号给不同 id 就不会互相覆盖）',
         })
         return true
       }
       const saved = saveAccountUser(runtimes.dir, u)
       // Drop any cached runtime so the fresh token is picked up
       try {
-        await runtimes.get(saved.user.email).sessions.shutdown()
+        await runtimes.invalidate(saved.key)
       } catch {
         // ignore
       }
       // 只读探测预热：导入后立即刷新 session/额度缓存（不占额度）
       try {
-        const rt = runtimes.get(saved.user.email)
+        const rt = runtimes.get(saved.key)
         await rt.sessions.refresh()
       } catch {
         // ignore — 探测失败不影响导入
       }
-      logger.info('account imported via web', { email: saved.user.email })
-      sendJson(res, 200, { ok: true, account: saved.user.email })
+      logger.info('account imported via web', { key: saved.key, email: saved.user.email })
+      sendJson(res, 200, { ok: true, account: saved.user.email, key: saved.key, id: saved.user.id || null })
       return true
     }
 
@@ -239,7 +238,7 @@ export function createWebApi(deps) {
         sendJson(res, 403, { error: '需要管理员权限' })
         return true
       }
-      const email = decodeURIComponent(acctMatch[1])
+      const key = decodeURIComponent(acctMatch[1])
       let body
       try {
         body = await readJson(req)
@@ -247,8 +246,12 @@ export function createWebApi(deps) {
         sendJson(res, 400, { error: '无效的 JSON' })
         return true
       }
-      const file = accountCredentialsPath(runtimes.dir, email)
-      const raw = readJsonFile(file)
+      const row = findAccountRow(runtimes.dir, key)
+      if (!row) {
+        sendJson(res, 404, { error: '账号不存在' })
+        return true
+      }
+      const raw = readJsonFile(row.path)
       if (!raw) {
         sendJson(res, 404, { error: '账号不存在' })
         return true
@@ -258,19 +261,11 @@ export function createWebApi(deps) {
           ? body.proxy.trim()
           : null
       raw.proxy = proxy
-      writeJsonFile(file, raw)
+      writeJsonFile(row.path, raw)
       // 让新的出口代理立即生效：丢弃缓存的 runtime
-      const rt = runtimes.byEmail.get(email)
-      if (rt) {
-        try {
-          await rt.sessions.shutdown()
-        } catch {
-          // ignore
-        }
-        runtimes.byEmail.delete(email)
-      }
-      logger.info('account proxy updated via web', { email, proxy })
-      sendJson(res, 200, { ok: true, email, proxy })
+      await runtimes.invalidate(row.key)
+      logger.info('account proxy updated via web', { key: row.key, email: row.email, proxy })
+      sendJson(res, 200, { ok: true, key: row.key, email: row.email, proxy })
       return true
     }
 
@@ -279,22 +274,14 @@ export function createWebApi(deps) {
         sendJson(res, 403, { error: '需要管理员权限' })
         return true
       }
-      const email = decodeURIComponent(acctMatch[1])
-      const rt = runtimes.byEmail.get(email)
-      if (rt) {
-        try {
-          await rt.sessions.release()
-        } catch {
-          // ignore
-        }
-        runtimes.byEmail.delete(email)
-      }
-      const removed = removeCredential(runtimes.dir, email)
+      const key = decodeURIComponent(acctMatch[1])
+      await runtimes.invalidate(key)
+      const removed = deleteAccountUser(runtimes.dir, key)
       if (!removed) {
         sendJson(res, 404, { error: '账号不存在' })
         return true
       }
-      sendJson(res, 200, { ok: true, email })
+      sendJson(res, 200, { ok: true, key })
       return true
     }
 
@@ -304,11 +291,12 @@ export function createWebApi(deps) {
       const results = []
       for (const a of runtimes.list()) {
         try {
-          const rt = runtimes.get(a.email)
+          const rt = runtimes.get(a.key)
           await rt.sessions.refresh()
-          results.push({ email: a.email, ok: true })
+          results.push({ key: a.key, email: a.email, ok: true })
         } catch (err) {
           results.push({
+            key: a.key,
             email: a.email,
             ok: false,
             error: err instanceof Error ? err.message : String(err),
@@ -325,8 +313,8 @@ export function createWebApi(deps) {
         sendJson(res, 403, { error: '需要管理员权限' })
         return true
       }
-      const email = decodeURIComponent(cooldownMatch[1])
-      runtimes.clearCooldown(email)
+      const key = decodeURIComponent(cooldownMatch[1])
+      runtimes.clearCooldown(key)
       sendJson(res, 200, { ok: true })
       return true
     }
@@ -469,6 +457,8 @@ export function createWebApi(deps) {
           ...(envProxyOrNull() ? [envProxyOrNull()] : []),
         ]),
         accounts: runtimes.list().map((a) => ({
+          key: a.key,
+          id: a.id || null,
           email: a.email,
           proxy: a.proxy || null,
           effectiveProxy: a.effectiveProxy || null,
@@ -690,13 +680,17 @@ function envProxyOrNull() {
   )
 }
 
-function removeCredential(dir, email) {
-  try {
-    const file = path.join(dir, emailToFilename(email))
-    if (!fs.existsSync(file)) return false
-    fs.unlinkSync(file)
-    return true
-  } catch {
-    return false
-  }
+/**
+ * 按 key（id 或邮箱）定位账号行；邮箱匹配仅在唯一命中时生效
+ * （同邮箱多个账号时必须以 key 精确指定，否则视为不存在）。
+ */
+function findAccountRow(dir, key) {
+  const rows = listAccounts(dir)
+  const norm = String(key || '').trim()
+  const exact = rows.find((a) => a.key === norm)
+  if (exact) return exact
+  const ci = rows.find((a) => String(a.key).toLowerCase() === norm.toLowerCase())
+  if (ci) return ci
+  const emailMatches = rows.filter((a) => a.email === norm.toLowerCase())
+  return emailMatches.length === 1 ? emailMatches[0] : null
 }

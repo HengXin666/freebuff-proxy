@@ -28,7 +28,7 @@ async function main() {
   const fingerprintId = generateFingerprintId()
   const upstream = createUpstreamClient(config, '')
   console.log('Requesting login URL…')
-  console.log(`Will save to: ${dir}/<email>.json`)
+  console.log(`Will save to: ${dir}/<账号ID>.json（GitHub/Google 同邮箱不会互相覆盖）`)
   const code = await upstream.loginCode(fingerprintId)
   console.log('\nOpen this URL in a browser and sign in:\n')
   console.log(code.loginUrl)
@@ -45,7 +45,7 @@ async function main() {
     })
     if (st?.user?.authToken) {
       const saved = saveAccountUser(dir, st.user)
-      console.log(`\nLogged in as ${saved.user.name || saved.user.email}`)
+      console.log(`\nLogged in as ${saved.user.name || saved.user.email} (id=${saved.user.id || '-'})`)
       console.log(`Saved ${saved.path}`)
       return
     }

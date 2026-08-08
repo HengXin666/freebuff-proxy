@@ -96,11 +96,12 @@ export function createProxyHandler(ctx) {
       const accounts = []
       for (const row of runtimes.list()) {
         try {
-          const rt = runtimes.get(row.email)
+          const rt = runtimes.get(row.key)
           await rt.sessions.release()
-          accounts.push({ email: row.email, ok: true })
+          accounts.push({ key: row.key, email: row.email, ok: true })
         } catch (err) {
           accounts.push({
+            key: row.key,
             email: row.email,
             ok: false,
             error: err instanceof Error ? err.message : String(err),
@@ -257,10 +258,10 @@ export function createProxyHandler(ctx) {
     // 换号重试预算：最多试到账号数（封顶 5 次），保证一波限流/5xx 时能换到可用账号。
     const maxAttempts = Math.max(
       maxRetry + 1,
-      Math.min(runtimes.allEmails().length || 1, 5),
+      Math.min(runtimes.allKeys().length || 1, 5),
     )
     /** @type {string | null} */
-    let lastEmail = null
+    let lastKey = null
     /** @type {string | null} */
     let pendingGateCode = null
     /** @type {number | null} */
@@ -278,7 +279,7 @@ export function createProxyHandler(ctx) {
           attempt === 1
             ? await runtimes.acquireForModel(upstreamModel)
             : await runtimes.reacquireAfterGate(upstreamModel, {
-                preferredEmail: lastEmail,
+                preferredKey: lastKey,
                 gateCode: pendingGateCode,
                 retryAfterMs: pendingRetryAfterMs,
                 switchAccount: pendingSwitchAccount,
@@ -286,10 +287,11 @@ export function createProxyHandler(ctx) {
         pendingGateCode = null
         pendingRetryAfterMs = null
         pendingSwitchAccount = false
-        lastEmail = rt.email
+        lastKey = rt.key
 
         // 可观测性：响应头标明本次实际使用的账号。
         res.setHeader('x-freebuff-proxy-account', rt.email)
+        res.setHeader('x-freebuff-proxy-account-id', rt.key)
 
         const snap = rt.sessions.getSnapshot()
         if (!snap.live || !snap.instanceId) {
@@ -305,7 +307,8 @@ export function createProxyHandler(ctx) {
           runId,
           agentId,
           model: upstreamModel,
-          account: rt.email,
+          key: rt.key,
+          email: rt.email,
         })
 
         const forwardBody = buildForwardBody(
@@ -340,7 +343,7 @@ export function createProxyHandler(ctx) {
             attempt,
             budget: retryBudget,
             model: upstreamModel,
-            account: lastEmail,
+            key: lastKey,
             switchAccount: result.switchAccount === true,
             retryAfterMs: result.retryAfterMs ?? null,
           })
@@ -365,7 +368,7 @@ export function createProxyHandler(ctx) {
             logger.warn('recoverable session error; will re-acquire once', {
               code: err.code,
               attempt,
-              account: lastEmail,
+              key: lastKey,
             })
             pendingGateCode = err.code
             pendingSwitchAccount = false

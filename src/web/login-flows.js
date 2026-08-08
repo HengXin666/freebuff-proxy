@@ -6,6 +6,7 @@ import { createUpstreamClient } from '../upstream/client.js'
 import {
   generateFingerprintId,
   saveAccountUser,
+  accountKeyOf,
 } from '../auth-store.js'
 import { logger } from '../util/log.js'
 
@@ -126,7 +127,12 @@ export class LoginFlowManager {
     return {
       ...rest,
       user: flow.user
-        ? { email: flow.user.email, name: flow.user.name }
+        ? {
+            key: accountKeyOf(flow.user),
+            id: flow.user.id || null,
+            email: flow.user.email,
+            name: flow.user.name,
+          }
         : null,
     }
   }
@@ -151,11 +157,12 @@ export class LoginFlowManager {
         if (st?.user?.authToken) {
           const saved = saveAccountUser(this.credentialsDir, st.user)
           flow.status = 'done'
-          flow.user = { email: saved.user.email, name: saved.user.name }
+          flow.user = { key: saved.key, id: saved.user.id || null, email: saved.user.email, name: saved.user.name }
           flow.error = null
           this.save()
           logger.info('login flow completed', {
             id: flow.id,
+            key: saved.key,
             email: saved.user.email,
           })
         }
