@@ -43,7 +43,9 @@ export function serveStatic(req, res, url, root) {
     res.writeHead(200, {
       'content-type': MIME[ext] || 'application/octet-stream',
       'content-length': st.size,
-      'cache-control': ext === '.html' ? 'no-cache' : 'public, max-age=3600',
+      // 控制台是 3 个小文件（index.html/app.js/style.css），全部 no-cache：
+      // 前端更新后用户普通刷新即生效，不存在“改了前端但页面还是旧的”缓存问题。
+      'cache-control': 'no-cache',
     })
     if (req.method === 'HEAD') {
       res.end()
