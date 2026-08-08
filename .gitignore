@@ -42,3 +42,6 @@ Thumbs.db
 *.swp
 *.swo
 .ruff_cache/
+
+# 本地 e2e 测试实例数据（fb-test 容器挂载）
+data-test/
