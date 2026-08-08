@@ -139,12 +139,24 @@ async function renderOverview(view) {
       el('h2', { style: 'margin:0 0 4px' }, `账号池（${data.accountCount}）`),
       el('span', { class: 'muted' }, `上游 ${data.upstream.apiBase} · 模型 ${data.models} · 数据目录 ${data.dataDir}`),
     ]),
-    state.me.role === 'admin'
-      ? el('div', { class: 'row' }, [
-          el('button', { onclick: () => openImportModal() }, '导入账号'),
-          el('button', { class: 'primary', onclick: () => openAddAccount() }, '+ 添加账号'),
-        ])
-      : null,
+    el('div', { class: 'row' }, [
+      el('button', { class: 'muted', onclick: async () => {
+        toast('正在探测上游…')
+        try {
+          const r = await api('/api/accounts/probe', { method: 'POST' })
+          state.accounts = r.accounts
+          const failed = (r.results || []).filter((x) => !x.ok)
+          toast(failed.length ? `探测完成，${failed.length} 个失败` : '探测完成（只读，不占额度）', !!failed.length)
+        } catch (err) { toast(err.message, true) }
+        render()
+      } }, '探测刷新'),
+      state.me.role === 'admin'
+        ? el('div', { class: 'row' }, [
+            el('button', { onclick: () => openImportModal() }, '导入账号'),
+            el('button', { class: 'primary', onclick: () => openAddAccount() }, '+ 添加账号'),
+          ])
+        : null,
+    ]),
   ])
   view.append(head)
 
@@ -186,19 +198,19 @@ async function renderOverview(view) {
         const cd = a.cooldownUntil ? new Date(a.cooldownUntil).toLocaleString() : null
         const sess = a.session?.live
           ? `${a.session.model} · ${fmtMs(a.session.remainingMs)}`
-          : (a.session?.status || '—')
+          : (a.session?.status === 'none' ? '无活跃' : (a.session?.status || '—'))
         return el('tr', {}, [
           el('td', {}, [
             a.email,
             a.lastUsed ? el('span', { class: 'badge ok', style: 'margin-left:6px' }, '最近使用') : '',
-            a.proxy ? el('div', { class: 'muted', style: 'font-size:11px' }, `出口 ${shortProxy(a.proxy)}`) : null,
+            a.effectiveProxy ? el('div', { class: 'muted', style: 'font-size:11px', title: `出网代理：${a.effectiveProxy}${a.proxy ? '（账号显式覆盖）' : '（全局池/全局配置分配）'}` }, `出口 ${shortProxy(a.effectiveProxy)}`) : null,
           ]),
           el('td', {}, a.available
             ? el('span', { class: 'badge ok' }, '可用')
             : el('span', { class: 'badge err' }, cd ? `冷却至 ${cd}` : '冷却中')),
           el('td', { class: 'mono' }, sess),
           el('td', {}, fmtQuota(a.quota)),
-          el('td', { class: 'mono' }, a.requests ? `${a.requests} 次` : '—'),
+          el('td', { class: 'mono' }, `${a.requests || 0} 次`),
           el('td', {}, cd ? el('span', { class: 'badge warn' }, a.cooldownCode || 'cooldown') : '—'),
           el('td', {}, state.me.role === 'admin' ? el('div', { class: 'row' }, [
             el('button', { class: 'muted', onclick: () => editProxy(a) }, '改出口'),
@@ -236,7 +248,7 @@ function fmtMs(ms) {
 /** 每个模型的每日免费 session 额度：已用/上限，以及重置时间 */
 function fmtQuota(quota) {
   if (!quota || !quota.byModel || !Object.keys(quota.byModel).length) {
-    return el('span', { class: 'muted' }, '—')
+    return el('span', { class: 'muted', title: '尚无额度数据：账号首次 admit（发起对话/创建 session）后上游才会返回限额；可先点「探测刷新」查看 session 状态' }, '—')
   }
   const chips = []
   for (const [model, q] of Object.entries(quota.byModel)) {
@@ -306,7 +318,7 @@ async function removeAccount(email) {
 /** 修改账号专属出口代理（多代理场景：每个账号绑定一个代理避开地区封锁/IP 限流） */
 async function editProxy(a) {
   const input = prompt(
-    `设置 ${a.email} 的专属出口代理（留空则用全局/环境代理）\n例: http://user:pass@127.0.0.1:7890`,
+    `设置 ${a.email} 的专属出口代理（可选高级用法，覆盖全局代理池；留空则用全局池/全局配置/env）\n例: http://user:pass@127.0.0.1:7890`,
     a.proxy || '',
   )
   if (input === null) return
@@ -369,8 +381,8 @@ async function pollFlow(id, body, backdrop) {
         statusEl.textContent = ''
         statusEl.append(el('span', { class: 'badge ok' }, `登录成功：${flow.user?.email || ''}`))
       }
-      toast(`账号 ${flow.user?.email} 已添加`)
-      setTimeout(() => { backdrop.remove(); render() }, 1200)
+      toast(`账号 ${flow.user?.email} 已添加，正在探测上游…`)
+      setTimeout(() => { backdrop.remove(); api('/api/accounts/probe', { method: 'POST' }).catch(() => {}).then(render) }, 1200)
       return
     }
     if (flow.status === 'expired' || flow.status === 'cancelled') {
@@ -400,8 +412,9 @@ function openImportModal() {
         try {
           const json = $('#import-json').value
           await api('/api/accounts/import', { method: 'POST', body: JSON.stringify({ json }) })
-          toast('导入成功')
+          toast('导入成功，正在探测上游…')
           backdrop.remove()
+          try { await api('/api/accounts/probe', { method: 'POST' }) } catch { /* ignore */ }
           render()
         } catch (err) { toast(err.message, true) }
       } }, '导入'),

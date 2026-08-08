@@ -521,15 +521,18 @@ assert.equal(requireModelId(''), null)
   pConfig.session.pollIntervalSec = 3600
   const pool = new AccountRuntimes(pConfig)
 
-  // rows surface proxy
-  const rows = pool.list()
-  const rowA = rows.find((x) => x.email === 'pa@example.com')
-  assert.equal(rowA.proxy, 'http://127.0.0.1:7890')
-  assert.equal(rows.find((x) => x.email === 'pb@example.com').proxy, null)
-
   // runtime uses the per-account proxy
   const rtA = pool.get('pa@example.com')
   assert.equal(rtA.proxy, 'http://127.0.0.1:7890')
+  assert.equal(rtA.effectiveProxy, 'http://127.0.0.1:7890')
+
+  // rows surface proxy + effectiveProxy
+  const rows = pool.list()
+  const rowA = rows.find((x) => x.email === 'pa@example.com')
+  assert.equal(rowA.proxy, 'http://127.0.0.1:7890')
+  assert.equal(rowA.effectiveProxy, 'http://127.0.0.1:7890')
+  assert.equal(rows.find((x) => x.email === 'pb@example.com').proxy, null)
+  assert.equal(rows.find((x) => x.email === 'pb@example.com').effectiveProxy, null)
 
   // proxy change → cached runtime recreated with the new proxy
   pool.get('pa@example.com').sessions.quota = { byModel: {}, rateLimit: null, updatedAt: 'x' }
@@ -548,6 +551,94 @@ assert.equal(requireModelId(''), null)
   assert.ok(cli)
   await pool.shutdown()
   fs.rmSync(pDir, { recursive: true, force: true })
+}
+
+// --- 全局代理池：稳定哈希分配 + 账号覆盖优先 ---
+{
+  const poolConfig = loadConfig()
+  poolConfig.upstream.proxies = [
+    'http://p1.example:7890',
+    'http://p2.example:7890',
+    'http://p3.example:7890',
+  ]
+  const { createUpstreamClient } = await import('../src/upstream/client.js')
+  const a1 = createUpstreamClient(poolConfig, 'tok', { accountId: 'a@example.com' })
+  const a2 = createUpstreamClient(poolConfig, 'tok', { accountId: 'a@example.com' })
+  const b = createUpstreamClient(poolConfig, 'tok', { accountId: 'b@example.com' })
+  // 同账号稳定同一代理
+  assert.equal(a1.proxyUrl, a2.proxyUrl)
+  assert.ok(a1.proxyUrl.startsWith('http://p'))
+  // 不同账号可能落到不同代理（池内成员之一）
+  assert.ok(poolConfig.upstream.proxies.includes(a1.proxyUrl))
+  assert.ok(poolConfig.upstream.proxies.includes(b.proxyUrl))
+  // 账号显式代理优先于全局池
+  const c = createUpstreamClient(poolConfig, 'tok', {
+    accountId: 'a@example.com',
+    proxy: 'http://explicit:9999',
+  })
+  assert.equal(c.proxyUrl, 'http://explicit:9999')
+  // 无池无显式 → 直连（null）
+  const plain = createUpstreamClient(loadConfig(), 'tok', { accountId: 'x@example.com' })
+  assert.equal(plain.proxyUrl, null)
+}
+
+// --- web api: probe 只读刷新 session/额度缓存 ---
+{
+  const wDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-probe-'))
+  saveAccountUser(wDir, { id: 'w', email: 'w@example.com', authToken: 'token-w' })
+  const wConfig = loadConfig()
+  wConfig.server.host = '127.0.0.1'
+  wConfig.server.port = 0
+  wConfig.server.apiKeys = ['sk-test']
+  wConfig.upstream.credentialsDir = wDir
+  wConfig.session.pollIntervalSec = 3600
+  const { UserStore } = await import('../src/web/user-store.js')
+  const { WebSessionStore } = await import('../src/web/session-store.js')
+  const { LoginFlowManager } = await import('../src/web/login-flows.js')
+  const userStore = new UserStore(path.join(wDir, 'users.json'))
+  const webSessions = new WebSessionStore(path.join(wDir, 'web-sessions.json'), 3600_000)
+  userStore.create({ username: 'admin', password: 'secret123', role: 'admin' })
+  const loginFlows = new LoginFlowManager({
+    file: path.join(wDir, 'login-flows.json'),
+    credentialsDir: wDir,
+    config: wConfig,
+  })
+  const wruntimes = new AccountRuntimes(wConfig)
+  const wserver = await startServer({
+    config: wConfig,
+    runtimes: wruntimes,
+    authToken: null,
+    authSource: null,
+    authEmail: null,
+    upstream: null,
+    sessions: null,
+    userStore,
+    webSessions,
+    loginFlows,
+  })
+  const wport = wserver.address().port
+  const lr = await fetch(`http://127.0.0.1:${wport}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'secret123' }),
+  })
+  assert.equal(lr.status, 200)
+  const cookie = lr.headers.get('set-cookie').split(';')[0]
+  const pr = await fetch(`http://127.0.0.1:${wport}/api/accounts/probe`, {
+    method: 'POST',
+    headers: { cookie },
+  })
+  assert.equal(pr.status, 200)
+  const pj = await pr.json()
+  assert.equal(pj.results.length, 1)
+  assert.equal(pj.results[0].ok, true)
+  assert.equal(pj.accounts[0].email, 'w@example.com')
+  // mock GET 返回 status none → 探测后 session 状态可见
+  assert.equal(pj.accounts[0].session.status, 'none')
+  loginFlows.shutdown()
+  await wruntimes.shutdown()
+  wserver.close()
+  fs.rmSync(wDir, { recursive: true, force: true })
 }
 
 // --- quota: extraction + quota-aware load balancing ---

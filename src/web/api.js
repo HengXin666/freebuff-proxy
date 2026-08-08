@@ -220,6 +220,13 @@ export function createWebApi(deps) {
       } catch {
         // ignore
       }
+      // 只读探测预热：导入后立即刷新 session/额度缓存（不占额度）
+      try {
+        const rt = runtimes.get(saved.user.email)
+        await rt.sessions.refresh()
+      } catch {
+        // ignore — 探测失败不影响导入
+      }
       logger.info('account imported via web', { email: saved.user.email })
       sendJson(res, 200, { ok: true, account: saved.user.email })
       return true
@@ -287,6 +294,27 @@ export function createWebApi(deps) {
         return true
       }
       sendJson(res, 200, { ok: true, email })
+      return true
+    }
+
+    if (method === 'POST' && path === '/api/accounts/probe') {
+      // 只读探测：对每个账号 GET session，刷新 session/额度缓存。
+      // 不创建 session、不占免费额度；fresh 账号若上游无使用记录则额度仍为空。
+      const results = []
+      for (const a of runtimes.list()) {
+        try {
+          const rt = runtimes.get(a.email)
+          await rt.sessions.refresh()
+          results.push({ email: a.email, ok: true })
+        } catch (err) {
+          results.push({
+            email: a.email,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
+      sendJson(res, 200, { ok: true, results, accounts: runtimes.list() })
       return true
     }
 
@@ -428,6 +456,7 @@ export function createWebApi(deps) {
             apiBase: config.upstream.apiBase,
             loginBase: config.upstream.loginBase,
             proxy: config.upstream.proxy || envProxyOrNull(),
+            proxies: config.upstream.proxies || [],
             credentialsDir: config.upstream.credentialsDir,
           },
           web: config.web,

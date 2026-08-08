@@ -72,6 +72,7 @@ export class AccountRuntimes {
         cooldownUntil: cooling ? new Date(cd.until).toISOString() : null,
         cooldownCode: cooling ? cd.code : null,
         requests: this.stats.byEmail.get(a.email) || 0,
+        effectiveProxy: rt?.effectiveProxy || null,
         session: snap
           ? {
               status: snap.status,
@@ -116,12 +117,15 @@ export class AccountRuntimes {
 
     const upstream = createUpstreamClient(this.config, user.authToken, {
       proxy: user.proxy || null,
+      accountId: user.email,
     })
     const sessions = new SessionManager({ upstream, config: this.config })
     const runtime = {
       email: user.email,
       authToken: user.authToken,
       proxy: user.proxy || null,
+      /** 实际生效的出网代理（全局池分配 / 账号覆盖 / env） */
+      effectiveProxy: upstream.proxyUrl || null,
       user,
       upstream,
       sessions,

@@ -193,38 +193,30 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 
 服务器出网（请求 Freebuff / Codebuff）支持代理，配置方式按优先级：
 
-1. **账号专属代理（多代理粘性）**：每个 Freebuff 账号可绑定独立的出网代理，适合**多账号多 IP / 避开地区封锁**。控制台「总览 → 改出口」设置，或直接编辑凭据文件：
+1. **全局代理池（推荐，多代理）**：在 `/data/config.yaml` 里配一组代理，所有账号共享这个池子：
+
+   ```yaml
+   upstream:
+     proxies:
+       - http://user:pass@127.0.0.1:7890
+       - socks5://127.0.0.1:1080
+   ```
+
+   - 每个账号按**稳定哈希**分配到池内某个代理（同一账号始终同一出口，保持 session IP 稳定，不会中途换 IP）；
+   - 账号分布自动打散到各代理，天然负载均衡；
+   - 某个代理**连接失败**时自动回落到池内下一个（写日志）；
+   - 控制台「总览」每个账号会显示实际生效的**出口**（池内第几个 / 哪个 URL）。
+2. **账号专属代理（可选高级覆盖）**：某个账号要固定走独立代理时，控制台「总览 → 改出口」或编辑凭据文件：
 
    ```json
    // data/credentials/<email>.json
-   {
-     "email": "you@example.com",
-     "authToken": "...",
-     "proxy": "http://user:pass@127.0.0.1:7890"
-   }
+   { "email": "you@example.com", "authToken": "...", "proxy": "http://user:pass@127.0.0.1:7890" }
    ```
 
-   该账号的所有请求（session admit / 补全 / 轮询）都走自己的代理；改代理后缓存运行时自动重建、立即生效。配合「粘性会话」使用即可实现 **账号 + 代理 一起绑定**。
-2. **全局环境变量**：在 `.env` 或 compose 里设置 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`（已支持）；`upstream/client.js` 使用 undici 的 `EnvHttpProxyAgent` / `ProxyAgent`，`NO_PROXY` 可放行内网地址。
-3. **配置文件**：编辑 `/data/config.yaml`：
+   该账号所有请求走自己的代理（优先于全局池）；改后缓存运行时自动重建、立即生效。
+3. **全局单代理 / 环境变量**：`upstream.proxy: http://...`，或 `.env` / compose 里设 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`（undici `EnvHttpProxyAgent`，`NO_PROXY` 放行内网）。
 
-   ```yaml
-   upstream:
-     proxy: http://user:pass@127.0.0.1:7890   # 全局显式代理，优先于环境变量
-   ```
-
-以上三种都未配置时直连。
-
-1. **环境变量（推荐，Docker 部署）**：在 `.env` 或 compose 里设置
-   `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`（已支持）；`upstream/client.js` 使用 undici 的
-   `EnvHttpProxyAgent` / `ProxyAgent`，`NO_PROXY` 可放行内网地址。
-2. **配置文件**：编辑 `/data/config.yaml`：
-
-   ```yaml
-   upstream:
-     proxy: http://user:pass@127.0.0.1:7890   # 显式代理，优先于环境变量
-   ```
-3. 无任何配置时直连。
+以上都未配置时直连。
 
 > 注意：代理是**容器出网**代理（例如宿主机上的 Clash）。若代理跑在宿主机，需把代理监听 0.0.0.0 并用宿主机网关 IP，或使用
 > `network_mode: host` / 额外 compose 网络。容器健康检查走 `NO_PROXY=127.0.0.1,localhost`，不受代理影响。

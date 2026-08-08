@@ -31,39 +31,100 @@ function parseRetryAfterMs(value) {
 
 
 /**
- * Build a fetch dispatcher for outbound proxy support.
- * Priority: per-account proxy > config.upstream.proxy > HTTP(S)_PROXY env (with NO_PROXY).
- * Returns null when no proxy is configured (plain direct fetch).
+ * 解析出网代理配置，返回统一结构：
+ *   { kind: 'none', agent: null, url: null }
+ *   { kind: 'single', agent: ProxyAgent|EnvHttpProxyAgent, url: string }
+ *   { kind: 'pool', agents: ProxyAgent[], urls: string[], indexFor(key) }   // 全局代理池
+ * 优先级：账号显式 proxy > upstream.proxies（全局池） > upstream.proxy > HTTP(S)_PROXY env。
  */
-function makeDispatcher(config, accountProxy) {
+function resolveProxy(config, accountProxy, accountId) {
   const explicit = accountProxy || config?.upstream?.proxy
+  if (explicit) {
+    return {
+      kind: 'single',
+      url: explicit,
+      agent: new ProxyAgent({ uri: explicit }),
+      indexFor: () => 0,
+    }
+  }
+  const pool = (config?.upstream?.proxies || []).filter(Boolean)
+  if (pool.length) {
+    return {
+      kind: 'pool',
+      urls: pool,
+      agents: pool.map((u) => new ProxyAgent({ uri: u })),
+      /** 稳定哈希：同一账号始终落到同一代理（保持 session IP 稳定） */
+      indexFor: (key) => hashIndex(key, pool.length),
+    }
+  }
   const envSet = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'].some(
     (k) => Boolean(process.env[k]),
   )
-  if (explicit) return new ProxyAgent({ uri: explicit })
-  if (envSet) return new EnvHttpProxyAgent()
-  return null
+  if (envSet) {
+    return {
+      kind: 'single',
+      url: '(env HTTP(S)_PROXY)',
+      agent: new EnvHttpProxyAgent(),
+      indexFor: () => 0,
+    }
+  }
+  return { kind: 'none', agent: null, url: null, indexFor: () => 0 }
 }
 
-/**
- * undici's own fetch must be used when a custom proxy dispatcher is active:
- * Node's global fetch rejects dispatchers from a different undici build.
- */
-function makeFetcher(dispatcher) {
-  return dispatcher ? undiciFetch : globalThis.fetch
+function hashIndex(key, n) {
+  let h = 5381
+  for (const ch of String(key || '')) {
+    h = ((h << 5) + h + ch.charCodeAt(0)) | 0
+  }
+  return (h >>> 0) % n
 }
 
 /**
  * @param {import('../config.js').ProxyConfig} config
  * @param {string} token
- * @param {{ proxy?: string | null }} [opts] per-account proxy override
+ * @param {{ proxy?: string | null, accountId?: string }} [opts]
+ *   proxy: 账号显式代理覆盖；accountId: 用于全局代理池的稳定分配（如账号邮箱）
  */
 export function createUpstreamClient(config, token, opts = {}) {
 
   const apiBase = config.upstream.apiBase
   const loginBase = config.upstream.loginBase
-  const dispatcher = makeDispatcher(config, opts.proxy)
-  const fetcher = makeFetcher(dispatcher)
+  const proxyRes = resolveProxy(config, opts.proxy, opts.accountId)
+  const poolIndex = proxyRes.kind === 'pool'
+    ? proxyRes.indexFor(opts.accountId || token)
+    : 0
+  /** 该账号实际生效的代理 URL（用于控制台展示） */
+  const proxyUrl =
+    proxyRes.kind === 'pool' ? proxyRes.urls[poolIndex] : proxyRes.url
+
+  /**
+   * 带代理池的 fetch：
+   *  - 无代理 / 单代理 / env：直接走对应 dispatcher
+   *  - 全局池：优先本账号分配的代理，连接级失败（fetch 抛错）时依次回落到池内下一个
+   */
+  async function fetchWithProxy(url, init) {
+    if (proxyRes.kind !== 'pool' || proxyRes.agents.length <= 1) {
+      const agent = proxyRes.agent
+      return (agent ? undiciFetch : globalThis.fetch)(url, {
+        ...init,
+        ...(agent ? { dispatcher: agent } : {}),
+      })
+    }
+    let lastErr
+    for (let i = 0; i < proxyRes.agents.length; i++) {
+      const idx = (poolIndex + i) % proxyRes.agents.length
+      try {
+        return await undiciFetch(url, { ...init, dispatcher: proxyRes.agents[idx] })
+      } catch (err) {
+        lastErr = err
+        logger.warn('proxy failed; trying next in pool', {
+          proxy: proxyRes.urls[idx],
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    throw lastErr
+  }
 
   async function apiFetch(path, init = {}) {
     const url = path.startsWith('http') ? path : `${apiBase}${path}`
@@ -86,13 +147,12 @@ export function createUpstreamClient(config, token, opts = {}) {
       }
     }
     try {
-      const res = await fetcher(url, {
+      const res = await fetchWithProxy(url, {
         method: init.method || 'GET',
         headers,
         body: init.body,
         signal: controller.signal,
         duplex: init.body && typeof init.body !== 'string' ? 'half' : undefined,
-        ...(dispatcher ? { dispatcher } : {}),
       })
       return res
     } finally {
@@ -104,6 +164,7 @@ export function createUpstreamClient(config, token, opts = {}) {
     apiBase,
     loginBase,
     token,
+    proxyUrl,
 
     async me(fields = ['id', 'email']) {
       const res = await apiFetch(`/api/v1/me?fields=${fields.join(',')}`, {
@@ -120,11 +181,10 @@ export function createUpstreamClient(config, token, opts = {}) {
     },
 
     async loginCode(fingerprintId) {
-      const res = await fetcher(`${loginBase}/api/auth/cli/code`, {
+      const res = await fetchWithProxy(`${loginBase}/api/auth/cli/code`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ fingerprintId }),
-        ...(dispatcher ? { dispatcher } : {}),
       })
       if (!res.ok) {
         throw new UpstreamError(`login code failed: ${res.status}`, {
@@ -141,9 +201,8 @@ export function createUpstreamClient(config, token, opts = {}) {
         fingerprintHash,
         expiresAt,
       })
-      const res = await fetcher(`${loginBase}/api/auth/cli/status?${qs}`, {
+      const res = await fetchWithProxy(`${loginBase}/api/auth/cli/status?${qs}`, {
         method: 'GET',
-        ...(dispatcher ? { dispatcher } : {}),
       })
       if (res.status === 401) return { pending: true }
       if (!res.ok) {

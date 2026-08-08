@@ -7,7 +7,7 @@ import { parse as parseYaml } from 'yaml'
 /**
  * @typedef {object} ProxyConfig
  * @property {{host: string, port: number, apiKeys: string[], dataDir: string}} server
- * @property {{apiBase: string, loginBase: string, credentialsDir: string | null, proxy: string | null}} upstream
+ * @property {{apiBase: string, loginBase: string, credentialsDir: string | null, proxy: string | null, proxies: string[]}} upstream
  * @property {{cookieSecure: boolean, sessionTtlHours: number}} web
  * @property {{defaultAdminUsername: string, defaultAdminPassword: string | null}} users
  * @property {{releaseOnShutdown: boolean, reAdmitOnExpire: boolean, pollIntervalSec: number, admitTimeoutMs: number}} session
@@ -31,6 +31,8 @@ const DEFAULTS = {
     credentialsDir: null,
     /** Explicit proxy URL, e.g. http://user:pass@host:7890. Env HTTP(S)_PROXY used otherwise. */
     proxy: null,
+    /** 全局代理池（多代理）：账号按稳定哈希分配到池内某个代理；连接失败自动回落下一个。 */
+    proxies: [],
   },
   web: {
     cookieSecure: false,
@@ -190,6 +192,11 @@ export function loadConfig(configPath) {
 
   if (!Array.isArray(merged.server.apiKeys)) merged.server.apiKeys = []
   merged.server.apiKeys = merged.server.apiKeys.map(String).filter(Boolean)
+
+  if (!Array.isArray(merged.upstream.proxies)) merged.upstream.proxies = []
+  merged.upstream.proxies = merged.upstream.proxies
+    .map((u) => (typeof u === 'string' ? u.trim() : ''))
+    .filter(Boolean)
 
   // Resolve data dir against project root when relative
   if (!path.isAbsolute(merged.server.dataDir)) {

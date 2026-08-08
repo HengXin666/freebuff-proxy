@@ -16,6 +16,11 @@ upstream:
   # credentials_dir: ./credentials
   # 显式上游代理，如 http://user:pass@127.0.0.1:7890；不配则读 HTTP(S)_PROXY/NO_PROXY 环境变量
   # proxy: http://127.0.0.1:7890
+  # 全局代理池（多代理）：账号按稳定哈希分配到池内某个代理，保持 session IP 稳定；
+  # 连接失败自动回落到池内下一个。优先级：账号显式 proxy > 本池 > 上面单代理 > 环境变量
+  # proxies:
+  #   - http://user:pass@127.0.0.1:7890
+  #   - socks5://127.0.0.1:1080
 
 web:
   # 通过 HTTPS 反向代理访问时设为 true
