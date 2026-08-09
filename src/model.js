@@ -10,7 +10,7 @@
  * @typedef {object} FreebuffModelInfo
  * @property {string} id
  * @property {string} displayName
- * @property {'premium' | 'unlimited' | 'referral' | 'limited_offer' | 'helper'} pool
+ * @property {'premium' | 'daily' | 'referral' | 'limited_offer' | 'helper'} pool
  * @property {boolean} multimodal
  * @property {('full' | 'limited')[]} accessTiers  which Freebuff access tiers can pick it in the regular catalog
  * @property {string} [note]
@@ -21,9 +21,10 @@ export const FREEBUFF_AVAILABLE_MODELS = /** @type {const} */ ([
   {
     id: 'deepseek/deepseek-v4-flash',
     displayName: 'DeepSeek V4 Flash 07/31',
-    pool: 'unlimited',
+    pool: 'daily',
     multimodal: false,
     accessTiers: ['full', 'limited'],
+    note: 'Daily quota follows the live Freebuff rateLimitsByModel response',
   },
   {
     id: 'deepseek/deepseek-v4-pro',
@@ -49,9 +50,10 @@ export const FREEBUFF_AVAILABLE_MODELS = /** @type {const} */ ([
   {
     id: 'mimo/mimo-v2.5',
     displayName: 'MiMo 2.5',
-    pool: 'unlimited',
+    pool: 'daily',
     multimodal: true,
     accessTiers: ['full', 'limited'],
+    note: 'Daily quota follows the live Freebuff rateLimitsByModel response',
   },
   {
     id: 'z-ai/glm-5.2',
@@ -70,18 +72,6 @@ export const FREEBUFF_AVAILABLE_MODELS = /** @type {const} */ ([
     note: 'Capacity-limited offer; only when server advertises it',
   },
 ])
-
-/**
- * 该模型是否属于"不限量"池（如 deepseek-v4-flash / mimo-v2.5）。
- * 上游对这类模型不应计入每日 session 限额（rateLimitsByModel），
- * 代理的配额感知切换/展示应对其豁免，避免误把不限量模型当限额模型来回切号。
- * @param {string} modelId
- * @returns {boolean}
- */
-export function isUnlimitedModel(modelId) {
-  const m = FREEBUFF_AVAILABLE_MODELS.find((x) => x.id === modelId)
-  return Boolean(m && m.pool === 'unlimited')
-}
 
 /**
  * Normalize client model field. No alias mapping — pass through as provided.

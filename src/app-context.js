@@ -8,7 +8,6 @@ import {
 import { createUpstreamClient } from './upstream/client.js'
 import { SessionManager } from './session-manager.js'
 import { UpstreamError } from './upstream/client.js'
-import { isUnlimitedModel } from './model.js'
 import { logger } from './util/log.js'
 
 /** Errors where trying another logged-in account may succeed. */
@@ -87,7 +86,7 @@ export class AccountRuntimes {
             }
           : null,
         // 每日免费 session 额度（来自最近一次 admit/refresh 的上游返回）
-        quota: decorateQuota(snap?.quota),
+        quota: snap?.quota || null,
       }
     })
   }
@@ -449,25 +448,6 @@ export class AccountRuntimes {
     await Promise.allSettled(tasks)
     this.byKey.clear()
   }
-}
-
-/**
- * 标注额度中的不限量模型（upstream 可能仍返回 limit 条目，但按目录 pool 视为不限）。
- * @param {any} quota
- */
-function decorateQuota(quota) {
-  if (!quota || typeof quota !== 'object') return null
-  const byModel = {}
-  for (const [model, entry] of Object.entries(quota.byModel || {})) {
-    if (entry && typeof entry === 'object') {
-      byModel[model] = isUnlimitedModel(model)
-        ? { ...entry, unlimited: true }
-        : entry
-    } else {
-      byModel[model] = entry
-    }
-  }
-  return { ...quota, byModel }
 }
 
 /**

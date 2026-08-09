@@ -560,7 +560,7 @@ export function createProxyHandler(ctx) {
 
       // free_mode_capacity_deferred：免费模式瞬时容量排队（上游原话
       // "your request will be retried automatically"）。不是账号级故障——
-      // 实测同一账号同一 session 立即重试即恢复（不限量模型 flash 尤其常见）。
+      // 实测同一账号同一 session 立即重试即恢复（flash 尤其常见）。
       // 换下一个账号继续轮询，但绝不冷却当前账号，避免把可用账号白白钉死。
       if (
         errCode === 'free_mode_capacity_deferred' ||

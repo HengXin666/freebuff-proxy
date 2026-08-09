@@ -357,15 +357,6 @@ function fmtQuota(quota) {
   const chips = []
   for (const [model, q] of Object.entries(quota.byModel)) {
     if (!q) continue
-    // unlimited 池模型（flash/mimo）：不限量，不做已用/上限展示，也不参与配额切号
-    if (q.unlimited) {
-      chips.push(el('span', {
-        class: 'badge ok',
-        style: 'margin:2px 4px 2px 0',
-        title: `${model} · 不限量（目录 pool=unlimited，不参与配额切换）`,
-      }, `${shortModel(model)} 不限`))
-      continue
-    }
     if (!Number.isFinite(q.limit)) continue
     const used = Math.ceil(Number(q.recentCount) || 0)
     const left = Math.max(0, q.limit - used)

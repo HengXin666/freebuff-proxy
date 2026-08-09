@@ -182,11 +182,11 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
 Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByModel`，如
 `limit: 6 / recentCount: 已用 / resetAt: 重置时间`，按太平洋日重置）。
 
-> ⚠️ 实测（参考 [freebuff2api-workers](https://github.com/pingmike2/freebuff2api-wokers) 的逆向结论）：
-> `deepseek/deepseek-v4-flash` 与 `mimo/mimo-v2.5` 属于 **unlimited 池，不限量**，
-> 不在每日限额表内。代理据此对这两个模型**豁免配额切换与额度展示**（显示为「不限」绿色徽章）。
+> ⚠️ 2026-08-09 实时探测：`deepseek/deepseek-v4-flash` 与
+> `mimo/mimo-v2.5` 已重新出现在上游 `rateLimitsByModel` 中（当前为 6 次/天）。
+> 代理不再对它们做不限量豁免，始终以上游实时返回的限额为准。
 
-- 控制台「总览」每个账号有一列 **额度（今日）**：限额模型显示 `已用/上限` 与重置时间（`已用满` 红色、`≤2` 黄色、正常绿色），不限量模型显示「不限」。
+- 控制台「总览」每个账号有一列 **额度（今日）**：所有限额模型都显示 `已用/上限` 与重置时间（`已用满` 红色、`≤2` 黄色、正常绿色）。
 - 额度在 **admit 时自动抓取**（上游仅在 session 活跃时返回）；活跃 session 每 30s 轮询刷新，session 结束后保留最后一次缓存值直到下次 admit。
 - 同样可通过 `GET /v1/freebuff/status` 或 `GET /v1/freebuff/accounts` 拿到每个账号的 `quota`。
 
@@ -254,11 +254,11 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 - **授权**：`server.api_keys`（超级 Key）或 Web 用户 API Key 均可；非 loopback 绑定且两者皆无时拒绝启动。
 - **模型列表**：`GET /v1/models` 返回 Freebuff 线上 model id（含 `pool` / `available` / `access_tiers` 等附加字段），例如：
-  - `deepseek/deepseek-v4-flash`（unlimited）
+  - `deepseek/deepseek-v4-flash`（daily）
   - `deepseek/deepseek-v4-pro`（premium）
   - `openai/gpt-5.6-luna`（premium）
   - `minimax/minimax-m3`（premium）
-  - `mimo/mimo-v2.5`（unlimited）
+  - `mimo/mimo-v2.5`（daily）
 - **Session**：`POST /v1/chat/completions` 自动按 model 占用 1 小时 free session、注入
   `codebuff_metadata.{cost_mode=free, freebuff_instance_id, run_id, client_id}`，其余字段原样透传；
   遇到 `session_expired` / `session_superseded` / waiting room 等 gate 自动 re-admit 一次（`limits.max_auto_retry_on_session_error`）。

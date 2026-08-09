@@ -926,11 +926,12 @@ assert.equal(requireModelId(''), null)
   const order2 = pool.candidateKeys('openai/gpt-5.6-luna')
   assert.deepEqual(order2, ['qa', 'qb'], `exhaustion must not alter round-robin, got ${order2}`)
 
-  // list() surfaces quota + requests；flash 条目被标注 unlimited
+  // list() surfaces the live quota unchanged, including flash daily limits
   pa.sessions.quota = {
     byModel: {
       'openai/gpt-5.6-luna': mkQuota('openai/gpt-5.6-luna', 6, 5).byModel['openai/gpt-5.6-luna'],
       'deepseek/deepseek-v4-flash': mkQuota('deepseek/deepseek-v4-flash', 6, 6).byModel['deepseek/deepseek-v4-flash'],
+      'mimo/mimo-v2.5': mkQuota('mimo/mimo-v2.5', 6, 4.8).byModel['mimo/mimo-v2.5'],
     },
     rateLimit: null,
     updatedAt: new Date().toISOString(),
@@ -939,6 +940,7 @@ assert.equal(requireModelId(''), null)
     byModel: {
       'openai/gpt-5.6-luna': mkQuota('openai/gpt-5.6-luna', 6, 1).byModel['openai/gpt-5.6-luna'],
       'deepseek/deepseek-v4-flash': mkQuota('deepseek/deepseek-v4-flash', 6, 6).byModel['deepseek/deepseek-v4-flash'],
+      'mimo/mimo-v2.5': mkQuota('mimo/mimo-v2.5', 6, 4.8).byModel['mimo/mimo-v2.5'],
     },
     rateLimit: null,
     updatedAt: new Date().toISOString(),
@@ -946,7 +948,12 @@ assert.equal(requireModelId(''), null)
   const rows = pool.list()
   const rowB = rows.find((x) => x.email === 'qb@example.com')
   assert.equal(rowB.quota.byModel['openai/gpt-5.6-luna'].recentCount, 1)
-  assert.equal(rowB.quota.byModel['deepseek/deepseek-v4-flash'].unlimited, true)
+  assert.equal(rowB.quota.byModel['deepseek/deepseek-v4-flash'].limit, 6)
+  assert.equal(rowB.quota.byModel['deepseek/deepseek-v4-flash'].recentCount, 6)
+  assert.equal(rowB.quota.byModel['deepseek/deepseek-v4-flash'].unlimited, undefined)
+  assert.equal(rowB.quota.byModel['mimo/mimo-v2.5'].limit, 6)
+  assert.equal(rowB.quota.byModel['mimo/mimo-v2.5'].recentCount, 4.8)
+  assert.equal(rowB.quota.byModel['mimo/mimo-v2.5'].unlimited, undefined)
   assert.equal(rowB.quota.byModel['openai/gpt-5.6-luna'].unlimited, undefined)
   assert.equal(typeof rowB.requests, 'number')
   await pool.shutdown()

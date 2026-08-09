@@ -57,15 +57,15 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 - 前端展示上游 `rateLimitsByModel`（每模型 `已用/上限/重置时间`）；额度仅在 admit/活跃 session 时由上游返回。
 - 提供**只读探测刷新**（`POST /api/accounts/probe`，只 GET、不创建 session、不占额度）；导入账号后自动探测。
 - 多账号池自动切号：`rate_limited / spend_limited / ip_capped / free_mode_rate_limited / banned` 整号冷却并换下一个；`model_unavailable` 只冷却该模型。上游报错（chat 429 限流 / 5xx / 403 账号级封禁 / startAgentRun 失败 / 网络超时）一律冷却当前账号并继续轮询下一个，**试完所有账号（预算=账号数+1，封顶 5 次）才把错误返回给用户**；4xx 客户端错误不换号。
-- **`free_mode_capacity_deferred`（"Free mode is briefly at capacity"）不冷却**：是免费模式瞬时容量排队，上游自己说 "will be retried automatically"，实测同 session 立即重试即恢复（不限量模型 flash 尤常见）。换下一个账号继续轮询即可，绝不把账号钉死。
+- **`free_mode_capacity_deferred`（"Free mode is briefly at capacity"）不冷却**：是免费模式瞬时容量排队，上游自己说 "will be retried automatically"，实测同 session 立即重试即恢复（flash 尤常见）。换下一个账号继续轮询即可，绝不把账号钉死。
 - gate 错误（session_expired/superseded/waiting_room 等）：先同账号 re-admit 一次（不冷却），连续两次仍失败才升级为换号冷却。
 - **session 轮询 GET 跳过在途请求**：上游同一个号同一时间只能一个客户端在线，轮询若撞上正在进行的 chat 会干扰/顶掉活跃会话，因此有请求在途时本轮刷新跳过。
 - **强制轮询负载均衡**：Freebuff 会话是**无状态**的（每次请求由客户端带全量历史），
   **不做任何会话粘性/分组/记忆**。每个请求按账号**严格轮流**（第 1、第 2、第 3…个账号），
   冷却中的账号跳过、指针推进到被选中账号的下一位；不做"活跃 session 加分"、不做配额加权
   （那会把请求全吸到同一账号，轮询就失效了）。每个账号自己的热 session 在轮到它时仍被复用。
-- **不限量模型豁免**：目录 `pool: 'unlimited'` 的模型（`deepseek/deepseek-v4-flash`、`mimo/mimo-v2.5`）
-  前端显示「不限」（不再有配额切换逻辑）。
+- **Flash / MiMo 纳入每日配额**：`deepseek/deepseek-v4-flash`、`mimo/mimo-v2.5`
+  不再硬编码为不限量；前端和 API 始终以上游 `rateLimitsByModel` 的实时 `recentCount / limit / resetAt` 为准。
 
 ## Session 行为
 
@@ -97,10 +97,10 @@ docker build .
 - 改动网络/代理/部署相关，必须本地起容器端到端验证（healthz / 登录 / 导入 / 探测 / 代理测试 / 真实对话）后再提交。
 - 真实账号验证注意：admit 会消耗每日额度，尽量用 GET 探测或控制次数。
 
-## 当前状态（截至 2026-08-08）
+## 当前状态（截至 2026-08-09）
 
 - [x] 轻量镜像 + compose 一键部署 + /data 持久化 + GitHub Actions 构建
 - [x] Web 控制台：登录、用户管理、账号导入/浏览器回调、playground、额度/请求/冷却/出口展示
-- [x] 多账号池 + **强制轮询负载均衡**（无会话粘性/分组/记忆，每请求严格轮流；冷却跳过、热 session 复用）+ 不限量模型（flash/mimo）豁免 + **全链路故障转移**（chat/run/网络错误都换号，试完所有账号才报错；capacity_deferred 不冷却；gate 同号重试后升级换号）
+- [x] 多账号池 + **强制轮询负载均衡**（无会话粘性/分组/记忆，每请求严格轮流；冷却跳过、热 session 复用）+ Flash/MiMo 实时每日配额 + **全链路故障转移**（chat/run/网络错误都换号，试完所有账号才报错；capacity_deferred 不冷却；gate 同号重试后升级换号）
 - [x] 前端「代理设置」全局池管理：多行代理、保存立即生效、持久化 `/data/proxies.json`、重启自动加载、无需重启
 - [x] 全局代理池（config 层兜底）+ 代理测试（出口 IP/国家/延迟/codebuff 状态、底层原因码）+ 账号级 proxy 仅内部字段（无 UI）
