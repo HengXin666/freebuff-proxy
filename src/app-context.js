@@ -57,6 +57,8 @@ export class AccountRuntimes {
      */
     this.cooldowns = new Map()
     this._rr = 0
+    /** Serialize account selection + session admission on cold start. */
+    this._acquireMutex = Promise.resolve()
     this._lastSuccessKey = null
     /** Per-account success counters (in-memory, for load-balance visibility). */
     this.stats = { total: 0, byKey: new Map() }
@@ -214,32 +216,74 @@ export class AccountRuntimes {
     this.stats.byKey.set(key, (this.stats.byKey.get(key) || 0) + 1)
   }
 
+  async _withAcquireLock(fn) {
+    let release
+    const wait = new Promise((resolve) => {
+      release = resolve
+    })
+    const prev = this._acquireMutex
+    this._acquireMutex = prev.then(() => wait)
+    await prev
+    try {
+      return await fn()
+    } finally {
+      release()
+    }
+  }
+
   /**
    * @param {string} model
    */
   candidateKeys(model) {
     const keys = this.allKeys()
     if (!keys.length) return []
-    // 强制轮询：每次请求按 第1、第2、第3…个账号轮流分配，
-    // 冷却中的账号跳过。上游无状态（每次请求带全量历史），
-    // 不做会话粘性/分组，也不做配额加权（否则会打破轮询，把请求吸回同一账号）。
-    // 每个账号自己的 free session 仍会在轮到它时被复用，热 session 不丢。
+
+    // Session-first scheduling minimizes billable admissions:
+    // 1. reuse an already-live slot for the requested model;
+    // 2. use an account without a live slot;
+    // 3. replace a live slot for another model only as a last resort.
+    // Round-robin is only a tie-breaker inside the same tier.
     const start = this._rr % keys.length
-    const order = []
+    const candidates = []
     for (let i = 0; i < keys.length; i++) {
       const key = keys[(start + i) % keys.length]
       if (this.isCoolingDown(key, model)) continue
-      order.push(key)
+      const sessions = this.byKey.get(key)?.sessions
+      const usable = sessions?.isUsableForModel?.(model) === true
+      const live = sessions?.hasLiveSlot?.() === true
+      const quota = sessions?.getSnapshot?.()?.quota?.byModel?.[model]
+      const exhausted =
+        !usable &&
+        quota &&
+        Number.isFinite(quota.limit) &&
+        quota.limit > 0 &&
+        (Number(quota.recentCount) || 0) >= quota.limit
+      candidates.push({
+        key,
+        tier: usable ? 0 : live ? 2 : 1,
+        exhausted: exhausted ? 1 : 0,
+        rotation: i,
+      })
     }
-    return order
+    candidates.sort(
+      (a, b) =>
+        a.tier - b.tier ||
+        a.exhausted - b.exhausted ||
+        a.rotation - b.rotation,
+    )
+    return candidates.map((item) => item.key)
   }
 
   /**
-   * 强制轮询选号：从轮询指针开始按账号顺序尝试，冷却中的账号跳过。
-   * 上游无状态（每次请求带全量历史），不做会话粘性/分组。
+   * Prefer a reusable same-model session. Cold accounts and model replacement
+   * are fallbacks; round-robin only breaks ties within those groups.
    * @param {string} model
    */
   async acquireForModel(model) {
+    return this._withAcquireLock(() => this._acquireForModelUnlocked(model))
+  }
+
+  async _acquireForModelUnlocked(model) {
     if (!model) {
       throw new UpstreamError('model is required', {
         status: 400,
@@ -307,6 +351,7 @@ export class AccountRuntimes {
       }
 
       try {
+        const reusedSession = rt.sessions.isUsableForModel(model)
         await rt.sessions.ensureSession(model)
         this.clearCooldown(key, model)
         this._lastSuccessKey = key
@@ -318,6 +363,7 @@ export class AccountRuntimes {
           key,
           email: rt.email,
           model,
+          reusedSession,
         })
         return rt
       } catch (err) {
@@ -351,14 +397,20 @@ export class AccountRuntimes {
 
   /**
    * 换号/重试选号：
-   * - switchAccount（429/5xx/403 账号级故障）→ 冷却当前账号，然后按轮询换下一个账号；
-   *   noCooldown（如 free_mode_capacity_deferred 瞬时容量）→ 换号但不冷却；
+   * - switchAccount（429/5xx/403 账号级故障）→ 冷却当前账号，然后换下一个账号；
+   *   noCooldown（如 free_mode_capacity_deferred 瞬时容量）→ 不冷却，优先复用热 session；
    * - 纯 gate 错误（session_expired/superseded 等）→ 同号强制 re-admit 一次（不冷却），
-   *   失败则按轮询换号。
+   *   失败则换号。
    * @param {string} model
    * @param {{ preferredKey?: string | null, gateCode?: string | null, retryAfterMs?: number | null, switchAccount?: boolean, noCooldown?: boolean }} [opts]
    */
   async reacquireAfterGate(model, opts = {}) {
+    return this._withAcquireLock(() =>
+      this._reacquireAfterGateUnlocked(model, opts),
+    )
+  }
+
+  async _reacquireAfterGateUnlocked(model, opts = {}) {
     if (opts.preferredKey) {
       if (
         opts.switchAccount ||
@@ -391,7 +443,7 @@ export class AccountRuntimes {
         }
       }
     }
-    return this.acquireForModel(model)
+    return this._acquireForModelUnlocked(model)
   }
 
   earliestCooldownMs() {

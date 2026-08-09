@@ -612,7 +612,7 @@ assert.equal(requireModelId(''), null)
   assert.equal(ws.get(tok), null)
 }
 
-// --- unit: 强制轮询 —— 每次 acquire 按账号轮流，冷却账号跳过 ---
+// --- unit: session-first —— 热 session 复用，冷却后才启用下一个账号 ---
 {
   const rrDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-rr-unit-'))
   saveAccountUser(rrDir, { id: 'a', email: 'rr-a@example.com', authToken: 'token-a' })
@@ -624,7 +624,7 @@ assert.equal(requireModelId(''), null)
   const pool = new AccountRuntimes(rrConfig)
   mockMode = 'ok'
   sessionPosts = 0
-  // a → b → c → a → b …（强制轮询，不因配额/会话粘性把请求吸回同一账号）
+  // 串行请求全部复用 a 的同一个热 session，只 admit 一次。
   const emails = []
   for (let i = 0; i < 6; i++) {
     const rt = await pool.acquireForModel('deepseek/deepseek-v4-flash')
@@ -634,16 +634,25 @@ assert.equal(requireModelId(''), null)
     emails,
     [
       'rr-a@example.com',
-      'rr-b@example.com',
-      'rr-c@example.com',
       'rr-a@example.com',
-      'rr-b@example.com',
-      'rr-c@example.com',
+      'rr-a@example.com',
+      'rr-a@example.com',
+      'rr-a@example.com',
+      'rr-a@example.com',
     ],
-    `强制轮询应严格轮流, got ${JSON.stringify(emails)}`,
+    `同模型热 session 应持续复用, got ${JSON.stringify(emails)}`,
   )
-  // 冷却中的账号跳过：b 冷却后 a → c → a → c
-  pool.markCooldown('b', {
+  assert.equal(sessionPosts, 1, `expected one admission, got ${sessionPosts}`)
+
+  // 新模型优先使用空闲的 b，不能释放 a 上仍可复用的 Flash session。
+  const luna = await pool.acquireForModel('openai/gpt-5.6-luna')
+  assert.equal(luna.email, 'rr-b@example.com')
+  assert.equal(pool.get('a').sessions.getSnapshot().model, 'deepseek/deepseek-v4-flash')
+  assert.equal(pool.get('b').sessions.getSnapshot().model, 'openai/gpt-5.6-luna')
+  assert.equal(sessionPosts, 2, `second model should add one admission, got ${sessionPosts}`)
+
+  // a 冷却后，Flash 使用空闲的 c，而不是覆盖 b 上的 Luna。
+  pool.markCooldown('a', {
     code: 'rate_limited',
     retryAfterMs: 60_000,
   })
@@ -654,9 +663,10 @@ assert.equal(requireModelId(''), null)
   }
   assert.deepEqual(
     next,
-    ['rr-a@example.com', 'rr-c@example.com', 'rr-a@example.com', 'rr-c@example.com'],
-    `冷却账号应被跳过, got ${JSON.stringify(next)}`,
+    ['rr-c@example.com', 'rr-c@example.com', 'rr-c@example.com', 'rr-c@example.com'],
+    `故障切号后应复用新账号 session, got ${JSON.stringify(next)}`,
   )
+  assert.equal(sessionPosts, 3, `expected three admissions, got ${sessionPosts}`)
   await pool.shutdown()
   fs.rmSync(rrDir, { recursive: true, force: true })
 }
@@ -680,23 +690,21 @@ assert.equal(requireModelId(''), null)
   assert.equal(rows.length, 2)
   assert.equal(readAccountUser(dupDir, 'github-u1').authToken, 'token-gh-2')
   assert.equal(readAccountUser(dupDir, 'google-u1').authToken, 'token-google')
-  // 轮询选号能分别选中两个账号（各获得一次）
+  // 并发冷启动也只能创建一个 session；两个身份仍各自独立存在于账号池。
   const dupConfig = loadConfig()
   dupConfig.upstream.credentialsDir = dupDir
   dupConfig.session.pollIntervalSec = 3600
   const dupPool = new AccountRuntimes(dupConfig)
   mockMode = 'ok'
   sessionPosts = 0
-  const seen = []
-  for (let i = 0; i < 2; i++) {
-    const rt = await dupPool.acquireForModel('deepseek/deepseek-v4-flash')
-    seen.push(rt.key)
-  }
-  assert.deepEqual(
-    [...seen].sort(),
-    ['github-u1', 'google-u1'],
-    `两个同邮箱账号都应被轮询到, got ${JSON.stringify(seen)}`,
+  const seen = await Promise.all(
+    Array.from({ length: 8 }, async () => {
+      const rt = await dupPool.acquireForModel('deepseek/deepseek-v4-flash')
+      return rt.key
+    }),
   )
+  assert.equal(new Set(seen).size, 1, `并发冷启动应复用一个账号, got ${seen}`)
+  assert.equal(sessionPosts, 1, `并发冷启动只应 admit 一次, got ${sessionPosts}`)
   await dupPool.shutdown()
   fs.rmSync(dupDir, { recursive: true, force: true })
 }
@@ -899,7 +907,7 @@ assert.equal(requireModelId(''), null)
   fs.rmSync(wDir, { recursive: true, force: true })
 }
 
-// --- quota: extraction + display；选号是强制轮询，不受配额加权影响 ---
+// --- quota: extraction + display；已用满的冷账号排到可用冷账号之后 ---
 {
   const qDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-quota-'))
   saveAccountUser(qDir, { id: 'qa', email: 'qa@example.com', authToken: 'token-qa' })
@@ -917,14 +925,14 @@ assert.equal(requireModelId(''), null)
   pa.sessions.quota = mkQuota('openai/gpt-5.6-luna', 6, 5)
   pb.sessions.quota = mkQuota('openai/gpt-5.6-luna', 6, 1)
 
-  // 强制轮询：即使 qa 剩余额度更少/更多，选号顺序也只按轮询指针走（qa → qb）
+  // 两个账号都有剩余额度时，轮询仅作为同层级的平局处理。
   const order = pool.candidateKeys('openai/gpt-5.6-luna')
-  assert.deepEqual(order, ['qa', 'qb'], `expected strict round-robin, got ${order}`)
+  assert.deepEqual(order, ['qa', 'qb'], `expected stable tie-break, got ${order}`)
 
-  // 已用满也不影响选号（429 会走冷却换号兜底，而不是选号阶段加权）
+  // 已用满的冷账号不应先触发一次必败的 admit。
   pa.sessions.quota = mkQuota('openai/gpt-5.6-luna', 6, 6)
   const order2 = pool.candidateKeys('openai/gpt-5.6-luna')
-  assert.deepEqual(order2, ['qa', 'qb'], `exhaustion must not alter round-robin, got ${order2}`)
+  assert.deepEqual(order2, ['qb', 'qa'], `exhausted account should be last, got ${order2}`)
 
   // list() surfaces the live quota unchanged, including flash daily limits
   pa.sessions.quota = {
@@ -960,7 +968,7 @@ assert.equal(requireModelId(''), null)
   fs.rmSync(qDir, { recursive: true, force: true })
 }
 
-// --- 强制轮询：同一 conversation_id 也轮流换账号（上游无状态，不做会话分组） ---
+// --- session-first：conversation_id 不参与选号，同模型热 session 始终复用 ---
 {
   const convDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-conv-'))
   saveAccountUser(convDir, { id: 'da', email: 'da@example.com', authToken: 'token-da' })
@@ -989,7 +997,7 @@ assert.equal(requireModelId(''), null)
   })
   const convPort = convServer.address().port
 
-  // integration: 同一会话 key 连续 6 次 → 每个账号恰好 2 次（严格轮流，不钉死在单一账号）
+  // 同一会话 key 连续 6 次只创建并复用一个上游 session。
   mockMode = 'ok'
   sessionPosts = 0
   completionAttempts = 0
@@ -1016,19 +1024,20 @@ assert.equal(requireModelId(''), null)
     seen,
     [
       'da@example.com',
-      'db@example.com',
-      'dc@example.com',
       'da@example.com',
-      'db@example.com',
-      'dc@example.com',
+      'da@example.com',
+      'da@example.com',
+      'da@example.com',
+      'da@example.com',
     ],
-    `恒定会话 key 也必须严格轮询换号, got ${JSON.stringify(seen)}`,
+    `恒定会话 key 应复用热 session, got ${JSON.stringify(seen)}`,
   )
+  assert.equal(sessionPosts, 1, `expected one admission, got ${sessionPosts}`)
   // 同一会话不应再回传会话 key 响应头（无会话分组概念）
   assert.equal(res.headers.get('x-freebuff-proxy-conv-key'), null)
 
-  // 冷却中的账号在轮到它时被跳过
-  convRuntimes.markCooldown('db', {
+  // 当前账号冷却后才切到下一个账号，并复用新 session。
+  convRuntimes.markCooldown('da', {
     code: 'rate_limited',
     retryAfterMs: 60_000,
   })
@@ -1049,14 +1058,15 @@ assert.equal(requireModelId(''), null)
     assert.equal(res.status, 200, await res.clone().text())
     afterCool.push(res.headers.get('x-freebuff-proxy-account'))
   }
-  assert.ok(!afterCool.includes('db@example.com'), '冷却账号应被跳过')
+  assert.deepEqual(afterCool, ['db@example.com', 'db@example.com'])
+  assert.equal(sessionPosts, 2, `failover should add one admission, got ${sessionPosts}`)
 
   await convRuntimes.shutdown()
   convServer.close()
   fs.rmSync(convDir, { recursive: true, force: true })
 }
 
-// 无会话ID 的请求（纯池子选号）：轮询均分，不因“活跃 session”一直压在一个账号
+// 无会话ID 的并发请求：冷启动原子化，全部共享一个上游 session
 {
   const rrDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-rr-'))
   saveAccountUser(rrDir, { id: 'ra', email: 'ra@example.com', authToken: 'token-ra' })
@@ -1088,10 +1098,8 @@ assert.equal(requireModelId(''), null)
   sessionPosts = 0
   completionAttempts = 0
   calls = []
-  // 9 个无会话 key 的请求：轮询 a→b→c→a→b→c…，每个账号 3 次，
-  // 而不是第一个拿到 session 的账号被活跃 session 加分持续吸走全部请求。
-  for (let i = 0; i < 9; i++) {
-    const res = await fetch(`http://127.0.0.1:${rrPort}/v1/chat/completions`, {
+  const concurrent = await Promise.all(
+    Array.from({ length: 9 }, () => fetch(`http://127.0.0.1:${rrPort}/v1/chat/completions`, {
       method: 'POST',
       headers: {
         authorization: 'Bearer sk-test',
@@ -1101,25 +1109,24 @@ assert.equal(requireModelId(''), null)
         model: 'deepseek/deepseek-v4-flash',
         messages: [{ role: 'user', content: 'hello' }],
       }),
-    })
+    })),
+  )
+  for (const res of concurrent) {
     assert.equal(res.status, 200, await res.clone().text())
   }
   const rrByEmail = new Map(
     rrRuntimes.list().map((a) => [a.email, a.requests]),
   )
-  for (const email of ['ra@example.com', 'rb@example.com', 'rc@example.com']) {
-    assert.equal(
-      rrByEmail.get(email),
-      3,
-      `${email} 应收到 3 个轮询请求, got ${rrByEmail.get(email)}`,
-    )
-  }
+  assert.equal(rrByEmail.get('ra@example.com'), 9)
+  assert.equal(rrByEmail.get('rb@example.com'), 0)
+  assert.equal(rrByEmail.get('rc@example.com'), 0)
+  assert.equal(sessionPosts, 1, `并发请求只应 admit 一次, got ${sessionPosts}`)
   await rrRuntimes.shutdown()
   rrServer.close()
   fs.rmSync(rrDir, { recursive: true, force: true })
 }
 
-// sub2api 场景：恒定的 user 字段 + 无任何会话 id → 仍按池子轮询，不钉死在固定 user 的账号
+// sub2api 场景：恒定 user 不参与选号，仍复用同模型热 session
 {
   const subDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-sub2api-'))
   saveAccountUser(subDir, { id: 'sa', email: 'sa@example.com', authToken: 'token-sa' })
@@ -1171,13 +1178,10 @@ assert.equal(requireModelId(''), null)
     // 无会话分组：请求头也不回传 conv-key
     assert.equal(res.headers.get('x-freebuff-proxy-conv-key'), null)
   }
-  for (const email of ['sa@example.com', 'sb@example.com', 'sc@example.com']) {
-    assert.equal(
-      seenAccounts.get(email),
-      2,
-      `${email} 应收到 2 个轮询请求, got ${seenAccounts.get(email)}`,
-    )
-  }
+  assert.equal(seenAccounts.get('sa@example.com'), 6)
+  assert.equal(seenAccounts.get('sb@example.com'), undefined)
+  assert.equal(seenAccounts.get('sc@example.com'), undefined)
+  assert.equal(sessionPosts, 1, `expected one admission, got ${sessionPosts}`)
   await subRuntimes.shutdown()
   subServer.close()
   fs.rmSync(subDir, { recursive: true, force: true })
@@ -1239,7 +1243,7 @@ assert.equal(requireModelId(''), null)
   mockMode = 'ok'
 }
 
-// free_mode_capacity_deferred → 换号重试且不冷却（瞬时容量，不是账号级故障）
+// free_mode_capacity_deferred → 同一热 session 重试且不冷却
 {
   const capDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-cap-'))
   saveAccountUser(capDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
@@ -1282,8 +1286,9 @@ assert.equal(requireModelId(''), null)
     }),
   })
   assert.equal(res.status, 200, await res.clone().text())
-  // 换到 b 成功；a 被 capacity 命中但【不】冷却
-  assert.equal(res.headers.get('x-freebuff-proxy-account'), 'b@example.com')
+  // 实测同一 session 立即重试可恢复，无需为瞬时容量再开一个 session。
+  assert.equal(res.headers.get('x-freebuff-proxy-account'), 'a@example.com')
+  assert.equal(sessionPosts, 1, `capacity retry should reuse session, got ${sessionPosts}`)
   const capAccounts = capRuntimes.list()
   assert.equal(
     capAccounts.find((x) => x.email === 'a@example.com').available,
@@ -1297,7 +1302,7 @@ assert.equal(requireModelId(''), null)
   mockMode = 'ok'
 }
 
-// 所有账号 capacity_deferred → 返回错误但【全部不冷却】（下次请求继续可轮询）
+// 持续 capacity_deferred → 返回错误但不冷却（下次请求仍可复用）
 {
   const capDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-cap2-'))
   saveAccountUser(capDir2, { id: 'a', email: 'a@example.com', authToken: 'token-a' })

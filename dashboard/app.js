@@ -694,8 +694,8 @@ async function renderMe(view) {
       el('button', { onclick: async () => { await navigator.clipboard.writeText(me.apiKey).catch(() => {}); toast('已复制') } }, '复制'),
     ]),
     el('div', { class: 'row' }, [
-      el('span', { class: 'muted' }, '负载均衡'),
-      el('span', {}, '强制轮询：所有请求按上游账号轮流分配（不做会话粘性/分组）'),
+      el('span', { class: 'muted' }, '会话调度'),
+      el('span', {}, '热会话优先：同模型请求复用现有会话，故障时自动切换账号'),
     ]),
     el('p', { class: 'muted', style: 'margin-top:14px' }, '下游 Agent 接入：把上面 API Key 作为 Bearer token，base_url 指向本服务，例如'),
     el('pre', { class: 'flow-url' }, 'curl http://127.0.0.1:8787/v1/chat/completions \\\n  -H "Authorization: Bearer ' + (me.apiKey || 'sk-fb-…') + '" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"model":"deepseek/deepseek-v4-flash","messages":[{"role":"user","content":"你好"}],"stream":true}\''),

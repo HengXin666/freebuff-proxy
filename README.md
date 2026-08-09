@@ -1,6 +1,6 @@
 # freebuff-proxy
 
-OpenAI 兼容的 **Freebuff / Codebuff 免费额度反向代理**，支持 **多账号自动切号 + 强制轮询负载均衡**、**Web 控制台**（用户管理 + 浏览器登录回调）、**上游代理**，并附带 **一键 Docker Compose 部署** 与 **GitHub Actions 镜像构建**。
+OpenAI 兼容的 **Freebuff / Codebuff 免费额度反向代理**，支持 **多账号自动切号 + 热 session 优先调度**、**Web 控制台**（用户管理 + 浏览器登录回调）、**上游代理**，并附带 **一键 Docker Compose 部署** 与 **GitHub Actions 镜像构建**。
 
 下游 Agent 只需要标准的 `base_url + api_key + model`，本服务负责：
 
@@ -17,7 +17,7 @@ OpenAI 兼容的 **Freebuff / Codebuff 免费额度反向代理**，支持 **多
 - [数据与持久化（/data 挂载）](#数据与持久化data-挂载)
 - [GitHub Actions 自动构建镜像](#github-actions-自动构建镜像)
 - [Web 控制台：登录 / 用户管理 / 添加账号回调](#web-控制台登录--用户管理--添加账号回调)
-- [多账号池与强制轮询负载均衡](#多账号池与强制轮询负载均衡)
+- [多账号池与热 session 优先调度](#多账号池与热-session-优先调度)
 - [代理支持](#代理支持)
 - [下游 Agent 接入](#下游-agent-接入)
 - [命令 / 本地开发](#命令--本地开发)
@@ -145,11 +145,11 @@ data/
 - 创建 / 删除用户，设置角色（`admin` / `user`）。
 - 每个用户独立 `sk-fb-...` API Key，可复制 / 重置。
 - 修改密码。
-- 下游 Agent 用**某个用户的 API Key** 接入（Bearer token），流量统一走**强制轮询**负载均衡。
+- 下游 Agent 用**某个用户的 API Key** 接入（Bearer token），流量统一走**热 session 优先**调度。
 
 ---
 
-## 多账号池与强制轮询负载均衡
+## 多账号池与热 session 优先调度
 
 ### 账号池自动切号
 
@@ -160,22 +160,22 @@ data/
   而不是把错误直接甩给下游；4xx 客户端错误（400/401/404/422）不换号。
 - 冷却信息（状态、剩余时间、原因）在控制台「总览」实时可见，可手动「解除冷却」。
 
-### 强制轮询负载均衡
+### 热 session 优先调度
 
 Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全量消息历史**（客户端自己携带），
-不存在"服务端记住某个会话"的概念。因此代理**不做任何会话粘性 / 分组 / 记忆**，
-每个请求都在账号池上**严格轮询**（第 1、第 2、第 3…个账号轮流）：
+不存在"服务端记住某个 conversation"的概念；但 admit 会占用按时长结算的免费次数，因此代理按
+**最少新建 session**的目标调度：
 
-- 无论请求带不带 `conversation_id` / `thread_id` / `user` / `client_id`，一律按账号轮流分配——
-  恒定的会话 key 也不会把账号钉死；
-- **冷却中的账号跳过**，指针推进到被选中账号的下一位，保证轮询公平；
-- 每个账号自己的活跃 free session 在轮到它时仍会被**复用**（同模型热 session 不丢），
-  避免重复 admit 占额度；
+- 优先复用同模型的活跃 session；`conversation_id` / `thread_id` / `user` / `client_id` 不参与选号；
+- 同一个 `instanceId` 支持多个并发 chat 流，并发请求也复用热 session；
+- 冷启动的选号与 admit 已原子化：多个并发请求同时到达也只创建一个 session；
+- 没有同模型热 session 时，优先选择没有活跃 session 的账号，避免提前释放其他模型的可用时段；
+- 多个同层级账号只在平局时轮询；**冷却中的账号跳过**；
 - 上游报错（gate 错误如 `session_expired` / `superseded`）自动同号 re-admit 重试一次；
   429 限流 / 5xx / 403 账号级封禁则**冷却当前账号并换下一个账号**重试（最多试到账号数，封顶 5 次），
   4xx 客户端错误（400/401/404/422）不换号。
 
-控制台「总览」顶部负载均衡条显示各账号请求占比，一眼看出分布是否均匀。
+控制台「总览」顶部显示各账号实际请求占比、活跃 session 与冷却状态。
 
 ### 查看额度（每日免费 session）
 
@@ -188,6 +188,7 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 
 - 控制台「总览」每个账号有一列 **额度（今日）**：所有限额模型都显示 `已用/上限` 与重置时间（`已用满` 红色、`≤2` 黄色、正常绿色）。
 - 额度在 **admit 时自动抓取**（上游仅在 session 活跃时返回）；活跃 session 每 30s 轮询刷新，session 结束后保留最后一次缓存值直到下次 admit。
+- `recentCount` 可能是小数：admit 时先预占 1 小时额度，提前释放后按实际占用时长结算（实测最小步进为 `0.1`）。因此复用热 session 比平均铺开账号更省额度。
 - 同样可通过 `GET /v1/freebuff/status` 或 `GET /v1/freebuff/accounts` 拿到每个账号的 `quota`。
 
 ---
@@ -259,8 +260,9 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   - `openai/gpt-5.6-luna`（premium）
   - `minimax/minimax-m3`（premium）
   - `mimo/mimo-v2.5`（daily）
-- **Session**：`POST /v1/chat/completions` 自动按 model 占用 1 小时 free session、注入
+- **Session**：`POST /v1/chat/completions` 自动按 model 复用或占用 1 小时 free session、注入
   `codebuff_metadata.{cost_mode=free, freebuff_instance_id, run_id, client_id}`，其余字段原样透传；
+  同一个 session 支持并发 chat 流；
   遇到 `session_expired` / `session_superseded` / waiting room 等 gate 自动 re-admit 一次（`limits.max_auto_retry_on_session_error`）。
 - **其它路由**：
 
@@ -315,6 +317,6 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 
 - Luna 等 premium：大约每天 6×1 小时 session（共享 premium 池）。
 - Flash：CLI full 访问下次数较松，仍有 spend / IP / 容量限制。
-- 同账号多端会 `superseded`；多账号多 IP 场景在「代理设置」配多个代理即可，系统按账号稳定分配出口（见代理支持）。
+- 同账号由另一个客户端重新 admit 可能触发 `superseded`；同一 `instanceId` 内的并发 chat 流可正常共用。多账号多 IP 场景在「代理设置」配多个代理即可，系统按账号稳定分配出口（见代理支持）。
 - 地区 / VPN / 封禁由上游决定。
 - 本项目**不**绕过风控，也**不**保证无限额度。

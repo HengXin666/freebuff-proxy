@@ -275,8 +275,9 @@ export function createProxyHandler(ctx) {
     /** 同一账号连续 gate 失败计数：gate 已同号 re-admit 重试过一次仍失败 → 升级为换号。 */
     let sameAccountGateRetries = 0
 
-    // 强制轮询：每个请求按账号轮流分配，不做会话粘性/分组。
-    // 上游无状态（客户端每次请求携带全量历史），所以无需为"同一会话"固定账号。
+    // Session-first scheduling: reuse a live same-model slot (including for
+    // concurrent requests), and only admit on another account when needed.
+    // The upstream is stateless because clients send the full history.
     // 故障转移：除了 4xx 客户端错误，任何上游失败（session/run/chat/网络超时）都
     // 冷却当前账号并继续轮询下一个，只有试完所有账号才把错误返回给用户。
     while (attempt < maxAttempts) {
@@ -303,38 +304,40 @@ export function createProxyHandler(ctx) {
         }
         lastKey = rt.key
 
-        // 可观测性：响应头标明本次实际使用的账号。
-        res.setHeader('x-freebuff-proxy-account', rt.email)
-        res.setHeader('x-freebuff-proxy-account-id', rt.key)
-
-        const snap = rt.sessions.getSnapshot()
-        if (!snap.live || !snap.instanceId) {
-          throw new UpstreamError(
-            'No live freebuff session after admit.',
-            { status: 503, code: 'no_session' },
-          )
-        }
-
-        const agentId = agentIdForModel(upstreamModel)
-        const runId = await rt.upstream.startAgentRun({ agentId })
-        logger.info('started agent run', {
-          runId,
-          agentId,
-          model: upstreamModel,
-          key: rt.key,
-          email: rt.email,
-        })
-
-        const forwardBody = buildForwardBody(
-          body,
-          upstreamModel,
-          snap.instanceId,
-          runId,
-        )
-        // 在途计数：轮询 GET 跳过该账号，避免干扰正在进行的 chat 会话
+        // Mark in-flight before startAgentRun so the background session GET
+        // cannot interfere between account selection and chat forwarding.
         rt.sessions.beginRequest()
         let result
+        let runId
         try {
+          // 可观测性：响应头标明本次实际使用的账号。
+          res.setHeader('x-freebuff-proxy-account', rt.email)
+          res.setHeader('x-freebuff-proxy-account-id', rt.key)
+
+          const snap = rt.sessions.getSnapshot()
+          if (!snap.live || !snap.instanceId) {
+            throw new UpstreamError(
+              'No live freebuff session after admit.',
+              { status: 503, code: 'no_session' },
+            )
+          }
+
+          const agentId = agentIdForModel(upstreamModel)
+          runId = await rt.upstream.startAgentRun({ agentId })
+          logger.info('started agent run', {
+            runId,
+            agentId,
+            model: upstreamModel,
+            key: rt.key,
+            email: rt.email,
+          })
+
+          const forwardBody = buildForwardBody(
+            body,
+            upstreamModel,
+            snap.instanceId,
+            runId,
+          )
           result = await forwardCompletions({
             req,
             res,
@@ -347,13 +350,15 @@ export function createProxyHandler(ctx) {
         }
 
         // Best-effort close the run registry row
-        void rt.upstream.finishAgentRun({
-          runId,
-          status: result.ok ? 'completed' : 'failed',
-          errorMessage: result.ok
-            ? undefined
-            : result.gateCode || 'completions_failed',
-        })
+        if (runId) {
+          void rt.upstream.finishAgentRun({
+            runId,
+            status: result.ok ? 'completed' : 'failed',
+            errorMessage: result.ok
+              ? undefined
+              : result.gateCode || 'completions_failed',
+          })
+        }
 
         if (result.ok) return
 
@@ -561,7 +566,8 @@ export function createProxyHandler(ctx) {
       // free_mode_capacity_deferred：免费模式瞬时容量排队（上游原话
       // "your request will be retried automatically"）。不是账号级故障——
       // 实测同一账号同一 session 立即重试即恢复（flash 尤其常见）。
-      // 换下一个账号继续轮询，但绝不冷却当前账号，避免把可用账号白白钉死。
+      // 优先复用当前热 session 重试，但绝不冷却账号，避免为瞬时容量
+      // 无谓开启另一个计费 session；若账号另有故障，外层仍会正常切号。
       if (
         errCode === 'free_mode_capacity_deferred' ||
         gateCode === 'free_mode_capacity_deferred'
