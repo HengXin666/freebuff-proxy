@@ -10,9 +10,12 @@ import { requireModelId } from '../src/model.js'
 import { saveAccountUser, listAccounts, readAccountUser } from '../src/auth-store.js'
 import {
   ensureFreebuffSystemMessages,
+  ensureFreebuffToolSignature,
   normalizeReasoningFields,
+  FREEBUFF_SIGNATURE_TOOL_NAME,
   FREEBUFF_SYSTEM_OPENING,
 } from '../src/free-mode.js'
+import { SettingsStore } from '../src/web/settings-store.js'
 import {
   extractGateError,
   extractRateLimitError,
@@ -253,6 +256,20 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
   assert.equal(r.reasoning_effort, undefined)
   assert.equal(r.reasoning.effort, 'high')
   assert.equal(r.reasoning.other, 1)
+
+  const originalTools = [
+    { type: 'function', function: { name: 'web_search' } },
+  ]
+  const signedTools = ensureFreebuffToolSignature(originalTools, true)
+  assert.equal(originalTools.length, 1)
+  assert.equal(signedTools.length, 2)
+  assert.equal(signedTools[1].function.name, FREEBUFF_SIGNATURE_TOOL_NAME)
+  assert.equal(ensureFreebuffToolSignature(originalTools, false), originalTools)
+  assert.deepEqual(ensureFreebuffToolSignature([], true), [])
+  assert.equal(
+    ensureFreebuffToolSignature(signedTools, true),
+    signedTools,
+  )
 }
 
 // --- unit: gate helpers ---
@@ -298,6 +315,7 @@ config.session.pollIntervalSec = 3600
 config.limits.maxConcurrentRequests = 2
 
 const runtimes = new AccountRuntimes(config)
+const settingsStore = new SettingsStore(path.join(tmpDir, 'settings.json'))
 const server = await startServer({
   config,
   runtimes,
@@ -311,6 +329,7 @@ const server = await startServer({
       sessions: rt.sessions,
     }
   })(),
+  settingsStore,
 })
 const port = server.address().port
 const base = `http://127.0.0.1:${port}`
@@ -353,6 +372,50 @@ function chat(body, headers = {}) {
     calls.some((c) => c.url.includes('/freebuff/session') && c.method === 'POST'),
   )
   assert.ok(calls.some((c) => c.url.includes('/chat/completions')))
+}
+
+// tool signature compatibility: default on, hot-disable without restart
+{
+  calls = []
+  completionAttempts = 0
+  const tools = [
+    {
+      type: 'function',
+      function: {
+        name: 'web_search',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+  ]
+  const enabledRes = await chat({
+    model: 'deepseek/deepseek-v4-flash',
+    messages: [{ role: 'user', content: 'hello' }],
+    tools,
+  })
+  assert.equal(enabledRes.status, 200, await enabledRes.clone().text())
+  const enabledCall = calls.find((c) => c.url.includes('/chat/completions'))
+  const enabledBody = JSON.parse(enabledCall.body)
+  assert.deepEqual(
+    enabledBody.tools.map((tool) => tool.function.name),
+    ['web_search', 'end_turn'],
+  )
+
+  settingsStore.save({ freeToolSignatureEnabled: false })
+  calls = []
+  completionAttempts = 0
+  const disabledRes = await chat({
+    model: 'deepseek/deepseek-v4-flash',
+    messages: [{ role: 'user', content: 'hello' }],
+    tools,
+  })
+  assert.equal(disabledRes.status, 200, await disabledRes.clone().text())
+  const disabledCall = calls.find((c) => c.url.includes('/chat/completions'))
+  const disabledBody = JSON.parse(disabledCall.body)
+  assert.deepEqual(
+    disabledBody.tools.map((tool) => tool.function.name),
+    ['web_search'],
+  )
+  settingsStore.save({ freeToolSignatureEnabled: true })
 }
 
 // stream
@@ -808,6 +871,7 @@ assert.equal(requireModelId(''), null)
     config: wConfig,
   })
   const proxyStore = new ProxyStore(path.join(wDir, 'proxies.json'))
+  const settingsStore = new SettingsStore(path.join(wDir, 'settings.json'))
   const poolUrls = ['http://p1.example:7890', 'http://p2.example:7890']
   const wruntimes = new AccountRuntimes(wConfig)
   const wserver = await startServer({
@@ -822,6 +886,7 @@ assert.equal(requireModelId(''), null)
     webSessions,
     loginFlows,
     proxyStore,
+    settingsStore,
   })
   const wport = wserver.address().port
   const lr = await fetch(`http://127.0.0.1:${wport}/api/auth/login`, {
@@ -842,6 +907,35 @@ assert.equal(requireModelId(''), null)
   assert.equal(pj.accounts[0].email, 'w@example.com')
   // mock GET 返回 status none → 探测后 session 状态可见
   assert.equal(pj.accounts[0].session.status, 'none')
+  // 运行设置：默认开启，保存关闭后立即返回并持久化，重建 store 仍为关闭
+  {
+    const getDefault = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+      headers: { cookie },
+    })
+    assert.equal(getDefault.status, 200)
+    assert.equal((await getDefault.json()).freeToolSignatureEnabled, true)
+
+    const invalid = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ freeToolSignatureEnabled: 'no' }),
+    })
+    assert.equal(invalid.status, 400)
+
+    const saveSetting = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ freeToolSignatureEnabled: false }),
+    })
+    assert.equal(saveSetting.status, 200)
+    assert.equal((await saveSetting.json()).freeToolSignatureEnabled, false)
+    assert.equal(settingsStore.get().freeToolSignatureEnabled, false)
+    assert.equal(
+      new SettingsStore(path.join(wDir, 'settings.json')).get()
+        .freeToolSignatureEnabled,
+      false,
+    )
+  }
   // 代理管理 API：GET 空池 → POST 保存（持久化 + 立即生效）→ GET 返回
   {
     const g1 = await fetch(`http://127.0.0.1:${wport}/api/proxy`, { headers: { cookie } })

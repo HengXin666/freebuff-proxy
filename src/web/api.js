@@ -28,10 +28,20 @@ const SESSION_COOKIE = 'fb_session'
  *   webSessions: import('./session-store.js').WebSessionStore,
  *   loginFlows: import('./login-flows.js').LoginFlowManager,
  *   runtimes: any,
+ *   proxyStore?: import('./proxy-store.js').ProxyStore,
+ *   settingsStore?: import('./settings-store.js').SettingsStore,
  * }} deps
  */
 export function createWebApi(deps) {
-  const { config, userStore, webSessions, loginFlows, runtimes, proxyStore } = deps
+  const {
+    config,
+    userStore,
+    webSessions,
+    loginFlows,
+    runtimes,
+    proxyStore,
+    settingsStore,
+  } = deps
 
   function getSessionUser(req) {
     const cookies = parseCookies(req.headers.cookie)
@@ -443,6 +453,44 @@ export function createWebApi(deps) {
           web: config.web,
         },
       })
+      return true
+    }
+
+    if (method === 'GET' && path === '/api/settings') {
+      sendJson(res, 200, {
+        freeToolSignatureEnabled:
+          settingsStore?.get().freeToolSignatureEnabled !== false,
+      })
+      return true
+    }
+
+    if (method === 'POST' && path === '/api/settings') {
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      if (!settingsStore) {
+        sendJson(res, 501, { error: '当前进程未启用运行设置存储' })
+        return true
+      }
+      let body
+      try {
+        body = await readJson(req)
+      } catch {
+        sendJson(res, 400, { error: '无效的 JSON' })
+        return true
+      }
+      if (typeof body.freeToolSignatureEnabled !== 'boolean') {
+        sendJson(res, 400, {
+          error: 'freeToolSignatureEnabled 必须是布尔值',
+        })
+        return true
+      }
+      const settings = settingsStore.save({
+        freeToolSignatureEnabled: body.freeToolSignatureEnabled,
+      })
+      logger.info('runtime settings updated via web', settings)
+      sendJson(res, 200, { ok: true, ...settings })
       return true
     }
 

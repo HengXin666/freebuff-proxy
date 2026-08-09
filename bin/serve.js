@@ -9,6 +9,7 @@ import { UserStore } from '../src/web/user-store.js'
 import { WebSessionStore } from '../src/web/session-store.js'
 import { LoginFlowManager } from '../src/web/login-flows.js'
 import { ProxyStore } from '../src/web/proxy-store.js'
+import { SettingsStore } from '../src/web/settings-store.js'
 import { listAccounts } from '../src/auth-store.js'
 
 function isLoopbackHost(host) {
@@ -34,6 +35,7 @@ async function main() {
   )
   // 前端「代理设置」管理的全局代理池（优先于 config.yaml 的 upstream.proxies）
   const proxyStore = new ProxyStore(path.join(dataDir, 'proxies.json'))
+  const settingsStore = new SettingsStore(path.join(dataDir, 'settings.json'))
   if (proxyStore.list().length) {
     config.upstream.proxies = proxyStore.list()
   }
@@ -115,6 +117,7 @@ async function main() {
     webSessions,
     loginFlows,
     proxyStore,
+    settingsStore,
   })
 
   const shutdown = async (signal) => {

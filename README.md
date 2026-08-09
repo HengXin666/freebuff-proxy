@@ -191,6 +191,12 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 - `recentCount` 可能是小数：admit 时先预占 1 小时额度，提前释放后按实际占用时长结算（实测最小步进为 `0.1`）。因此复用热 session 比平均铺开账号更省额度。
 - 同样可通过 `GET /v1/freebuff/status` 或 `GET /v1/freebuff/accounts` 拿到每个账号的 `quota`。
 
+### 工具签名兼容
+
+控制台「总览 → 免费额度策略」提供「工具签名兼容」开关，默认开启。开启时，代理会在非空
+`tools` 列表末尾补充 Freebuff 官方工具名 `end_turn`，避免工具请求被识别为外来工具集；关闭时
+原样转发客户端工具列表。切换后立即生效并持久化到 `/data/settings.json`，无需重启。
+
 ---
 
 ## 代理支持
@@ -304,6 +310,7 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 | Agent 门禁 | `server.api_keys`（可选；非 loopback 必填） |
 | 上游 API / 登录 URL | `upstream.api_base` / `login_base` |
 | 出网代理 | 控制台「代理设置」→ `/data/proxies.json`（账号级 `credentials/<email>.json#proxy`、`upstream.proxy`、`HTTP(S)_PROXY` 仅兜底） |
+| 运行策略 | 控制台「免费额度策略」→ `/data/settings.json`（保存后立即生效） |
 | 监听地址 | `server.host` / `port`（`FREEBUFF_PROXY_HOST` / `FREEBUFF_PROXY_PORT` 覆盖） |
 | 管理员 | `ADMIN_USERNAME` / `ADMIN_PASSWORD`（或 `users.default_admin_*`） |
 | 并发上限 | `limits.max_concurrent_requests` |

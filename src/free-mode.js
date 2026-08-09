@@ -17,6 +17,41 @@ You help the user with coding and technical questions. Be concise and accurate.
 Follow the user's instructions in subsequent messages.
 `
 
+export const FREEBUFF_SIGNATURE_TOOL_NAME = 'end_turn'
+
+const FREEBUFF_SIGNATURE_TOOL = Object.freeze({
+  type: 'function',
+  function: Object.freeze({
+    name: FREEBUFF_SIGNATURE_TOOL_NAME,
+    description: 'Compatibility marker only. Do not call this function.',
+    parameters: Object.freeze({
+      type: 'object',
+      properties: Object.freeze({}),
+    }),
+  }),
+})
+
+/**
+ * Add one Freebuff-specific tool name to a foreign toolset so upstream keeps
+ * the requested model. Tool-free requests do not trigger that upstream check.
+ *
+ * @param {unknown} tools
+ * @param {boolean} enabled
+ * @returns {unknown}
+ */
+export function ensureFreebuffToolSignature(tools, enabled = true) {
+  if (!enabled || !Array.isArray(tools) || tools.length === 0) return tools
+  const alreadyPresent = tools.some(
+    (tool) =>
+      tool &&
+      typeof tool === 'object' &&
+      tool.function &&
+      typeof tool.function === 'object' &&
+      tool.function.name === FREEBUFF_SIGNATURE_TOOL_NAME,
+  )
+  return alreadyPresent ? tools : [...tools, FREEBUFF_SIGNATURE_TOOL]
+}
+
 /**
  * Ensure messages[] has a leading system message whose text starts with the
  * Freebuff free-mode opening. Does not strip or rewrite user content beyond

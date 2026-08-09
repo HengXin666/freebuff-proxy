@@ -246,12 +246,38 @@ async function renderOverview(view) {
 /* ---------------- proxy settings ---------------- */
 async function renderProxySettings(view) {
   let data = null
+  let settings = null
   try {
-    data = await api('/api/proxy')
+    ;[data, settings] = await Promise.all([
+      api('/api/proxy'),
+      api('/api/settings'),
+    ])
   } catch {
     data = { proxies: [], effective: [], accounts: [] }
+    settings = { freeToolSignatureEnabled: true }
   }
   state.proxies = data.proxies || []
+
+  const signatureEnabled = settings.freeToolSignatureEnabled !== false
+  const toggleAttrs = {
+    id: 'free-tool-signature',
+    type: 'checkbox',
+    class: 'switch-input',
+    onchange: saveFreeToolSignatureSetting,
+  }
+  if (signatureEnabled) toggleAttrs.checked = ''
+  if (state.me.role !== 'admin') toggleAttrs.disabled = ''
+  view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
+    el('div', {}, [
+      el('h3', { style: 'margin:0 0 2px' }, '免费额度策略'),
+      el('span', { class: 'muted' }, '工具签名兼容'),
+    ]),
+    el('label', { class: 'switch', for: 'free-tool-signature' }, [
+      el('input', toggleAttrs),
+      el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
+      el('span', { class: 'switch-status' }, signatureEnabled ? '已开启' : '已关闭'),
+    ]),
+  ]))
 
   const card = el('div', { class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
@@ -284,6 +310,24 @@ async function renderProxySettings(view) {
       : null,
   ])
   view.append(card)
+}
+
+async function saveFreeToolSignatureSetting(event) {
+  const input = event.currentTarget
+  const enabled = input.checked
+  input.disabled = true
+  try {
+    await api('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({ freeToolSignatureEnabled: enabled }),
+    })
+    toast(enabled ? '工具签名兼容已开启' : '工具签名兼容已关闭')
+    render()
+  } catch (err) {
+    input.checked = !enabled
+    input.disabled = false
+    toast(err.message, true)
+  }
 }
 
 async function saveProxyPool() {

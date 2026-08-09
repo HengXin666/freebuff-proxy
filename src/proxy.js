@@ -22,6 +22,7 @@ import {
 import { freebuffAuthHeaders } from './auth-store.js'
 import {
   ensureFreebuffSystemMessages,
+  ensureFreebuffToolSignature,
   normalizeReasoningFields,
 } from './free-mode.js'
 import { logger } from './util/log.js'
@@ -35,7 +36,7 @@ import { logger } from './util/log.js'
  * @param {import('./app-context.js').AccountRuntimes} ctx.runtimes
  */
 export function createProxyHandler(ctx) {
-  const { config, runtimes, userStore } = ctx
+  const { config, runtimes, userStore, settingsStore } = ctx
   if (!runtimes) {
     throw new Error('createProxyHandler requires ctx.runtimes (AccountRuntimes)')
   }
@@ -495,6 +496,12 @@ export function createProxyHandler(ctx) {
     // ("You are Buffy, the strategic coding assistant."). Without it the
     // upstream returns free_mode_cli_required.
     body.messages = ensureFreebuffSystemMessages(body.messages)
+    const freeToolSignatureEnabled =
+      settingsStore?.get().freeToolSignatureEnabled !== false
+    body.tools = ensureFreebuffToolSignature(
+      body.tools,
+      freeToolSignatureEnabled,
+    )
 
     const existingMeta =
       body.codebuff_metadata && typeof body.codebuff_metadata === 'object'
