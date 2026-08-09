@@ -38,6 +38,70 @@ const DEFAULT_COOLDOWN_MS = 60_000
 const BANNED_COOLDOWN_MS = DAY_MS
 
 /**
+ * 账号级串行化互斥锁（公平 FIFO + 有界等待）：
+ * 一个账号同一时间只允许一个 chat 在途——上游会话不稳定时并发容易
+ * 互相干扰/顶号（幽灵连接的诱因之一）。
+ * timeoutMs=0 表示无限等待；持锁者受 streamIdleTimeoutSec / 各 HTTP 阶段
+ * 超时约束，无限等待在实际运行中是有上界的。
+ */
+class ChatMutex {
+  constructor() {
+    this._held = false
+    /** @type {Array<{resolve: Function, reject: Function, timer: NodeJS.Timeout | null}>} */
+    this._queue = []
+  }
+
+  get busy() {
+    return this._held
+  }
+
+  /**
+   * @param {number} timeoutMs 0 = 无限等待
+   * @returns {Promise<() => void>} 释放函数
+   */
+  acquire(timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const entry = { resolve, reject, timer: null }
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        entry.timer = setTimeout(() => {
+          const idx = this._queue.indexOf(entry)
+          if (idx >= 0) this._queue.splice(idx, 1)
+          reject(
+            new UpstreamError('account busy; timed out waiting for chat slot', {
+              status: 429,
+              code: 'account_busy',
+            }),
+          )
+        }, timeoutMs)
+        if (entry.timer.unref) entry.timer.unref()
+      }
+      if (!this._held) {
+        this._held = true
+        if (entry.timer) clearTimeout(entry.timer)
+        resolve(this._makeRelease())
+      } else {
+        this._queue.push(entry)
+      }
+    })
+  }
+
+  _makeRelease() {
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const next = this._queue.shift()
+      if (next) {
+        if (next.timer) clearTimeout(next.timer)
+        next.resolve(this._makeRelease())
+      } else {
+        this._held = false
+      }
+    }
+  }
+}
+
+/**
  * Multi-account pool. 账号以「account key」标识：
  * key = Freebuff 用户 id（优先），无 id（历史数据）回落邮箱。
  * GitHub / Google 登录同一邮箱但 id 不同 → 两个独立账号，互不覆盖。
@@ -59,6 +123,8 @@ export class AccountRuntimes {
     this._rr = 0
     /** Serialize account selection + session admission on cold start. */
     this._acquireMutex = Promise.resolve()
+    /** 账号级 chat 串行化锁（key → ChatMutex），跨 runtime 重建保持同一账号互斥。 */
+    this.chatLocks = new Map()
     this._lastSuccessKey = null
     /** Per-account success counters (in-memory, for load-balance visibility). */
     this.stats = { total: 0, byKey: new Map() }
@@ -144,6 +210,30 @@ export class AccountRuntimes {
   /** 账号 key 列表（id 优先，历史账号为邮箱）。 */
   allKeys() {
     return listAccounts(this.dir).map((a) => a.key)
+  }
+
+  chatLockFor(key) {
+    let lock = this.chatLocks.get(key)
+    if (!lock) {
+      lock = new ChatMutex()
+      this.chatLocks.set(key, lock)
+    }
+    return lock
+  }
+
+  /** 账号当前是否正在处理 chat（锁被持有）。 */
+  isChatBusy(key) {
+    return this.chatLocks.get(key)?.busy || false
+  }
+
+  /**
+   * 获取账号的 chat 串行化锁。
+   * @param {string} key
+   * @param {number} timeoutMs 0 = 无限等待
+   * @returns {Promise<() => void>}
+   */
+  acquireChat(key, timeoutMs) {
+    return this.chatLockFor(key).acquire(timeoutMs)
   }
 
   _cooldownKey(key, model) {
@@ -261,6 +351,9 @@ export class AccountRuntimes {
       candidates.push({
         key,
         tier: usable ? 0 : live ? 2 : 1,
+        // 同一层级内优先空闲账号（一个账号一个并发；已有热 session 的账号
+        // 忙时仍允许排队，只是排在同层空闲账号之后）
+        busy: this.isChatBusy(key) ? 1 : 0,
         exhausted: exhausted ? 1 : 0,
         rotation: i,
       })
@@ -268,6 +361,7 @@ export class AccountRuntimes {
     candidates.sort(
       (a, b) =>
         a.tier - b.tier ||
+        a.busy - b.busy ||
         a.exhausted - b.exhausted ||
         a.rotation - b.rotation,
     )
@@ -429,6 +523,8 @@ export class AccountRuntimes {
         }
       } else {
         try {
+          // 同账号 gate 重试时，调用方（chat 流程）已持有该账号的串行化锁，
+          // 不会与另一个在途 chat 冲突，可直接 forceReadmit。
           const rt = this.get(opts.preferredKey)
           await rt.sessions.forceReadmit(model)
           this.clearCooldown(opts.preferredKey, model)

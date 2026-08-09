@@ -18,6 +18,7 @@ const dashboardDir = path.join(projectRootFromModule(), 'dashboard')
  * @param {import('./web/user-store.js').UserStore} deps.userStore
  * @param {import('./web/session-store.js').WebSessionStore} deps.webSessions
  * @param {import('./web/login-flows.js').LoginFlowManager} deps.loginFlows
+ * @param {() => void} [deps.restart] 前端「重启服务」回调（admin 触发）
  */
 export function startServer(deps) {
   const { config } = deps

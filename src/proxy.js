@@ -8,6 +8,7 @@ import {
   extractGateError,
   extractRateLimitError,
   isSessionRecoverableGate,
+  safeText,
   UpstreamError,
 } from './upstream/client.js'
 import { timingSafeEqual } from 'node:crypto'
@@ -275,215 +276,275 @@ export function createProxyHandler(ctx) {
     let pendingNoCooldown = false
     /** 同一账号连续 gate 失败计数：gate 已同号 re-admit 重试过一次仍失败 → 升级为换号。 */
     let sameAccountGateRetries = 0
+    /** 当前持锁账号 runtime（账号级串行化：一个账号同一时间只处理一个 chat）。 */
+    let heldRt = null
+    /** 当前持有的账号 chat 锁释放函数。 */
+    let releaseChat = null
 
-    // Session-first scheduling: reuse a live same-model slot (including for
-    // concurrent requests), and only admit on another account when needed.
-    // The upstream is stateless because clients send the full history.
+    /** 释放当前账号的串行化锁与在途标记（换号/请求结束时调用）。 */
+    function dropChatHold() {
+      if (releaseChat) {
+        releaseChat()
+        releaseChat = null
+      }
+      if (heldRt) {
+        heldRt.sessions.endRequest()
+        heldRt = null
+      }
+    }
+
+    /**
+     * 账号锁等待时长：
+     * - 热 session（同模型可直接复用）：等一个完整 idle 超时周期。上游卡死也会在
+     *   streamIdleTimeoutSec 后被掐断释放锁，所以热会话优先排队复用而不是新建 session。
+     * - 冷账号/换模型：只等固定窗口，超时即换下一个账号。
+     */
+    function chatWaitMs(rt) {
+      if (rt.sessions.isUsableForModel(upstreamModel)) {
+        return ((config.limits.streamIdleTimeoutSec || 120) * 1000) + 15_000
+      }
+      return config.limits.accountChatWaitMs || 60_000
+    }
+
+    // Session-first scheduling: reuse a live same-model slot, serialized per
+    // account (one account handles one chat at a time). The upstream is
+    // stateless because clients send the full history.
     // 故障转移：除了 4xx 客户端错误，任何上游失败（session/run/chat/网络超时）都
     // 冷却当前账号并继续轮询下一个，只有试完所有账号才把错误返回给用户。
-    while (attempt < maxAttempts) {
-      attempt++
-      try {
-        // Single reacquire path: first attempt acquires; retries use gate from previous failure.
-        const rt =
-          attempt === 1
-            ? await runtimes.acquireForModel(upstreamModel)
-            : await runtimes.reacquireAfterGate(upstreamModel, {
-                preferredKey: lastKey,
-                gateCode: pendingGateCode,
-                retryAfterMs: pendingRetryAfterMs,
-                switchAccount: pendingSwitchAccount,
-                noCooldown: pendingNoCooldown,
-              })
-        pendingGateCode = null
-        pendingRetryAfterMs = null
-        pendingSwitchAccount = false
-        pendingNoCooldown = false
-        if (lastKey && rt.key !== lastKey) {
-          // 已经换到不同账号 → 重置同账号 gate 计数
-          sameAccountGateRetries = 0
-        }
-        lastKey = rt.key
-
-        // Mark in-flight before startAgentRun so the background session GET
-        // cannot interfere between account selection and chat forwarding.
-        rt.sessions.beginRequest()
-        let result
-        let runId
+    try {
+      while (attempt < maxAttempts) {
+        attempt++
         try {
-          // 可观测性：响应头标明本次实际使用的账号。
-          res.setHeader('x-freebuff-proxy-account', rt.email)
-          res.setHeader('x-freebuff-proxy-account-id', rt.key)
+          // Single reacquire path: first attempt acquires; retries use gate from previous failure.
+          const rt =
+            attempt === 1
+              ? await runtimes.acquireForModel(upstreamModel)
+              : await runtimes.reacquireAfterGate(upstreamModel, {
+                  preferredKey: lastKey,
+                  gateCode: pendingGateCode,
+                  retryAfterMs: pendingRetryAfterMs,
+                  switchAccount: pendingSwitchAccount,
+                  noCooldown: pendingNoCooldown,
+                })
+          pendingGateCode = null
+          pendingRetryAfterMs = null
+          pendingSwitchAccount = false
+          pendingNoCooldown = false
+          if (lastKey && rt.key !== lastKey) {
+            // 已经换到不同账号 → 重置同账号 gate 计数，并释放上一账号的串行化锁
+            sameAccountGateRetries = 0
+            dropChatHold()
+          }
+          lastKey = rt.key
 
-          const snap = rt.sessions.getSnapshot()
-          if (!snap.live || !snap.instanceId) {
-            throw new UpstreamError(
-              'No live freebuff session after admit.',
-              { status: 503, code: 'no_session' },
+          // 账号级串行化：同一账号同一时间只处理一个 chat（热会话排队复用，
+          // 超时兜底换号；预算耗尽时无限等待——持锁者受 idle 超时约束必然释放）。
+          if (!heldRt) {
+            try {
+              releaseChat = await runtimes.acquireChat(rt.key, chatWaitMs(rt))
+            } catch (lockErr) {
+              if (lockErr?.code === 'account_busy' && attempt < maxAttempts) {
+                logger.warn('account busy; trying next account', {
+                  key: rt.key,
+                  email: rt.email,
+                  model: upstreamModel,
+                  attempt,
+                })
+                pendingGateCode = 'account_busy'
+                pendingSwitchAccount = true
+                pendingNoCooldown = true
+                continue
+              }
+              logger.warn('account busy; final fallback waiting for chat slot', {
+                key: rt.key,
+                email: rt.email,
+                model: upstreamModel,
+              })
+              releaseChat = await runtimes.acquireChat(rt.key, 0)
+            }
+            heldRt = rt
+            // 在途标记：锁内唯一请求；轮询 GET 会跳过该账号，避免干扰活跃会话。
+            heldRt.sessions.beginRequest()
+          }
+
+          let result
+          let runId
+          {
+            // 可观测性：响应头标明本次实际使用的账号。
+            res.setHeader('x-freebuff-proxy-account', rt.email)
+            res.setHeader('x-freebuff-proxy-account-id', rt.key)
+
+            const snap = rt.sessions.getSnapshot()
+            if (!snap.live || !snap.instanceId) {
+              throw new UpstreamError(
+                'No live freebuff session after admit.',
+                { status: 503, code: 'no_session' },
+              )
+            }
+
+            const agentId = agentIdForModel(upstreamModel)
+            runId = await rt.upstream.startAgentRun({ agentId })
+            logger.info('started agent run', {
+              runId,
+              agentId,
+              model: upstreamModel,
+              key: rt.key,
+              email: rt.email,
+            })
+
+            const forwardBody = buildForwardBody(
+              body,
+              upstreamModel,
+              snap.instanceId,
+              runId,
+            )
+            result = await forwardCompletions({
+              req,
+              res,
+              forwardBody,
+              stream,
+              upstream: rt.upstream,
+            })
+          }
+
+          // Best-effort close the run registry row
+          if (runId) {
+            void rt.upstream.finishAgentRun({
+              runId,
+              status: result.ok ? 'completed' : 'failed',
+              errorMessage: result.ok
+                ? undefined
+                : result.gateCode || 'completions_failed',
+            })
+          }
+
+          if (result.ok) return
+
+          if (result.recoverable && attempt < maxAttempts) {
+            if (result.switchAccount) {
+              sameAccountGateRetries = 0
+            } else {
+              // 同账号 gate 重试计数：连续两次 gate 失败 → 升级为换号
+              sameAccountGateRetries += 1
+            }
+            logger.warn('session error; will re-acquire', {
+              code: result.gateCode,
+              attempt,
+              budget: maxAttempts,
+              model: upstreamModel,
+              key: lastKey,
+              switchAccount:
+                result.switchAccount === true || sameAccountGateRetries >= 2,
+              noCooldown: result.noCooldown === true,
+              retryAfterMs: result.retryAfterMs ?? null,
+            })
+            pendingGateCode = result.gateCode
+            pendingRetryAfterMs = result.retryAfterMs ?? null
+            pendingSwitchAccount =
+              result.switchAccount === true || sameAccountGateRetries >= 2
+            pendingNoCooldown = result.noCooldown === true
+            continue
+          }
+
+          // 最后一次尝试也失败：把当前账号标记冷却（gate 瞬时问题 noCooldown 除外），
+          // 避免下一个请求立刻又撞上同一个故障账号。
+          if (result.switchAccount && !result.noCooldown) {
+            runtimes.markCooldown(
+              lastKey,
+              new UpstreamError(result.gateCode || 'upstream_error', {
+                code: result.gateCode || 'upstream_error',
+                status: result.status,
+                retryAfterMs: result.retryAfterMs ?? undefined,
+              }),
+              upstreamModel,
             )
           }
 
-          const agentId = agentIdForModel(upstreamModel)
-          runId = await rt.upstream.startAgentRun({ agentId })
-          logger.info('started agent run', {
-            runId,
-            agentId,
-            model: upstreamModel,
-            key: rt.key,
-            email: rt.email,
-          })
-
-          const forwardBody = buildForwardBody(
-            body,
-            upstreamModel,
-            snap.instanceId,
-            runId,
-          )
-          result = await forwardCompletions({
-            req,
-            res,
-            forwardBody,
-            stream,
-            upstream: rt.upstream,
-          })
-        } finally {
-          rt.sessions.endRequest()
-        }
-
-        // Best-effort close the run registry row
-        if (runId) {
-          void rt.upstream.finishAgentRun({
-            runId,
-            status: result.ok ? 'completed' : 'failed',
-            errorMessage: result.ok
-              ? undefined
-              : result.gateCode || 'completions_failed',
-          })
-        }
-
-        if (result.ok) return
-
-        if (result.recoverable && attempt < maxAttempts) {
-          if (result.switchAccount) {
-            sameAccountGateRetries = 0
-          } else {
-            // 同账号 gate 重试计数：连续两次 gate 失败 → 升级为换号
-            sameAccountGateRetries += 1
+          if (!result.wrote) {
+            await writeUpstreamError(
+              res,
+              result.status,
+              result.body,
+              result.headers,
+            )
           }
-          logger.warn('session error; will re-acquire', {
-            code: result.gateCode,
-            attempt,
-            budget: maxAttempts,
-            model: upstreamModel,
-            key: lastKey,
-            switchAccount:
-              result.switchAccount === true || sameAccountGateRetries >= 2,
-            noCooldown: result.noCooldown === true,
-            retryAfterMs: result.retryAfterMs ?? null,
-          })
-          pendingGateCode = result.gateCode
-          pendingRetryAfterMs = result.retryAfterMs ?? null
-          pendingSwitchAccount =
-            result.switchAccount === true || sameAccountGateRetries >= 2
-          pendingNoCooldown = result.noCooldown === true
-          continue
-        }
-
-        // 最后一次尝试也失败：把当前账号标记冷却（gate 瞬时问题 noCooldown 除外），
-        // 避免下一个请求立刻又撞上同一个故障账号。
-        if (result.switchAccount && !result.noCooldown) {
-          runtimes.markCooldown(
-            lastKey,
-            new UpstreamError(result.gateCode || 'upstream_error', {
-              code: result.gateCode || 'upstream_error',
-              status: result.status,
-              retryAfterMs: result.retryAfterMs ?? undefined,
-            }),
-            upstreamModel,
-          )
-        }
-
-        if (!result.wrote) {
-          await writeUpstreamError(
-            res,
-            result.status,
-            result.body,
-            result.headers,
-          )
-        }
-        return
-      } catch (err) {
-        if (err instanceof UpstreamError) {
-          if (isSessionRecoverableGate(err.code) && attempt < maxAttempts) {
-            logger.warn('recoverable session error; will re-acquire', {
-              code: err.code,
-              attempt,
-              key: lastKey,
-            })
-            pendingGateCode = err.code
-            pendingSwitchAccount = false
-            pendingNoCooldown = false
-            continue
+          return
+        } catch (err) {
+          if (err instanceof UpstreamError) {
+            if (isSessionRecoverableGate(err.code) && attempt < maxAttempts) {
+              logger.warn('recoverable session error; will re-acquire', {
+                code: err.code,
+                attempt,
+                key: lastKey,
+              })
+              pendingGateCode = err.code
+              pendingSwitchAccount = false
+              pendingNoCooldown = false
+              continue
+            }
+            // 其他上游错误（startAgentRun 失败 / no_session / admit 后异常等）：
+            // 只要还有重试预算，就冷却当前账号换下一个，而不是直接把错误甩给用户。
+            const isTerminal =
+              err.code === 'no_available_account' ||
+              err.code === 'model_required' ||
+              err.code === 'upstream_auth_missing'
+            if (
+              !isTerminal &&
+              attempt < maxAttempts &&
+              shouldSwitchAccountOnError(err.status, err.code)
+            ) {
+              logger.warn('upstream error; switching account', {
+                code: err.code,
+                status: err.status,
+                attempt,
+                key: lastKey,
+                model: upstreamModel,
+              })
+              pendingGateCode = err.code || `http_${err.status || 502}`
+              pendingRetryAfterMs = err.retryAfterMs ?? null
+              pendingSwitchAccount = true
+              pendingNoCooldown = false
+              continue
+            }
+            mapAndSendError(res, err)
+            return
           }
-          // 其他上游错误（startAgentRun 失败 / no_session / admit 后异常等）：
-          // 只要还有重试预算，就冷却当前账号换下一个，而不是直接把错误甩给用户。
-          const isTerminal =
-            err.code === 'no_available_account' ||
-            err.code === 'model_required' ||
-            err.code === 'upstream_auth_missing'
-          if (
-            !isTerminal &&
-            attempt < maxAttempts &&
-            shouldSwitchAccountOnError(err.status, err.code)
-          ) {
-            logger.warn('upstream error; switching account', {
-              code: err.code,
-              status: err.status,
+          // 非 UpstreamError：网络错误 / 上游超时（socket 断开、代理不可达等）。
+          // 只要还有重试预算就冷却当前账号换下一个；客户端是否已断开无法可靠区分
+          // （req.destroyed 在请求体读完后就为 true），多试一轮最多浪费一次上游调用。
+          if (attempt < maxAttempts) {
+            logger.warn('upstream network error; switching account', {
+              error: err instanceof Error ? err.message : String(err),
               attempt,
               key: lastKey,
               model: upstreamModel,
             })
-            pendingGateCode = err.code || `http_${err.status || 502}`
-            pendingRetryAfterMs = err.retryAfterMs ?? null
+            pendingGateCode = 'upstream_network_error'
+            pendingRetryAfterMs = null
             pendingSwitchAccount = true
             pendingNoCooldown = false
             continue
           }
-          mapAndSendError(res, err)
+          logger.error('chat completions failed', {
+            error: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+          })
+          if (!res.headersSent) {
+            sendJson(res, 500, {
+              error: {
+                message: err instanceof Error ? err.message : String(err),
+                type: 'proxy_error',
+              },
+            })
+          } else {
+            res.end()
+          }
           return
         }
-        // 非 UpstreamError：网络错误 / 上游超时（socket 断开、代理不可达等）。
-        // 只要还有重试预算就冷却当前账号换下一个；客户端是否已断开无法可靠区分
-        // （req.destroyed 在请求体读完后就为 true），多试一轮最多浪费一次上游调用。
-        if (attempt < maxAttempts) {
-          logger.warn('upstream network error; switching account', {
-            error: err instanceof Error ? err.message : String(err),
-            attempt,
-            key: lastKey,
-            model: upstreamModel,
-          })
-          pendingGateCode = 'upstream_network_error'
-          pendingRetryAfterMs = null
-          pendingSwitchAccount = true
-          pendingNoCooldown = false
-          continue
-        }
-        logger.error('chat completions failed', {
-          error: err instanceof Error ? err.message : String(err),
-          stack: err instanceof Error ? err.stack : undefined,
-        })
-        if (!res.headersSent) {
-          sendJson(res, 500, {
-            error: {
-              message: err instanceof Error ? err.message : String(err),
-              type: 'proxy_error',
-            },
-          })
-        } else {
-          res.end()
-        }
-        return
       }
+    } finally {
+      // 请求结束（成功/失败/预算耗尽）：释放账号串行化锁，恢复该账号轮询
+      dropChatHold()
     }
   }
 
@@ -552,7 +613,7 @@ export function createProxyHandler(ctx) {
     const respHeaders = filterResponseHeaders(upstreamRes.headers)
 
     if (!upstreamRes.ok) {
-      const text = await upstreamRes.text()
+      const text = await safeText(upstreamRes)
       let parsed = null
       try {
         parsed = text ? JSON.parse(text) : null
@@ -640,8 +701,14 @@ export function createProxyHandler(ctx) {
       res.end()
       return { ok: true, wrote: true }
     }
-    await pipeWebStreamToNode(upstreamRes.body, res, req)
-    return { ok: true, wrote: true }
+    try {
+      await pipeWebStreamToNode(upstreamRes.body, res, req, {
+        idleTimeoutMs: (config.limits.streamIdleTimeoutSec || 0) * 1000,
+      })
+      return { ok: true, wrote: true }
+    } catch (err) {
+      return handleStreamPipeFailure(err, req, res)
+    }
   }
 
   /**
@@ -696,10 +763,69 @@ export function createProxyHandler(ctx) {
       res.end()
       return
     }
-    await pipeWebStreamToNode(upstreamRes.body, res, req)
+    try {
+      await pipeWebStreamToNode(upstreamRes.body, res, req, {
+        idleTimeoutMs: (config.limits.streamIdleTimeoutSec || 0) * 1000,
+      })
+    } catch (err) {
+      // 上游卡死/客户端断开：透传没有换号语义，直接掐断连接（客户端自行重试）
+      if (!res.destroyed) {
+        try {
+          res.destroy()
+        } catch {
+          // ignore
+        }
+      }
+      logger.warn('passthrough stream failed', {
+        path: upstreamPath,
+        error: err instanceof Error ? err.message : String(err),
+        stalled: Boolean(err?.stalled),
+      })
+    }
   }
 
   return { handle }
+}
+
+/**
+ * 上游流式 body 透传失败的处理（幽灵连接/客户端断开）：
+ * - 上游卡死（idle 超时）→ 200 响应头已提交（writeHead 在 pipe 之前），无法整体
+ *   重试；直接销毁连接，让客户端感知截断后自行重试。不冷却账号（session 可能
+ *   正常，只是那次传输卡了），下一请求仍可复用该 session。
+ * - 客户端主动断开 → 静默终止：不重试、不冷却、不写错误。
+ */
+function handleStreamPipeFailure(err, req, res) {
+  const stalled = Boolean(err?.stalled || err?.code === 'stream_idle_timeout')
+  if (stalled) {
+    return {
+      ok: false,
+      wrote: true,
+      recoverable: false,
+      switchAccount: false,
+      gateCode: 'stream_idle_timeout',
+      status: 504,
+      body: {
+        error: {
+          message: 'upstream stream idle timeout',
+          type: 'upstream_error',
+          code: 'stream_idle_timeout',
+        },
+      },
+      headers: {},
+    }
+  }
+  // 客户端主动断开（pipe 内 res.destroy 是我们自己触发的，不能用来判断客户端状态）
+  if (req.destroyed || err?.name === 'AbortError') {
+    return {
+      ok: false,
+      wrote: true,
+      recoverable: false,
+      switchAccount: false,
+      gateCode: 'client_disconnected',
+      status: 499,
+    }
+  }
+  throw err
 }
 
 function methodHasBody(method) {
@@ -783,27 +909,100 @@ function reqToAbortSignal(req) {
   return controller.signal
 }
 
-async function pipeWebStreamToNode(webBody, nodeRes, nodeReq) {
+/**
+ * 把上游响应体透传给下游，带 idle 超时兜底：
+ * 上游流式响应“发了一半不再吐数据、也不断开”（幽灵连接）时，超过
+ * idleTimeoutMs 没有新数据块 → 取消上游读取、销毁下游连接，并抛出带
+ * stalled 标记的错误（err.wroteBytes 记录已下发的字节数），
+ * 由调用方决定换号重试还是直接断开。
+ */
+async function pipeWebStreamToNode(
+  webBody,
+  nodeRes,
+  nodeReq,
+  { idleTimeoutMs = 0 } = {},
+) {
   const reader = webBody.getReader()
+  let wroteBytes = 0
+  /** 确定性 stall 标志：不依赖 race 谁先拒绝（reader.cancel 的拒绝原因各实现不同）。 */
+  let stalled = false
+  let timer = null
+  let rejectStall = null
+  let stallPromise = null
+
+  const clearTimer = () => {
+    if (timer) clearTimeout(timer)
+    timer = null
+    rejectStall = null
+    stallPromise = null
+  }
+  const armTimer = () => {
+    clearTimer()
+    if (!(idleTimeoutMs > 0)) return
+    stallPromise = new Promise((_, reject) => {
+      rejectStall = reject
+    })
+    timer = setTimeout(() => {
+      stalled = true
+      reader.cancel().catch(() => {})
+      if (rejectStall) rejectStall(new StreamStallError(idleTimeoutMs))
+    }, idleTimeoutMs)
+    if (timer.unref) timer.unref()
+  }
+  const stallGuard = (promise) =>
+    Promise.race([promise, stallPromise].filter(Boolean))
+
   nodeReq.on('close', () => {
     reader.cancel().catch(() => {})
   })
+
+  armTimer()
   try {
     while (true) {
-      const { done, value } = await reader.read()
+      const { done, value } = await stallGuard(reader.read())
+      if (stalled) throw new StreamStallError(idleTimeoutMs)
       if (done) break
       if (value) {
-        const ok = nodeRes.write(Buffer.from(value))
-        if (!ok) await onceDrain(nodeRes)
+        clearTimer()
+        const buf = Buffer.from(value)
+        wroteBytes += buf.length
+        const ok = nodeRes.write(buf)
+        if (!ok) {
+          // 下游背压：等待 drain 也可能被客户端卡住，同样受 idle 超时约束
+          await stallGuard(onceDrain(nodeRes))
+          if (stalled) throw new StreamStallError(idleTimeoutMs)
+        }
+        armTimer()
       }
     }
+    clearTimer()
     nodeRes.end()
+    return { wroteBytes }
   } catch (err) {
+    clearTimer()
+    if (stalled && !(err instanceof StreamStallError)) {
+      err = new StreamStallError(idleTimeoutMs)
+    }
+    if (err && typeof err === 'object' && err.wroteBytes == null) {
+      err.wroteBytes = wroteBytes
+    }
     try {
       nodeRes.destroy(err instanceof Error ? err : undefined)
     } catch {
       // ignore
     }
+    throw err
+  }
+}
+
+class StreamStallError extends Error {
+  constructor(idleTimeoutMs) {
+    super(
+      `upstream stream idle for ${idleTimeoutMs}ms without data; terminating`,
+    )
+    this.name = 'StreamStallError'
+    this.code = 'stream_idle_timeout'
+    this.stalled = true
   }
 }
 

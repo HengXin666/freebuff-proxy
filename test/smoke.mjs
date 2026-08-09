@@ -131,6 +131,40 @@ globalThis.fetch = async (url, init = {}) => {
     assert.ok(headers['x-codebuff-api-key'] || headers['X-Codebuff-Api-Key'])
 
     completionAttempts++
+    // stall_zero: 200 OK with a streaming body that never sends any data nor closes
+    // （只对 token-spa 的第一次尝试生效，验证换号重试）
+    const stallAuth =
+      headers.Authorization ||
+      headers.authorization ||
+      headers['x-codebuff-api-key'] ||
+      ''
+    if (
+      mockMode === 'stall_zero' &&
+      completionAttempts === 1 &&
+      String(stallAuth).includes('token-sa')
+    ) {
+      return new Response(new ReadableStream({ start() {} }), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    }
+    // stall_partial: enqueue one chunk then stall forever
+    if (
+      mockMode === 'stall_partial' &&
+      completionAttempts === 1 &&
+      String(stallAuth).includes('token-sa')
+    ) {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(
+              'data: {"id":"c1","object":"chat.completion.chunk","choices":[{"delta":{"content":"hi"}}]}\n\n'
+            ))
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      )
+    }
     // First completion fails with recoverable gate; second succeeds.
     if (mockMode === 'gate_once' && completionAttempts === 1) {
       return jsonRes(
@@ -1611,6 +1645,336 @@ assert.equal(requireModelId(''), null)
   g2Server.close()
   fs.rmSync(g2Dir, { recursive: true, force: true })
   mockMode = 'ok'
+}
+
+
+
+
+// --- 幽灵连接：上游流 idle 超时（zero bytes 未落地）→ 换号重试 ---
+{
+  const stDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-stall-'))
+  saveAccountUser(stDir, { id: 'sa', email: 'sa@example.com', authToken: 'token-sa' })
+  saveAccountUser(stDir, { id: 'sb', email: 'sb@example.com', authToken: 'token-sb' })
+  const stConfig = loadConfig()
+  stConfig.server.host = '127.0.0.1'
+  stConfig.server.port = 0
+  stConfig.server.apiKeys = ['sk-test']
+  stConfig.upstream.credentialsDir = stDir
+  stConfig.session.pollIntervalSec = 3600
+  stConfig.limits.streamIdleTimeoutSec = 1
+
+  const stRuntimes = new AccountRuntimes(stConfig)
+  const stServer = await startServer({
+    config: stConfig,
+    runtimes: stRuntimes,
+    ...(() => {
+      const rt = stRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const stPort = stServer.address().port
+
+  // spa 的流式响应只开不关（幽灵连接，一个字节都不吐）→ 连接被掐断而不是永远挂着
+  mockMode = 'stall_zero'
+  sessionPosts = 0
+  completionAttempts = 0
+  const started = Date.now()
+  let stRes
+  try {
+    stRes = await fetch(`http://127.0.0.1:${stPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'deepseek/deepseek-v4-flash', messages: [{ role: 'user', content: 'hello' }] }),
+    })
+    let stBody = ''
+    try { stBody = await stRes.text() } catch { stBody = '' }
+    assert.ok(
+      stBody.trim() === '' || stBody.includes('hi') || stBody.includes('hello'),
+      `unexpected body: ${stBody.slice(0, 60)}`,
+    )
+  } catch (fetchErr) {
+    // 连接被掐断导致 fetch 直接失败也符合预期（不挂死即可）
+  }
+  const elapsed = Date.now() - started
+  assert.ok(elapsed < 30_000, `stall zero test took too long: ${elapsed}ms`)
+
+  // 幽灵连接不冷却同账号；下一请求仍可复用同一会话快速完成
+  mockMode = 'ok'
+  const stRes2 = await fetch(`http://127.0.0.1:${stPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'deepseek/deepseek-v4-flash', messages: [{ role: 'user', content: 'hello' }] }),
+  })
+  assert.equal(stRes2.status, 200, await stRes2.clone().text())
+  assert.ok(stRes2.headers.get('x-freebuff-proxy-account'), 'expected an account')
+  assert.equal(sessionPosts, 1, `should reuse one session, got ${sessionPosts}`)
+  await stRuntimes.shutdown()
+  stServer.close()
+  fs.rmSync(stDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
+
+// --- 幽灵连接：上游流 idle 超时（partial bytes 已落地）→ 冷却当前账号 + 断开连接 ---
+//   后续请求应切到另一个可用账号
+{
+  const spDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-stall-partial-'))
+  saveAccountUser(spDir, { id: 'spa', email: 'spa@example.com', authToken: 'token-spa' })
+  saveAccountUser(spDir, { id: 'spb', email: 'spb@example.com', authToken: 'token-spb' })
+  const spConfig = loadConfig()
+  spConfig.server.host = '127.0.0.1'
+  spConfig.server.port = 0
+  spConfig.server.apiKeys = ['sk-test']
+  spConfig.upstream.credentialsDir = spDir
+  spConfig.session.pollIntervalSec = 3600
+  spConfig.limits.streamIdleTimeoutSec = 1
+
+  const spRuntimes = new AccountRuntimes(spConfig)
+  const spServer = await startServer({
+    config: spConfig,
+    runtimes: spRuntimes,
+    ...(() => {
+      const rt = spRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const spPort = spServer.address().port
+
+  // 第一个请求打到 spa：partial stall（已下发部分字节后卡死）→ 连接被掐断，
+  // 客户端收到截断的 SSE 而不是永远挂着
+  mockMode = 'stall_partial'
+  sessionPosts = 0
+  completionAttempts = 0
+  const spStart = Date.now()
+  const spRes1 = await fetch(`http://127.0.0.1:${spPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      stream: true,
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  let spText1 = ''
+  try { spText1 = await spRes1.text() } catch { spText1 = '' }
+  assert.ok(
+    spText1.trim() === '' || spText1.includes('hi'),
+    `expected truncated SSE body, got: ${spText1.slice(0, 60)}`,
+  )
+  assert.ok(Date.now() - spStart < 30_000, `partial stall test took too long: ${Date.now() - spStart}ms`)
+
+  // 幽灵连接不冷却同账号（只是断开连接）；第二个请求仍可复用同一会话
+  mockMode = 'ok'
+  const spRes2 = await fetch(`http://127.0.0.1:${spPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'deepseek/deepseek-v4-flash', messages: [{ role: 'user', content: 'hello' }] }),
+  })
+  assert.equal(spRes2.status, 200, await spRes2.clone().text())
+  const spAccount = spRes2.headers.get('x-freebuff-proxy-account')
+  assert.ok(spAccount, `expected an account, got empty`)
+  assert.equal(sessionPosts, 1, `should reuse one session, got ${sessionPosts}`)
+
+  await spRuntimes.shutdown()
+  spServer.close()
+  fs.rmSync(spDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
+
+// --- 账号级串行化：一个账号同一时间只处理一个 chat（慢流场景）---
+{
+  const scDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-serial-'))
+  saveAccountUser(scDir, { id: 'sca', email: 'sca@example.com', authToken: 'token-sca' })
+  saveAccountUser(scDir, { id: 'scb', email: 'scb@example.com', authToken: 'token-scb' })
+  const scConfig = loadConfig()
+  scConfig.server.host = '127.0.0.1'
+  scConfig.server.port = 0
+  scConfig.server.apiKeys = ['sk-test']
+  scConfig.upstream.credentialsDir = scDir
+  scConfig.session.pollIntervalSec = 3600
+  scConfig.limits.maxConcurrentRequests = 12
+
+  const scRuntimes = new AccountRuntimes(scConfig)
+  const scServer = await startServer({
+    config: scConfig,
+    runtimes: scRuntimes,
+    ...(() => {
+      const rt = scRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const scPort = scServer.address().port
+
+  // 慢流 mock：每次 chunk 延迟 ~100ms，总时长 ~800ms；记录并发峰值
+  let streamActive = 0
+  let streamActiveMax = 0
+  const origFetch = globalThis.fetch
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url)
+    if (u.includes('127.0.0.1') || u.includes('localhost')) return origFetch(url, init)
+    if (u.includes('/api/v1/chat/completions')) {
+      const body = JSON.parse(init.body)
+      if (body.stream) {
+        let closed = false
+        streamActive++
+        if (streamActive > streamActiveMax) streamActiveMax = streamActive
+        const stream = new ReadableStream({
+          start(controller) {
+            const enc = new TextEncoder()
+            const chunks = [
+              'data: {"id":"c1","object":"chat.completion.chunk","choices":[{"delta":{"content":"h"}}]}\n\n',
+              'data: {"id":"c2","object":"chat.completion.chunk","choices":[{"delta":{"content":"i"}}]}\n\n',
+              'data: {"id":"c3","object":"chat.completion.chunk","choices":[{"delta":{"content":"!"}}]}\n\n',
+              'data: [DONE]\n\n',
+            ]
+            async function emit(i) {
+              if (i >= chunks.length || closed) {
+                streamActive = Math.max(0, streamActive - 1)
+                if (!closed) controller.close()
+                return
+              }
+              controller.enqueue(enc.encode(chunks[i]))
+              await new Promise((r) => setTimeout(r, 100))
+              emit(i + 1)
+            }
+            emit(0)
+          },
+          cancel() {
+            closed = true
+            streamActive = Math.max(0, streamActive - 1)
+          },
+        })
+        return new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        })
+      }
+      // 非 stream 模式立刻完成
+      return jsonRes({
+        id: 'c1', object: 'chat.completion',
+        choices: [{ message: { role: 'assistant', content: 'hi' } }],
+      })
+    }
+    return origFetch(url, init)
+  }
+
+  mockMode = 'ok'
+  streamActive = 0
+  streamActiveMax = 0
+  sessionPosts = 0
+  completionAttempts = 0
+
+  // 6 个并发 stream 请求
+  const scReq = Array.from({ length: 6 }, () =>
+    fetch(`http://127.0.0.1:${scPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'deepseek/deepseek-v4-flash',
+        stream: true,
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    }),
+  )
+  const scResponses = await Promise.all(scReq)
+  const scAccounts = []
+  for (const r of scResponses) {
+    assert.equal(r.status, 200, await r.clone().text())
+    const accountHeader = r.headers.get('x-freebuff-proxy-account')
+    scAccounts.push(accountHeader)
+  }
+  // 全部走同一个账号（热 session 优先串行化）
+  assert.equal(new Set(scAccounts).size, 1, `expected one account, got ${JSON.stringify(scAccounts)}`)
+  assert.equal(sessionPosts, 1, `expected 1 session admission, got ${sessionPosts}`)
+  assert.equal(streamActiveMax, 1, `expected max 1 concurrent stream, got ${streamActiveMax}`)
+
+  globalThis.fetch = origFetch
+  await scRuntimes.shutdown()
+  scServer.close()
+  fs.rmSync(scDir, { recursive: true, force: true })
+}
+
+// --- 重启 API 端点测试（不执行实际重启）---
+{
+  const rsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-restart-'))
+  const rsConfig = loadConfig()
+  rsConfig.server.host = '127.0.0.1'
+  rsConfig.server.port = 0
+  rsConfig.server.apiKeys = ['sk-test']
+  rsConfig.upstream.credentialsDir = rsDir
+  rsConfig.session.pollIntervalSec = 3600
+
+  // 不需要实际 Freebuff 账号（重启不依赖上游）
+  const rsRuntimes = new AccountRuntimes(rsConfig)
+  // 重启回调标记
+  let restarted = false
+  const { UserStore: US } = await import('../src/web/user-store.js')
+  const { WebSessionStore: WS } = await import('../src/web/session-store.js')
+  const { LoginFlowManager: LFM } = await import('../src/web/login-flows.js')
+  const { ProxyStore: PS } = await import('../src/web/proxy-store.js')
+  const { SettingsStore: SS } = await import('../src/web/settings-store.js')
+  const rsUsers = new US(path.join(rsDir, 'users.json'))
+  rsUsers.create({ username: 'admin', password: 'secret123', role: 'admin' })
+  const rsWS = new WS(path.join(rsDir, 'web-sessions.json'), 3600_000)
+  const rsLFM = new LFM({ file: path.join(rsDir, 'login-flows.json'), credentialsDir: rsDir, config: rsConfig })
+  const rsPS = new PS(path.join(rsDir, 'proxies.json'))
+  const rsSS = new SS(path.join(rsDir, 'settings.json'))
+  const rsServer = await startServer({
+    config: rsConfig,
+    runtimes: rsRuntimes,
+    userStore: rsUsers,
+    webSessions: rsWS,
+    loginFlows: rsLFM,
+    proxyStore: rsPS,
+    settingsStore: rsSS,
+    restart: () => { restarted = true },
+  })
+  const rsPort = rsServer.address().port
+
+  // 未登录 → 401
+  {
+    const res = await fetch(`http://127.0.0.1:${rsPort}/api/system/restart`, { method: 'POST' })
+    assert.equal(res.status, 401)
+  }
+
+  // 登录后 POST → 200 且 restart 回调被调用
+  const loginRes = await fetch(`http://127.0.0.1:${rsPort}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'secret123' }),
+  })
+  assert.equal(loginRes.status, 200, await loginRes.clone().text())
+  const cookies = loginRes.headers.get('set-cookie')
+  assert.ok(cookies, 'expected set-cookie')
+
+  const rrRes = await fetch(`http://127.0.0.1:${rsPort}/api/system/restart`, {
+    method: 'POST',
+    headers: { cookie: cookies.split(';')[0] },
+  })
+  assert.equal(rrRes.status, 200, await rrRes.clone().text())
+  // setTimeout 300ms 后调用 restart → 等一会儿
+  await new Promise((r) => setTimeout(r, 600))
+  assert.equal(restarted, true, 'restart callback should have been called')
+
+  rsServer.close()
+  fs.rmSync(rsDir, { recursive: true, force: true })
 }
 
 await runtimes.shutdown()

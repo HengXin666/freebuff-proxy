@@ -43,6 +43,11 @@ session:
 limits:
   max_concurrent_requests: 32
   upstream_timeout_sec: 600
+  # 上游流式响应 body idle 超时（秒）：上游发了响应头后长时间不再吐数据
+  # （幽灵连接）→ 主动掐断/换号，避免连接永远挂着。
+  stream_idle_timeout_sec: 120
+  # 账号级串行化：一个账号同一时间只处理一个 chat；超过该等待时长(ms)后换号
+  account_chat_wait_ms: 120000
   max_auto_retry_on_session_error: 1
 
 logging:

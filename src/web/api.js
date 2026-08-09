@@ -30,6 +30,7 @@ const SESSION_COOKIE = 'fb_session'
  *   runtimes: any,
  *   proxyStore?: import('./proxy-store.js').ProxyStore,
  *   settingsStore?: import('./settings-store.js').SettingsStore,
+ *   restart?: () => void,
  * }} deps
  */
 export function createWebApi(deps) {
@@ -114,6 +115,33 @@ export function createWebApi(deps) {
     // --- session required ---
     const user = requireUser(req, res)
     if (!user) return true
+
+    if (method === 'POST' && path === '/api/system/restart') {
+      // 前端「重启服务」：admin 专属，彻底解决幽灵连接等进程级问题。
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      if (typeof deps.restart !== 'function') {
+        sendJson(res, 501, { error: '当前进程未启用重启功能' })
+        return true
+      }
+      logger.info('system restart requested via web console', {
+        by: user.username,
+      })
+      sendJson(res, 200, { ok: true, message: '服务正在重启，约几秒后恢复' })
+      // 先让响应完整落地到客户端，再触发自重启
+      setTimeout(() => {
+        try {
+          deps.restart()
+        } catch (err) {
+          logger.error('system restart failed', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }, 300)
+      return true
+    }
 
     if (method === 'POST' && path === '/api/auth/logout') {
       const cookies = parseCookies(req.headers.cookie)

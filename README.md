@@ -167,7 +167,9 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
 **最少新建 session**的目标调度：
 
 - 优先复用同模型的活跃 session；`conversation_id` / `thread_id` / `user` / `client_id` 不参与选号；
-- 同一个 `instanceId` 支持多个并发 chat 流，并发请求也复用热 session；
+- **账号级串行化**：一个账号同一时间只处理一个 chat（上游会话不稳定时并发容易互相
+  干扰/顶号）。并发请求会按热 session 排队，而不是同时打在同一个 `instanceId` 上；
+  排队超时（`limits.account_chat_wait_ms`）后会换到下一个可用账号；
 - 冷启动的选号与 admit 已原子化：多个并发请求同时到达也只创建一个 session；
 - 没有同模型热 session 时，优先选择没有活跃 session 的账号，避免提前释放其他模型的可用时段；
 - 多个同层级账号只在平局时轮询；**冷却中的账号跳过**；
@@ -198,6 +200,29 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 原样转发客户端工具列表。切换后立即生效并持久化到 `/data/settings.json`，无需重启。
 
 ---
+
+## 幽灵连接治理与重启兜底
+
+### 上游卡死自动掐断（不再有幽灵连接）
+
+上游流式响应偶尔会出现"发了一半不再吐数据、也不断开连接"的卡死状态（幽灵连接），
+会让该连接永远挂着并拖住后续请求。代理现在对上游响应体做了 **idle 超时兜底**：
+
+- 收到响应头后，只要超过 `limits.stream_idle_timeout_sec`（默认 120 秒）没有新数据块，
+  立即取消上游读取并**断开下游连接**，让客户端感知截断后自行重试——而不是无限期挂着；
+- 断开后**不冷却该账号**（session 本身可能正常，只是那次传输卡了），下一个请求仍可
+  复用同一 session；账号级串行化保证同一个账号不会同时被多个卡死请求叠加占用；
+- 后台控制面请求（session / agent-runs 等）的 body 读取同样带超时兜底，杜绝任何路径挂死。
+
+### 前端一键「重启服务」（终极兜底）
+
+右上角管理员专属「**重启服务**」按钮：服务端收到请求后 spawn 自重启子进程并优雅退出
+（释放 session、关闭监听），子进程等待端口释放后无缝接管；Docker 场景下容器主进程退出
+也会触发 `restart: unless-stopped` 整容器重建，双保险。
+
+- 重启会中断所有在途连接约几秒，期间前端自动轮询 `/healthz`，恢复后提示并刷新；
+- Web 登录态持久化在 `/data/web-sessions.json`，重启后无需重新登录；
+- 权限：仅 admin 角色可见/可调（`POST /api/system/restart`），非登录请求返回 401。
 
 ## 代理支持
 
@@ -314,6 +339,8 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 | 监听地址 | `server.host` / `port`（`FREEBUFF_PROXY_HOST` / `FREEBUFF_PROXY_PORT` 覆盖） |
 | 管理员 | `ADMIN_USERNAME` / `ADMIN_PASSWORD`（或 `users.default_admin_*`） |
 | 并发上限 | `limits.max_concurrent_requests` |
+| 上游流 idle 超时（幽灵连接治理） | `limits.stream_idle_timeout_sec`（默认 120s） |
+| 账号级串行化排队上限 | `limits.account_chat_wait_ms`（默认 120000ms） |
 | Web 会话有效期 | `web.session_ttl_hours`（默认 168h） |
 | 配置文件路径 | 默认 `./config.yaml` 或 `FREEBUFF_PROXY_CONFIG` |
 | 数据目录 | 默认 `./data` 或 `FREEBUFF_PROXY_DATA_DIR`（Docker 固定 `/data`） |

@@ -99,12 +99,50 @@ async function doLogin() {
 }
 
 function renderHeader() {
+  const buttons = []
+  if (state.me.role === 'admin') {
+    buttons.push(el('button', {
+      class: 'danger',
+      onclick: restartService,
+      title: '彻底解决连接卡死等问题：重启整个代理服务（约几秒）',
+    }, '重启服务'))
+  }
+  buttons.push(el('button', { onclick: logout }, '退出'))
   return el('header', {}, [
     el('h1', {}, '⚡ Freebuff Proxy'),
     el('div', { class: 'spacer' }),
     el('span', { class: 'muted' }, `👤 ${state.me.username} ${state.me.role === 'admin' ? el('span', { class: 'badge admin' }, 'admin') : ''}`),
-    el('button', { onclick: logout }, '退出'),
+    ...buttons,
   ])
+}
+
+/**
+ * 前端「重启服务」兜底：请求 API → 服务端自重启 → 轮询 /healthz 直到恢复。
+ * 重启期间所有连接会短暂中断，恢复后 Web 登录态仍在（会话持久化在 /data）。
+ */
+async function restartService() {
+  if (!confirm('确定要重启服务吗？\n\n重启会中断当前所有连接约几秒，期间请勿发送新请求。')) return
+  try {
+    await api('/api/system/restart', { method: 'POST' })
+  } catch (err) {
+    toast(err.message, true)
+    return
+  }
+  toast('正在重启服务…')
+  const deadline = Date.now() + 90_000
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000))
+    try {
+      const res = await fetch('/healthz', { cache: 'no-store' })
+      if (res.ok) {
+        toast('服务已重启完成')
+        render()
+        return
+      }
+    } catch { /* 服务尚未就绪，继续等待 */ }
+  }
+  toast('等待重启超时，请刷新页面确认服务状态', true)
+  render()
 }
 
 function renderNav() {

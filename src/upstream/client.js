@@ -392,9 +392,25 @@ export function createUpstreamClient(config, token, opts = {}) {
   }
 }
 
-async function safeText(res) {
+/**
+ * 读取上游响应 body 文本，带超时兜底：上游发完响应头后 body 迟迟不来
+ * （幽灵连接）时取消 body 读取，避免控制面请求永远挂起。
+ * @param {Response} res
+ * @param {number} [timeoutMs]
+ */
+export async function safeText(res, timeoutMs = 10_000) {
+  if (!res || !res.body) return ''
   try {
-    return await res.text()
+    return await Promise.race([
+      res.text(),
+      new Promise((_, reject) => {
+        const timer = setTimeout(() => {
+          res.body?.cancel().catch(() => {})
+          reject(new Error('upstream body read timeout'))
+        }, timeoutMs)
+        if (timer.unref) timer.unref()
+      }),
+    ])
   } catch {
     return ''
   }

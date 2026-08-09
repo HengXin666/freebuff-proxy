@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import process from 'node:process'
 import path from 'node:path'
+import net from 'node:net'
+import { spawn } from 'node:child_process'
 import { loadConfig } from '../src/config.js'
 import { buildAppContext } from '../src/app-context.js'
 import { startServer } from '../src/server.js'
@@ -23,9 +25,41 @@ function parseConfigPath(argv) {
   return undefined
 }
 
+/**
+ * 自重启子进程的端口等待：旧进程退出需要一点时间，轮询直到端口可绑定，
+ * 避免子进程启动时撞上 EADDRINUSE（裸机/非 Docker 场景）。
+ */
+function waitForPortFree(host, port, timeoutMs) {
+  const target =
+    !host || host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host
+  const deadline = Date.now() + timeoutMs
+  return new Promise((resolve) => {
+    const tryOnce = () => {
+      const socket = net.connect({ host: target, port })
+      const done = () => {
+        socket.destroy()
+        if (Date.now() < deadline) setTimeout(tryOnce, 250)
+        else resolve()
+      }
+      socket.once('connect', done)
+      socket.once('error', () => resolve()) // 端口已释放 → 可以接管
+    }
+    tryOnce()
+  })
+}
+
 async function main() {
   const config = loadConfig(parseConfigPath(process.argv.slice(2)))
   configureLogger(config.logging)
+
+  // 自重启子进程：等旧进程释放端口后再走正常启动流程
+  if (process.env.FREEBUFF_PROXY_RESTART_CHILD === '1') {
+    logger.info('restart child starting; waiting for port to free', {
+      host: config.server.host,
+      port: config.server.port,
+    })
+    await waitForPortFree(config.server.host, config.server.port, 15_000)
+  }
 
   const dataDir = config.server.dataDir
   const userStore = new UserStore(path.join(dataDir, 'users.json'))
@@ -105,7 +139,53 @@ async function main() {
     config,
   })
 
-  const server = await startServer({
+  let server = null
+  const shutdown = async (signal) => {
+    logger.info('shutting down', { signal })
+    loginFlows.shutdown()
+    try {
+      await ctx.runtimes.shutdown()
+    } catch (err) {
+      logger.warn('session shutdown error', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+    if (server) {
+      server.close(() => process.exit(0))
+      // 重启场景下立即断开存量连接，让端口尽快释放给子进程
+      server.closeAllConnections?.()
+    } else {
+      process.exit(0)
+    }
+    setTimeout(() => process.exit(0), 3000).unref()
+  }
+
+  /**
+   * 前端「重启服务」：spawn 一个 detached 子进程（等待端口释放后接管），
+   * 然后当前进程优雅退出。Docker 场景下容器主进程退出会触发 restart 策略
+   * 整容器重建；裸机场景由子进程无缝接管。
+   */
+  function scheduleRestart() {
+    const child = spawn(
+      process.execPath,
+      process.argv.slice(1),
+      {
+        detached: true,
+        stdio: 'inherit',
+        env: { ...process.env, FREEBUFF_PROXY_RESTART_CHILD: '1' },
+      },
+    )
+    child.unref()
+    logger.info('restart scheduled via web console', { pid: child.pid })
+    shutdown('restart').catch((err) => {
+      logger.error('graceful shutdown during restart failed', {
+        error: err instanceof Error ? err.stack || err.message : String(err),
+      })
+      process.exit(1)
+    })
+  }
+
+  server = await startServer({
     config,
     runtimes: ctx.runtimes,
     authToken: ctx.authToken,
@@ -118,21 +198,9 @@ async function main() {
     loginFlows,
     proxyStore,
     settingsStore,
+    restart: scheduleRestart,
   })
 
-  const shutdown = async (signal) => {
-    logger.info('shutting down', { signal })
-    loginFlows.shutdown()
-    try {
-      await ctx.runtimes.shutdown()
-    } catch (err) {
-      logger.warn('session shutdown error', {
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
-    server.close(() => process.exit(0))
-    setTimeout(() => process.exit(0), 3000).unref()
-  }
   process.on('SIGINT', () => shutdown('SIGINT'))
   process.on('SIGTERM', () => shutdown('SIGTERM'))
 }

@@ -11,7 +11,7 @@ import { parse as parseYaml } from 'yaml'
  * @property {{cookieSecure: boolean, sessionTtlHours: number}} web
  * @property {{defaultAdminUsername: string, defaultAdminPassword: string | null}} users
  * @property {{releaseOnShutdown: boolean, reAdmitOnExpire: boolean, pollIntervalSec: number, admitTimeoutMs: number}} session
- * @property {{maxConcurrentRequests: number, upstreamTimeoutSec: number, maxAutoRetryOnSessionError: number}} limits
+ * @property {{maxConcurrentRequests: number, upstreamTimeoutSec: number, streamIdleTimeoutSec: number, accountChatWaitMs: number, maxAutoRetryOnSessionError: number}} limits
  * @property {{level: 'debug' | 'info' | 'warn' | 'error'}} logging
  */
 
@@ -53,6 +53,12 @@ const DEFAULTS = {
   limits: {
     maxConcurrentRequests: 32,
     upstreamTimeoutSec: 600,
+    // 上游流式响应 body 的 idle 超时（秒）：收到响应头后若长时间没有新数据块，
+    // 视为上游卡死（幽灵连接），主动掐断/换号，避免连接永远挂着。
+    streamIdleTimeoutSec: 120,
+    // 账号级串行化：同一账号同一时间只处理一个 chat。热 session 排队等待的
+    // 上限（毫秒，约等于一个完整 idle 超时周期）；超时后换下一个可用账号。
+    accountChatWaitMs: 120_000,
     maxAutoRetryOnSessionError: 1,
   },
   logging: {
@@ -77,6 +83,8 @@ const KEY_MAP = {
   admit_timeout_ms: 'admitTimeoutMs',
   max_concurrent_requests: 'maxConcurrentRequests',
   upstream_timeout_sec: 'upstreamTimeoutSec',
+  stream_idle_timeout_sec: 'streamIdleTimeoutSec',
+  account_chat_wait_ms: 'accountChatWaitMs',
   max_auto_retry_on_session_error: 'maxAutoRetryOnSessionError',
 }
 
