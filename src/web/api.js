@@ -116,6 +116,26 @@ export function createWebApi(deps) {
     const user = requireUser(req, res)
     if (!user) return true
 
+    if (method === 'POST' && path === '/api/system/reconnect') {
+      // 前端「全部断开重连」：比重启更轻量。释放所有账号 session、清理死任务，
+      // 下一个请求自动 admit 全新 session；进程不重启。
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      logger.info('reconnect-all requested via web console', {
+        by: user.username,
+      })
+      const accounts = await runtimes.reconnectAll()
+      sendJson(res, 200, {
+        ok: true,
+        message:
+          '已断开全部 session，下次请求将自动重建；正在传输的连接可能被中断',
+        accounts,
+      })
+      return true
+    }
+
     if (method === 'POST' && path === '/api/system/restart') {
       // 前端「重启服务」：admin 专属，彻底解决幽灵连接等进程级问题。
       if (user.role !== 'admin') {
@@ -488,6 +508,7 @@ export function createWebApi(deps) {
       sendJson(res, 200, {
         freeToolSignatureEnabled:
           settingsStore?.get().freeToolSignatureEnabled !== false,
+        accountMaxConcurrency: settingsStore?.get().accountMaxConcurrency ?? 1,
       })
       return true
     }
@@ -508,15 +529,36 @@ export function createWebApi(deps) {
         sendJson(res, 400, { error: '无效的 JSON' })
         return true
       }
-      if (typeof body.freeToolSignatureEnabled !== 'boolean') {
+      const patch = {}
+      if (body.freeToolSignatureEnabled !== undefined) {
+        if (typeof body.freeToolSignatureEnabled !== 'boolean') {
+          sendJson(res, 400, {
+            error: 'freeToolSignatureEnabled 必须是布尔值',
+          })
+          return true
+        }
+        patch.freeToolSignatureEnabled = body.freeToolSignatureEnabled
+      }
+      if (body.accountMaxConcurrency !== undefined) {
+        if (
+          !Number.isInteger(body.accountMaxConcurrency) ||
+          body.accountMaxConcurrency < 1 ||
+          body.accountMaxConcurrency > 16
+        ) {
+          sendJson(res, 400, {
+            error: 'accountMaxConcurrency 必须是 1..16 的整数',
+          })
+          return true
+        }
+        patch.accountMaxConcurrency = body.accountMaxConcurrency
+      }
+      if (!Object.keys(patch).length) {
         sendJson(res, 400, {
-          error: 'freeToolSignatureEnabled 必须是布尔值',
+          error: '没有可保存的设置项',
         })
         return true
       }
-      const settings = settingsStore.save({
-        freeToolSignatureEnabled: body.freeToolSignatureEnabled,
-      })
+      const settings = settingsStore.save(patch)
       logger.info('runtime settings updated via web', settings)
       sendJson(res, 200, { ok: true, ...settings })
       return true

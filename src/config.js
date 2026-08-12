@@ -10,8 +10,8 @@ import { parse as parseYaml } from 'yaml'
  * @property {{apiBase: string, loginBase: string, credentialsDir: string | null, proxy: string | null, proxies: string[]}} upstream
  * @property {{cookieSecure: boolean, sessionTtlHours: number}} web
  * @property {{defaultAdminUsername: string, defaultAdminPassword: string | null}} users
- * @property {{releaseOnShutdown: boolean, reAdmitOnExpire: boolean, pollIntervalSec: number, admitTimeoutMs: number}} session
- * @property {{maxConcurrentRequests: number, upstreamTimeoutSec: number, streamIdleTimeoutSec: number, accountChatWaitMs: number, maxAutoRetryOnSessionError: number}} limits
+ * @property {{releaseOnShutdown: boolean, reAdmitOnExpire: boolean, reAdmitLeadSec: number, pollIntervalSec: number, admitTimeoutMs: number}} session
+ * @property {{maxConcurrentRequests: number, accountMaxConcurrency: number, upstreamTimeoutSec: number, streamIdleTimeoutSec: number, accountChatWaitMs: number, maxAutoRetryOnSessionError: number}} limits
  * @property {{level: 'debug' | 'info' | 'warn' | 'error'}} logging
  */
 
@@ -47,11 +47,17 @@ const DEFAULTS = {
   session: {
     releaseOnShutdown: true,
     reAdmitOnExpire: true,
+    // 会话剩余时间低于该值(秒)时不再承接新请求，提前 re-admit 换新会话，
+    // 避免请求发到马上过期的会话上、中途卡住（默认 60s）。
+    reAdmitLeadSec: 60,
     pollIntervalSec: 30,
     admitTimeoutMs: 30_000,
   },
   limits: {
     maxConcurrentRequests: 32,
+    // 每个账号同一时间最多可转发的 SSE 响应流数（账号并发）。默认 1:1
+    // （一个账号一个并发）；可在控制台「负载均衡」实时调整，立即生效。
+    accountMaxConcurrency: 1,
     upstreamTimeoutSec: 600,
     // 上游流式响应 body 的 idle 超时（秒）：收到响应头后若长时间没有新数据块，
     // 视为上游卡死（幽灵连接），主动掐断/换号，避免连接永远挂着。
@@ -79,9 +85,11 @@ const KEY_MAP = {
   default_admin_password: 'defaultAdminPassword',
   release_on_shutdown: 'releaseOnShutdown',
   re_admit_on_expire: 'reAdmitOnExpire',
+  re_admit_lead_sec: 'reAdmitLeadSec',
   poll_interval_sec: 'pollIntervalSec',
   admit_timeout_ms: 'admitTimeoutMs',
   max_concurrent_requests: 'maxConcurrentRequests',
+  account_max_concurrency: 'accountMaxConcurrency',
   upstream_timeout_sec: 'upstreamTimeoutSec',
   stream_idle_timeout_sec: 'streamIdleTimeoutSec',
   account_chat_wait_ms: 'accountChatWaitMs',

@@ -113,7 +113,10 @@ async function main() {
     return
   }
 
-  const ctx = buildAppContext(config)
+  const ctx = buildAppContext(config, {
+    // 账号并发上限来自控制台设置（/data/settings.json，默认 1:1），实时生效
+    getAccountConcurrency: () => settingsStore.get().accountMaxConcurrency,
+  })
   if (ctx.authEmail) {
     logger.info('upstream auth ready', {
       account: ctx.authEmail,
