@@ -107,3 +107,5 @@ docker build .
 - [x] 多账号池 + **热 session 优先调度**（无 conversation 粘性；同模型串行/并发均复用；冷启动只 admit 一次；新模型优先空闲账号）+ Flash/MiMo 实时每日配额 + **全链路故障转移**（chat/run/网络错误都换号，试完所有账号才报错；capacity_deferred 不冷却；gate 同号重试后升级换号）
 - [x] 前端「代理设置」全局池管理：多行代理、保存立即生效、持久化 `/data/proxies.json`、重启自动加载、无需重启
 - [x] 全局代理池（config 层兜底）+ 代理测试（出口 IP/国家/延迟/codebuff 状态、底层原因码）+ 账号级 proxy 仅内部字段（无 UI）
+- [x] **账号并发上限可配**（控制台「负载均衡设置」，默认 1:1；1..16，保存立即生效）+ 总览每账号「并发(在途/上限)」监控 + **会话临近过期提前 re-admit**（`session.re_admit_lead_sec`，默认 60s）平滑切换，流 idle 超时按会话剩余时间收敛
+- [x] 前端「**全部断开重连**」（admin，`POST /api/system/reconnect`）：释放全部 session + 重置并发信号量，比重启更轻量；下个请求自动 re-admit

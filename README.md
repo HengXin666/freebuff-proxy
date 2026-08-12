@@ -167,9 +167,15 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
 **最少新建 session**的目标调度：
 
 - 优先复用同模型的活跃 session；`conversation_id` / `thread_id` / `user` / `client_id` 不参与选号；
-- **账号级串行化**：一个账号同一时间只处理一个 chat（上游会话不稳定时并发容易互相
-  干扰/顶号）。并发请求会按热 session 排队，而不是同时打在同一个 `instanceId` 上；
-  排队超时（`limits.account_chat_wait_ms`）后会换到下一个可用账号；
+- **账号并发上限可配**：默认 1:1（一个账号同一时间只转发一条 SSE 流）。可在控制台
+  「负载均衡设置」调整（1..16），实测同一 `instanceId` 支持多条并发 chat 流，调大后
+  一个账号可同时转发多条响应；达到上限的请求按热 session 排队，超时
+  （`limits.account_chat_wait_ms`）后换到下一个可用账号。总览里每个账号显示
+  `并发(在途/上限)` 实时监控；
+- **会话临近过期提前切换**：剩余时间低于 `session.re_admit_lead_sec`（默认 60s）的
+  会话不再承接新请求，先释放再 re-admit 换全新会话——避免请求发到马上过期的会话上、
+  中途卡住（响应明显变慢/挂起）；流式 idle 超时也会按会话剩余时间收敛，过期后上游
+  若不再吐数据会更快被掐断；
 - 冷启动的选号与 admit 已原子化：多个并发请求同时到达也只创建一个 session；
 - 没有同模型热 session 时，优先选择没有活跃 session 的账号，避免提前释放其他模型的可用时段；
 - 多个同层级账号只在平局时轮询；**冷却中的账号跳过**；
@@ -213,6 +219,16 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 - 断开后**不冷却该账号**（session 本身可能正常，只是那次传输卡了），下一个请求仍可
   复用同一 session；账号级串行化保证同一个账号不会同时被多个卡死请求叠加占用；
 - 后台控制面请求（session / agent-runs 等）的 body 读取同样带超时兜底，杜绝任何路径挂死。
+
+### 前端一键「全部断开重连」（轻量兜底）
+
+右上角管理员专属「**全部断开重连**」按钮（`POST /api/system/reconnect`）：**比重启更轻量**，
+进程不重启，仅释放全部账号的 session（上游 DELETE）并重置账号并发信号量（清空在途计数、
+放行排队等待者）。用于清理死任务/幽灵连接等异常状态：
+
+- 正在传输的 SSE 可能被中断，但**下一个请求会自动 re-admit 全新 session**，无需任何手动操作；
+- Web 登录态、账号、代理池等全部保持不变；
+- 权限：仅 admin 角色可调（非登录返回 401，非 admin 返回 403）。
 
 ### 前端一键「重启服务」（终极兜底）
 
@@ -339,6 +355,8 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 | 监听地址 | `server.host` / `port`（`FREEBUFF_PROXY_HOST` / `FREEBUFF_PROXY_PORT` 覆盖） |
 | 管理员 | `ADMIN_USERNAME` / `ADMIN_PASSWORD`（或 `users.default_admin_*`） |
 | 并发上限 | `limits.max_concurrent_requests` |
+| 每账号并发（SSE 流数） | `limits.account_max_concurrency`（默认 1，控制台「负载均衡设置」实时调整） |
+| 会话过期提前切换 | `session.re_admit_lead_sec`（默认 60s） |
 | 上游流 idle 超时（幽灵连接治理） | `limits.stream_idle_timeout_sec`（默认 120s） |
 | 账号级串行化排队上限 | `limits.account_chat_wait_ms`（默认 120000ms） |
 | Web 会话有效期 | `web.session_ttl_hours`（默认 168h） |

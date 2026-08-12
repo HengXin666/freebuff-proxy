@@ -404,6 +404,8 @@ export function createProxyHandler(ctx) {
               forwardBody,
               stream,
               upstream: rt.upstream,
+              // 会话剩余时间：用于把流 idle 超时收敛到会话过期附近，过期即掐
+              sessionRemainingMs: snap.remainingMs,
             })
           }
 
@@ -582,12 +584,28 @@ export function createProxyHandler(ctx) {
     return body
   }
 
+  /**
+   * 流式 idle 超时：默认取 limits.streamIdleTimeoutSec；若会话剩余时间已知，
+   * 在其基础上加一个 lead 宽限并封顶，会话过期后上游若不再吐数据（幽灵卡死）
+   * 会更快被掐断，避免"会话快过期时响应卡住"。带下限 30s，避免误伤慢首包。
+   */
+  function effectiveStreamIdleMs(sessionRemainingMs) {
+    const base = (config.limits.streamIdleTimeoutSec || 0) * 1000
+    if (!(base > 0) || !Number.isFinite(sessionRemainingMs)) return base
+    const lead = 20_000
+    return Math.min(
+      base,
+      Math.max(30_000, Math.max(0, sessionRemainingMs) + lead),
+    )
+  }
+
   async function forwardCompletions({
     req,
     res,
     forwardBody,
     stream,
     upstream,
+    sessionRemainingMs,
   }) {
     const headers = {
       ...filterRequestHeaders(req.headers),
@@ -703,7 +721,7 @@ export function createProxyHandler(ctx) {
     }
     try {
       await pipeWebStreamToNode(upstreamRes.body, res, req, {
-        idleTimeoutMs: (config.limits.streamIdleTimeoutSec || 0) * 1000,
+        idleTimeoutMs: effectiveStreamIdleMs(sessionRemainingMs),
       })
       return { ok: true, wrote: true }
     } catch (err) {

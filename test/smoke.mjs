@@ -29,7 +29,10 @@ let calls = []
 /** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion' | 'err_500_a' | 'capacity_once' | 'capacity_all' | 'run_500_a' | 'network_err_a' | 'gate_twice_a'} */
 let mockMode = 'ok'
 let sessionPosts = 0
+let sessionDeletes = 0
 let completionAttempts = 0
+/** 会话有效期（毫秒）：近过期/重连测试用 */
+let sessionExpiryMs = 3600_000
 
 globalThis.fetch = async (url, init = {}) => {
   const u = String(url)
@@ -80,8 +83,8 @@ globalThis.fetch = async (url, init = {}) => {
       instanceId: `inst-${sessionPosts}`,
       model,
       admittedAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
-      remainingMs: 3600_000,
+      expiresAt: new Date(Date.now() + sessionExpiryMs).toISOString(),
+      remainingMs: sessionExpiryMs,
       accessTier: 'full',
       rateLimit,
       rateLimitsByModel: { [model]: rateLimit },
@@ -91,6 +94,7 @@ globalThis.fetch = async (url, init = {}) => {
     return jsonRes({ status: 'none', accessTier: 'full' })
   }
   if (u.includes('/api/v1/freebuff/session') && method === 'DELETE') {
+    sessionDeletes++
     return jsonRes({ status: 'none' })
   }
   if (u.includes('/api/v1/agent-runs') && method === 'POST') {
@@ -969,6 +973,42 @@ assert.equal(requireModelId(''), null)
         .freeToolSignatureEnabled,
       false,
     )
+  }
+  // 运行设置：账号并发上限（负载均衡）——默认 1，校验非法值，保存后持久化
+  {
+    const getDefault = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+      headers: { cookie },
+    })
+    assert.equal((await getDefault.json()).accountMaxConcurrency, 1)
+
+    for (const bad of [0, -1, 17, 1.5, 'x']) {
+      const res = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ accountMaxConcurrency: bad }),
+      })
+      assert.equal(res.status, 400, `accountMaxConcurrency=${bad} should be rejected`)
+    }
+
+    const save = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ accountMaxConcurrency: 4 }),
+    })
+    assert.equal(save.status, 200)
+    assert.equal((await save.json()).accountMaxConcurrency, 4)
+    assert.equal(settingsStore.get().accountMaxConcurrency, 4)
+    assert.equal(
+      new SettingsStore(path.join(wDir, 'settings.json')).get()
+        .accountMaxConcurrency,
+      4,
+    )
+    // 恢复默认，避免影响其他用例
+    await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ accountMaxConcurrency: 1 }),
+    })
   }
   // 代理管理 API：GET 空池 → POST 保存（持久化 + 立即生效）→ GET 返回
   {
@@ -1909,6 +1949,328 @@ assert.equal(requireModelId(''), null)
   await scRuntimes.shutdown()
   scServer.close()
   fs.rmSync(scDir, { recursive: true, force: true })
+}
+
+// --- 账号并发上限：一个账号可同时转发 N 条 SSE 流（默认 1:1，可调大）---
+{
+  const ccDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-cc-'))
+  saveAccountUser(ccDir, { id: 'cca', email: 'cca@example.com', authToken: 'token-cca' })
+  saveAccountUser(ccDir, { id: 'ccb', email: 'ccb@example.com', authToken: 'token-ccb' })
+  const ccConfig = loadConfig()
+  ccConfig.server.host = '127.0.0.1'
+  ccConfig.server.port = 0
+  ccConfig.server.apiKeys = ['sk-test']
+  ccConfig.upstream.credentialsDir = ccDir
+  ccConfig.session.pollIntervalSec = 3600
+  ccConfig.limits.maxConcurrentRequests = 12
+  // 模拟控制台把每账号并发上限调到 2
+  const ccRuntimes = new AccountRuntimes(ccConfig, {
+    getAccountConcurrency: () => 2,
+  })
+  const ccServer = await startServer({
+    config: ccConfig,
+    runtimes: ccRuntimes,
+    ...(() => {
+      const rt = ccRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const ccPort = ccServer.address().port
+
+  let streamActive = 0
+  let streamActiveMax = 0
+  const origFetch = globalThis.fetch
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url)
+    if (u.includes('127.0.0.1') || u.includes('localhost')) return origFetch(url, init)
+    if (u.includes('/api/v1/chat/completions')) {
+      const body = JSON.parse(init.body)
+      if (body.stream) {
+        let closed = false
+        streamActive++
+        if (streamActive > streamActiveMax) streamActiveMax = streamActive
+        const stream = new ReadableStream({
+          start(controller) {
+            const enc = new TextEncoder()
+            const chunks = ['h', 'i', '!', '\n']
+            async function emit(i) {
+              if (i >= chunks.length || closed) {
+                streamActive = Math.max(0, streamActive - 1)
+                if (!closed) controller.close()
+                return
+              }
+              controller.enqueue(enc.encode(`data: {"x":"${chunks[i]}"}\n\n`))
+              await new Promise((r) => setTimeout(r, 100))
+              emit(i + 1)
+            }
+            emit(0)
+          },
+          cancel() {
+            closed = true
+            streamActive = Math.max(0, streamActive - 1)
+          },
+        })
+        return new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        })
+      }
+      return jsonRes({
+        id: 'c1', object: 'chat.completion',
+        choices: [{ message: { role: 'assistant', content: 'hi' } }],
+      })
+    }
+    return origFetch(url, init)
+  }
+
+  mockMode = 'ok'
+  sessionPosts = 0
+  completionAttempts = 0
+  const ccReqs = Array.from({ length: 6 }, () =>
+    fetch(`http://127.0.0.1:${ccPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'deepseek/deepseek-v4-flash',
+        stream: true,
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    }),
+  )
+  const ccResponses = await Promise.all(ccReqs)
+  const ccAccounts = []
+  for (const r of ccResponses) {
+    assert.equal(r.status, 200, await r.clone().text())
+    ccAccounts.push(r.headers.get('x-freebuff-proxy-account'))
+  }
+  // 并发上限 2：同一账号同一 session 同时最多 2 条流；全部 200、只 admit 一次
+  assert.equal(new Set(ccAccounts).size, 1, `expected one account, got ${JSON.stringify(ccAccounts)}`)
+  assert.equal(sessionPosts, 1, `expected 1 session admission, got ${sessionPosts}`)
+  assert.equal(streamActiveMax, 2, `expected max 2 concurrent streams, got ${streamActiveMax}`)
+  // 监控字段：账号行带 在途/上限
+  const ccRow = ccRuntimes.list().find((x) => x.email === 'cca@example.com')
+  assert.equal(ccRow.concurrency, 2)
+  assert.ok(Number.isInteger(ccRow.inFlight) && ccRow.inFlight <= 2)
+
+  globalThis.fetch = origFetch
+  await ccRuntimes.shutdown()
+  ccServer.close()
+  fs.rmSync(ccDir, { recursive: true, force: true })
+}
+
+// --- 会话临近过期：提前 re-admit 平滑切换（不再把新请求发到马上过期的会话）---
+{
+  const expDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-expire-'))
+  saveAccountUser(expDir, { id: 'ea', email: 'ea@example.com', authToken: 'token-ea' })
+  saveAccountUser(expDir, { id: 'eb', email: 'eb@example.com', authToken: 'token-eb' })
+  const expConfig = loadConfig()
+  expConfig.server.host = '127.0.0.1'
+  expConfig.server.port = 0
+  expConfig.server.apiKeys = ['sk-test']
+  expConfig.upstream.credentialsDir = expDir
+  expConfig.session.pollIntervalSec = 3600
+  const expRuntimes = new AccountRuntimes(expConfig)
+  const expServer = await startServer({
+    config: expConfig,
+    runtimes: expRuntimes,
+    ...(() => {
+      const rt = expRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const expPort = expServer.address().port
+  const expChat = () => fetch(`http://127.0.0.1:${expPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'deepseek/deepseek-v4-flash', messages: [{ role: 'user', content: 'hello' }] }),
+  })
+
+  mockMode = 'ok'
+  sessionPosts = 0
+  sessionDeletes = 0
+  completionAttempts = 0
+  // 会话有效期只有 30s < reAdmitLeadSec(60s)：第二个请求必须提前换新会话
+  sessionExpiryMs = 30_000
+  const e1 = await expChat()
+  assert.equal(e1.status, 200, await e1.clone().text())
+  assert.equal(sessionPosts, 1)
+  assert.equal(e1.headers.get('x-freebuff-proxy-account'), 'ea@example.com')
+  // 多账号场景：近过期会话在同一账号 re-admit 续期，而不是换到 eb 新建 session
+  const e2 = await expChat()
+  assert.equal(e2.status, 200, await e2.clone().text())
+  assert.equal(sessionPosts, 2, `近过期会话应提前 re-admit, got ${sessionPosts}`)
+  assert.ok(sessionDeletes >= 1, 're-admit 前应先释放旧会话')
+  assert.equal(e2.headers.get('x-freebuff-proxy-account'), 'ea@example.com')
+  assert.equal(
+    expRuntimes.list().find((x) => x.email === 'eb@example.com').requests,
+    0,
+    '近过期会话应在本账号续期，不换账号',
+  )
+
+  // 有效期恢复正常（1h > lead）后：e3 先把还差 30s 的旧会话换掉（第 3 次 admit），
+  // e4 起新会话剩余 1h，不再重复 admit
+  sessionExpiryMs = 3600_000
+  const e3 = await expChat()
+  assert.equal(e3.status, 200, await e3.clone().text())
+  assert.equal(sessionPosts, 3, `切换后的请求应 admit 一次, got ${sessionPosts}`)
+  const e4 = await expChat()
+  assert.equal(e4.status, 200, await e4.clone().text())
+  assert.equal(sessionPosts, 3, `正常有效期应复用会话, got ${sessionPosts}`)
+
+  sessionExpiryMs = 3600_000
+  await expRuntimes.shutdown()
+  expServer.close()
+  fs.rmSync(expDir, { recursive: true, force: true })
+}
+
+// --- 账号并发信号量单元测试：容量、排队、超时、动态调大 ---
+{
+  const capPool = new AccountRuntimes(loadConfig(), {
+    getAccountConcurrency: () => 2,
+  })
+  const r1 = await capPool.acquireChat('cap-key', 0)
+  const r2 = await capPool.acquireChat('cap-key', 0)
+  assert.equal(capPool.chatInFlight('cap-key'), 2)
+  assert.equal(capPool.isChatBusy('cap-key'), true)
+  // 满员时排队，超时 → account_busy
+  let timedOut = null
+  try {
+    await capPool.acquireChat('cap-key', 50)
+  } catch (err) {
+    timedOut = err
+  }
+  assert.equal(timedOut?.code, 'account_busy')
+  // 释放一个槽位 → 排队者立即获得
+  const waiting = capPool.acquireChat('cap-key', 500)
+  r2()
+  const r3 = await waiting
+  assert.equal(capPool.chatInFlight('cap-key'), 2)
+  // 动态调大容量 → 队列里再排的人立即获得
+  const waiting2 = capPool.acquireChat('cap-key', 500)
+  capPool.chatLockFor('cap-key').setCapacity(4)
+  const r4 = await waiting2
+  assert.equal(capPool.chatInFlight('cap-key'), 3)
+  r1(); r3(); r4()
+  assert.equal(capPool.chatInFlight('cap-key'), 0)
+  // 全部断开重连：重置信号量，在途清零、排队者放行
+  const r5 = await capPool.acquireChat('cap-key', 0)
+  const waiting3 = capPool.acquireChat('cap-key', 500)
+  await capPool.reconnectAll()
+  // 旧持有被清除；排队者被放行（已拿到槽位，会在 chat 流程重新 re-admit）
+  assert.ok(capPool.chatInFlight('cap-key') <= 1, 'reconnect 后旧持有应被清除')
+  const r6 = await waiting3
+  r5(); r6()
+  assert.equal(capPool.chatInFlight('cap-key'), 0)
+  await capPool.shutdown()
+}
+
+// --- 全部断开重连 API：比重启更轻量，释放 session + 重置并发信号量 ---
+{
+  const rcDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-reconnect-'))
+  saveAccountUser(rcDir, { id: 'ra', email: 'ra@example.com', authToken: 'token-ra' })
+  const rcConfig = loadConfig()
+  rcConfig.server.host = '127.0.0.1'
+  rcConfig.server.port = 0
+  rcConfig.server.apiKeys = ['sk-test']
+  rcConfig.upstream.credentialsDir = rcDir
+  rcConfig.session.pollIntervalSec = 3600
+  const { UserStore: RCUS } = await import('../src/web/user-store.js')
+  const { WebSessionStore: RCWS } = await import('../src/web/session-store.js')
+  const { LoginFlowManager: RCLFM } = await import('../src/web/login-flows.js')
+  const { ProxyStore: RCPS } = await import('../src/web/proxy-store.js')
+  const { SettingsStore: RCSS } = await import('../src/web/settings-store.js')
+  const rcUsers = new RCUS(path.join(rcDir, 'users.json'))
+  rcUsers.create({ username: 'admin', password: 'secret123', role: 'admin' })
+  rcUsers.create({ username: 'viewer', password: 'secret123', role: 'user' })
+  const rcWS = new RCWS(path.join(rcDir, 'web-sessions.json'), 3600_000)
+  const rcLFM = new RCLFM({ file: path.join(rcDir, 'login-flows.json'), credentialsDir: rcDir, config: rcConfig })
+  const rcPS = new RCPS(path.join(rcDir, 'proxies.json'))
+  const rcSS = new RCSS(path.join(rcDir, 'settings.json'))
+  const rcRuntimes = new AccountRuntimes(rcConfig)
+  const rcServer = await startServer({
+    config: rcConfig,
+    runtimes: rcRuntimes,
+    userStore: rcUsers,
+    webSessions: rcWS,
+    loginFlows: rcLFM,
+    proxyStore: rcPS,
+    settingsStore: rcSS,
+  })
+  const rcPort = rcServer.address().port
+  const login = async (username) => {
+    const r = await fetch(`http://127.0.0.1:${rcPort}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username, password: 'secret123' }),
+    })
+    assert.equal(r.status, 200)
+    return r.headers.get('set-cookie').split(';')[0]
+  }
+  const adminCookie = await login('admin')
+  const viewerCookie = await login('viewer')
+
+  // 先 admit 一个活跃 session
+  mockMode = 'ok'
+  sessionPosts = 0
+  sessionDeletes = 0
+  completionAttempts = 0
+  const rcChat = await fetch(`http://127.0.0.1:${rcPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'deepseek/deepseek-v4-flash', messages: [{ role: 'user', content: 'hello' }] }),
+  })
+  assert.equal(rcChat.status, 200, await rcChat.clone().text())
+  assert.equal(sessionPosts, 1)
+  assert.equal(rcRuntimes.list()[0].session.status, 'active')
+
+  // 未登录 → 401；非 admin → 403
+  {
+    const anon = await fetch(`http://127.0.0.1:${rcPort}/api/system/reconnect`, { method: 'POST' })
+    assert.equal(anon.status, 401)
+    const viewer = await fetch(`http://127.0.0.1:${rcPort}/api/system/reconnect`, {
+      method: 'POST',
+      headers: { cookie: viewerCookie },
+    })
+    assert.equal(viewer.status, 403)
+  }
+
+  // admin 全部断开重连 → 200，session 被释放（下个请求自动重建）
+  const rcRes = await fetch(`http://127.0.0.1:${rcPort}/api/system/reconnect`, {
+    method: 'POST',
+    headers: { cookie: adminCookie },
+  })
+  assert.equal(rcRes.status, 200, await rcRes.clone().text())
+  const rcJson = await rcRes.json()
+  assert.equal(rcJson.ok, true)
+  assert.equal(rcJson.accounts[0].ok, true)
+  assert.equal(rcRuntimes.list()[0].session.status, 'none', 'reconnect 应释放 session')
+  assert.ok(sessionDeletes >= 1, 'reconnect 应调用上游 DELETE')
+
+  // 下个请求自动重建全新 session
+  const rcChat2 = await fetch(`http://127.0.0.1:${rcPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'deepseek/deepseek-v4-flash', messages: [{ role: 'user', content: 'hello' }] }),
+  })
+  assert.equal(rcChat2.status, 200, await rcChat2.clone().text())
+  assert.equal(sessionPosts, 2, `reconnect 后应重新 admit, got ${sessionPosts}`)
+
+  await rcRuntimes.shutdown()
+  rcServer.close()
+  fs.rmSync(rcDir, { recursive: true, force: true })
+  mockMode = 'ok'
 }
 
 // --- 重启 API 端点测试（不执行实际重启）---

@@ -87,6 +87,15 @@ export class SessionManager {
     return false
   }
 
+  /**
+   * 会话剩余时间低于该阈值（秒）后不再承接新请求，提前 re-admit 换新会话，
+   * 避免请求发到马上过期的会话上、中途卡住（切换流量更平滑）。
+   */
+  reAdmitLeadMs() {
+    const sec = this.config.session.reAdmitLeadSec
+    return (Number.isFinite(sec) && sec > 0 ? sec : 60) * 1000
+  }
+
   isUsableForModel(model, session = this.session) {
     if (!this.hasLiveSlot(session)) return false
     if (!session?.model || !session.instanceId) return false
@@ -95,10 +104,16 @@ export class SessionManager {
       // instance disappears if reAdmit not needed mid-request
       return session.model === model
     }
-    if (session.expiresAt) {
-      const left = Date.parse(session.expiresAt) - Date.now()
-      // treat fully expired (past expiresAt) as needing re-admit for NEW work
-      if (left <= 0 && this.config.session.reAdmitOnExpire) return false
+    if (this.config.session.reAdmitOnExpire) {
+      // expiresAt 优先；上游只回 remainingMs 时用它兜底（admit 时的快照）。
+      const left =
+        session.expiresAt != null
+          ? Date.parse(session.expiresAt) - Date.now()
+          : typeof session.remainingMs === 'number'
+            ? session.remainingMs
+            : null
+      // 已过期 / 剩余时间不足 lead → 新请求需要 re-admit（提前平滑切换）
+      if (left != null && left <= this.reAdmitLeadMs()) return false
     }
     return session.status === 'active' && session.model === model
   }
@@ -119,14 +134,13 @@ export class SessionManager {
         return this.session
       }
 
-      // Different model while holding a slot → release first
-      if (
-        this.hasLiveSlot() &&
-        this.session?.model &&
-        this.session.model !== model
-      ) {
-        logger.info('switching freebuff session model', {
-          from: this.session.model,
+      // 持有的 slot 已不可用（模型不符 / 已过期 / 即将过期）：先释放再 admit，
+      // 平滑切换——避免带着旧 session 直接 POST 造成上游 model_locked 或排队。
+      if (this.hasLiveSlot() && !this.isUsableForModel(model)) {
+        logger.info('releasing session before re-admit', {
+          model,
+          status: this.session?.status,
+          from: this.session?.model,
           to: model,
         })
         await this._releaseUnlocked()

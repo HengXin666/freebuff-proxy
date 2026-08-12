@@ -103,6 +103,11 @@ function renderHeader() {
   if (state.me.role === 'admin') {
     buttons.push(el('button', {
       class: 'danger',
+      onclick: reconnectAll,
+      title: '比重启更轻量：释放全部 session、清理死任务，下个请求自动重建（不重启进程）',
+    }, '全部断开重连'))
+    buttons.push(el('button', {
+      class: 'danger',
       onclick: restartService,
       title: '彻底解决连接卡死等问题：重启整个代理服务（约几秒）',
     }, '重启服务'))
@@ -114,6 +119,22 @@ function renderHeader() {
     el('span', { class: 'muted' }, `👤 ${state.me.username} ${state.me.role === 'admin' ? el('span', { class: 'badge admin' }, 'admin') : ''}`),
     ...buttons,
   ])
+}
+
+/**
+ * 前端「全部断开重连」：请求 API → 服务端释放所有账号 session 并重置并发信号量。
+ * 比重启轻量（进程不重启），用于清理死任务/幽灵连接；下个请求自动重建 session。
+ */
+async function reconnectAll() {
+  if (!confirm('确定要全部断开重连吗？\n\n将释放所有账号的 session（正在传输的 SSE 可能被中断），下一个请求会自动重建新 session。')) return
+  try {
+    const r = await api('/api/system/reconnect', { method: 'POST' })
+    const failed = (r.accounts || []).filter((x) => !x.ok)
+    toast(failed.length ? `已断开重连，${failed.length} 个账号失败` : '已全部断开重连，下个请求自动重建')
+    render()
+  } catch (err) {
+    toast(err.message, true)
+  }
 }
 
 /**
@@ -222,7 +243,7 @@ async function renderOverview(view) {
         el('div', { class: 'row spread' }, [
           el('div', {}, [
             el('span', { class: 'muted' }, `负载均衡 · 共 ${totalReq} 次选号 `),
-            el('span', { class: 'muted' }, '（会话级：不同会话按哈希摊开，同一会话固定账号；配额感知仅限额模型生效）'),
+            el('span', { class: 'muted' }, '（热 session 优先复用，同一账号可配置并发上限；配额感知仅限额模型生效）'),
           ]),
           el('button', { class: 'muted', onclick: () => render() }, '刷新'),
         ]),
@@ -231,7 +252,7 @@ async function renderOverview(view) {
     }
 
     const table = el('table', {}, [
-      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '额度（今日）', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
+      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发(在途/上限)', '额度（今日）', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
       el('tbody', {}, data.accounts.map((a) => {
         const cd = a.cooldownUntil ? new Date(a.cooldownUntil).toLocaleString() : null
         const sess = a.session?.live
@@ -249,6 +270,7 @@ async function renderOverview(view) {
             ? el('span', { class: 'badge ok' }, '可用')
             : el('span', { class: 'badge err' }, cd ? `冷却至 ${cd}` : '冷却中')),
           el('td', { class: 'mono' }, sess),
+          el('td', { class: 'mono' }, `${a.inFlight || 0}/${a.concurrency || 1}`),
           el('td', {}, fmtQuota(a.quota)),
           el('td', { class: 'mono' }, `${a.requests || 0} 次`),
           el('td', {}, cd ? el('span', { class: 'badge warn' }, a.cooldownCode || 'cooldown') : '—'),
@@ -317,6 +339,34 @@ async function renderProxySettings(view) {
     ]),
   ]))
 
+  // 负载均衡：每账号并发上限（1:1 默认；一个账号可同时转发多条 SSE 流）
+  const concurrency = settings.accountMaxConcurrency ?? 1
+  view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
+    el('div', { class: 'row spread' }, [
+      el('div', {}, [
+        el('h3', { style: 'margin:0 0 2px' }, '负载均衡设置'),
+        el('span', { class: 'muted' }, '每个账号同一时间最多转发的 SSE 响应流数（默认 1:1，一个账号一个并发）；保存立即生效，无需重启'),
+      ]),
+      el('div', { class: 'row' }, [
+        el('input', {
+          id: 'account-concurrency',
+          type: 'number',
+          min: 1,
+          max: 16,
+          style: 'width:70px',
+          value: concurrency,
+          ...(state.me.role === 'admin' ? {} : { disabled: '' }),
+        }),
+        state.me.role === 'admin'
+          ? el('button', { class: 'primary', onclick: saveAccountConcurrency }, '保存并生效')
+          : null,
+      ]),
+    ]),
+    state.me.role !== 'admin'
+      ? el('div', { class: 'muted', style: 'margin-top:8px' }, `当前每账号并发上限：${concurrency}（管理员可调）`)
+      : null,
+  ]))
+
   const card = el('div', { class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
       el('div', {}, [
@@ -364,6 +414,26 @@ async function saveFreeToolSignatureSetting(event) {
   } catch (err) {
     input.checked = !enabled
     input.disabled = false
+    toast(err.message, true)
+  }
+}
+
+async function saveAccountConcurrency() {
+  const input = $('#account-concurrency')
+  if (!input) return
+  const n = Number(input.value)
+  if (!Number.isInteger(n) || n < 1 || n > 16) {
+    toast('并发数必须是 1..16 的整数', true)
+    return
+  }
+  try {
+    const r = await api('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({ accountMaxConcurrency: n }),
+    })
+    toast(`每账号并发上限已设为 ${r.accountMaxConcurrency}，立即生效`)
+    render()
+  } catch (err) {
     toast(err.message, true)
   }
 }

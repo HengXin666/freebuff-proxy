@@ -38,21 +38,55 @@ const DEFAULT_COOLDOWN_MS = 60_000
 const BANNED_COOLDOWN_MS = DAY_MS
 
 /**
- * 账号级串行化互斥锁（公平 FIFO + 有界等待）：
- * 一个账号同一时间只允许一个 chat 在途——上游会话不稳定时并发容易
- * 互相干扰/顶号（幽灵连接的诱因之一）。
+ * 账号级 chat 并发信号量（公平 FIFO + 有界等待）：
+ * 默认容量 1（一个账号同一时间只处理一个 chat，避免上游会话不稳定时
+ * 并发互相干扰/顶号）；可在控制台「负载均衡」调大（一个账号可同时
+ * 转发多个 SSE 响应流，实测同一 instanceId 支持并发 chat）。
  * timeoutMs=0 表示无限等待；持锁者受 streamIdleTimeoutSec / 各 HTTP 阶段
  * 超时约束，无限等待在实际运行中是有上界的。
  */
 class ChatMutex {
-  constructor() {
-    this._held = false
+  /**
+   * @param {number} [capacity] 同一账号最大并发 chat 数（>=1）
+   */
+  constructor(capacity = 1) {
+    this._capacity = Math.max(1, Math.floor(capacity) || 1)
+    /** 当前在途 chat 数（含已授予的等待者）。 */
+    this._held = 0
     /** @type {Array<{resolve: Function, reject: Function, timer: NodeJS.Timeout | null}>} */
     this._queue = []
   }
 
+  /** 是否已达到并发上限（不再有可用槽位）。 */
   get busy() {
+    return this._held >= this._capacity
+  }
+
+  /** 当前在途 chat 数（监控用）。 */
+  get inFlight() {
     return this._held
+  }
+
+  /** 当前并发上限（监控用）。 */
+  get capacity() {
+    return this._capacity
+  }
+
+  /**
+   * 动态调整并发上限（控制台保存后立即生效）。已授予的在途不受影响；
+   * 调大时立即把空出的槽位授予排队的等待者。
+   * @param {number} n
+   */
+  setCapacity(n) {
+    const next = Math.max(1, Math.floor(n) || 1)
+    if (next === this._capacity) return
+    this._capacity = next
+    while (this._queue.length && this._held < this._capacity) {
+      const entry = this._queue.shift()
+      if (entry.timer) clearTimeout(entry.timer)
+      this._held += 1
+      entry.resolve(this._makeRelease())
+    }
   }
 
   /**
@@ -75,8 +109,8 @@ class ChatMutex {
         }, timeoutMs)
         if (entry.timer.unref) entry.timer.unref()
       }
-      if (!this._held) {
-        this._held = true
+      if (this._held < this._capacity) {
+        this._held += 1
         if (entry.timer) clearTimeout(entry.timer)
         resolve(this._makeRelease())
       } else {
@@ -85,17 +119,31 @@ class ChatMutex {
     })
   }
 
+  /**
+   * 全部断开重连时调用：清空在途计数并立即放行所有排队等待者
+   * （等待者会在 chat 流程里重新检查 session 并 re-admit，不会卡死）。
+   */
+  reset() {
+    this._held = 0
+    while (this._queue.length) {
+      const entry = this._queue.shift()
+      if (entry.timer) clearTimeout(entry.timer)
+      this._held += 1
+      entry.resolve(this._makeRelease())
+    }
+  }
+
   _makeRelease() {
     let released = false
     return () => {
       if (released) return
       released = true
-      const next = this._queue.shift()
-      if (next) {
+      this._held = Math.max(0, this._held - 1)
+      while (this._queue.length && this._held < this._capacity) {
+        const next = this._queue.shift()
         if (next.timer) clearTimeout(next.timer)
+        this._held += 1
         next.resolve(this._makeRelease())
-      } else {
-        this._held = false
       }
     }
   }
@@ -109,10 +157,17 @@ class ChatMutex {
 export class AccountRuntimes {
   /**
    * @param {import('./config.js').ProxyConfig} config
+   * @param {{ getAccountConcurrency?: () => number }} [opts]
+   *   getAccountConcurrency: 每个账号的并发上限来源（控制台设置/配置），
+   *   默认取 config.limits.accountMaxConcurrency。
    */
-  constructor(config) {
+  constructor(config, opts = {}) {
     this.config = config
     this.dir = resolveCredentialsDir(config)
+    this._getAccountConcurrency =
+      typeof opts.getAccountConcurrency === 'function'
+        ? opts.getAccountConcurrency
+        : () => this.config.limits.accountMaxConcurrency || 1
     /** @type {Map<string, { key: string, email: string, id: string | null, authToken: string, user: any, upstream: any, sessions: SessionManager, source: string }>} */
     this.byKey = new Map()
     /**
@@ -137,6 +192,7 @@ export class AccountRuntimes {
       const cooling = Boolean(cd && cd.until > now)
       const rt = this.byKey.get(a.key)
       const snap = rt?.sessions?.getSnapshot?.()
+      const chatLock = this.chatLocks.get(a.key)
       return {
         ...a,
         lastUsed: this._lastSuccessKey === a.key,
@@ -144,6 +200,9 @@ export class AccountRuntimes {
         cooldownUntil: cooling ? new Date(cd.until).toISOString() : null,
         cooldownCode: cooling ? cd.code : null,
         requests: this.stats.byKey.get(a.key) || 0,
+        // 负载均衡监控：当前在途 SSE 流数 / 账号并发上限
+        inFlight: chatLock?.inFlight || 0,
+        concurrency: chatLock?.capacity || this._accountConcurrency(),
         effectiveProxy: rt?.effectiveProxy || null,
         session: snap
           ? {
@@ -212,22 +271,35 @@ export class AccountRuntimes {
     return listAccounts(this.dir).map((a) => a.key)
   }
 
+  /** 每个账号的当前并发上限（控制台设置，实时生效）。 */
+  _accountConcurrency() {
+    const n = this._getAccountConcurrency()
+    return Number.isFinite(n) && n >= 1 ? Math.min(16, Math.floor(n)) : 1
+  }
+
   chatLockFor(key) {
     let lock = this.chatLocks.get(key)
     if (!lock) {
-      lock = new ChatMutex()
+      lock = new ChatMutex(this._accountConcurrency())
       this.chatLocks.set(key, lock)
+    } else {
+      lock.setCapacity(this._accountConcurrency())
     }
     return lock
   }
 
-  /** 账号当前是否正在处理 chat（锁被持有）。 */
+  /** 账号当前是否已达到并发上限（无可用 chat 槽位）。 */
   isChatBusy(key) {
     return this.chatLocks.get(key)?.busy || false
   }
 
+  /** 账号当前在途 chat 数（监控用）。 */
+  chatInFlight(key) {
+    return this.chatLocks.get(key)?.inFlight || 0
+  }
+
   /**
-   * 获取账号的 chat 串行化锁。
+   * 获取账号的 chat 并发槽位。
    * @param {string} key
    * @param {number} timeoutMs 0 = 无限等待
    * @returns {Promise<() => void>}
@@ -341,19 +413,28 @@ export class AccountRuntimes {
       const sessions = this.byKey.get(key)?.sessions
       const usable = sessions?.isUsableForModel?.(model) === true
       const live = sessions?.hasLiveSlot?.() === true
-      const quota = sessions?.getSnapshot?.()?.quota?.byModel?.[model]
+      const snap = sessions?.getSnapshot?.()
+      const quota = snap?.quota?.byModel?.[model]
       const exhausted =
         !usable &&
         quota &&
         Number.isFinite(quota.limit) &&
         quota.limit > 0 &&
         (Number(quota.recentCount) || 0) >= quota.limit
+      const chatLock = this.chatLocks.get(key)
+      const inFlight = chatLock?.inFlight || 0
+      const capacity = chatLock?.capacity || this._accountConcurrency()
+      const sameModel = snap?.model === model
       candidates.push({
         key,
-        tier: usable ? 0 : live ? 2 : 1,
-        // 同一层级内优先空闲账号（一个账号一个并发；已有热 session 的账号
-        // 忙时仍允许排队，只是排在同层空闲账号之后）
-        busy: this.isChatBusy(key) ? 1 : 0,
+        // 同模型即将过期（live 但不可复用）≈ 冷账号：只需 re-admit 续期，
+        // 不应排到"要释放别的模型 session"的最后梯队
+        tier: usable ? 0 : live && !sameModel ? 2 : 1,
+        // 同模型过期时优先在同一账号 re-admit（保持出口稳定），而不是换账号新建
+        sameModel: sameModel ? 1 : 0,
+        // 达到并发上限的账号排后；同层级内优先在途少的账号
+        busy: inFlight >= capacity ? 1 : 0,
+        load: inFlight,
         exhausted: exhausted ? 1 : 0,
         rotation: i,
       })
@@ -361,7 +442,9 @@ export class AccountRuntimes {
     candidates.sort(
       (a, b) =>
         a.tier - b.tier ||
+        b.sameModel - a.sameModel ||
         a.busy - b.busy ||
+        a.load - b.load ||
         a.exhausted - b.exhausted ||
         a.rotation - b.rotation,
     )
@@ -582,6 +665,41 @@ export class AccountRuntimes {
     this.byKey.delete(key)
   }
 
+  /**
+   * 全部断开重连（比重启更轻量）：释放所有账号的 session（清理死任务），
+   * 并重置账号并发信号量（放行等待者，等待者会在 chat 流程重新 re-admit）。
+   * 不重启进程；下一个请求自动 admit 全新 session。
+   * @returns {Promise<Array<{key: string, email?: string, ok: boolean, error?: string}>>}
+   */
+  async reconnectAll() {
+    // 并发信号量与 runtime 的并集：无账号凭据的锁（如单元测试）也要重置
+    const keys = [...new Set([...this.chatLocks.keys(), ...this.byKey.keys()])]
+    const results = await Promise.all(
+      keys.map(async (key) => {
+        const rt = this.byKey.get(key)
+        try {
+          if (rt) await rt.sessions.release()
+          // 信号量重置：清空在途计数并放行排队等待者（等待者会在 chat
+          // 流程重新检查 session 并 re-admit，不会卡死）
+          this.chatLocks.get(key)?.reset()
+          return { key, email: rt?.email, ok: true }
+        } catch (err) {
+          return {
+            key,
+            email: rt?.email,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          }
+        }
+      }),
+    )
+    logger.info('all sessions disconnected via web console', {
+      accounts: keys.length,
+      ok: results.filter((r) => r.ok).length,
+    })
+    return results
+  }
+
   /** 代理池变更后调用：释放并重建所有缓存 runtime，让新出口立即生效 */
   async invalidateProxies() {
     const tasks = [...this.byKey.values()].map((rt) => rt.sessions.shutdown())
@@ -600,9 +718,10 @@ export class AccountRuntimes {
 
 /**
  * @param {import('./config.js').ProxyConfig} config
+ * @param {{ getAccountConcurrency?: () => number }} [opts] 透传给 AccountRuntimes
  */
-export function buildAppContext(config) {
-  const runtimes = new AccountRuntimes(config)
+export function buildAppContext(config, opts = {}) {
+  const runtimes = new AccountRuntimes(config, opts)
   const keys = runtimes.allKeys()
   if (!keys.length) {
     // Zero-account startup is allowed: the web console can add Freebuff

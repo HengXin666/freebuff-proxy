@@ -37,11 +37,17 @@ users:
 session:
   release_on_shutdown: true
   re_admit_on_expire: true
+  # 会话剩余时间低于该值（秒）时不再承接新请求，提前 re-admit 换新会话，
+  # 避免请求发到马上过期的会话上、中途卡住（切换流量更平滑）
+  re_admit_lead_sec: 60
   poll_interval_sec: 30
   admit_timeout_ms: 30000
 
 limits:
   max_concurrent_requests: 32
+  # 每个账号同一时间最多转发的 SSE 响应流数（账号并发，默认 1:1）。
+  # 建议在控制台「负载均衡设置」里调整，保存立即生效、无需重启
+  account_max_concurrency: 1
   upstream_timeout_sec: 600
   # 上游流式响应 body idle 超时（秒）：上游发了响应头后长时间不再吐数据
   # （幽灵连接）→ 主动掐断/换号，避免连接永远挂着。
