@@ -1,5 +1,7 @@
 # freebuff-proxy
 
+> 发布与更新日志：[Releases](https://github.com/HengXin666/freebuff-proxy/releases)
+
 OpenAI 兼容的 **Freebuff / Codebuff 免费额度反向代理**，支持 **多账号自动切号 + 热 session 优先调度**、**Web 控制台**（用户管理 + 浏览器登录回调）、**上游代理**，并附带 **一键 Docker Compose 部署** 与 **GitHub Actions 镜像构建**。
 
 下游 Agent 只需要标准的 `base_url + api_key + model`，本服务负责：
