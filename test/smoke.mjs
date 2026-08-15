@@ -26,13 +26,38 @@ configureLogger({ level: 'error' })
 
 const originalFetch = globalThis.fetch
 let calls = []
-/** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion' | 'err_500_a' | 'capacity_once' | 'capacity_all' | 'run_500_a' | 'network_err_a' | 'gate_twice_a'} */
+/** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion' | 'err_500_a' | 'capacity_once' | 'capacity_all' | 'run_500_a' | 'network_err_a' | 'gate_twice_a' | 'hold_once'} */
 let mockMode = 'ok'
 let sessionPosts = 0
 let sessionDeletes = 0
 let completionAttempts = 0
 /** 会话有效期（毫秒）：近过期/重连测试用 */
 let sessionExpiryMs = 3600_000
+/** hold_once 模式：被挂起的流式响应控制器（等 releaseHoldStreams 放行） */
+let holdStreamControllers = []
+
+/** 放行所有被挂起的流式响应（写入 [DONE] 并关闭）。 */
+function releaseHoldStreams() {
+  const enc = new TextEncoder()
+  for (const controller of holdStreamControllers.splice(0)) {
+    try {
+      controller.enqueue(enc.encode('data: [DONE]\n\n'))
+      controller.close()
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/** 轮询等待条件成立（默认 2s 超时，超时抛错）。 */
+async function waitFor(desc, fn, timeoutMs = 2_000, stepMs = 20) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (fn()) return
+    await new Promise((r) => setTimeout(r, stepMs))
+  }
+  assert.fail(`waitFor 超时: ${desc}`)
+}
 
 globalThis.fetch = async (url, init = {}) => {
   const u = String(url)
@@ -231,6 +256,27 @@ globalThis.fetch = async (url, init = {}) => {
     // 网络层错误（fetch 抛异常）→ 换号重试
     if (mockMode === 'network_err_a' && String(compAuth).includes('token-a')) {
       throw new Error('ECONNRESET: socket hang up')
+    }
+    // hold_once：第一次流式响应保持打开（先吐一个 chunk），
+    // 直到 releaseHoldStreams() 放行——用于模拟"正在传输的长流"。
+    if (mockMode === 'hold_once' && completionAttempts === 1 && body.stream) {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            holdStreamControllers.push(controller)
+            controller.enqueue(
+              new TextEncoder().encode(
+                'data: {"id":"c1","object":"chat.completion.chunk","choices":[{"delta":{"content":"hi"}}]}\n\n',
+              ),
+            )
+          },
+          cancel() {
+            const i = holdStreamControllers.indexOf(controller)
+            if (i >= 0) holdStreamControllers.splice(i, 1)
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      )
     }
 
     if (body.stream) {
@@ -516,6 +562,193 @@ assert.equal(requireModelId(''), null)
   // First admit + one force re-admit on retry (not double)
   assert.equal(sessionPosts, 2, `expected 2 session POSTs, got ${sessionPosts}`)
   assert.equal(completionAttempts, 2)
+  mockMode = 'ok'
+}
+
+// 会话切换（re-admit）不得掐断在途 SSE：旧 session 必须等在途流结束后才释放
+{
+  const sm = runtimes.get('u1').sessions
+  await sm.release()
+  calls = []
+  sessionPosts = 0
+  sessionDeletes = 0
+  completionAttempts = 0
+  mockMode = 'hold_once'
+  const res = await chat({
+    model: 'deepseek/deepseek-v4-flash',
+    stream: true,
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+  assert.equal(res.status, 200)
+  assert.equal(sm.inFlightCount(), 1, 'hold 流应在途')
+  assert.equal(sessionPosts, 1)
+  assert.equal(sessionDeletes, 0)
+
+  // 模拟"会话即将过期需要 re-admit"：让 isUsableForModel 返回 false 后触发 ensureSession
+  sm.session.expiresAt = new Date(Date.now() - 1000).toISOString()
+  const ensurePromise = sm.ensureSession('deepseek/deepseek-v4-flash')
+  // 等待一小段：ensureSession 应等待在途流结束，而不是立刻 DELETE 旧 session
+  await new Promise((r) => setTimeout(r, 150))
+  assert.equal(sessionDeletes, 0, 're-admit 不得在流在途时删除旧 session')
+  assert.equal(sm.inFlightCount(), 1)
+
+  // 放行旧流 → 在途归零 → ensureSession 才释放旧 session 并 admit 新 session
+  releaseHoldStreams()
+  const text = await res.text()
+  assert.match(text, /data: \[DONE\]/)
+  await ensurePromise
+  assert.equal(sessionDeletes, 1, '旧 session 应在流结束后才释放')
+  assert.equal(sessionPosts, 2, '应 admit 一个新 session')
+  mockMode = 'ok'
+}
+
+// 流量切换（代理池变更）不得掐断在途 SSE：旧 runtime 优雅回收
+{
+  const pDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-drain-'))
+  saveAccountUser(pDir, { id: 'pa', email: 'pa@example.com', authToken: 'token-pa' })
+  const pConfig = loadConfig()
+  pConfig.server.host = '127.0.0.1'
+  pConfig.server.port = 0
+  pConfig.server.apiKeys = ['sk-test']
+  pConfig.upstream.credentialsDir = pDir
+  pConfig.session.pollIntervalSec = 3600
+  const pRuntimes = new AccountRuntimes(pConfig)
+  const pServer = await startServer({
+    config: pConfig,
+    runtimes: pRuntimes,
+    ...(() => {
+      const rt = pRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const pBase = `http://127.0.0.1:${pServer.address().port}`
+  const oldRt = pRuntimes.get('pa')
+
+  mockMode = 'hold_once'
+  sessionPosts = 0
+  sessionDeletes = 0
+  completionAttempts = 0
+  const res = await fetch(`${pBase}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      stream: true,
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  assert.equal(res.status, 200)
+  assert.equal(oldRt.sessions.inFlightCount(), 1)
+
+  // 切换代理池：立即让位，但旧流不能被掐断
+  pConfig.upstream.proxies = ['http://p1.example:7890']
+  await pRuntimes.invalidateProxies()
+  assert.equal(pRuntimes.isCurrentRuntime(oldRt), false)
+  await new Promise((r) => setTimeout(r, 150))
+  assert.equal(sessionDeletes, 0, '代理切换不得在流在途时删除旧 session')
+
+  // 旧流正常结束，之后旧 session 才被优雅释放
+  releaseHoldStreams()
+  const text = await res.text()
+  assert.match(text, /data: \[DONE\]/)
+  await waitFor('代理切换后旧 session 优雅释放', () => sessionDeletes >= 1)
+  assert.equal(sessionDeletes, 1)
+  assert.equal(sessionPosts, 1, '切换本身不应新增 admit（新请求才走新出口）')
+
+  await pRuntimes.shutdown()
+  pServer.close()
+  fs.rmSync(pDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
+
+// 排队等锁期间发生代理切换 → 请求无冷却重新选号，不撞已失效旧 runtime
+{
+  const qDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-queue-switch-'))
+  saveAccountUser(qDir, { id: 'qa', email: 'qa@example.com', authToken: 'token-qa' })
+  const qConfig = loadConfig()
+  qConfig.server.host = '127.0.0.1'
+  qConfig.server.port = 0
+  qConfig.server.apiKeys = ['sk-test']
+  qConfig.upstream.credentialsDir = qDir
+  qConfig.session.pollIntervalSec = 3600
+  qConfig.limits.accountMaxConcurrency = 1
+  const qRuntimes = new AccountRuntimes(qConfig)
+  const qServer = await startServer({
+    config: qConfig,
+    runtimes: qRuntimes,
+    ...(() => {
+      const rt = qRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const qBase = `http://127.0.0.1:${qServer.address().port}`
+
+  mockMode = 'hold_once'
+  sessionPosts = 0
+  sessionDeletes = 0
+  completionAttempts = 0
+  const oldRt = qRuntimes.get('qa')
+  // A：占住账号唯一并发槽（流保持打开）
+  const resA = await fetch(`${qBase}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      stream: true,
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  assert.equal(resA.status, 200)
+  assert.equal(oldRt.sessions.inFlightCount(), 1)
+  // B：开始后会在 chat 锁上排队
+  const resBPromise = fetch(`${qBase}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      stream: true,
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  await new Promise((r) => setTimeout(r, 150))
+  // 等待期间切换代理池 → 旧 runtime 被顶替
+  qConfig.upstream.proxies = ['http://q1.example:7890']
+  await qRuntimes.invalidateProxies()
+  assert.equal(qRuntimes.isCurrentRuntime(oldRt), false)
+  // 放行 A；B 拿到锁后应检测到 runtime 已过期 → 无冷却重新选号 → 走新出口成功
+  releaseHoldStreams()
+  await resA.text()
+  const resB = await resBPromise
+  assert.equal(resB.status, 200, await resB.clone().text())
+  assert.match(await resB.text(), /data: \[DONE\]/)
+  assert.equal(sessionPosts, 2, 'B 应在新 runtime 上 admit 新 session')
+  // A 的旧 session 由优雅回收释放
+  await waitFor('排队切换后旧 session 优雅释放', () => sessionDeletes >= 1)
+
+  await qRuntimes.shutdown()
+  qServer.close()
+  fs.rmSync(qDir, { recursive: true, force: true })
   mockMode = 'ok'
 }
 

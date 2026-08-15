@@ -240,7 +240,10 @@ export class AccountRuntimes {
       return existing
     }
     if (existing) {
-      existing.sessions.shutdown().catch(() => {})
+      // 账号信息变更（token/代理）：旧 runtime 立即让位，session 等在途
+      // 请求结束后再优雅释放（避免掐断正在传输的 SSE；等待方会在 chat
+      // 流程通过 isCurrentRuntime 检测到已被顶替并重新选号）。
+      existing.sessions.releaseWhenIdle().catch(() => {})
       this.byKey.delete(accountKey)
     }
 
@@ -425,11 +428,19 @@ export class AccountRuntimes {
       const inFlight = chatLock?.inFlight || 0
       const capacity = chatLock?.capacity || this._accountConcurrency()
       const sameModel = snap?.model === model
+      // 同模型即将过期（live 但不可复用）且正被在途流占用：re-admit 必须等
+      // 流结束（见 SessionManager.ensureSession），有免费账号时不应让新请求
+      // 干等——把它降为最后梯队，只有没有空闲账号时才等它续期。
+      const busyNearExpiry =
+        live &&
+        sameModel &&
+        !usable &&
+        (sessions?.inFlightCount?.() || 0) > 0
       candidates.push({
         key,
         // 同模型即将过期（live 但不可复用）≈ 冷账号：只需 re-admit 续期，
-        // 不应排到"要释放别的模型 session"的最后梯队
-        tier: usable ? 0 : live && !sameModel ? 2 : 1,
+        // 不应排到"要释放别的模型 session"的最后梯队（正被在途流占用时除外）
+        tier: usable ? 0 : live && !sameModel ? 2 : busyNearExpiry ? 2 : 1,
         // 同模型过期时优先在同一账号 re-admit（保持出口稳定），而不是换账号新建
         sameModel: sameModel ? 1 : 0,
         // 达到并发上限的账号排后；同层级内优先在途少的账号
@@ -651,18 +662,32 @@ export class AccountRuntimes {
   }
 
   /**
+   * 该 runtime 是否仍是该账号当前缓存的 runtime。
+   * 代理/账号信息切换后旧 runtime 会被顶替（byKey 指向新 runtime），
+   * chat 流程借此识别"排队等锁期间已被切换"的请求并重新选号，
+   * 而不是拿着旧出口的 runtime 去撞已被释放的旧 session。
+   * @param {{ key: string }} rt
+   */
+  isCurrentRuntime(rt) {
+    return this.byKey.get(rt.key) === rt
+  }
+
+  /**
    * 丢弃单个账号的缓存 runtime（删除/改代理后调用，让新状态立即生效）。
+   * 立即让位（新请求走新 runtime），旧 session 等在途 SSE 结束后优雅释放，
+   * 避免把正在传输的连接掐断。
    * @param {string} key
    */
   async invalidate(key) {
     const rt = this.byKey.get(key)
     if (!rt) return
-    try {
-      await rt.sessions.shutdown()
-    } catch {
-      // ignore
-    }
     this.byKey.delete(key)
+    rt.sessions.releaseWhenIdle().catch((err) => {
+      logger.warn('account invalidated; deferred session release failed', {
+        key,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
   }
 
   /**
@@ -700,13 +725,25 @@ export class AccountRuntimes {
     return results
   }
 
-  /** 代理池变更后调用：释放并重建所有缓存 runtime，让新出口立即生效 */
+  /**
+   * 代理池变更后调用：立即重建所有缓存 runtime（新出口对新请求生效），
+   * 旧 runtime 的 session 等在途 SSE 结束后在后台优雅释放——不再像以前
+   * 那样直接 DELETE，避免把正在传输的流掐断导致客户端永久卡住。
+   */
   async invalidateProxies() {
-    const tasks = [...this.byKey.values()].map((rt) => rt.sessions.shutdown())
-    await Promise.allSettled(tasks)
-    const count = this.byKey.size
+    const oldRuntimes = [...this.byKey.values()]
     this.byKey.clear()
-    logger.info('proxy pool changed; cached runtimes invalidated', { count })
+    for (const rt of oldRuntimes) {
+      rt.sessions.releaseWhenIdle().catch((err) => {
+        logger.warn('proxy pool changed; deferred session release failed', {
+          key: rt.key,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+    }
+    logger.info('proxy pool changed; cached runtimes invalidated', {
+      count: oldRuntimes.length,
+    })
   }
 
   async shutdown() {

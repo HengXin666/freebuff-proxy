@@ -362,6 +362,27 @@ export function createProxyHandler(ctx) {
               })
               releaseChat = await runtimes.acquireChat(rt.key, 0)
             }
+            // 切换竞态：等待 chat 锁期间可能发生了代理/账号切换（本 runtime
+            // 已被顶替，旧 session 正在被优雅释放）。此时不能继续用旧 runtime
+            // ——它的 session 可能马上被 DELETE，硬用会让请求撞上已失效会话而
+            // 卡死。释放锁、无冷却重新选号（新 runtime 走新出口、新 session）。
+            if (!runtimes.isCurrentRuntime(rt)) {
+              logger.warn(
+                'runtime superseded while waiting for chat slot; re-selecting',
+                {
+                  key: rt.key,
+                  email: rt.email,
+                  model: upstreamModel,
+                  attempt,
+                },
+              )
+              releaseChat()
+              releaseChat = null
+              pendingGateCode = 'runtime_superseded'
+              pendingSwitchAccount = true
+              pendingNoCooldown = true
+              continue
+            }
             heldRt = rt
             // 在途标记：锁内唯一请求；轮询 GET 会跳过该账号，避免干扰活跃会话。
             heldRt.sessions.beginRequest()

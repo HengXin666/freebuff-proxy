@@ -36,6 +36,8 @@ export class SessionManager {
     this._pollTimer = null
     /** 当前正在处理中的请求数（在途 chat 时跳过轮询 GET，避免干扰活跃会话）。 */
     this._inFlight = 0
+    /** 等待在途请求归零的监听器（会话平滑切换/优雅释放时用）。 */
+    this._idleWaiters = []
   }
 
   /** 请求开始（在途计数 +1，轮询跳过）。 */
@@ -43,9 +45,46 @@ export class SessionManager {
     this._inFlight += 1
   }
 
-  /** 请求结束（在途计数 -1）。 */
+  /** 请求结束（在途计数 -1），归零时唤醒等待方。 */
   endRequest() {
+    const before = this._inFlight
     this._inFlight = Math.max(0, this._inFlight - 1)
+    if (before > 0 && this._inFlight === 0) {
+      const waiters = this._idleWaiters
+      this._idleWaiters = []
+      for (const wake of waiters) wake()
+    }
+  }
+
+  /** 当前在途请求数（监控/优雅释放用）。 */
+  inFlightCount() {
+    return this._inFlight
+  }
+
+  /**
+   * 等待在途请求全部结束。默认不限时：每个在途 SSE 流都受自身 idle 超时
+   * 约束（幽灵连接会在 streamIdleTimeoutSec 后被掐断并释放锁），健康的长流
+   * 会正常结束——切换连接时绝不能掐断健康流，所以无限等待是安全的。
+   * @param {number} [timeoutMs] >0 时强制设上限，超时直接返回（由调用方兜底）
+   */
+  async _waitForIdle(timeoutMs = 0) {
+    if (this._inFlight <= 0) return
+    await new Promise((resolve) => {
+      const wake = () => {
+        if (timer) clearTimeout(timer)
+        resolve()
+      }
+      let timer = null
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          const i = this._idleWaiters.indexOf(wake)
+          if (i >= 0) this._idleWaiters.splice(i, 1)
+          resolve()
+        }, timeoutMs)
+        if (timer.unref) timer.unref()
+      }
+      this._idleWaiters.push(wake)
+    })
   }
 
   /** Serialize admit/release operations. */
@@ -133,6 +172,29 @@ export class SessionManager {
       if (this.isUsableForModel(model)) {
         return this.session
       }
+
+      // 平滑切换的竞态保护：live 会话可能正被在途 SSE 流使用（例如热会话
+      // 排队等待 chat 锁期间，另一个请求先走到这里）。此时若直接释放再
+      // re-admit，会把正在传输的 session 从上游删掉——上游连接还在但
+      // session 已消失，用户端会永久卡住。先等在途请求全部结束（受 stream
+      // idle 超时约束，幽灵连接也会被掐断），再释放重建。
+      // 用循环而非单次等待：某次归零的瞬间可能有新请求刚拿到 chat 锁开始
+      // 在途，需继续等它，直到观察到真正的空闲窗口。
+      while (
+        this.hasLiveSlot() &&
+        !this.isUsableForModel(model) &&
+        this._inFlight > 0
+      ) {
+        logger.info('waiting for in-flight requests before session switch', {
+          model,
+          from: this.session?.model,
+          to: model,
+          inFlight: this._inFlight,
+        })
+        await this._waitForIdle()
+      }
+      // 等待期间可能已被其他路径重建/续期，重新检查
+      if (this.isUsableForModel(model)) return this.session
 
       // 持有的 slot 已不可用（模型不符 / 已过期 / 即将过期）：先释放再 admit，
       // 平滑切换——避免带着旧 session 直接 POST 造成上游 model_locked 或排队。
@@ -269,6 +331,15 @@ export class SessionManager {
   }
 
   async release() {
+    return this.withLock(() => this._releaseUnlocked())
+  }
+
+  /**
+   * 优雅释放：先在途请求全部结束（受 idle 超时约束，不会永久阻塞），
+   * 再释放 session。用于代理切换/账号重建——避免把正在传输的 SSE 掐断。
+   */
+  async releaseWhenIdle() {
+    await this._waitForIdle()
     return this.withLock(() => this._releaseUnlocked())
   }
 
