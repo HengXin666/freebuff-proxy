@@ -109,3 +109,4 @@ docker build .
 - [x] 全局代理池（config 层兜底）+ 代理测试（出口 IP/国家/延迟/codebuff 状态、底层原因码）+ 账号级 proxy 仅内部字段（无 UI）
 - [x] **账号并发上限可配**（控制台「负载均衡设置」，默认 1:1；1..16，保存立即生效）+ 总览每账号「并发(在途/上限)」监控 + **会话临近过期提前 re-admit**（`session.re_admit_lead_sec`，默认 60s）平滑切换，流 idle 超时按会话剩余时间收敛
 - [x] 前端「**全部断开重连**」（admin，`POST /api/system/reconnect`）：释放全部 session + 重置并发信号量，比重启更轻量；下个请求自动 re-admit
+- [x] **极简路由（路由模式）**（控制台「免费额度策略」开关，默认关闭；`minimalRoutingEnabled`/`minimalRoutingMode` 持久化 `/data/settings.json`）：代理侧按 dsh-routing-suite 协议改写请求——任务分类注入 spec/react/weak 极简 persona（置顶，客户端 system 保留在后）+ 首轮核心工具面（首个 tool_calls 后放行全部；工具保证：不裁空、`end_turn` 特殊签名工具始终保留）+ weak 模式近距离引导 + **路由风格钉死**（`minimalRoutingMode` auto/spec/react/weak）；**目标模型 = deepseek-v4-flash（fast）**：spec 的 we/let's 集体链按模型自适应锚定（Pro 远距 persona 锚定；Flash 远距反噬改近距 user 注入 + 首 token We 自锚定，实测 we=4~6/let's=3/let me=0）；free-mode 门禁标记不受影响，保存立即生效
