@@ -429,6 +429,30 @@ async function renderProxySettings(view) {
       : null,
   ]))
 
+  // 免费模型暴力分散：不钉死热 session，请求轮转分散到不同账号
+  const spreadFreeModels = settings.spreadFreeModels !== false
+  const spreadAttrs = {
+    id: 'spread-free-models',
+    type: 'checkbox',
+    class: 'switch-input',
+    onchange: saveSpreadFreeModelsSetting,
+  }
+  if (spreadFreeModels) spreadAttrs.checked = ''
+  if (state.me.role !== 'admin') spreadAttrs.disabled = ''
+  view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
+    el('div', { class: 'row spread' }, [
+      el('div', {}, [
+        el('span', {}, '免费模型分散到不同账号'),
+        el('div', { class: 'muted', style: 'font-size:12px' }, '免费模型不心疼额度：请求轮转分散，单账号被占死不再拖垮全部请求，多账号并行吞吐更高；关闭则恢复热 session 复用（最省额度）'),
+      ]),
+      el('label', { class: 'switch', for: 'spread-free-models' }, [
+        el('input', spreadAttrs),
+        el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
+        el('span', { class: 'switch-status' }, spreadFreeModels ? '已开启' : '已关闭'),
+      ]),
+    ]),
+  ]))
+
   const card = el('div', { class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
       el('div', {}, [
@@ -529,6 +553,24 @@ async function saveAccountConcurrency() {
     toast(`每账号并发上限已设为 ${r.accountMaxConcurrency}，立即生效`)
     render()
   } catch (err) {
+    toast(err.message, true)
+  }
+}
+
+async function saveSpreadFreeModelsSetting(event) {
+  const input = event.currentTarget
+  const enabled = input.checked
+  input.disabled = true
+  try {
+    await api('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({ spreadFreeModels: enabled }),
+    })
+    toast(enabled ? '免费模型分散已开启（下个请求生效）' : '已恢复热 session 复用（最省额度）')
+    render()
+  } catch (err) {
+    input.checked = !enabled
+    input.disabled = false
     toast(err.message, true)
   }
 }

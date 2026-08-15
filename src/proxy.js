@@ -651,13 +651,20 @@ export function createProxyHandler(ctx) {
       ...freebuffAuthHeaders(upstream.token),
     }
 
-    const upstreamRes = await upstream.raw('/api/v1/chat/completions', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(forwardBody),
-      signal: reqToAbortSignal(req),
-      timeoutMs: config.limits.upstreamTimeoutSec * 1000,
-    })
+    const abortCtrl = reqToAbortSignal(req)
+    let upstreamRes
+    try {
+      upstreamRes = await upstream.raw('/api/v1/chat/completions', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(forwardBody),
+        signal: abortCtrl.signal,
+        timeoutMs: config.limits.upstreamTimeoutSec * 1000,
+      })
+    } finally {
+      // 响应头已到/上游已失败：后续由 pipe 的 socket 监听接管，移除本监听器
+      abortCtrl.cleanup()
+    }
 
     const status = upstreamRes.status
     const respHeaders = filterResponseHeaders(upstreamRes.headers)
@@ -796,12 +803,17 @@ export function createProxyHandler(ctx) {
 
     let upstreamRes
     try {
-      upstreamRes = await rt.upstream.raw(upstreamPath, {
-        method: req.method || 'GET',
-        headers,
-        body: rawBuf?.length ? rawBuf : undefined,
-        signal: reqToAbortSignal(req),
-      })
+      const abortCtrl = reqToAbortSignal(req)
+      try {
+        upstreamRes = await rt.upstream.raw(upstreamPath, {
+          method: req.method || 'GET',
+          headers,
+          body: rawBuf?.length ? rawBuf : undefined,
+          signal: abortCtrl.signal,
+        })
+      } finally {
+        abortCtrl.cleanup()
+      }
     } catch (err) {
       mapAndSendError(res, err)
       return
@@ -865,7 +877,7 @@ function handleStreamPipeFailure(err, req, res) {
     }
   }
   // 客户端主动断开（pipe 内 res.destroy 是我们自己触发的，不能用来判断客户端状态）
-  if (req.destroyed || err?.name === 'AbortError') {
+  if (req.destroyed || err?.name === 'AbortError' || err?.code === 'client_gone') {
     return {
       ok: false,
       wrote: true,
@@ -951,12 +963,25 @@ function releaseRequestSlot() {
   if (next) next()
 }
 
+/**
+ * 客户端断开的 abort 信号。**必须监听底层 socket 关闭**：node 的
+ * IncomingMessage 'close' 是「请求体读完」事件（body 读完即触发，早于我们注册
+ * 监听器的时机），监听它既收不到真正的断开、又会在 body 一读完就 abort 掉上游。
+ * 客户端断开（含 keep-alive 下断开）只会体现在 socket close 上。若这里不 abort，
+ * 上游 fetch 会一直挂着（最长等 upstreamTimeoutSec=600s），账号 chat 锁被占死，
+ * 后续所有请求排队超时（实测 inFlight 卡满、客户端 headers 超时）。
+ */
 function reqToAbortSignal(req) {
   const controller = new AbortController()
-  req.on('close', () => {
-    if (!req.complete) controller.abort()
-  })
-  return controller.signal
+  const onClose = () => controller.abort()
+  // once + 用后 removeListener：keep-alive 连接被多个请求共享，不清理会累积监听器
+  req.socket?.once('close', onClose)
+  return {
+    signal: controller.signal,
+    cleanup() {
+      req.socket?.removeListener('close', onClose)
+    },
+  }
 }
 
 /**
@@ -965,6 +990,10 @@ function reqToAbortSignal(req) {
  * idleTimeoutMs 没有新数据块 → 取消上游读取、销毁下游连接，并抛出带
  * stalled 标记的错误（err.wroteBytes 记录已下发的字节数），
  * 由调用方决定换号重试还是直接断开。
+ *
+ * 客户端断开也必须立即中断：实测 reader.cancel()/fetch abort 都不能让挂起的
+ * reader.read() 拒绝（会一直挂到 idle 超时），账号 chat 锁被占死。因此把
+ * 「客户端连接关闭」显式加进 race，断开瞬间 reject 并释放锁。
  */
 async function pipeWebStreamToNode(
   webBody,
@@ -976,9 +1005,13 @@ async function pipeWebStreamToNode(
   let wroteBytes = 0
   /** 确定性 stall 标志：不依赖 race 谁先拒绝（reader.cancel 的拒绝原因各实现不同）。 */
   let stalled = false
+  /** 确定性 client-gone 标志（同上：不依赖底层取消的拒绝原因）。 */
+  let clientGone = false
   let timer = null
   let rejectStall = null
+  let rejectGone = null
   let stallPromise = null
+  let gonePromise = null
 
   const clearTimer = () => {
     if (timer) clearTimeout(timer)
@@ -992,6 +1025,7 @@ async function pipeWebStreamToNode(
     stallPromise = new Promise((_, reject) => {
       rejectStall = reject
     })
+    stallPromise.catch(() => {}) // 防迟到拒绝变 unhandledRejection
     timer = setTimeout(() => {
       stalled = true
       reader.cancel().catch(() => {})
@@ -999,18 +1033,33 @@ async function pipeWebStreamToNode(
     }, idleTimeoutMs)
     if (timer.unref) timer.unref()
   }
+  const armGone = () => {
+    if (gonePromise) return
+    gonePromise = new Promise((_, reject) => {
+      rejectGone = reject
+    })
+    gonePromise.catch(() => {}) // 防迟到拒绝变 unhandledRejection
+  }
   const stallGuard = (promise) =>
-    Promise.race([promise, stallPromise].filter(Boolean))
+    Promise.race([promise, stallPromise, gonePromise].filter(Boolean))
 
-  nodeReq.on('close', () => {
+  // 客户端断开只能靠底层 socket close 感知（req 'close' 是 body 读完事件，
+  // 在管道注册前就已触发）；迟到触发的拒绝需要兜底 catch 防 unhandledRejection。
+  const socket = nodeReq.socket
+  const onSocketClose = () => {
+    clientGone = true
     reader.cancel().catch(() => {})
-  })
+    if (rejectGone) rejectGone(new ClientGoneError())
+  }
+  if (socket) socket.once('close', onSocketClose)
 
   armTimer()
+  armGone()
   try {
     while (true) {
       const { done, value } = await stallGuard(reader.read())
       if (stalled) throw new StreamStallError(idleTimeoutMs)
+      if (clientGone) throw new ClientGoneError()
       if (done) break
       if (value) {
         clearTimer()
@@ -1021,6 +1070,7 @@ async function pipeWebStreamToNode(
           // 下游背压：等待 drain 也可能被客户端卡住，同样受 idle 超时约束
           await stallGuard(onceDrain(nodeRes))
           if (stalled) throw new StreamStallError(idleTimeoutMs)
+          if (clientGone) throw new ClientGoneError()
         }
         armTimer()
       }
@@ -1033,6 +1083,9 @@ async function pipeWebStreamToNode(
     if (stalled && !(err instanceof StreamStallError)) {
       err = new StreamStallError(idleTimeoutMs)
     }
+    if (clientGone && !(err instanceof ClientGoneError)) {
+      err = new ClientGoneError()
+    }
     if (err && typeof err === 'object' && err.wroteBytes == null) {
       err.wroteBytes = wroteBytes
     }
@@ -1042,6 +1095,16 @@ async function pipeWebStreamToNode(
       // ignore
     }
     throw err
+  } finally {
+    if (socket) socket.removeListener('close', onSocketClose)
+  }
+}
+
+class ClientGoneError extends Error {
+  constructor() {
+    super('client disconnected while streaming upstream response')
+    this.name = 'ClientGoneError'
+    this.code = 'client_gone'
   }
 }
 

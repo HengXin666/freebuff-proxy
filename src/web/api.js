@@ -509,6 +509,7 @@ export function createWebApi(deps) {
         freeToolSignatureEnabled:
           settingsStore?.get().freeToolSignatureEnabled !== false,
         accountMaxConcurrency: settingsStore?.get().accountMaxConcurrency ?? 1,
+        spreadFreeModels: settingsStore?.get().spreadFreeModels !== false,
         minimalRoutingEnabled: settingsStore?.get().minimalRoutingEnabled === true,
         minimalRoutingMode: settingsStore?.get().minimalRoutingMode ?? 'auto',
       })
@@ -553,6 +554,15 @@ export function createWebApi(deps) {
           return true
         }
         patch.accountMaxConcurrency = body.accountMaxConcurrency
+      }
+      if (body.spreadFreeModels !== undefined) {
+        if (typeof body.spreadFreeModels !== 'boolean') {
+          sendJson(res, 400, {
+            error: 'spreadFreeModels 必须是布尔值',
+          })
+          return true
+        }
+        patch.spreadFreeModels = body.spreadFreeModels
       }
       if (body.minimalRoutingEnabled !== undefined) {
         if (typeof body.minimalRoutingEnabled !== 'boolean') {

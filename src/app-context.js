@@ -157,9 +157,12 @@ class ChatMutex {
 export class AccountRuntimes {
   /**
    * @param {import('./config.js').ProxyConfig} config
-   * @param {{ getAccountConcurrency?: () => number }} [opts]
+   * @param {{ getAccountConcurrency?: () => number, getSpreadFreeModels?: () => boolean }} [opts]
    *   getAccountConcurrency: 每个账号的并发上限来源（控制台设置/配置），
    *   默认取 config.limits.accountMaxConcurrency。
+   *   getSpreadFreeModels: 免费模型是否暴力分散到不同账号（默认 true，控制台
+   *   「负载均衡设置」可关）。免费额度不受单账号热 session 钉死，分散可避免
+   *   单个账号被占死拖垮全部请求，并拿到多账号并行吞吐。
    */
   constructor(config, opts = {}) {
     this.config = config
@@ -168,6 +171,10 @@ export class AccountRuntimes {
       typeof opts.getAccountConcurrency === 'function'
         ? opts.getAccountConcurrency
         : () => this.config.limits.accountMaxConcurrency || 1
+    this._getSpreadFreeModels =
+      typeof opts.getSpreadFreeModels === 'function'
+        ? opts.getSpreadFreeModels
+        : () => true
     /** @type {Map<string, { key: string, email: string, id: string | null, authToken: string, user: any, upstream: any, sessions: SessionManager, source: string }>} */
     this.byKey = new Map()
     /**
@@ -403,11 +410,11 @@ export class AccountRuntimes {
     const keys = this.allKeys()
     if (!keys.length) return []
 
-    // Session-first scheduling minimizes billable admissions:
-    // 1. reuse an already-live slot for the requested model;
-    // 2. use an account without a live slot;
-    // 3. replace a live slot for another model only as a last resort.
-    // Round-robin is only a tie-breaker inside the same tier.
+    // 免费模型暴力分散（默认开）：不优先热 session，按 空闲槽位 → 在途少 →
+    // 未耗尽 → 轮询 排序，请求轮转分散到不同账号——单账号被占死不再拖垮
+    // 全部请求，且多账号并行吞吐更高（免费额度不心疼 admit）。
+    // 关闭时保持 Session-first 调度（额度最省）：优先复用热 session。
+    const spread = this._getSpreadFreeModels() !== false
     const start = this._rr % keys.length
     const candidates = []
     for (let i = 0; i < keys.length; i++) {
@@ -427,6 +434,16 @@ export class AccountRuntimes {
       const chatLock = this.chatLocks.get(key)
       const inFlight = chatLock?.inFlight || 0
       const capacity = chatLock?.capacity || this._accountConcurrency()
+      if (spread) {
+        candidates.push({
+          key,
+          busy: inFlight >= capacity ? 1 : 0,
+          load: inFlight,
+          exhausted: exhausted ? 1 : 0,
+          rotation: i,
+        })
+        continue
+      }
       const sameModel = snap?.model === model
       // 同模型即将过期（live 但不可复用）且正被在途流占用：re-admit 必须等
       // 流结束（见 SessionManager.ensureSession），有免费账号时不应让新请求
@@ -450,15 +467,25 @@ export class AccountRuntimes {
         rotation: i,
       })
     }
-    candidates.sort(
-      (a, b) =>
-        a.tier - b.tier ||
-        b.sameModel - a.sameModel ||
-        a.busy - b.busy ||
-        a.load - b.load ||
-        a.exhausted - b.exhausted ||
-        a.rotation - b.rotation,
-    )
+    if (spread) {
+      candidates.sort(
+        (a, b) =>
+          a.busy - b.busy ||
+          a.load - b.load ||
+          a.exhausted - b.exhausted ||
+          a.rotation - b.rotation,
+      )
+    } else {
+      candidates.sort(
+        (a, b) =>
+          a.tier - b.tier ||
+          b.sameModel - a.sameModel ||
+          a.busy - b.busy ||
+          a.load - b.load ||
+          a.exhausted - b.exhausted ||
+          a.rotation - b.rotation,
+      )
+    }
     return candidates.map((item) => item.key)
   }
 

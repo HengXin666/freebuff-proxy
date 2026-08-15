@@ -5,6 +5,9 @@ const DEFAULT_SETTINGS = Object.freeze({
   freeToolSignatureEnabled: true,
   // 每个账号同一时间可并发的 SSE 响应流数（负载均衡），默认 1:1。
   accountMaxConcurrency: 1,
+  // 免费模型暴力分散到不同账号（默认开）：不钉死热 session，请求轮转分散，
+  // 单账号被占死不再拖垮全部请求，且多账号并行吞吐更高。
+  spreadFreeModels: true,
   // 极简路由（路由模式）：代理侧改写请求注入 persona/首轮核心工具面/近距离引导。
   minimalRoutingEnabled: false,
   // 路由风格钉死：auto（按任务分类）/ spec（计划-集体，we/let's 链）/ react（执行者）/ weak（内部路由）。
@@ -33,6 +36,9 @@ export class SettingsStore {
         this.settings.accountMaxConcurrency = clampConcurrency(
           raw.accountMaxConcurrency,
         )
+      }
+      if (typeof raw?.spreadFreeModels === 'boolean') {
+        this.settings.spreadFreeModels = raw.spreadFreeModels
       }
       if (typeof raw?.minimalRoutingEnabled === 'boolean') {
         this.settings.minimalRoutingEnabled = raw.minimalRoutingEnabled
@@ -69,6 +75,12 @@ export class SettingsStore {
       this.settings.accountMaxConcurrency = clampConcurrency(
         next.accountMaxConcurrency,
       )
+    }
+    if (next?.spreadFreeModels !== undefined) {
+      if (typeof next.spreadFreeModels !== 'boolean') {
+        throw new TypeError('spreadFreeModels must be a boolean')
+      }
+      this.settings.spreadFreeModels = next.spreadFreeModels
     }
     if (next?.minimalRoutingEnabled !== undefined) {
       if (typeof next.minimalRoutingEnabled !== 'boolean') {
