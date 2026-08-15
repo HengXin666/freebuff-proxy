@@ -185,9 +185,34 @@ const ROOT_AGENT_BY_MODEL = {
 }
 
 /**
+ * base3 单循环 harness 孪生 agent（freebuff free-agents.ts：
+ * FREEBUFF_WEB_BASE3_AGENT_ID_BY_MODEL）。主 agent 因
+ * free_mode_invalid_agent_model 被拒时回退到这里（上游按用途/推理任务可能
+ * 路由到不同 agent，有些带单次 output 限制会截断长思考链——换 agent 兜底）。
+ */
+const BASE3_AGENT_BY_MODEL = {
+  'deepseek/deepseek-v4-flash': 'base3-free-deepseek-flash',
+  'deepseek/deepseek-v4-pro': 'base3-free-deepseek',
+  'openai/gpt-5.6-luna': 'base3-free-luna',
+  'minimax/minimax-m3': 'base3-free-minimax-m3',
+  'mimo/mimo-v2.5': 'base3-free-mimo',
+  'z-ai/glm-5.2': 'base3-free-glm',
+  'anthropic/claude-fable-5': 'base3-free-fable',
+}
+
+/**
  * @param {string} modelId
  * @returns {string}
  */
 export function agentIdForModel(modelId) {
   return ROOT_AGENT_BY_MODEL[modelId] || 'base2-free'
+}
+
+/**
+ * 主 agent 不可用时的兜底 agent（base3 孪生；无孪生则回退通用 base2-free）。
+ * @param {string} modelId
+ * @returns {string}
+ */
+export function agentFallbackForModel(modelId) {
+  return BASE3_AGENT_BY_MODEL[modelId] || 'base2-free'
 }

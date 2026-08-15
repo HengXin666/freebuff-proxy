@@ -148,6 +148,13 @@ globalThis.fetch = async (url, init = {}) => {
       if (mockMode === 'run_500_a' && String(runAuth).includes('token-a')) {
         return jsonRes({ error: 'internal_error', message: 'run boom' }, 500)
       }
+      // agent 兜底：主 agent（base2）被拒，base3 孪生成功
+      if (mockMode === 'agent_fallback' && body.agentId === 'base2-free-deepseek-flash') {
+        return jsonRes(
+          { error: 'free_mode_invalid_agent_model', message: 'Free mode is only available for specific agent and model combinations.' },
+          403,
+        )
+      }
       return jsonRes({ runId: '00000000-0000-4000-8000-000000000001' })
     }
     if (body.action === 'FINISH') {
@@ -353,8 +360,13 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
     reasoning: { effort: 'low', other: 1 },
   })
   assert.equal(r.reasoning_effort, undefined)
-  assert.equal(r.reasoning.effort, 'high')
+  // 官方 efforts 表（freebuff free-agents/reasoning-effort）：flash=[low,high,max]、
+  // pro=[high,max]——max 是合法档位，保留以支持最深思考（不降档）
+  assert.equal(r.reasoning.effort, 'max')
   assert.equal(r.reasoning.other, 1)
+
+  const r2 = normalizeReasoningFields({ reasoning_effort: 'high' })
+  assert.equal(r2.reasoning.effort, 'high')
 
   const originalTools = [
     { type: 'function', function: { name: 'web_search' } },
@@ -1127,6 +1139,28 @@ assert.equal(requireModelId(''), null)
   await ensurePromise
   assert.equal(sessionDeletes, 1, '旧 session 应在流结束后才释放')
   assert.equal(sessionPosts, 2, '应 admit 一个新 session')
+  mockMode = 'ok'
+}
+
+// agent 兜底：主 agent 403 free_mode_invalid_agent_model → 自动回退 base3 孪生
+{
+  mockMode = 'agent_fallback'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  const res = await chat({
+    model: 'deepseek/deepseek-v4-flash',
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  // startAgentRun 至少尝试了 base3（fallback），且 chat 成功
+  const startCalls = calls.filter(
+    (c) => c.url.includes('/agent-runs') && JSON.parse(c.body).action === 'START',
+  )
+  assert.ok(
+    startCalls.some((c) => JSON.parse(c.body).agentId === 'base3-free-deepseek-flash'),
+    `应回退到 base3 孪生 agent, got ${JSON.stringify(startCalls.map((c) => JSON.parse(c.body).agentId))}`,
+  )
   mockMode = 'ok'
 }
 

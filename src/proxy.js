@@ -3,6 +3,7 @@ import {
   buildModelsListResponse,
   modelIdsFromSession,
   agentIdForModel,
+  agentFallbackForModel,
 } from './model.js'
 import {
   extractGateError,
@@ -404,8 +405,35 @@ export function createProxyHandler(ctx) {
               )
             }
 
+            // agent 选择：主 agent 被上游以 free_mode_invalid_agent_model 拒绝时
+            // （上游按用途/推理任务可能只接受特定 agent，且部分 agent 带单次
+            // output 限制会截断长思考链），回退 base3 孪生 agent 再试一次。
             const agentId = agentIdForModel(upstreamModel)
-            runId = await rt.upstream.startAgentRun({ agentId })
+            try {
+              runId = await rt.upstream.startAgentRun({ agentId })
+            } catch (agentErr) {
+              if (
+                agentErr instanceof UpstreamError &&
+                (agentErr.code === 'start_agent_run_failed' ||
+                  agentErr.code === 'free_mode_invalid_agent_model') &&
+                agentErr.status === 403
+              ) {
+                const fbAgentId = agentFallbackForModel(upstreamModel)
+                if (fbAgentId !== agentId) {
+                  logger.warn('primary agent rejected; falling back', {
+                    agentId,
+                    fbAgentId,
+                    model: upstreamModel,
+                    key: rt.key,
+                  })
+                  runId = await rt.upstream.startAgentRun({ agentId: fbAgentId })
+                } else {
+                  throw agentErr
+                }
+              } else {
+                throw agentErr
+              }
+            }
             logger.info('started agent run', {
               runId,
               agentId,
