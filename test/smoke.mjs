@@ -541,6 +541,65 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
     assert.equal(out.messages.at(-1).content, '请修复这个报错')
   }
 
+  // 工具循环轮次（最后一条是 tool 结果）→ flash+spec 锚定仍注入（修复思维链衰减）
+  {
+    const out = applyMinimalRouting(
+      {
+        messages: [
+          { role: 'user', content: '做一个我的世界网页版' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
+          },
+          { role: 'tool', tool_call_id: 'c1', content: 'total 0' },
+        ],
+        tools: allTools,
+      },
+      'deepseek/deepseek-v4-flash',
+      { modeOverride: 'spec' },
+    )
+    assert.equal(out.messages.at(-1).role, 'user')
+    assert.equal(out.messages.at(-1).content, WE_CHAIN_ANCHOR_FLASH)
+    // 已有 tool_calls → 工具放行全部
+    assert.equal(out.tools.length, allTools.length)
+  }
+
+  // weak 模式工具循环轮次 → 引导仍注入
+  {
+    const out = applyMinimalRouting(
+      {
+        messages: [
+          { role: 'user', content: '随便聊聊' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
+          },
+          { role: 'tool', tool_call_id: 'c1', content: 'ok' },
+        ],
+      },
+      'deepseek/deepseek-v4-pro',
+    )
+    assert.equal(out.messages.at(-1).role, 'user')
+    assert.equal(out.messages.at(-1).content, GUIDE_WEAK)
+  }
+
+  // assistant 文本回复是最后一条 → 不追加（避免"用户插话"）
+  {
+    const out = applyMinimalRouting(
+      {
+        messages: [
+          { role: 'user', content: '做一个我的世界网页版' },
+          { role: 'assistant', content: '好的，我来做。' },
+        ],
+      },
+      'deepseek/deepseek-v4-flash',
+      { modeOverride: 'spec' },
+    )
+    assert.equal(out.messages.at(-1).role, 'assistant')
+  }
+
   // 历史已有 assistant tool_calls → 放行全部工具（首轮锚定完成，不再裁剪）
   {
     const out = applyMinimalRouting(

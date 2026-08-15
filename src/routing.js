@@ -266,8 +266,11 @@ export function applyMinimalRouting(body, modelId, opts = {}) {
     }
   }
 
-  // 3) near-field 引导：仅当最后一个消息是（有文本的）用户消息时追加，避免插在
-  //    assistant tool_calls 与 tool 结果之间破坏协议配对。
+  // 3) near-field 引导：最后一个消息是「用户消息」或「tool 结果」都追加。
+  //    工具循环里最后一条通常是 tool 结果——若只在用户消息后追加，锚定会在
+  //    第二轮起断供，思维链从 we/let's 衰减回 let me（实测 turn1 step2 复现）。
+  //    最后一条是 assistant（文本回复 / tool_calls）时跳过：文本回复后追加会
+  //    变成"用户插话"，tool_calls 后追加会破坏与随后 tool 结果的配对。
   //    - weak 模式：固定路由引导（简单任务快速收敛 / 复杂任务深度收敛）；
   //    - flash + spec：we/let's 集体链近距锚定（首 token We 自锚定，P14/P15）。
   let routedMessages = routed
@@ -275,8 +278,13 @@ export function applyMinimalRouting(body, modelId, opts = {}) {
   if (bandOf(mode) === 'weak' || flashSpecAnchor) {
     const lastIdx = routedMessages.length - 1
     const last = routedMessages[lastIdx]
-    if (last && last.role === 'user' && messageText(last).trim().length > 0) {
-      const guide = flashSpecAnchor || (isComplexTask(messageText(last)) ? GUIDE_DEEP : GUIDE_WEAK)
+    const lastText = messageText(last)
+    const isUserTurn = last && last.role === 'user' && lastText.trim().length > 0
+    const isToolTurn = last && (last.role === 'tool' || (last.role === 'user' && last.tool_call_id))
+    if (isUserTurn || isToolTurn) {
+      // 复杂度判断取"最近的真实用户任务文本"（tool 轮次回退到会话首个用户消息）
+      const complexityText = isUserTurn ? lastText : firstUserText || ''
+      const guide = flashSpecAnchor || (isComplexTask(complexityText) ? GUIDE_DEEP : GUIDE_WEAK)
       routedMessages = [
         ...routedMessages,
         { role: 'user', content: guide },
