@@ -10,7 +10,9 @@ const el = (tag, attrs = {}, children = []) => {
     if (k === 'class') node.className = v
     else if (k === 'html') node.innerHTML = v
     else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v)
-    else if (v !== undefined && v !== null) node.setAttribute(k, v)
+    // false 值不 setAttribute：否则 selected:false / disabled:false 会被写成
+    // 字符串 "false" 变成"已设置"，导致下拉永远选中最后一项、按钮被误禁用。
+    else if (v !== undefined && v !== null && v !== false) node.setAttribute(k, v)
   }
   for (const c of [].concat(children)) {
     if (c == null) continue
@@ -373,24 +375,30 @@ async function renderProxySettings(view) {
     ['react', 'react · 执行者（let me 链）'],
     ['weak', 'weak · 内部路由（模型自分类）'],
   ]
+  const modeLabel = (mode) => (modeOptions.find(([v]) => v === mode) || [mode, mode])[1]
   view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
     el('div', {}, [
       el('h3', { style: 'margin:0 0 2px' }, '路由风格（思维链）'),
       el('span', { class: 'muted' }, '钉死路由要产出的思维链风格；spec 模式会附加 we/let\'s 集体语域锚定，立即生效'),
     ]),
-    el('div', { class: 'row' }, [
+    el('div', { class: 'row', style: 'margin-top:8px' }, [
       el('select', {
         id: 'minimal-routing-mode',
-        style: 'min-width:240px',
+        style: 'min-width:260px',
         ...(state.me.role === 'admin' ? {} : { disabled: '' }),
-      }, modeOptions.map(([v, label]) => el('option', { value: v, selected: v === routingMode }, label))),
+      }, modeOptions.map(([v, label]) => {
+        const attrs = { value: v }
+        if (v === routingMode) attrs.selected = ''
+        return el('option', attrs, label)
+      })),
       state.me.role === 'admin'
         ? el('button', { class: 'primary', onclick: saveMinimalRoutingMode }, '保存并生效')
         : null,
     ]),
-    state.me.role !== 'admin'
-      ? el('div', { class: 'muted', style: 'margin-top:8px' }, `当前路由风格：${routingMode}（管理员可调）`)
-      : null,
+    el('div', { class: 'muted', style: 'margin-top:8px' }, [
+      `当前生效：${modeLabel(routingMode)}`,
+      state.me.role !== 'admin' ? '（管理员可调）' : '',
+    ]),
   ]))
 
   // 负载均衡：每账号并发上限（1:1 默认；一个账号可同时转发多条 SSE 流）
