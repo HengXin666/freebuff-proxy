@@ -439,15 +439,17 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
     assert.ok(out.messages[0].content.includes(SPEC_PERSONA))
     // spec 模式缀上 we/let's 集体链锚定
     assert.ok(out.messages[0].content.includes(WE_CHAIN_ANCHOR))
-    // 客户端 system 保留在其后（persona 置顶，极简但不丢客户端上下文）
-    assert.match(out.messages[1].content, /Keep the role/)
+    // 套件 applyPersona 语义：客户端 persona 段被替换，其余 section 保留在同一条
+    // system 消息里（路由 persona 在前，Keep the role 在后）——不再是前置两条 system
+    assert.ok(out.messages[0].content.indexOf(SPEC_PERSONA) < out.messages[0].content.indexOf('Keep the role'))
+    assert.ok(!out.messages[0].content.includes('Keep the role.\n\nYou are'))
     // end_turn 由 proxy.js 的 ensureFreebuffToolSignature 在改写后追加，此处不出现
     assert.deepEqual(
       out.tools.map((t) => t.function.name),
       ['read', 'edit', 'glob', 'grep', 'bash'],
     )
-    // 非 weak 不追加引导（persona system + 客户端 system + user = 3）
-    assert.equal(out.messages.length, 3)
+    // 非 weak 不追加引导（替换后的 system + user = 2）
+    assert.equal(out.messages.length, 2)
   }
 
   // build task → react persona + 写优先工具面
@@ -638,6 +640,37 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
     )
     assert.equal(out.messages.length, 3) // system + user + assistant
     assert.equal(out.messages[2].role, 'assistant')
+  }
+
+  // 标准预设形态：客户端 persona（"You are a coding agent powered by..."）被替换，
+  // "### " 工具/工作区 section 保留在路由 persona 之后
+  {
+    const stdSystem =
+      'You are a coding agent powered by the deepseek/deepseek-v4-flash model. Your working directory is /workspace.\n\n### 工具使用\n用 read/edit/write/glob/grep/bash 操作文件。\n### 工作区\nAGENTS.md 是最高优先级约定。'
+    const out = applyMinimalRouting(
+      { messages: [{ role: 'system', content: stdSystem }, { role: 'user', content: '修复 bug' }], tools: allTools },
+      'deepseek/deepseek-v4-pro',
+    )
+    const sys0 = out.messages[0].content
+    assert.ok(sys0.startsWith(FREEBUFF_SYSTEM_OPENING))
+    assert.ok(sys0.includes(SPEC_PERSONA))
+    // 原 persona 句被移除，其余 section 保留
+    assert.ok(!sys0.includes('coding agent powered by'))
+    assert.ok(sys0.includes('### 工具使用'))
+    assert.ok(sys0.includes('AGENTS.md 是最高优先级约定'))
+    assert.equal(out.messages.length, 2) // 替换后的 system + user
+  }
+
+  // 客户端 system 不以 "You are" 开头 → 无法识别 persona 段，回退前置 persona 消息
+  {
+    const out = applyMinimalRouting(
+      { messages: [{ role: 'system', content: 'Be brief. 只给结论。' }, { role: 'user', content: '修复 bug' }] },
+      'deepseek/deepseek-v4-pro',
+    )
+    assert.equal(out.messages[0].role, 'system')
+    assert.ok(out.messages[0].content.startsWith(FREEBUFF_SYSTEM_OPENING))
+    assert.equal(out.messages[1].content, 'Be brief. 只给结论。') // 原样保留
+    assert.equal(out.messages.length, 3) // 前置 persona + 客户端 system + user
   }
 
   // 客户端没有 tools → 保持空
@@ -910,8 +943,11 @@ function chat(body, headers = {}) {
   assert.equal(onBody.messages[0].role, 'system')
   assert.ok(onBody.messages[0].content.startsWith(FREEBUFF_SYSTEM_OPENING))
   assert.ok(onBody.messages[0].content.includes(SPEC_PERSONA))
-  assert.equal(onBody.messages[1].content, msgs[0].content)
-  assert.equal(onBody.messages.length, 3) // persona + 客户端 system + user，非 weak 无引导
+  // 套件 applyPersona 语义：客户端 persona 段被路由 persona 替换，其余 section 保留
+  assert.ok(onBody.messages[0].content.includes('Keep the role'))
+  assert.ok(!onBody.messages[0].content.includes('Keep the role.\n\nYou are'))
+  assert.equal(onBody.messages[1].role, 'user')
+  assert.equal(onBody.messages.length, 2) // 替换后的 system + user，非 weak 无引导
   assert.deepEqual(
     onBody.tools.map((t) => t.function.name),
     ['read', 'edit', 'glob', 'grep', 'bash', 'end_turn'],
