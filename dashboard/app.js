@@ -339,6 +339,60 @@ async function renderProxySettings(view) {
     ]),
   ]))
 
+  // 极简路由（路由模式）：代理侧改写请求，注入 persona / 首轮核心工具面 /
+  // 近距离引导（思路来自 dsh-routing-suite 的 router-standard preset 实测：
+  // 极简条件接近训练分布，同模型性能最高）。客户端侧路由注入经过翻译/反向
+  // 代理链可能被丢弃，此开关让代理兜底保证路由生效。
+  const routingEnabled = settings.minimalRoutingEnabled === true
+  const routingToggleAttrs = {
+    id: 'minimal-routing',
+    type: 'checkbox',
+    class: 'switch-input',
+    onchange: saveMinimalRoutingSetting,
+  }
+  if (routingEnabled) routingToggleAttrs.checked = ''
+  if (state.me.role !== 'admin') routingToggleAttrs.disabled = ''
+  view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
+    el('div', {}, [
+      el('h3', { style: 'margin:0 0 2px' }, '极简路由（路由模式）'),
+      el('span', { class: 'muted' }, '按任务自动注入 spec/react/weak persona，首轮只暴露核心工具，weak 模式追加近距离引导；保存立即生效（参考 dsh-routing-suite）'),
+    ]),
+    el('label', { class: 'switch', for: 'minimal-routing' }, [
+      el('input', routingToggleAttrs),
+      el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
+      el('span', { class: 'switch-status' }, routingEnabled ? '已开启' : '已关闭'),
+    ]),
+  ]))
+
+  // 路由风格：钉死某条思维链（spec = we/let's 集体计划链；react = let me 执行链；
+  // weak = 模型自分类），默认 auto 按任务自动分类
+  const routingMode = settings.minimalRoutingMode ?? 'auto'
+  const modeOptions = [
+    ['auto', 'auto · 按任务自动分类'],
+    ['spec', 'spec · 计划-集体（we/let\'s 链）'],
+    ['react', 'react · 执行者（let me 链）'],
+    ['weak', 'weak · 内部路由（模型自分类）'],
+  ]
+  view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
+    el('div', {}, [
+      el('h3', { style: 'margin:0 0 2px' }, '路由风格（思维链）'),
+      el('span', { class: 'muted' }, '钉死路由要产出的思维链风格；spec 模式会附加 we/let\'s 集体语域锚定，立即生效'),
+    ]),
+    el('div', { class: 'row' }, [
+      el('select', {
+        id: 'minimal-routing-mode',
+        style: 'min-width:240px',
+        ...(state.me.role === 'admin' ? {} : { disabled: '' }),
+      }, modeOptions.map(([v, label]) => el('option', { value: v, selected: v === routingMode }, label))),
+      state.me.role === 'admin'
+        ? el('button', { class: 'primary', onclick: saveMinimalRoutingMode }, '保存并生效')
+        : null,
+    ]),
+    state.me.role !== 'admin'
+      ? el('div', { class: 'muted', style: 'margin-top:8px' }, `当前路由风格：${routingMode}（管理员可调）`)
+      : null,
+  ]))
+
   // 负载均衡：每账号并发上限（1:1 默认；一个账号可同时转发多条 SSE 流）
   const concurrency = settings.accountMaxConcurrency ?? 1
   view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
@@ -414,6 +468,39 @@ async function saveFreeToolSignatureSetting(event) {
   } catch (err) {
     input.checked = !enabled
     input.disabled = false
+    toast(err.message, true)
+  }
+}
+
+async function saveMinimalRoutingSetting(event) {
+  const input = event.currentTarget
+  const enabled = input.checked
+  input.disabled = true
+  try {
+    await api('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({ minimalRoutingEnabled: enabled }),
+    })
+    toast(enabled ? '极简路由已开启（下个请求生效）' : '极简路由已关闭')
+    render()
+  } catch (err) {
+    input.checked = !enabled
+    input.disabled = false
+    toast(err.message, true)
+  }
+}
+
+async function saveMinimalRoutingMode() {
+  const select = $('#minimal-routing-mode')
+  if (!select) return
+  try {
+    const r = await api('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({ minimalRoutingMode: select.value }),
+    })
+    toast(`路由风格已设为 ${r.minimalRoutingMode}，下个请求生效`)
+    render()
+  } catch (err) {
     toast(err.message, true)
   }
 }

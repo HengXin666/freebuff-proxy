@@ -15,6 +15,22 @@ import {
   FREEBUFF_SIGNATURE_TOOL_NAME,
   FREEBUFF_SYSTEM_OPENING,
 } from '../src/free-mode.js'
+import {
+  applyMinimalRouting,
+  bandOf,
+  classifyTask,
+  coreFor,
+  personaFor,
+  resolveMode,
+  SPEC_PERSONA,
+  REACT_PERSONA,
+  WEAK_PRO,
+  WEAK_FLASH,
+  WE_CHAIN_ANCHOR,
+  WE_CHAIN_ANCHOR_FLASH,
+  GUIDE_WEAK,
+  GUIDE_DEEP,
+} from '../src/routing.js'
 import { SettingsStore } from '../src/web/settings-store.js'
 import {
   extractGateError,
@@ -142,7 +158,7 @@ globalThis.fetch = async (url, init = {}) => {
   }
   if (u.includes('/api/v1/chat/completions')) {
     const body = JSON.parse(init.body)
-    assert.equal(body.model, 'deepseek/deepseek-v4-flash')
+    assert.match(body.model, /^[a-z0-9-]+\/[a-z0-9.-]+$/i)
     assert.equal(body.codebuff_metadata.cost_mode, 'free')
     assert.ok(body.codebuff_metadata.freebuff_instance_id)
     assert.equal(
@@ -155,7 +171,7 @@ globalThis.fetch = async (url, init = {}) => {
       String(body.messages[0].content).startsWith(FREEBUFF_SYSTEM_OPENING),
     )
     const userMsg = body.messages.find((m) => m.role === 'user')
-    assert.equal(userMsg?.content, 'hello')
+    assert.ok(userMsg && String(userMsg.content).length > 0)
     assert.ok(headers.Authorization || headers.authorization)
     assert.ok(headers['x-codebuff-api-key'] || headers['X-Codebuff-Api-Key'])
 
@@ -356,6 +372,287 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
   )
 }
 
+// --- unit: minimal routing (dsh-routing-suite protocol, proxy-side) ---
+{
+  // task classification: build → react, fix → spec, ambiguous → weak
+  assert.equal(classifyTask('帮我写一个爬虫脚本抓取数据'), 1)
+  assert.equal(classifyTask('修复这个崩溃的 bug 并排查原因'), 0)
+  assert.equal(classifyTask('你好，随便聊聊'), 'weak')
+  assert.equal(classifyTask(''), 'weak')
+  assert.equal(classifyTask(undefined), 'weak')
+
+  // bands
+  assert.equal(bandOf(0), 'spec')
+  assert.equal(bandOf(0.3), 'transition')
+  assert.equal(bandOf(1), 'react')
+  assert.equal(bandOf('weak'), 'weak')
+
+  // 路由风格钉死（we/let's 链 / let me 链 / weak / auto 分类）
+  assert.equal(resolveMode('spec', '从零开发一个网页应用'), 0)
+  assert.equal(resolveMode('react', '请修复这个报错'), 1)
+  assert.equal(resolveMode('weak', '从零开发一个网页应用'), 'weak')
+  assert.equal(resolveMode('auto', '从零开发一个网页应用'), 1)
+  assert.equal(resolveMode(null, '从零开发一个网页应用'), 1)
+  assert.equal(resolveMode(undefined, '请修复这个报错'), 0)
+
+  // personas by mode + model
+  assert.equal(personaFor(0, 'deepseek/deepseek-v4-pro'), SPEC_PERSONA)
+  assert.equal(personaFor(1, 'deepseek/deepseek-v4-pro'), REACT_PERSONA)
+  assert.equal(personaFor('weak', 'deepseek/deepseek-v4-pro'), WEAK_PRO)
+  assert.equal(personaFor('weak', 'deepseek/deepseek-v4-flash'), WEAK_FLASH)
+  assert.deepEqual(coreFor(0), ['read', 'edit', 'glob', 'grep'])
+  assert.deepEqual(coreFor(1), ['read', 'write', 'edit'])
+
+  const allTools = [
+    { type: 'function', function: { name: 'read' } },
+    { type: 'function', function: { name: 'edit' } },
+    { type: 'function', function: { name: 'glob' } },
+    { type: 'function', function: { name: 'grep' } },
+    { type: 'function', function: { name: 'write' } },
+    { type: 'function', function: { name: 'bash' } },
+    { type: 'function', function: { name: 'todo_write' } },
+    { type: 'function', function: { name: 'skill' } },
+    { type: 'function', function: { name: 'workflow' } },
+  ]
+
+  // fix task → spec persona 置顶 + 读优先工具面；客户端 system 保留在后面；
+  // 无引导（非 weak）；其他字段（model/stream/thinking）原样保留
+  {
+    const out = applyMinimalRouting(
+      {
+        model: 'deepseek/deepseek-v4-pro',
+        stream: true,
+        thinking: { type: 'enabled' },
+        messages: [
+          { role: 'system', content: 'You are Buffy, the strategic coding assistant.\n\nKeep the role.' },
+          { role: 'user', content: '请修复这个报错并排查根因' },
+        ],
+        tools: allTools,
+      },
+      'deepseek/deepseek-v4-pro',
+    )
+    assert.equal(out.model, 'deepseek/deepseek-v4-pro')
+    assert.equal(out.stream, true)
+    assert.deepEqual(out.thinking, { type: 'enabled' })
+    assert.equal(out.messages[0].role, 'system')
+    assert.ok(out.messages[0].content.startsWith(FREEBUFF_SYSTEM_OPENING))
+    assert.ok(out.messages[0].content.includes(SPEC_PERSONA))
+    // spec 模式缀上 we/let's 集体链锚定
+    assert.ok(out.messages[0].content.includes(WE_CHAIN_ANCHOR))
+    // 客户端 system 保留在其后（persona 置顶，极简但不丢客户端上下文）
+    assert.match(out.messages[1].content, /Keep the role/)
+    // end_turn 由 proxy.js 的 ensureFreebuffToolSignature 在改写后追加，此处不出现
+    assert.deepEqual(
+      out.tools.map((t) => t.function.name),
+      ['read', 'edit', 'glob', 'grep', 'bash'],
+    )
+    // 非 weak 不追加引导（persona system + 客户端 system + user = 3）
+    assert.equal(out.messages.length, 3)
+  }
+
+  // build task → react persona + 写优先工具面
+  {
+    const out = applyMinimalRouting(
+      {
+        messages: [{ role: 'user', content: '从零开发一个网页应用' }],
+        tools: allTools,
+      },
+      'deepseek/deepseek-v4-pro',
+    )
+    assert.ok(out.messages[0].content.includes(REACT_PERSONA))
+    // 过滤保持原始工具顺序
+    assert.deepEqual(
+      out.tools.map((t) => t.function.name),
+      ['read', 'edit', 'write', 'bash'],
+    )
+  }
+
+  // 模糊任务 → weak persona + 近距离引导（简单任务用 GUIDE_WEAK）
+  {
+    const out = applyMinimalRouting(
+      {
+        messages: [{ role: 'user', content: '你好' }],
+        tools: allTools,
+      },
+      'deepseek/deepseek-v4-pro',
+    )
+    assert.ok(out.messages[0].content.includes(WEAK_PRO))
+    assert.equal(out.messages.length, 3) // system + user + guide
+    assert.equal(out.messages[2].role, 'user')
+    assert.equal(out.messages[2].content, GUIDE_WEAK)
+  }
+
+  // 复杂任务 → GUIDE_DEEP（>120 字符且无强 build/fix 关键词 → weak + 深度引导）
+  {
+    const longNeutral =
+      '我们需要综合考虑当前的状况和未来的目标，从不同维度评估可能的走向，并给出一个平衡的结论，涵盖利弊、风险与收益，同时说明在哪些情况下应该调整优先级，在哪些情况下保持现状即可，另外还需要注意资源与时间上的约束，以及不同阶段之间如何衔接才能让整体推进更加顺畅。'
+    assert.ok(longNeutral.length > 120)
+    const out = applyMinimalRouting(
+      {
+        messages: [{ role: 'user', content: longNeutral }],
+      },
+      'deepseek/deepseek-v4-pro',
+    )
+    assert.equal(out.messages.at(-1).content, GUIDE_DEEP)
+  }
+
+  // Flash 模型 → weak 用 WEAK_FLASH
+  {
+    const out = applyMinimalRouting(
+      { messages: [{ role: 'user', content: '随便聊聊' }] },
+      'deepseek/deepseek-v4-flash',
+    )
+    assert.ok(out.messages[0].content.includes(WEAK_FLASH))
+  }
+
+  // Flash + spec（auto 分类命中）：system 保持纯 spec 句（远距锚定在 flash 上反噬），
+  // 改由近距离 user 消息注入 we/let's 首 token 锚定
+  {
+    const out = applyMinimalRouting(
+      { messages: [{ role: 'user', content: '请修复这个报错' }], tools: allTools },
+      'deepseek/deepseek-v4-flash',
+    )
+    assert.ok(out.messages[0].content.includes(SPEC_PERSONA))
+    assert.ok(!out.messages[0].content.includes(WE_CHAIN_ANCHOR)) // 远距不加
+    assert.equal(out.messages.at(-1).role, 'user')
+    assert.equal(out.messages.at(-1).content, WE_CHAIN_ANCHOR_FLASH)
+  }
+
+  // Flash + spec 钉死（build 任务也强制）：同样近距锚定
+  {
+    const out = applyMinimalRouting(
+      { messages: [{ role: 'user', content: '从零开发一个网页应用' }], tools: allTools },
+      'deepseek/deepseek-v4-flash',
+      { modeOverride: 'spec' },
+    )
+    assert.ok(out.messages[0].content.includes(SPEC_PERSONA))
+    assert.ok(!out.messages[0].content.includes(WE_CHAIN_ANCHOR))
+    assert.equal(out.messages.at(-1).content, WE_CHAIN_ANCHOR_FLASH)
+  }
+
+  // Pro + spec：远距 persona 锚定，无近距引导
+  {
+    const out = applyMinimalRouting(
+      { messages: [{ role: 'user', content: '请修复这个报错' }] },
+      'deepseek/deepseek-v4-pro',
+    )
+    assert.ok(out.messages[0].content.includes(WE_CHAIN_ANCHOR))
+    assert.equal(out.messages.at(-1).role, 'user')
+    assert.equal(out.messages.at(-1).content, '请修复这个报错')
+  }
+
+  // 历史已有 assistant tool_calls → 放行全部工具（首轮锚定完成，不再裁剪）
+  {
+    const out = applyMinimalRouting(
+      {
+        messages: [
+          { role: 'user', content: '写一个脚本' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
+          },
+          { role: 'tool', tool_call_id: 'c1', content: 'ok' },
+        ],
+        tools: allTools,
+      },
+      'deepseek/deepseek-v4-pro',
+    )
+    assert.deepEqual(
+      out.tools.map((t) => t.function.name),
+      allTools.map((t) => t.function.name),
+    )
+    // 最后一个消息是 tool 结果 → 不追加引导
+    assert.equal(out.messages.length, 4)
+  }
+
+  // 最后一个消息不是用户消息（assistant 文本回复）→ 不追加引导
+  {
+    const out = applyMinimalRouting(
+      {
+        messages: [
+          { role: 'user', content: '你好' },
+          { role: 'assistant', content: '你好！有什么可以帮你？' },
+        ],
+      },
+      'deepseek/deepseek-v4-pro',
+    )
+    assert.equal(out.messages.length, 3) // system + user + assistant
+    assert.equal(out.messages[2].role, 'assistant')
+  }
+
+  // 客户端没有 tools → 保持空
+  {
+    const out = applyMinimalRouting(
+      { messages: [{ role: 'user', content: '修复 bug' }] },
+      'deepseek/deepseek-v4-pro',
+    )
+    assert.deepEqual(out.tools, [])
+  }
+
+  // 路由风格钉死：build 任务强制 spec（we/let's 链）→ spec persona + 锚定 + 读优先工具
+  {
+    const out = applyMinimalRouting(
+      { messages: [{ role: 'user', content: '从零开发一个网页应用' }], tools: allTools },
+      'deepseek/deepseek-v4-pro',
+      { modeOverride: 'spec' },
+    )
+    assert.ok(out.messages[0].content.includes(SPEC_PERSONA))
+    assert.ok(out.messages[0].content.includes(WE_CHAIN_ANCHOR))
+    assert.deepEqual(
+      out.tools.map((t) => t.function.name),
+      ['read', 'edit', 'glob', 'grep', 'bash'],
+    )
+  }
+
+  // 路由风格钉死：fix 任务强制 react → react persona（无锚定）+ 写优先工具
+  {
+    const out = applyMinimalRouting(
+      { messages: [{ role: 'user', content: '请修复这个报错' }], tools: allTools },
+      'deepseek/deepseek-v4-pro',
+      { modeOverride: 'react' },
+    )
+    assert.ok(out.messages[0].content.includes(REACT_PERSONA))
+    assert.ok(!out.messages[0].content.includes(WE_CHAIN_ANCHOR))
+    assert.deepEqual(
+      out.tools.map((t) => t.function.name),
+      ['read', 'edit', 'write', 'bash'],
+    )
+  }
+
+  // 工具保证：客户端工具全是非常规名 → 核心裁剪为空 → 保留原工具集（模型仍可调用工具）
+  {
+    const weirdTools = [
+      { type: 'function', function: { name: 'web_search' } },
+      { type: 'function', function: { name: 'fetch_page' } },
+    ]
+    const out = applyMinimalRouting(
+      { messages: [{ role: 'user', content: '修复 bug' }], tools: weirdTools },
+      'deepseek/deepseek-v4-pro',
+    )
+    assert.deepEqual(
+      out.tools.map((t) => t.function.name),
+      ['web_search', 'fetch_page'],
+    )
+  }
+
+  // 特殊签名工具保证：原工具集里带 end_turn → 裁剪后必须保留
+  {
+    const signedTools = [
+      { type: 'function', function: { name: 'read' } },
+      { type: 'function', function: { name: 'edit' } },
+      { type: 'function', function: { name: 'todo_write' } },
+      { type: 'function', function: { name: 'end_turn' } },
+    ]
+    const out = applyMinimalRouting(
+      { messages: [{ role: 'user', content: '修复 bug' }], tools: signedTools },
+      'deepseek/deepseek-v4-pro',
+    )
+    const names = out.tools.map((t) => t.function.name)
+    assert.deepEqual(names, ['read', 'edit', 'end_turn'])
+  }
+}
+
 // --- unit: gate helpers ---
 {
   assert.equal(
@@ -500,6 +797,143 @@ function chat(body, headers = {}) {
     ['web_search'],
   )
   settingsStore.save({ freeToolSignatureEnabled: true })
+}
+
+// minimal routing: 默认关闭 → 透传不改写；开启 → persona 置顶 + 首轮工具面裁剪
+{
+  calls = []
+  completionAttempts = 0
+  const tools = [
+    { type: 'function', function: { name: 'read' } },
+    { type: 'function', function: { name: 'edit' } },
+    { type: 'function', function: { name: 'glob' } },
+    { type: 'function', function: { name: 'grep' } },
+    { type: 'function', function: { name: 'write' } },
+    { type: 'function', function: { name: 'bash' } },
+    { type: 'function', function: { name: 'todo_write' } },
+    { type: 'function', function: { name: 'skill' } },
+  ]
+  const msgs = [
+    { role: 'system', content: 'You are Buffy, the strategic coding assistant.\n\nKeep the role.' },
+    { role: 'user', content: '请修复这个报错并排查根因' },
+  ]
+
+  // 关闭：原样透传（仅 free-mode 门禁补齐），tools 只追加签名工具
+  assert.equal(settingsStore.get().minimalRoutingEnabled, false)
+  const offRes = await chat({
+    model: 'deepseek/deepseek-v4-pro',
+    messages: msgs,
+    tools,
+  })
+  assert.equal(offRes.status, 200, await offRes.clone().text())
+  const offCall = calls.find((c) => c.url.includes('/chat/completions'))
+  const offBody = JSON.parse(offCall.body)
+  assert.equal(offBody.messages.length, 2)
+  assert.equal(offBody.messages[0].content, msgs[0].content)
+  assert.deepEqual(
+    offBody.tools.map((t) => t.function.name),
+    ['read', 'edit', 'glob', 'grep', 'write', 'bash', 'todo_write', 'skill', 'end_turn'],
+  )
+
+  // 开启：spec persona 置顶（门禁标记保留）、客户端 system 在后、工具裁剪为
+  // read/edit/glob/grep + bash + end_turn、非 weak 不追加引导
+  settingsStore.save({ minimalRoutingEnabled: true })
+  calls = []
+  completionAttempts = 0
+  const onRes = await chat({
+    model: 'deepseek/deepseek-v4-pro',
+    messages: msgs,
+    tools,
+  })
+  assert.equal(onRes.status, 200, await onRes.clone().text())
+  const onCall = calls.find((c) => c.url.includes('/chat/completions'))
+  const onBody = JSON.parse(onCall.body)
+  assert.equal(onBody.messages[0].role, 'system')
+  assert.ok(onBody.messages[0].content.startsWith(FREEBUFF_SYSTEM_OPENING))
+  assert.ok(onBody.messages[0].content.includes(SPEC_PERSONA))
+  assert.equal(onBody.messages[1].content, msgs[0].content)
+  assert.equal(onBody.messages.length, 3) // persona + 客户端 system + user，非 weak 无引导
+  assert.deepEqual(
+    onBody.tools.map((t) => t.function.name),
+    ['read', 'edit', 'glob', 'grep', 'bash', 'end_turn'],
+  )
+
+  // 已有 tool_calls 历史 → 放行全部工具
+  calls = []
+  completionAttempts = 0
+  const toolMsgs = [
+    { role: 'user', content: '写一个脚本' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
+    },
+    { role: 'tool', tool_call_id: 'c1', content: 'ok' },
+  ]
+  const toolRes = await chat({
+    model: 'deepseek/deepseek-v4-pro',
+    messages: toolMsgs,
+    tools,
+  })
+  assert.equal(toolRes.status, 200, await toolRes.clone().text())
+  const toolCall = calls.find((c) => c.url.includes('/chat/completions'))
+  const toolBody = JSON.parse(toolCall.body)
+  assert.deepEqual(
+    toolBody.tools.map((t) => t.function.name),
+    ['read', 'edit', 'glob', 'grep', 'write', 'bash', 'todo_write', 'skill', 'end_turn'],
+  )
+
+  // 路由风格钉死 spec：build 任务也被路由到 we/let's 集体链（spec persona + 锚定 + 读优先工具）
+  settingsStore.save({ minimalRoutingMode: 'spec' })
+  calls = []
+  completionAttempts = 0
+  const pinnedRes = await chat({
+    model: 'deepseek/deepseek-v4-pro',
+    messages: [{ role: 'user', content: '从零开发一个网页应用' }],
+    tools,
+  })
+  assert.equal(pinnedRes.status, 200, await pinnedRes.clone().text())
+  const pinnedCall = calls.find((c) => c.url.includes('/chat/completions'))
+  const pinnedBody = JSON.parse(pinnedCall.body)
+  assert.ok(pinnedBody.messages[0].content.includes(SPEC_PERSONA))
+  assert.ok(pinnedBody.messages[0].content.includes(WE_CHAIN_ANCHOR))
+  assert.deepEqual(
+    pinnedBody.tools.map((t) => t.function.name),
+    ['read', 'edit', 'glob', 'grep', 'bash', 'end_turn'],
+  )
+  settingsStore.save({ minimalRoutingMode: 'auto' })
+
+  // Flash + spec 钉死：system 无远距锚定，近距 user 注入 we/let's 首 token 锚定
+  settingsStore.save({ minimalRoutingMode: 'spec' })
+  calls = []
+  completionAttempts = 0
+  const flashSpecRes = await chat({
+    model: 'deepseek/deepseek-v4-flash',
+    messages: [{ role: 'user', content: '从零开发一个网页应用' }],
+    tools,
+  })
+  assert.equal(flashSpecRes.status, 200, await flashSpecRes.clone().text())
+  const flashSpecCall = calls.find((c) => c.url.includes('/chat/completions'))
+  const flashSpecBody = JSON.parse(flashSpecCall.body)
+  assert.ok(flashSpecBody.messages[0].content.includes(SPEC_PERSONA))
+  assert.ok(!flashSpecBody.messages[0].content.includes(WE_CHAIN_ANCHOR))
+  assert.equal(flashSpecBody.messages.at(-1).content, WE_CHAIN_ANCHOR_FLASH)
+  settingsStore.save({ minimalRoutingMode: 'auto' })
+
+  // 模糊任务（weak 模式）+ Flash 模型 → WEAK_FLASH persona + 近距离引导
+  calls = []
+  completionAttempts = 0
+  const weakRes = await chat({
+    model: 'deepseek/deepseek-v4-flash',
+    messages: [{ role: 'user', content: '随便聊聊' }],
+  })
+  assert.equal(weakRes.status, 200, await weakRes.clone().text())
+  const weakCall = calls.find((c) => c.url.includes('/chat/completions'))
+  const weakBody = JSON.parse(weakCall.body)
+  assert.ok(weakBody.messages[0].content.includes(WEAK_FLASH))
+  assert.equal(weakBody.messages.at(-1).role, 'user')
+  assert.equal(weakBody.messages.at(-1).content, GUIDE_WEAK)
+  settingsStore.save({ minimalRoutingEnabled: false })
 }
 
 // stream
@@ -1242,6 +1676,77 @@ assert.equal(requireModelId(''), null)
       headers: { cookie, 'content-type': 'application/json' },
       body: JSON.stringify({ accountMaxConcurrency: 1 }),
     })
+  }
+  // 运行设置：极简路由开关——默认关闭，非法值拒绝，保存后立即生效并持久化
+  {
+    const getDefault = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+      headers: { cookie },
+    })
+    assert.equal((await getDefault.json()).minimalRoutingEnabled, false)
+
+    const invalid = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ minimalRoutingEnabled: 'yes' }),
+    })
+    assert.equal(invalid.status, 400)
+
+    const save = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ minimalRoutingEnabled: true }),
+    })
+    assert.equal(save.status, 200)
+    assert.equal((await save.json()).minimalRoutingEnabled, true)
+    assert.equal(settingsStore.get().minimalRoutingEnabled, true)
+    assert.equal(
+      new SettingsStore(path.join(wDir, 'settings.json')).get()
+        .minimalRoutingEnabled,
+      true,
+    )
+    // 恢复默认
+    await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ minimalRoutingEnabled: false }),
+    })
+    assert.equal(settingsStore.get().minimalRoutingEnabled, false)
+  }
+  // 运行设置：路由风格（思维链钉死）——默认 auto，非法值拒绝，保存后持久化
+  {
+    const getDefault = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+      headers: { cookie },
+    })
+    assert.equal((await getDefault.json()).minimalRoutingMode, 'auto')
+
+    for (const bad of ['foo', 'SPEC', 1, null]) {
+      const res = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ minimalRoutingMode: bad }),
+      })
+      assert.equal(res.status, 400, `minimalRoutingMode=${bad} should be rejected`)
+    }
+
+    const save = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ minimalRoutingMode: 'spec' }),
+    })
+    assert.equal(save.status, 200)
+    assert.equal((await save.json()).minimalRoutingMode, 'spec')
+    assert.equal(settingsStore.get().minimalRoutingMode, 'spec')
+    assert.equal(
+      new SettingsStore(path.join(wDir, 'settings.json')).get().minimalRoutingMode,
+      'spec',
+    )
+    // 恢复默认
+    await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ minimalRoutingMode: 'auto' }),
+    })
+    assert.equal(settingsStore.get().minimalRoutingMode, 'auto')
   }
   // 代理管理 API：GET 空池 → POST 保存（持久化 + 立即生效）→ GET 返回
   {

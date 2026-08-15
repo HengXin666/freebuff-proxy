@@ -26,6 +26,7 @@ import {
   ensureFreebuffToolSignature,
   normalizeReasoningFields,
 } from './free-mode.js'
+import { applyMinimalRouting } from './routing.js'
 import { logger } from './util/log.js'
 
 /**
@@ -576,6 +577,16 @@ export function createProxyHandler(ctx) {
     let body = { ...clientBody, model: upstreamModel }
     // One reasoning field only — avoids Freebuff default + client dual fields.
     body = normalizeReasoningFields(body)
+    // 极简路由（路由模式）：代理侧注入 persona + 首轮核心工具面 + 近距离引导。
+    // 参考 dsh-routing-suite（dsh-router-standard）的请求协议——当客户端侧的
+    // 路由注入经过翻译/反向代理链被改写或丢弃时，由代理兜底保证路由生效。
+    // 改写后的第一条 system 消息以 free-mode 门禁标记开头，后续
+    // ensureFreebuffSystemMessages 不会再重复加前缀。
+    if (settingsStore?.get().minimalRoutingEnabled === true) {
+      body = applyMinimalRouting(body, upstreamModel, {
+        modeOverride: settingsStore?.get().minimalRoutingMode ?? 'auto',
+      })
+    }
     // Free mode requires a system message opening with the Freebuff CLI marker
     // ("You are Buffy, the strategic coding assistant."). Without it the
     // upstream returns free_mode_cli_required.

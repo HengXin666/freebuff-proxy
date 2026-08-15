@@ -509,6 +509,8 @@ export function createWebApi(deps) {
         freeToolSignatureEnabled:
           settingsStore?.get().freeToolSignatureEnabled !== false,
         accountMaxConcurrency: settingsStore?.get().accountMaxConcurrency ?? 1,
+        minimalRoutingEnabled: settingsStore?.get().minimalRoutingEnabled === true,
+        minimalRoutingMode: settingsStore?.get().minimalRoutingMode ?? 'auto',
       })
       return true
     }
@@ -551,6 +553,24 @@ export function createWebApi(deps) {
           return true
         }
         patch.accountMaxConcurrency = body.accountMaxConcurrency
+      }
+      if (body.minimalRoutingEnabled !== undefined) {
+        if (typeof body.minimalRoutingEnabled !== 'boolean') {
+          sendJson(res, 400, {
+            error: 'minimalRoutingEnabled 必须是布尔值',
+          })
+          return true
+        }
+        patch.minimalRoutingEnabled = body.minimalRoutingEnabled
+      }
+      if (body.minimalRoutingMode !== undefined) {
+        if (!['auto', 'spec', 'react', 'weak'].includes(body.minimalRoutingMode)) {
+          sendJson(res, 400, {
+            error: 'minimalRoutingMode 必须是 auto/spec/react/weak 之一',
+          })
+          return true
+        }
+        patch.minimalRoutingMode = body.minimalRoutingMode
       }
       if (!Object.keys(patch).length) {
         sendJson(res, 400, {

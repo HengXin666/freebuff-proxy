@@ -212,6 +212,79 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 `tools` 列表末尾补充 Freebuff 官方工具名 `end_turn`，避免工具请求被识别为外来工具集；关闭时
 原样转发客户端工具列表。切换后立即生效并持久化到 `/data/settings.json`，无需重启。
 
+### 极简路由（路由模式）
+
+控制台「总览 → 免费额度策略」提供「**极简路由（路由模式）**」开关，默认关闭。开启后，代理在
+转发每个 chat 请求前按 [dsh-routing-suite](https://github.com/yjh051108/dsh-routing-suite)
+（dsh-router-standard preset，P1-P30 实测）的请求协议改写请求：
+
+1. **persona 注入**：按会话首个用户消息自动分类任务 → `spec`（修复/排查，计划-集体）、
+   `react`（构建/开发，执行-个体）、`weak`（模糊任务，模型自分类，按模型选最优：
+   Pro=spec 句，Flash=neutral+classify），并把极简 persona 置于请求最前。
+   客户端原本的 system 消息保留在其后（极简但不丢客户端上下文）。
+2. **首轮核心工具面**：历史里还没有 `assistant tool_calls` 时，把 `tools` 裁剪到该模式的
+   核心工具集（spec 读优先 `read/edit/glob/grep`，react 写优先 `read/write/edit`）+ `bash/pwsh`；
+   首个工具调用之后自动放行全部工具（首轮锚定，路径提交后不再干预）。
+   **工具保证**：客户端给了工具就绝不裁空（核心集裁剪为空则保留原工具集，模型始终能调用
+   工具）；Freebuff 特殊签名工具 `end_turn` 始终保留（上游凭它保留请求模型/额度）。
+3. **近距离引导（weak 模式）**：最后一个用户消息后追加一条固定引导文本——简单任务快速收敛、
+   复杂任务（长文本/架构词）深度收敛；固定文本保持上游缓存命中（92-94%）。
+4. **路由风格（思维链）**：可把路由钉死到某条思维链——`spec` = we/let's 集体计划链、
+   `react` = let me 执行链、`weak` = 模型自分类、`auto` = 按任务自动分类（默认）。
+   we/let's 链的锚定方式按模型自适应：
+   - **v4-pro**：persona 远距锚定即生效（persona 后附加
+     `Plan and reason collectively: use first-person plural (we / let's).`）；
+   - **v4-flash（fast）**：远距锚定反噬（实测 we 9→0），改在用户消息后**近距注入**
+     `... Begin your reasoning with "We".` 做首 token 自锚定（P15 机制），
+     实测工具化多轮会话中 we/let's 链稳定出现（we=4~6, let's=3, let me=0）。
+
+同一套路由在客户端（DSH 侧）注入时，经过翻译层/中间代理可能被改写或丢弃而"不生效"；
+本开关让代理兜底执行路由协议，与客户端是否安装路由插件无关。切换后立即生效并持久化到
+`/data/settings.json`，无需重启。free-mode 门禁不受影响：改写后的第一条 system 消息仍以
+`You are Buffy, the strategic coding assistant.` 开头，`end_turn` 签名工具照常补充。
+
+> 提示：路由改写面向所有走 `/v1/chat/completions` 的客户端。若你的 Agent 自带路由预设，
+> 建议关闭本开关（客户端已注入）；若 Agent 的路由经代理链"失效"，开启本开关由代理兜底。
+
+---
+
+## 基准测试与验证（Benchmark）
+
+> **目标模型**：本项目的极简路由面向 **`deepseek/deepseek-v4-flash`（V4 Fast）**，
+> 同时给出 `deepseek/deepseek-v4-pro` 的对照数据。判定思维链的特征词：
+> `we` / `let's`（计划-集体）vs `let me`（执行-个体）在模型思维链（`reasoning_content`）
+> 中的出现次数。
+
+### 测试归属（谁做的）
+
+| 测试 | 执行者 | 环境 |
+|---|---|---|
+| **理论实验 P1–P30**（persona 轴三行为带、近距离引导、首 token 自锚定等） | [dsh-routing-suite](https://github.com/yjh051108/dsh-routing-suite) 作者 **yjh051108** | 官方 API，`thinking.enabled + reasoning_effort=max`，21 点 × n=2 探针 |
+| **本项目真实上游验证**（we/let's vs let me 实测） | freebuff-proxy 维护者（本仓库），使用真实 Freebuff 账号 | 本机部署 freebuff-proxy → `codebuff.com` 上游，流式抓取 `reasoning_content` 词频统计 |
+| **合规/回归测试**（free-mode 门禁 + 路由改写） | freebuff-proxy 项目 `test/smoke.mjs`（自动化，mock 上游） | CI / `npm test`，覆盖 Buffy 门禁标记、`end_turn` 签名、reasoning 归一化、路由改写不变量 |
+
+> 说明：真实上游验证为有限样本（每条件 n=1~3 次请求，热 session 复用，admit 次数受每日
+> 免费额度限制），结果用于指示性对比，非严格统计实验；严格的行为学实验以 dsh-routing-suite
+> 的 P1–P30 为准（Pro 为测量主体）。
+
+### 思维链实测结果（本项目，真实上游）
+
+同一任务「从零开发一个待办事项网页应用」/「修复崩溃 bug」，同一账号热 session：
+
+| 模型 | 路由风格 | 任务 | we | let's | let me | 备注 |
+|---|---|---|---|---|---|---|
+| **v4-flash**（目标） | 关 | 构建 | 0 | 0 | 2~6 | 默认 let me 主导 |
+| **v4-flash** | **spec**（近距锚定） | 构建 | 4~6 | 3 | 0（多数轮次） | we/let's 集体链出现；个别轮次切执行语域（方差） |
+| **v4-flash** | react | 构建 | 0 | 0 | 2~6 | let me 执行链 |
+| **v4-flash** | auto（命中 spec） | 修复 | 3 | 0 | 0 | 集体链 |
+| v4-pro（对照） | 关 | 构建 | 0 | 0 | 6 | 模型自带 doer 风格 |
+| v4-pro（对照） | spec | 修复 | 7~12 | 2~4 | 0 | we/let's 集体链稳定 |
+| v4-pro（对照） | react | 构建 | 0 | 0 | 4~6 | let me 执行链 |
+
+结论：**钉死 `spec` 即把 we/let's 集体思维链路由到 v4-flash**（与 `react` 形成同模型
+同任务下的语域翻转）；`auto` 让修复类任务自动命中该链。v4-flash 上必须走近距锚定，
+远距（system 内）锚定会反噬——这也是本实现按模型自适应锚定位置的原因。
+
 ---
 
 ## 幽灵连接治理与重启兜底
