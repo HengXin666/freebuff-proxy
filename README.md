@@ -240,7 +240,9 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
      `Plan and reason collectively: use first-person plural (we / let's).`）；
    - **v4-flash（fast）**：远距锚定反噬（实测 we 9→0），改在用户消息后**近距注入**
      `... Begin your reasoning with "We".` 做首 token 自锚定（P15 机制），
-     实测工具化多轮会话中 we/let's 链稳定出现（we=4~6, let's=3, let me=0）。
+     实测工具化多轮会话中 we/let's 链稳定出现（we=4~6, let's=3, let me=0）；
+     锚定在**工具循环轮次同样注入**（最后一条是 tool 结果也追加，实测 turn2
+     we=8/let's=6/let me=1，不会衰减回 let me）。
 
 同一套路由在客户端（DSH 侧）注入时，经过翻译层/中间代理可能被改写或丢弃而"不生效"；
 本开关让代理兜底执行路由协议，与客户端是否安装路由插件无关。切换后立即生效并持久化到
