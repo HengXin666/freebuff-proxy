@@ -174,6 +174,27 @@ function messageText(message) {
 }
 
 /**
+ * 移除客户端 system 开头的 persona 段，替换为路由 persona（套件 applyPersona 语义）。
+ * 客户端装配后的系统提示以 persona 段落开头（如 "You are a coding agent powered by..."），
+ * 后面是 "\n\n" / "### " 分隔的其余 section（工具指导/工作区说明等）——这里只去掉
+ * 第一个 "You are..." 段落，把路由 persona 放最前，**其余 section 全部保留**。
+ * 与原版"前置一条 persona 消息、客户端 persona 原样保留"不同：那会让模型同时看到
+ * 两个身份（路由 persona + 客户端原身份）互相打架，稀释路由效果（用户反馈"没改变实质"）。
+ * @param {string} systemText 客户端第一条 system 消息文本
+ * @param {string} personaContent 新的 persona 内容（含 free-mode 门禁标记）
+ * @returns {string | null} 替换后的完整 system 内容；无法识别 persona 段时返回 null
+ */
+function replaceLeadingPersona(systemText, personaContent) {
+  const trimmed = String(systemText || '').trimStart()
+  if (!/^You are\b/i.test(trimmed)) return null
+  // persona 段边界：第一个 section 分隔（"### "/"## "）或空行段落
+  const m = trimmed.match(/\n(#{2,3} )|\n\n/)
+  const personaEnd = m ? m.index : -1
+  const remainder = personaEnd === -1 ? '' : trimmed.slice(personaEnd).replace(/^\n+/, '')
+  return remainder ? `${personaContent}\n\n${remainder}` : personaContent
+}
+
+/**
  * 解析路由模式：风格钉死（spec/react/weak）优先，否则按任务自动分类。
  * @param {string | null | undefined} override 'auto' | 'spec' | 'react' | 'weak'
  * @param {string} firstUserText
@@ -229,12 +250,26 @@ export function applyMinimalRouting(body, modelId, opts = {}) {
     persona = `${persona}\n${WE_CHAIN_ANCHOR}`
   }
 
-  // 1) persona 置顶（free-mode 门禁标记保留在最前）
-  const personaSystem = {
-    role: 'system',
-    content: `${FREEBUFF_SYSTEM_OPENING}\n\n${persona}`,
+  // 1) persona 替换（套件 applyPersona 语义）：移除客户端第一条 system 开头的
+  //    persona 段，换成路由 persona（门禁标记保留在最前），其余 section 保留；
+  //    无法识别 persona 段（不以 "You are" 开头）时回退为前置一条 persona 消息。
+  const personaSystemContent = `${FREEBUFF_SYSTEM_OPENING}\n\n${persona}`
+  let routed = null
+  const firstSystemIdx = messages.findIndex((m) => m && m.role === 'system')
+  if (firstSystemIdx !== -1) {
+    const replaced = replaceLeadingPersona(
+      messageText(messages[firstSystemIdx]),
+      personaSystemContent,
+    )
+    if (replaced !== null) {
+      routed = messages.map((m, i) =>
+        i === firstSystemIdx ? { ...messages[firstSystemIdx], content: replaced } : m,
+      )
+    }
   }
-  const routed = [personaSystem, ...messages]
+  if (routed === null) {
+    routed = [{ role: 'system', content: personaSystemContent }, ...messages]
+  }
 
   // 2) 首轮工具面：已有 assistant tool_calls 的历史 → 放行全部；否则裁剪到核心集。
   //    裁剪后为空（客户端工具全是非常规名）→ 保留原工具集，保证模型可调用工具。

@@ -222,10 +222,12 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 转发每个 chat 请求前按 [dsh-routing-suite](https://github.com/yjh051108/dsh-routing-suite)
 （dsh-router-standard preset，P1-P30 实测）的请求协议改写请求：
 
-1. **persona 注入**：按会话首个用户消息自动分类任务 → `spec`（修复/排查，计划-集体）、
+1. **persona 替换**：按会话首个用户消息自动分类任务 → `spec`（修复/排查，计划-集体）、
    `react`（构建/开发，执行-个体）、`weak`（模糊任务，模型自分类，按模型选最优：
-   Pro=spec 句，Flash=neutral+classify），并把极简 persona 置于请求最前。
-   客户端原本的 system 消息保留在其后（极简但不丢客户端上下文）。
+   Pro=spec 句，Flash=neutral+classify）。与 dsh-routing-suite 的 `applyPersona` 语义
+   一致：**移除**客户端系统提示开头的 persona 段，换成路由 persona 置于最前，
+   其余 section（工具指导/工作区说明/回复格式等）**原样保留**——模型只看到一个身份，
+   不会被客户端原 persona 稀释；无法识别 persona 段时回退为前置一条 persona 消息。
 2. **首轮核心工具面**：历史里还没有 `assistant tool_calls` 时，把 `tools` 裁剪到该模式的
    核心工具集（spec 读优先 `read/edit/glob/grep`，react 写优先 `read/write/edit`）+ `bash/pwsh`；
    首个工具调用之后自动放行全部工具（首轮锚定，路径提交后不再干预）。
