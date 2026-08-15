@@ -26,7 +26,6 @@ import {
   REACT_PERSONA,
   WEAK_PRO,
   WEAK_FLASH,
-  WE_CHAIN_ANCHOR,
   WE_CHAIN_ANCHOR_FLASH,
   GUIDE_WEAK,
   GUIDE_DEEP,
@@ -438,7 +437,7 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
     assert.ok(out.messages[0].content.startsWith(FREEBUFF_SYSTEM_OPENING))
     assert.ok(out.messages[0].content.includes(SPEC_PERSONA))
     // spec 模式缀上 we/let's 集体链锚定
-    assert.ok(out.messages[0].content.includes(WE_CHAIN_ANCHOR))
+    assert.ok(!out.messages[0].content.includes('Plan and reason collectively'))
     // 套件 applyPersona 语义：客户端 persona 段被替换，其余 section 保留在同一条
     // system 消息里（路由 persona 在前，Keep the role 在后）——不再是前置两条 system
     assert.ok(out.messages[0].content.indexOf(SPEC_PERSONA) < out.messages[0].content.indexOf('Keep the role'))
@@ -515,7 +514,7 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
       'deepseek/deepseek-v4-flash',
     )
     assert.ok(out.messages[0].content.includes(SPEC_PERSONA))
-    assert.ok(!out.messages[0].content.includes(WE_CHAIN_ANCHOR)) // 远距不加
+    assert.ok(!out.messages[0].content.includes('Plan and reason collectively')) // persona 逐字符原样
     assert.equal(out.messages.at(-1).role, 'user')
     assert.equal(out.messages.at(-1).content, WE_CHAIN_ANCHOR_FLASH)
   }
@@ -528,7 +527,7 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
       { modeOverride: 'spec' },
     )
     assert.ok(out.messages[0].content.includes(SPEC_PERSONA))
-    assert.ok(!out.messages[0].content.includes(WE_CHAIN_ANCHOR))
+    assert.ok(!out.messages[0].content.includes('Plan and reason collectively'))
     assert.equal(out.messages.at(-1).content, WE_CHAIN_ANCHOR_FLASH)
   }
 
@@ -538,7 +537,7 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
       { messages: [{ role: 'user', content: '请修复这个报错' }] },
       'deepseek/deepseek-v4-pro',
     )
-    assert.ok(out.messages[0].content.includes(WE_CHAIN_ANCHOR))
+    assert.ok(!out.messages[0].content.includes('Plan and reason collectively'))
     assert.equal(out.messages.at(-1).role, 'user')
     assert.equal(out.messages.at(-1).content, '请修复这个报错')
   }
@@ -690,7 +689,7 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
       { modeOverride: 'spec' },
     )
     assert.ok(out.messages[0].content.includes(SPEC_PERSONA))
-    assert.ok(out.messages[0].content.includes(WE_CHAIN_ANCHOR))
+    assert.ok(!out.messages[0].content.includes('Plan and reason collectively'))
     assert.deepEqual(
       out.tools.map((t) => t.function.name),
       ['read', 'edit', 'glob', 'grep', 'bash'],
@@ -705,7 +704,7 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
       { modeOverride: 'react' },
     )
     assert.ok(out.messages[0].content.includes(REACT_PERSONA))
-    assert.ok(!out.messages[0].content.includes(WE_CHAIN_ANCHOR))
+    assert.ok(!out.messages[0].content.includes('Plan and reason collectively'))
     assert.deepEqual(
       out.tools.map((t) => t.function.name),
       ['read', 'edit', 'write', 'bash'],
@@ -991,7 +990,7 @@ function chat(body, headers = {}) {
   const pinnedCall = calls.find((c) => c.url.includes('/chat/completions'))
   const pinnedBody = JSON.parse(pinnedCall.body)
   assert.ok(pinnedBody.messages[0].content.includes(SPEC_PERSONA))
-  assert.ok(pinnedBody.messages[0].content.includes(WE_CHAIN_ANCHOR))
+  assert.ok(!pinnedBody.messages[0].content.includes('Plan and reason collectively'))
   assert.deepEqual(
     pinnedBody.tools.map((t) => t.function.name),
     ['read', 'edit', 'glob', 'grep', 'bash', 'end_turn'],
@@ -1011,7 +1010,7 @@ function chat(body, headers = {}) {
   const flashSpecCall = calls.find((c) => c.url.includes('/chat/completions'))
   const flashSpecBody = JSON.parse(flashSpecCall.body)
   assert.ok(flashSpecBody.messages[0].content.includes(SPEC_PERSONA))
-  assert.ok(!flashSpecBody.messages[0].content.includes(WE_CHAIN_ANCHOR))
+  assert.ok(!flashSpecBody.messages[0].content.includes('Plan and reason collectively'))
   assert.equal(flashSpecBody.messages.at(-1).content, WE_CHAIN_ANCHOR_FLASH)
   settingsStore.save({ minimalRoutingMode: 'auto' })
 

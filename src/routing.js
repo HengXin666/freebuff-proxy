@@ -62,25 +62,17 @@ export const GUIDE_DEEP =
   '\nRouter: classify this task (build or fix) now, then adopt the matching style — build: direct production; fix: inspect-first. Think deeply about the architecture, edge cases, and integration points. Do not spend reasoning on the environment or tooling. Produce when your information is complete. End each reasoning block with a decision or an information need.'
 
 /**
- * We/Let's 集体思维链锚定（spec 模式）。
- * 实测 spec 盆地 = 计划-集体轨迹（We / Let's，let me ≈ 0，P1-P30）；P15 显示
- * 语域会自回归自锚定（区分度 0→+2.0 反衰减），P22 提醒"锚定应是提醒，不是格式
- * 要求"。因此以一句轻量提醒缀在 spec persona 后，把 we/let's 链稳定地"链化"出来，
- * 而不强制首 token 格式。
- *
- * Pro（P11 实测）：远距 persona 锚定即生效（we=7~12, let me≈0）。
- * Flash（P11 + 本项目实测）：远距锚定反噬（we 9→0）；必须用**近距离** user 消息
- * 注入 + 首 token We 自锚定（P15）才链化成功（工具化多轮会话 we=11, let's=4~5,
- * let me=0，跨轮保持）。
+ * Flash spec 模式的近距集体语域引导（用户指定文本）。
+ * 以独立 user 消息注入（与套件 GUIDE_WEAK 的近距机制一致），**不修改 persona**——
+ * persona 保持套件逐字符原样（RL 哈希不变），引导只在工具循环/用户轮次追加。
  */
-export const WE_CHAIN_ANCHOR =
-  "Plan and reason collectively: use first-person plural (we / let's)."
-
-/** Flash 专用：近距注入 + 首 token We 自锚定（P15：自回归一致性把语域越锚越牢）。 */
 export const WE_CHAIN_ANCHOR_FLASH =
-  `${WE_CHAIN_ANCHOR} Begin your reasoning with "We".`
+  'Plan and reason collectively: use first-person plural (we / let\'s). Begin your reasoning with "We".'
 
-/** 复杂度启发式：长任务或架构词任务 = 复杂（深度引导）。 */
+/**
+ * 复杂度启发式：长任务或架构词任务 = 复杂（深度引导）。
+ * （与 dsh-routing-suite router-core.mjs 逐字符一致，不追加任何内容。）
+ */
 const COMPLEX_RE =
   /(重构|架构|全面|详细|设计|系统|优化|分析|survey|overview|architecture|refactor|comprehensive|detailed|design|system|optimize|analyze)/i
 
@@ -241,14 +233,9 @@ export function applyMinimalRouting(body, modelId, opts = {}) {
     .find((t) => t.trim().length > 0)
   const mode = resolveMode(opts?.modeOverride || null, firstUserText)
   const isFlash = isFlashModel(modelId)
-  let persona = personaFor(mode, modelId)
-  // spec 盆地 = we/let's 集体链：
-  // - Pro：远距 persona 锚定即生效（we=7~12，let me≈0）；
-  // - Flash：远距锚定反噬（P11 + 实测 we 9→0），system 里保持纯 spec 句，改由
-  //   近距离 user 消息 + 首 token We 锚定（见下方 near-field 注入）。
-  if (bandOf(mode) === 'spec' && !isFlash) {
-    persona = `${persona}\n${WE_CHAIN_ANCHOR}`
-  }
+  // persona 逐字符取自套件（router-core.mjs），不做任何追加/改写：
+  // spec = 官方 RL 句 "You are a helpful software engineer assistant."，哈希不可变。
+  const persona = personaFor(mode, modelId)
 
   // 1) persona 替换（套件 applyPersona 语义）：移除客户端第一条 system 开头的
   //    persona 段，换成路由 persona（门禁标记保留在最前），其余 section 保留；
@@ -301,13 +288,10 @@ export function applyMinimalRouting(body, modelId, opts = {}) {
     }
   }
 
-  // 3) near-field 引导：最后一个消息是「用户消息」或「tool 结果」都追加。
-  //    工具循环里最后一条通常是 tool 结果——若只在用户消息后追加，锚定会在
-  //    第二轮起断供，思维链从 we/let's 衰减回 let me（实测 turn1 step2 复现）。
-  //    最后一条是 assistant（文本回复 / tool_calls）时跳过：文本回复后追加会
-  //    变成"用户插话"，tool_calls 后追加会破坏与随后 tool 结果的配对。
-  //    - weak 模式：固定路由引导（简单任务快速收敛 / 复杂任务深度收敛）；
-  //    - flash + spec：we/let's 集体链近距锚定（首 token We 自锚定，P14/P15）。
+  // 3) near-field 引导（套件原样：仅 weak 模式）：最后一个消息是「用户消息」或
+  //    「tool 结果」都追加固定引导（工具循环轮次也保持），简单任务快速收敛 /
+  //    复杂任务深度收敛；最后一条是 assistant（文本回复 / tool_calls）时跳过，
+  //    避免插话或破坏 tool_call→tool 结果配对。
   let routedMessages = routed
   const flashSpecAnchor = isFlash && bandOf(mode) === 'spec' ? WE_CHAIN_ANCHOR_FLASH : null
   if (bandOf(mode) === 'weak' || flashSpecAnchor) {
@@ -317,7 +301,6 @@ export function applyMinimalRouting(body, modelId, opts = {}) {
     const isUserTurn = last && last.role === 'user' && lastText.trim().length > 0
     const isToolTurn = last && (last.role === 'tool' || (last.role === 'user' && last.tool_call_id))
     if (isUserTurn || isToolTurn) {
-      // 复杂度判断取"最近的真实用户任务文本"（tool 轮次回退到会话首个用户消息）
       const complexityText = isUserTurn ? lastText : firstUserText || ''
       const guide = flashSpecAnchor || (isComplexTask(complexityText) ? GUIDE_DEEP : GUIDE_WEAK)
       routedMessages = [
