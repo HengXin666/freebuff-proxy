@@ -136,7 +136,9 @@ export function normalizeReasoningFields(body) {
   // Prefer explicit top-level if both present (caller's curl-style field)
   if (fromTop) effort = fromTop
 
-  const mapped = effort === 'max' ? 'high' : effort
+  // 官方 efforts 表：deepseek-v4-flash = [low, high, max]、v4-pro = [high, max]，
+  // 因此 max 是合法档位，不降档（旧实现 max→high 会压制思考深度/智力）。
+  const mapped = effort
   delete out.reasoning_effort
   out.reasoning = {
     ...(out.reasoning && typeof out.reasoning === 'object' ? out.reasoning : {}),
