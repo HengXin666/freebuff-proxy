@@ -116,6 +116,8 @@ async function main() {
   const ctx = buildAppContext(config, {
     // 账号并发上限来自控制台设置（/data/settings.json，默认 1:1），实时生效
     getAccountConcurrency: () => settingsStore.get().accountMaxConcurrency,
+    // 免费模型暴力分散（默认开，控制台「负载均衡设置」可关）
+    getSpreadFreeModels: () => settingsStore.get().spreadFreeModels !== false,
   })
   if (ctx.authEmail) {
     logger.info('upstream auth ready', {

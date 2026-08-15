@@ -1036,6 +1036,37 @@ assert.equal(requireModelId(''), null)
   mockMode = 'ok'
 }
 
+// 客户端断开必须立即释放账号锁（回归：reqToAbortSignal 无条件 abort，
+// 否则请求体读完（req.complete=true）后断开会让上游挂到超时、锁占死全部请求）
+{
+  mockMode = 'hold_once'
+  completionAttempts = 0
+  const res = await chat({
+    model: 'deepseek/deepseek-v4-flash',
+    stream: true,
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+  assert.equal(res.status, 200)
+  // 读一个 chunk 后客户端断开（cancel body → 连接关闭）
+  const reader = res.body.getReader()
+  await reader.read()
+  await reader.cancel().catch(() => {})
+  // 立即发第二个请求：锁必须已释放并快速 200（无修复会卡到上游超时/无限排队）
+  const t0 = Date.now()
+  const res2 = await chat({
+    model: 'deepseek/deepseek-v4-flash',
+    stream: true,
+    messages: [{ role: 'user', content: 'hello again' }],
+  })
+  assert.equal(res2.status, 200, await res2.clone().text())
+  assert.ok(
+    Date.now() - t0 < 10_000,
+    `断开后账号锁应快速释放, took ${Date.now() - t0}ms`,
+  )
+  await res2.text()
+  mockMode = 'ok'
+}
+
 // 流量切换（代理池变更）不得掐断在途 SSE：旧 runtime 优雅回收
 {
   const pDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-drain-'))
@@ -1389,7 +1420,8 @@ assert.equal(requireModelId(''), null)
   const rrConfig = loadConfig()
   rrConfig.upstream.credentialsDir = rrDir
   rrConfig.session.pollIntervalSec = 3600
-  const pool = new AccountRuntimes(rrConfig)
+  // 本用例回归热 session 复用（旧行为）→ 显式关闭免费模型分散
+  const pool = new AccountRuntimes(rrConfig, { getSpreadFreeModels: () => false })
   mockMode = 'ok'
   sessionPosts = 0
   // 串行请求全部复用 a 的同一个热 session，只 admit 一次。
@@ -1439,6 +1471,52 @@ assert.equal(requireModelId(''), null)
   fs.rmSync(rrDir, { recursive: true, force: true })
 }
 
+// --- unit: 免费模型暴力分散（spread 默认开）——轮转分散到不同账号 ---
+{
+  const spDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-spread-'))
+  saveAccountUser(spDir, { id: 'a', email: 'sp-a@example.com', authToken: 'token-a' })
+  saveAccountUser(spDir, { id: 'b', email: 'sp-b@example.com', authToken: 'token-b' })
+  saveAccountUser(spDir, { id: 'c', email: 'sp-c@example.com', authToken: 'token-c' })
+  const spConfig = loadConfig()
+  spConfig.upstream.credentialsDir = spDir
+  spConfig.session.pollIntervalSec = 3600
+  const pool = new AccountRuntimes(spConfig) // 默认 spread=true
+  mockMode = 'ok'
+  sessionPosts = 0
+  // 串行请求轮转 A→B→C→A→B→C，不钉死热 session
+  const emails = []
+  for (let i = 0; i < 6; i++) {
+    const rt = await pool.acquireForModel('deepseek/deepseek-v4-flash')
+    emails.push(rt.email)
+  }
+  assert.deepEqual(
+    emails,
+    [
+      'sp-a@example.com',
+      'sp-b@example.com',
+      'sp-c@example.com',
+      'sp-a@example.com',
+      'sp-b@example.com',
+      'sp-c@example.com',
+    ],
+    `免费模型应轮转分散, got ${JSON.stringify(emails)}`,
+  )
+  // 3 个账号各 admit 一次（每个账号一个 session，第 4 个请求起复用）
+  assert.equal(sessionPosts, 3, `expected 3 admissions (one per account), got ${sessionPosts}`)
+
+  // 并发冷启动也分散到不同账号（而不是挤在一个账号）
+  sessionPosts = 0
+  const seen = await Promise.all(
+    Array.from({ length: 6 }, async () => {
+      const rt = await pool.acquireForModel('deepseek/deepseek-v4-pro')
+      return rt.key
+    }),
+  )
+  assert.equal(new Set(seen).size, 3, `并发冷启动应分散到全部账号, got ${seen}`)
+  await pool.shutdown()
+  fs.rmSync(spDir, { recursive: true, force: true })
+}
+
 // --- regression: GitHub/Google 同一邮箱但 id 不同 → 两个账号并存，不互相覆盖 ---
 {
   const dupDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-dup-'))
@@ -1462,7 +1540,7 @@ assert.equal(requireModelId(''), null)
   const dupConfig = loadConfig()
   dupConfig.upstream.credentialsDir = dupDir
   dupConfig.session.pollIntervalSec = 3600
-  const dupPool = new AccountRuntimes(dupConfig)
+  const dupPool = new AccountRuntimes(dupConfig, { getSpreadFreeModels: () => false })
   mockMode = 'ok'
   sessionPosts = 0
   const seen = await Promise.all(
@@ -1886,7 +1964,7 @@ assert.equal(requireModelId(''), null)
   convConfig.server.apiKeys = ['sk-test']
   convConfig.upstream.credentialsDir = convDir
   convConfig.session.pollIntervalSec = 3600
-  const convRuntimes = new AccountRuntimes(convConfig)
+  const convRuntimes = new AccountRuntimes(convConfig, { getSpreadFreeModels: () => false })
   const convServer = await startServer({
     config: convConfig,
     runtimes: convRuntimes,
@@ -1984,7 +2062,7 @@ assert.equal(requireModelId(''), null)
   rrConfig.server.apiKeys = ['sk-test']
   rrConfig.upstream.credentialsDir = rrDir
   rrConfig.session.pollIntervalSec = 3600
-  const rrRuntimes = new AccountRuntimes(rrConfig)
+  const rrRuntimes = new AccountRuntimes(rrConfig, { getSpreadFreeModels: () => false })
   const rrServer = await startServer({
     config: rrConfig,
     runtimes: rrRuntimes,
@@ -2044,7 +2122,7 @@ assert.equal(requireModelId(''), null)
   subConfig.server.apiKeys = ['sk-test']
   subConfig.upstream.credentialsDir = subDir
   subConfig.session.pollIntervalSec = 3600
-  const subRuntimes = new AccountRuntimes(subConfig)
+  const subRuntimes = new AccountRuntimes(subConfig, { getSpreadFreeModels: () => false })
   const subServer = await startServer({
     config: subConfig,
     runtimes: subRuntimes,
@@ -2160,7 +2238,7 @@ assert.equal(requireModelId(''), null)
   capConfig.server.apiKeys = ['sk-test']
   capConfig.upstream.credentialsDir = capDir
   capConfig.session.pollIntervalSec = 3600
-  const capRuntimes = new AccountRuntimes(capConfig)
+  const capRuntimes = new AccountRuntimes(capConfig, { getSpreadFreeModels: () => false })
   const capServer = await startServer({
     config: capConfig,
     runtimes: capRuntimes,
@@ -2219,7 +2297,7 @@ assert.equal(requireModelId(''), null)
   capConfig2.server.apiKeys = ['sk-test']
   capConfig2.upstream.credentialsDir = capDir2
   capConfig2.session.pollIntervalSec = 3600
-  const capRuntimes2 = new AccountRuntimes(capConfig2)
+  const capRuntimes2 = new AccountRuntimes(capConfig2, { getSpreadFreeModels: () => false })
   const capServer2 = await startServer({
     config: capConfig2,
     runtimes: capRuntimes2,
@@ -2441,7 +2519,7 @@ assert.equal(requireModelId(''), null)
   stConfig.session.pollIntervalSec = 3600
   stConfig.limits.streamIdleTimeoutSec = 1
 
-  const stRuntimes = new AccountRuntimes(stConfig)
+  const stRuntimes = new AccountRuntimes(stConfig, { getSpreadFreeModels: () => false })
   const stServer = await startServer({
     config: stConfig,
     runtimes: stRuntimes,
@@ -2512,7 +2590,7 @@ assert.equal(requireModelId(''), null)
   spConfig.session.pollIntervalSec = 3600
   spConfig.limits.streamIdleTimeoutSec = 1
 
-  const spRuntimes = new AccountRuntimes(spConfig)
+  const spRuntimes = new AccountRuntimes(spConfig, { getSpreadFreeModels: () => false })
   const spServer = await startServer({
     config: spConfig,
     runtimes: spRuntimes,
@@ -2583,7 +2661,7 @@ assert.equal(requireModelId(''), null)
   scConfig.session.pollIntervalSec = 3600
   scConfig.limits.maxConcurrentRequests = 12
 
-  const scRuntimes = new AccountRuntimes(scConfig)
+  const scRuntimes = new AccountRuntimes(scConfig, { getSpreadFreeModels: () => false })
   const scServer = await startServer({
     config: scConfig,
     runtimes: scRuntimes,
@@ -2703,6 +2781,7 @@ assert.equal(requireModelId(''), null)
   ccConfig.limits.maxConcurrentRequests = 12
   // 模拟控制台把每账号并发上限调到 2
   const ccRuntimes = new AccountRuntimes(ccConfig, {
+    getSpreadFreeModels: () => false,
     getAccountConcurrency: () => 2,
   })
   const ccServer = await startServer({
@@ -2813,7 +2892,7 @@ assert.equal(requireModelId(''), null)
   expConfig.server.apiKeys = ['sk-test']
   expConfig.upstream.credentialsDir = expDir
   expConfig.session.pollIntervalSec = 3600
-  const expRuntimes = new AccountRuntimes(expConfig)
+  const expRuntimes = new AccountRuntimes(expConfig, { getSpreadFreeModels: () => false })
   const expServer = await startServer({
     config: expConfig,
     runtimes: expRuntimes,
