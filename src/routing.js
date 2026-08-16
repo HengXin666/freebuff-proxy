@@ -409,27 +409,11 @@ export function applyStandardRouting(body, modelId, opts = {}) {
     }
   }
 
-  // 3) 近距引导：weak 语义，最后一个「用户消息 / tool 结果」轮次追加固定引导
-  //    （简单任务快速收敛 / 复杂任务深度收敛）。persona 已静态携带深度思考引导，
-  //    这里再追加近距固定引导做双保险；多轮稳定性由 persona 的静态并入保证。
+  // 3) 标准模式**不追加逐轮动态引导**。参考 v4-flash-godmode（rc.6 实测）：
+  //    逐轮 session/event + inbox.append 动态注入不可靠，且每轮 GUIDE_WEAK/
+  //    GUIDE_DEEP 随轮次复杂度变化，会让模型跨轮看到相悖指令 → 思维链模式
+  //    混用。深度思考引导已静态并入 persona（STANDARD_FLASH_PERSONA），
+  //    每轮请求改写都重新注入同一份 persona → 多轮恒定、稳定触发。
   let routedMessages = routed
-  const lastIdx = routedMessages.length - 1
-  const last = routedMessages[lastIdx]
-  const lastText = messageText(last)
-  const isUserTurn = last && last.role === 'user' && lastText.trim().length > 0
-  const isToolTurn = last && (last.role === 'tool' || (last.role === 'user' && last.tool_call_id))
-  if (isUserTurn || isToolTurn) {
-    const firstUserText = messages
-      .filter((m) => m && m.role === 'user')
-      .map(messageText)
-      .find((t) => t.trim().length > 0)
-    const complexityText = isUserTurn ? lastText : firstUserText || ''
-    const guide = isComplexTask(complexityText) ? GUIDE_DEEP : GUIDE_WEAK
-    routedMessages = [
-      ...routedMessages,
-      { role: 'user', content: guide },
-    ]
-  }
-
   return { ...body, messages: routedMessages, tools: routedTools }
 }

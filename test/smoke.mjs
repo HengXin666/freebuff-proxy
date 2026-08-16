@@ -826,32 +826,32 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
       out.tools.map((t) => t.function.name),
       ['read', 'edit', 'write', 'bash'],
     )
-    // 近距引导追加（weak 语义）
+    // 标准模式不追加逐轮动态引导（v4-flash-godmode rc.6 教训：动态注入不可靠，
+    // 每轮 GUIDE 随轮次变化 → 思维链混用）。深度引导已静态并入 persona。
+    assert.equal(out.messages.length, 2) // system + user
     assert.equal(out.messages.at(-1).role, 'user')
-    assert.ok(
-      out.messages.at(-1).content === GUIDE_WEAK ||
-        out.messages.at(-1).content === GUIDE_DEEP,
-    )
+    assert.equal(out.messages.at(-1).content, '从零开发一个网页应用')
   }
 
-  // 标准模式 Pro/其他模型 → STANDARD_PRO_PERSONA（w6c，无锚）
+  // 标准模式 Pro/其他模型 → STANDARD_PRO_PERSONA（w6c，无锚、无逐轮引导）
   {
     const out = applyStandardRouting(
       { messages: [{ role: 'user', content: '请全面重构这个系统的架构设计并优化性能' }] },
       'deepseek/deepseek-v4-pro',
     )
     assert.ok(out.messages[0].content.includes(STANDARD_PRO_PERSONA))
-    assert.equal(out.messages.at(-1).content, GUIDE_DEEP) // 复杂任务（架构/重构/优化）→ 深度引导
+    assert.equal(out.messages.length, 2) // system + user，不追加引导
+    assert.equal(out.messages.at(-1).content, '请全面重构这个系统的架构设计并优化性能')
   }
 
-  // 标准模式 Pro：简单任务 → GUIDE_WEAK（快速收敛）
+  // 标准模式 Pro：简单任务同样不追加引导（persona 恒定 = 多轮稳定）
   {
     const out = applyStandardRouting(
       { messages: [{ role: 'user', content: '修复这个报错' }] },
       'deepseek/deepseek-v4-pro',
     )
     assert.ok(out.messages[0].content.includes(STANDARD_PRO_PERSONA))
-    assert.equal(out.messages.at(-1).content, GUIDE_WEAK)
+    assert.equal(out.messages.length, 2)
   }
 
   // 标准模式：历史已有 tool_calls → 放行全部工具（promote 语义，多轮不裁剪）
@@ -875,10 +875,10 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
       out.tools.map((t) => t.function.name),
       allTools.map((t) => t.function.name),
     )
-    // 无 system → 前置 persona（1）+ 原始 3 条 + tool 结果追加近距引导（1）= 5
-    assert.equal(out.messages.length, 5)
-    assert.equal(out.messages.at(-1).role, 'user')
-    assert.equal(out.messages.at(-1).content, GUIDE_WEAK)
+    // 无 system → 前置 persona（1）+ 原始 3 条 = 4；标准模式不追加逐轮引导
+    assert.equal(out.messages.length, 4)
+    assert.equal(out.messages.at(-1).role, 'tool')
+    assert.equal(out.messages.at(-1).content, 'ok')
   }
 
   // 标准模式多轮稳定：第二轮（历史带 assistant 文本回复）仍注入标准 persona，
@@ -1231,12 +1231,11 @@ function chat(body, headers = {}) {
     body.tools.map((t) => t.function.name),
     ['read', 'edit', 'write', 'bash', 'end_turn'],
   )
-  // 近距引导追加（weak 语义）
+  // 标准模式不追加逐轮动态引导（v4-flash-godmode rc.6 教训：动态注入不可靠、
+  // 每轮 GUIDE 随轮次变化 → 思维链混用）；深度引导静态并入 persona。
+  assert.equal(body.messages.length, 2) // system + user
   assert.equal(body.messages.at(-1).role, 'user')
-  assert.ok(
-    body.messages.at(-1).content === GUIDE_WEAK ||
-      body.messages.at(-1).content === GUIDE_DEEP,
-  )
+  assert.equal(body.messages.at(-1).content, '从零开发一个网页应用')
   settingsStore.save({ minimalRoutingEnabled: false })
 }
 
