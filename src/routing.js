@@ -62,6 +62,25 @@ export const GUIDE_DEEP =
   '\nRouter: classify this task (build or fix) now, then adopt the matching style — build: direct production; fix: inspect-first. Think deeply about the architecture, edge cases, and integration points. Do not spend reasoning on the environment or tooling. Produce when your information is complete. End each reasoning block with a decision or an information need.'
 
 /**
+ * 标准模式（standard routing）的 Flash persona —— 与 v4-flash-godmode-opencode-go
+ * 的 router-core.mjs 逐字一致：neutral + 分类指令 + 回顾/防环境扫描 + 深度思考引导。
+ *
+ * 关键设计（来自 dsh-router-standard / v4-flash-godmode 实测）：
+ * - Flash 最优是 weak 内路由（w7, +5.67）——spec 句 persona 在 flash 上会反路由。
+ * - rc.6 教训：`session/event` + `inbox.append` 的动态注入不可靠（多轮后丢失），
+ *   因此把「深度思考引导」**静态并入 persona**，每轮请求改写都重新注入，天然多轮稳定。
+ */
+export const STANDARD_FLASH_PERSONA =
+  'You are a helpful assistant.\n'
+  + 'Before acting, decide the task type (build or fix) and adopt the matching '
+  + 'style: build → hands-on production; fix → inspect-and-plan.\n'
+  + 'Before acting, briefly review what you have already done in this session and continue from where you left off; do not repeat completed steps. Do not run environment checks (echo, whoami, uname, node --version, date) or exhaustive grep/glob scans.\n'
+  + 'Think deeply about the architecture, edge cases, and integration points before writing. Do not spend reasoning on the environment or tooling. Produce when your information is complete, and end each reasoning block with a decision or an information need.'
+
+/** 标准模式的 Pro/其他模型 persona（w6c，spec 句 + 分类；无锚——P24 实测锚对 Pro 有害）。 */
+export const STANDARD_PRO_PERSONA = WEAK_PRO
+
+/**
  * Flash spec 模式的近距集体语域引导（用户指定文本）。
  * 以独立 user 消息注入（与套件 GUIDE_WEAK 的近距机制一致），**不修改 persona**——
  * persona 保持套件逐字符原样（RL 哈希不变），引导只在工具循环/用户轮次追加。
@@ -308,6 +327,108 @@ export function applyMinimalRouting(body, modelId, opts = {}) {
         { role: 'user', content: guide },
       ]
     }
+  }
+
+  return { ...body, messages: routedMessages, tools: routedTools }
+}
+
+/**
+ * 标准模式（standard routing）—— dsh-routing-suite router-standard 的
+ * standard routerMode + v4-flash-godmode 的 Flash 适配，下沉到代理层。
+ *
+ * 与极简模式（applyMinimalRouting）的区别：
+ * - 极简 = 按任务分类 spec/react/weak 三带 + personaFor() 动态 persona；
+ *   深度引导只以近距 user 消息注入（参考仓库实测 rc.6 上动态注入不可靠、
+ *   多轮后易丢——正是「思维增强拉垮」的一个来源）。
+ * - 标准 = **恒走 weak 内路由**（Flash 最优解 w7：neutral + 分类 + 回顾 +
+ *   防环境扫描），**深度思考引导静态并入 persona**（v4-flash-godmode 的
+ *   rc.6 修复：动态注入失效 → 静态并入；代理每轮请求改写都会重新注入
+ *   persona，因此多轮天然稳定）。
+ * - 首轮 RL 形状工具面（shell + 编辑面），首个 tool_calls 后放行全部
+ *   （promote 语义，与 anchored-standard 的 bootstrap→resident 一致）。
+ * - Pro/其他模型用 w6c persona（spec 句 + 分类，无锚——P24 实测锚对 Pro 有害）。
+ *
+ * @param {Record<string, any>} body 客户端请求体
+ * @param {string} modelId 上游模型 id
+ * @param {{ modeOverride?: string | null }} [opts] 保留参数（future：风格钉死）
+ * @returns {Record<string, any>}
+ */
+export function applyStandardRouting(body, modelId, opts = {}) {
+  if (!body || typeof body !== 'object') return body
+  const messages = Array.isArray(body.messages)
+    ? body.messages.map((m) => ({ ...m }))
+    : []
+  const isFlash = isFlashModel(modelId)
+  const persona = isFlash ? STANDARD_FLASH_PERSONA : STANDARD_PRO_PERSONA
+
+  // 1) persona 替换（套件 applyPersona 语义）——与极简模式共用：只换 persona 段，
+  //    其余 section（plan-mode/工具引导等）保留；门禁标记保留在最前。
+  const personaSystemContent = `${FREEBUFF_SYSTEM_OPENING}\n\n${persona}`
+  let routed = null
+  const firstSystemIdx = messages.findIndex((m) => m && m.role === 'system')
+  if (firstSystemIdx !== -1) {
+    const replaced = replaceLeadingPersona(
+      messageText(messages[firstSystemIdx]),
+      personaSystemContent,
+    )
+    if (replaced !== null) {
+      routed = messages.map((m, i) =>
+        i === firstSystemIdx ? { ...messages[firstSystemIdx], content: replaced } : m,
+      )
+    }
+  }
+  if (routed === null) {
+    routed = [{ role: 'system', content: personaSystemContent }, ...messages]
+  }
+
+  // 2) 首轮 RL 形状工具面：weak 核心集（read/write/edit）+ shell + end_turn 签名；
+  //    首个 tool_calls 后放行全部。裁剪后为空 → 保留原工具集（工具保证，不裁空）。
+  const tools = Array.isArray(body.tools) ? body.tools : []
+  let routedTools = tools
+  if (tools.length > 0) {
+    const hasToolCalls = messages.some(
+      (m) =>
+        m &&
+        m.role === 'assistant' &&
+        Array.isArray(m.tool_calls) &&
+        m.tool_calls.length > 0,
+    )
+    if (!hasToolCalls) {
+      const core = new Set(coreFor('weak'))
+      for (const t of tools) {
+        const name = t && t.function ? t.function.name : null
+        if (name === 'bash' || name === 'pwsh' || name === FREEBUFF_SIGNATURE_TOOL_NAME) {
+          core.add(name)
+        }
+      }
+      const filtered = tools.filter((t) => {
+        const name = t && t.function ? t.function.name : null
+        return name !== null && core.has(name)
+      })
+      routedTools = filtered.length > 0 ? filtered : tools
+    }
+  }
+
+  // 3) 近距引导：weak 语义，最后一个「用户消息 / tool 结果」轮次追加固定引导
+  //    （简单任务快速收敛 / 复杂任务深度收敛）。persona 已静态携带深度思考引导，
+  //    这里再追加近距固定引导做双保险；多轮稳定性由 persona 的静态并入保证。
+  let routedMessages = routed
+  const lastIdx = routedMessages.length - 1
+  const last = routedMessages[lastIdx]
+  const lastText = messageText(last)
+  const isUserTurn = last && last.role === 'user' && lastText.trim().length > 0
+  const isToolTurn = last && (last.role === 'tool' || (last.role === 'user' && last.tool_call_id))
+  if (isUserTurn || isToolTurn) {
+    const firstUserText = messages
+      .filter((m) => m && m.role === 'user')
+      .map(messageText)
+      .find((t) => t.trim().length > 0)
+    const complexityText = isUserTurn ? lastText : firstUserText || ''
+    const guide = isComplexTask(complexityText) ? GUIDE_DEEP : GUIDE_WEAK
+    routedMessages = [
+      ...routedMessages,
+      { role: 'user', content: guide },
+    ]
   }
 
   return { ...body, messages: routedMessages, tools: routedTools }

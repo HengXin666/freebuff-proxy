@@ -341,7 +341,7 @@ async function renderProxySettings(view) {
     ]),
   ]))
 
-  // 极简路由（路由模式）：代理侧改写请求，注入 persona / 首轮核心工具面 /
+  // 思维路由（路由模式）：代理侧改写请求，注入 persona / 首轮核心工具面 /
   // 近距离引导（思路来自 dsh-routing-suite 的 router-standard preset 实测：
   // 极简条件接近训练分布，同模型性能最高）。客户端侧路由注入经过翻译/反向
   // 代理链可能被丢弃，此开关让代理兜底保证路由生效。
@@ -356,13 +356,45 @@ async function renderProxySettings(view) {
   if (state.me.role !== 'admin') routingToggleAttrs.disabled = ''
   view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
     el('div', {}, [
-      el('h3', { style: 'margin:0 0 2px' }, '极简路由（路由模式）'),
-      el('span', { class: 'muted' }, '按任务自动注入 spec/react/weak persona，首轮只暴露核心工具，weak 模式追加近距离引导；保存立即生效（参考 dsh-routing-suite）'),
+      el('h3', { style: 'margin:0 0 2px' }, '思维路由（路由模式）'),
+      el('span', { class: 'muted' }, '代理侧注入 persona / 首轮核心工具面 / 近距离引导，保证客户端侧路由注入经反向代理链不被丢弃；一键开关，性能不佳可随时回退（参考 dsh-routing-suite）'),
     ]),
     el('label', { class: 'switch', for: 'minimal-routing' }, [
       el('input', routingToggleAttrs),
       el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
       el('span', { class: 'switch-status' }, routingEnabled ? '已开启' : '已关闭'),
+    ]),
+  ]))
+
+  // 路由实现风格：standard（默认，flash 恒走 weak 内路由 + 深度引导静态并入
+  // persona——不依赖动态注入，多轮对话稳定触发）/ minimal（按任务分类三带）
+  const routingStyle = settings.minimalRoutingStyle ?? 'standard'
+  const styleOptions = [
+    ['standard', 'standard · 标准模式（flash 恒 weak + 深度引导静态并入，推荐）'],
+    ['minimal', 'minimal · 极简模式（按任务分类 spec/react/weak）'],
+  ]
+  view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
+    el('div', {}, [
+      el('h3', { style: 'margin:0 0 2px' }, '路由实现风格'),
+      el('span', { class: 'muted' }, 'standard：flash 恒走 weak 内路由（w7 最优）+ 深度思考引导静态并入 persona，多轮对话稳定触发（参考 v4-flash-godmode）；minimal：旧的按任务分类行为。保存立即生效'),
+    ]),
+    el('div', { class: 'row', style: 'margin-top:8px' }, [
+      el('select', {
+        id: 'minimal-routing-style',
+        style: 'min-width:260px',
+        ...(state.me.role === 'admin' ? {} : { disabled: '' }),
+      }, styleOptions.map(([v, label]) => {
+        const attrs = { value: v }
+        if (v === routingStyle) attrs.selected = ''
+        return el('option', attrs, label)
+      })),
+      state.me.role === 'admin'
+        ? el('button', { class: 'primary', onclick: saveMinimalRoutingStyle }, '保存并生效')
+        : null,
+    ]),
+    el('div', { class: 'muted', style: 'margin-top:8px' }, [
+      `当前生效：${(styleOptions.find(([v]) => v === routingStyle) || [routingStyle, routingStyle])[1]}`,
+      state.me.role !== 'admin' ? '（管理员可调）' : '',
     ]),
   ]))
 
@@ -531,6 +563,21 @@ async function saveMinimalRoutingMode() {
       body: JSON.stringify({ minimalRoutingMode: select.value }),
     })
     toast(`路由风格已设为 ${r.minimalRoutingMode}，下个请求生效`)
+    render()
+  } catch (err) {
+    toast(err.message, true)
+  }
+}
+
+async function saveMinimalRoutingStyle() {
+  const select = $('#minimal-routing-style')
+  if (!select) return
+  try {
+    const r = await api('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({ minimalRoutingStyle: select.value }),
+    })
+    toast(`路由实现风格已设为 ${r.minimalRoutingStyle}，下个请求生效`)
     render()
   } catch (err) {
     toast(err.message, true)

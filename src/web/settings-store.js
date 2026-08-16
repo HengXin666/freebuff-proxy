@@ -12,9 +12,14 @@ const DEFAULT_SETTINGS = Object.freeze({
   minimalRoutingEnabled: false,
   // 路由风格钉死：auto（按任务分类）/ spec（计划-集体，we/let's 链）/ react（执行者）/ weak（内部路由）。
   minimalRoutingMode: 'auto',
+  // 路由实现风格：standard（标准模式，默认——flash 恒走 weak 内路由 + 深度引导
+  // 静态并入 persona，多轮稳定；参考 v4-flash-godmode） / minimal（极简模式，
+  // 按任务分类三带 persona）。性能不佳可一键切回 minimal 或关闭总开关。
+  minimalRoutingStyle: 'standard',
 })
 
 const ROUTING_MODES = Object.freeze(['auto', 'spec', 'react', 'weak'])
+const ROUTING_STYLES = Object.freeze(['standard', 'minimal'])
 
 /** Frontend-managed runtime settings persisted under /data. */
 export class SettingsStore {
@@ -45,6 +50,9 @@ export class SettingsStore {
       }
       if (ROUTING_MODES.includes(raw?.minimalRoutingMode)) {
         this.settings.minimalRoutingMode = raw.minimalRoutingMode
+      }
+      if (ROUTING_STYLES.includes(raw?.minimalRoutingStyle)) {
+        this.settings.minimalRoutingStyle = raw.minimalRoutingStyle
       }
     } catch (err) {
       console.error(
@@ -95,6 +103,14 @@ export class SettingsStore {
         )
       }
       this.settings.minimalRoutingMode = next.minimalRoutingMode
+    }
+    if (next?.minimalRoutingStyle !== undefined) {
+      if (!ROUTING_STYLES.includes(next.minimalRoutingStyle)) {
+        throw new TypeError(
+          `minimalRoutingStyle must be one of ${ROUTING_STYLES.join('/')}`,
+        )
+      }
+      this.settings.minimalRoutingStyle = next.minimalRoutingStyle
     }
     const settings = { ...this.settings }
     fs.mkdirSync(path.dirname(this.file), { recursive: true })
