@@ -28,7 +28,7 @@ import {
   normalizeReasoningFields,
   normalizeOutputBudget,
 } from './free-mode.js'
-import { applyMinimalRouting } from './routing.js'
+import { applyMinimalRouting, applyStandardRouting } from './routing.js'
 import { logger } from './util/log.js'
 
 /**
@@ -615,10 +615,16 @@ export function createProxyHandler(ctx) {
     // 路由注入经过翻译/反向代理链被改写或丢弃时，由代理兜底保证路由生效。
     // 改写后的第一条 system 消息以 free-mode 门禁标记开头，后续
     // ensureFreebuffSystemMessages 不会再重复加前缀。
+    // 实现风格：standard（默认，flash 恒走 weak 内路由 + 深度引导静态并入
+    // persona，多轮稳定；参考 v4-flash-godmode） / minimal（按任务分类三带）。
     if (settingsStore?.get().minimalRoutingEnabled === true) {
-      body = applyMinimalRouting(body, upstreamModel, {
-        modeOverride: settingsStore?.get().minimalRoutingMode ?? 'auto',
-      })
+      const routingStyle = settingsStore?.get().minimalRoutingStyle ?? 'standard'
+      body =
+        routingStyle === 'minimal'
+          ? applyMinimalRouting(body, upstreamModel, {
+              modeOverride: settingsStore?.get().minimalRoutingMode ?? 'auto',
+            })
+          : applyStandardRouting(body, upstreamModel)
     }
     // Free mode requires a system message opening with the Freebuff CLI marker
     // ("You are Buffy, the strategic coding assistant."). Without it the

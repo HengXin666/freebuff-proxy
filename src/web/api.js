@@ -512,6 +512,8 @@ export function createWebApi(deps) {
         spreadFreeModels: settingsStore?.get().spreadFreeModels !== false,
         minimalRoutingEnabled: settingsStore?.get().minimalRoutingEnabled === true,
         minimalRoutingMode: settingsStore?.get().minimalRoutingMode ?? 'auto',
+        minimalRoutingStyle:
+          settingsStore?.get().minimalRoutingStyle ?? 'standard',
       })
       return true
     }
@@ -581,6 +583,15 @@ export function createWebApi(deps) {
           return true
         }
         patch.minimalRoutingMode = body.minimalRoutingMode
+      }
+      if (body.minimalRoutingStyle !== undefined) {
+        if (!['standard', 'minimal'].includes(body.minimalRoutingStyle)) {
+          sendJson(res, 400, {
+            error: 'minimalRoutingStyle 必须是 standard/minimal 之一',
+          })
+          return true
+        }
+        patch.minimalRoutingStyle = body.minimalRoutingStyle
       }
       if (!Object.keys(patch).length) {
         sendJson(res, 400, {

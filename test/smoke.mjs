@@ -18,6 +18,7 @@ import {
 } from '../src/free-mode.js'
 import {
   applyMinimalRouting,
+  applyStandardRouting,
   bandOf,
   classifyTask,
   coreFor,
@@ -27,6 +28,8 @@ import {
   REACT_PERSONA,
   WEAK_PRO,
   WEAK_FLASH,
+  STANDARD_FLASH_PERSONA,
+  STANDARD_PRO_PERSONA,
   WE_CHAIN_ANCHOR_FLASH,
   GUIDE_WEAK,
   GUIDE_DEEP,
@@ -794,6 +797,118 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
     const names = out.tools.map((t) => t.function.name)
     assert.deepEqual(names, ['read', 'edit', 'end_turn'])
   }
+
+  // ── 标准模式（applyStandardRouting）：flash 恒走 weak + 深度引导静态并入 ──
+  {
+    // flash：恒用 STANDARD_FLASH_PERSONA（不按任务分类），深度思考引导静态并入
+    // persona（v4-flash-godmode rc.6 教训：动态注入不可靠 → 静态并入，多轮稳定）
+    const out = applyStandardRouting(
+      {
+        messages: [
+          { role: 'system', content: 'You are a coding agent powered by the deepseek/deepseek-v4-flash model.\n\n### 工具使用\n用工具操作文件。' },
+          { role: 'user', content: '从零开发一个网页应用' },
+        ],
+        tools: allTools,
+      },
+      'deepseek/deepseek-v4-flash',
+    )
+    const sys0 = out.messages[0].content
+    assert.ok(sys0.startsWith(FREEBUFF_SYSTEM_OPENING))
+    assert.ok(sys0.includes(STANDARD_FLASH_PERSONA))
+    // 深度引导静态并入 persona（关键：多轮稳定，不依赖动态注入）
+    assert.ok(sys0.includes('Think deeply about the architecture'))
+    assert.ok(sys0.includes('decide the task type (build or fix)'))
+    // 客户端 persona 段被替换、其余 section 保留（套件 applyPersona 语义）
+    assert.ok(!sys0.includes('coding agent powered by'))
+    assert.ok(sys0.includes('### 工具使用'))
+    // 首轮 weak 核心工具面（read/write/edit + shell）
+    assert.deepEqual(
+      out.tools.map((t) => t.function.name),
+      ['read', 'edit', 'write', 'bash'],
+    )
+    // 近距引导追加（weak 语义）
+    assert.equal(out.messages.at(-1).role, 'user')
+    assert.ok(
+      out.messages.at(-1).content === GUIDE_WEAK ||
+        out.messages.at(-1).content === GUIDE_DEEP,
+    )
+  }
+
+  // 标准模式 Pro/其他模型 → STANDARD_PRO_PERSONA（w6c，无锚）
+  {
+    const out = applyStandardRouting(
+      { messages: [{ role: 'user', content: '请全面重构这个系统的架构设计并优化性能' }] },
+      'deepseek/deepseek-v4-pro',
+    )
+    assert.ok(out.messages[0].content.includes(STANDARD_PRO_PERSONA))
+    assert.equal(out.messages.at(-1).content, GUIDE_DEEP) // 复杂任务（架构/重构/优化）→ 深度引导
+  }
+
+  // 标准模式 Pro：简单任务 → GUIDE_WEAK（快速收敛）
+  {
+    const out = applyStandardRouting(
+      { messages: [{ role: 'user', content: '修复这个报错' }] },
+      'deepseek/deepseek-v4-pro',
+    )
+    assert.ok(out.messages[0].content.includes(STANDARD_PRO_PERSONA))
+    assert.equal(out.messages.at(-1).content, GUIDE_WEAK)
+  }
+
+  // 标准模式：历史已有 tool_calls → 放行全部工具（promote 语义，多轮不裁剪）
+  {
+    const out = applyStandardRouting(
+      {
+        messages: [
+          { role: 'user', content: '写一个脚本' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
+          },
+          { role: 'tool', tool_call_id: 'c1', content: 'ok' },
+        ],
+        tools: allTools,
+      },
+      'deepseek/deepseek-v4-flash',
+    )
+    assert.deepEqual(
+      out.tools.map((t) => t.function.name),
+      allTools.map((t) => t.function.name),
+    )
+    // 无 system → 前置 persona（1）+ 原始 3 条 + tool 结果追加近距引导（1）= 5
+    assert.equal(out.messages.length, 5)
+    assert.equal(out.messages.at(-1).role, 'user')
+    assert.equal(out.messages.at(-1).content, GUIDE_WEAK)
+  }
+
+  // 标准模式多轮稳定：第二轮（历史带 assistant 文本回复）仍注入标准 persona，
+  // 且 persona 内容与首轮逐字一致（哈希不变，多轮触发不衰减）
+  {
+    const first = applyStandardRouting(
+      { messages: [{ role: 'user', content: '帮我重构这个模块' }] },
+      'deepseek/deepseek-v4-flash',
+    )
+    const second = applyStandardRouting(
+      {
+        messages: [
+          { role: 'user', content: '帮我重构这个模块' },
+          { role: 'assistant', content: '好的，我先看一下现有代码结构。' },
+          { role: 'user', content: '继续，顺便加上单元测试' },
+        ],
+      },
+      'deepseek/deepseek-v4-flash',
+    )
+    // 两轮注入的 persona 逐字一致（静态并入 → 多轮稳定触发）
+    assert.equal(
+      first.messages[0].content.includes(STANDARD_FLASH_PERSONA),
+      true,
+    )
+    assert.equal(
+      second.messages[0].content.includes(STANDARD_FLASH_PERSONA),
+      true,
+    )
+    assert.ok(second.messages[0].content.includes('Think deeply about the architecture'))
+  }
 }
 
 // --- unit: gate helpers ---
@@ -944,6 +1059,8 @@ function chat(body, headers = {}) {
 
 // minimal routing: 默认关闭 → 透传不改写；开启 → persona 置顶 + 首轮工具面裁剪
 {
+  // 本块专门验证 minimal 实现风格（旧行为），显式钉死，避免受默认 standard 影响
+  settingsStore.save({ minimalRoutingStyle: 'minimal' })
   calls = []
   completionAttempts = 0
   const tools = [
@@ -1079,6 +1196,47 @@ function chat(body, headers = {}) {
   assert.ok(weakBody.messages[0].content.includes(WEAK_FLASH))
   assert.equal(weakBody.messages.at(-1).role, 'user')
   assert.equal(weakBody.messages.at(-1).content, GUIDE_WEAK)
+  settingsStore.save({ minimalRoutingEnabled: false, minimalRoutingStyle: 'standard' })
+}
+
+// standard routing（默认实现风格）：flash 恒走 weak 内路由 + 深度引导静态并入 persona
+{
+  const tools = [
+    { type: 'function', function: { name: 'read' } },
+    { type: 'function', function: { name: 'edit' } },
+    { type: 'function', function: { name: 'glob' } },
+    { type: 'function', function: { name: 'grep' } },
+    { type: 'function', function: { name: 'write' } },
+    { type: 'function', function: { name: 'bash' } },
+    { type: 'function', function: { name: 'todo_write' } },
+    { type: 'function', function: { name: 'skill' } },
+  ]
+  settingsStore.save({ minimalRoutingEnabled: true, minimalRoutingStyle: 'standard' })
+  calls = []
+  completionAttempts = 0
+  const res = await chat({
+    model: 'deepseek/deepseek-v4-flash',
+    messages: [{ role: 'user', content: '从零开发一个网页应用' }],
+    tools,
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  const call = calls.find((c) => c.url.includes('/chat/completions'))
+  const body = JSON.parse(call.body)
+  const sys0 = body.messages[0].content
+  // flash 恒走 weak 标准 persona（不按任务分类），深度思考引导静态并入
+  assert.ok(sys0.includes(STANDARD_FLASH_PERSONA))
+  assert.ok(sys0.includes('Think deeply about the architecture'))
+  // 首轮 weak 核心工具面（read/write/edit + bash + end_turn 签名）
+  assert.deepEqual(
+    body.tools.map((t) => t.function.name),
+    ['read', 'edit', 'write', 'bash', 'end_turn'],
+  )
+  // 近距引导追加（weak 语义）
+  assert.equal(body.messages.at(-1).role, 'user')
+  assert.ok(
+    body.messages.at(-1).content === GUIDE_WEAK ||
+      body.messages.at(-1).content === GUIDE_DEEP,
+  )
   settingsStore.save({ minimalRoutingEnabled: false })
 }
 
