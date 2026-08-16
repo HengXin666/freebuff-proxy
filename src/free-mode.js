@@ -146,3 +146,39 @@ export function normalizeReasoningFields(body) {
   }
   return out
 }
+
+/**
+ * 输出预算治理：DeepSeek 系模型把思考（reasoning）token 计入
+ * max_tokens / max_completion_tokens 预算（官方文档明确 reasoning tokens
+ * 占用 max_tokens）。客户端（cc/Pi 等）常带一个偏小的输出上限（如 8192），
+ * 思考链稍长就把预算吃光 → 上游以 finish_reason=length 提前截断，表现为
+ * 「思考异常即截断」（freebuff2api-wokers#8 同源问题，参考仓库同样原样转发
+ * 客户端 max_tokens 而中招）。
+ *
+ * 转发上游前把输出上限抬到 floor：客户端已设上限时取 max(上限, floor)，
+ * 未设时也补一个 floor（上游默认若不设可能同样偏小）。统一收敛为
+ * max_completion_tokens 单字段，避免 max_tokens / max_completion_tokens
+ * 双字段语义冲突（与 normalizeReasoningFields 同思路）。
+ *
+ * @param {Record<string, any>} body
+ * @param {number} [floor] 最低输出预算（token），默认 65536
+ * @returns {Record<string, any>}
+ */
+export function normalizeOutputBudget(body, floor = 65536) {
+  if (!body || typeof body !== 'object') return body
+  // 兼容三种客户端字段写法：max_tokens（OpenAI 旧）、max_completion_tokens
+  // （OpenAI 新）、max_output_tokens（Responses/部分 SDK，参考仓库同样映射）。
+  const caps = [
+    body.max_tokens,
+    body.max_completion_tokens,
+    body.max_output_tokens,
+  ]
+    .map((v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : NaN))
+    .filter(Number.isFinite)
+  const clientCap = caps.length ? Math.max(...caps) : 0
+  const out = { ...body }
+  delete out.max_tokens
+  delete out.max_output_tokens
+  out.max_completion_tokens = Math.max(floor, clientCap)
+  return out
+}

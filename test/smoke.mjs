@@ -12,6 +12,7 @@ import {
   ensureFreebuffSystemMessages,
   ensureFreebuffToolSignature,
   normalizeReasoningFields,
+  normalizeOutputBudget,
   FREEBUFF_SIGNATURE_TOOL_NAME,
   FREEBUFF_SYSTEM_OPENING,
 } from '../src/free-mode.js'
@@ -180,6 +181,16 @@ globalThis.fetch = async (url, init = {}) => {
     assert.ok(userMsg && String(userMsg.content).length > 0)
     assert.ok(headers.Authorization || headers.authorization)
     assert.ok(headers['x-codebuff-api-key'] || headers['X-Codebuff-Api-Key'])
+
+    // 输出预算治理（freebuff2api-wokers#8）：客户端小 max_tokens 会把思考链
+    // （reasoning token 计入预算）掐断——转发上游前必须抬到 floor 并统一为
+    // max_completion_tokens 单字段，绝不允许小上限原样透传。
+    assert.equal(body.max_tokens, undefined)
+    assert.equal(body.max_output_tokens, undefined)
+    assert.ok(
+      body.max_completion_tokens >= 65536,
+      `转发上游的输出预算应 >= 65536, got ${body.max_completion_tokens}`,
+    )
 
     completionAttempts++
     // stall_zero: 200 OK with a streaming body that never sends any data nor closes
@@ -367,6 +378,35 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
 
   const r2 = normalizeReasoningFields({ reasoning_effort: 'high' })
   assert.equal(r2.reasoning.effort, 'high')
+
+  // 输出预算治理（freebuff2api-wokers#8：DS4 思考链稍长即截断）：
+  // reasoning token 计入 max_tokens 预算，客户端偏小上限会把思考链掐断
+  // （finish_reason=length）。转发上游前抬到 floor，统一为 max_completion_tokens。
+  const b1 = normalizeOutputBudget({ max_tokens: 8192 })
+  assert.equal(b1.max_tokens, undefined)
+  assert.equal(b1.max_completion_tokens, 65536)
+
+  const b2 = normalizeOutputBudget({ max_completion_tokens: 4096, max_tokens: 1000 })
+  assert.equal(b2.max_tokens, undefined)
+  assert.equal(b2.max_completion_tokens, 65536)
+
+  // 客户端上限高于 floor → 保留客户端意图（不降档）
+  const b3 = normalizeOutputBudget({ max_tokens: 131072 })
+  assert.equal(b3.max_completion_tokens, 131072)
+
+  // 未设上限 → 补 floor（上游默认若不设可能同样偏小）
+  const b4 = normalizeOutputBudget({ model: 'x' })
+  assert.equal(b4.max_completion_tokens, 65536)
+  assert.equal(b4.model, 'x')
+
+  // max_output_tokens（Responses/部分 SDK 字段）同样计入预算
+  const b6 = normalizeOutputBudget({ max_output_tokens: 2048 })
+  assert.equal(b6.max_output_tokens, undefined)
+  assert.equal(b6.max_completion_tokens, 65536)
+
+  // 非法/非数值上限 → 兜底 floor
+  const b5 = normalizeOutputBudget({ max_tokens: 'abc', max_completion_tokens: -5 })
+  assert.equal(b5.max_completion_tokens, 65536)
 
   const originalTools = [
     { type: 'function', function: { name: 'web_search' } },
