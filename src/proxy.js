@@ -26,6 +26,7 @@ import {
   ensureFreebuffSystemMessages,
   ensureFreebuffToolSignature,
   normalizeReasoningFields,
+  normalizeOutputBudget,
 } from './free-mode.js'
 import { applyMinimalRouting } from './routing.js'
 import { logger } from './util/log.js'
@@ -605,6 +606,10 @@ export function createProxyHandler(ctx) {
     let body = { ...clientBody, model: upstreamModel }
     // One reasoning field only — avoids Freebuff default + client dual fields.
     body = normalizeReasoningFields(body)
+    // 输出预算治理：客户端偏小的 max_tokens/max_completion_tokens 会把思考链
+    // （reasoning token 计入该预算）提前掐断（finish_reason=length）——参考
+    // freebuff2api-wokers#8「DS4 思考链稍长即截断」。转发上游前抬到 floor。
+    body = normalizeOutputBudget(body)
     // 极简路由（路由模式）：代理侧注入 persona + 首轮核心工具面 + 近距离引导。
     // 参考 dsh-routing-suite（dsh-router-standard）的请求协议——当客户端侧的
     // 路由注入经过翻译/反向代理链被改写或丢弃时，由代理兜底保证路由生效。

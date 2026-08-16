@@ -1,6 +1,6 @@
 {
   "name": "freebuff-proxy",
-  "version": "1.5.6",
+  "version": "1.5.7",
   "private": true,
   "description": "OpenAI-compatible reverse proxy that handles Freebuff auth and free-session admission",
   "type": "module",
