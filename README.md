@@ -24,7 +24,7 @@ OpenAI 兼容的 **Freebuff / Codebuff 免费额度反向代理**，支持 **多
 - [下游 Agent 接入](#下游-agent-接入)
 - [命令 / 本地开发](#命令--本地开发)
 - [配置参考](#配置参考)
-- [限制](#限制)
+- [限制](#限制官方免费层现实)
 
 ---
 
@@ -455,11 +455,11 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 
 | 项 | 唯一来源 |
 |----|----------|
-| Freebuff 登录态 | Web 控制台添加 / `npm run login` → `credentials/<email>.json` |
+| Freebuff 登录态 | Web 控制台添加 / `npm run login` → `credentials/<账号ID>.json` |
 | Web 用户 / API Key | `/data/users.json`（控制台管理） |
 | Agent 门禁 | `server.api_keys`（可选；非 loopback 必填） |
 | 上游 API / 登录 URL | `upstream.api_base` / `login_base` |
-| 出网代理 | 控制台「代理设置」→ `/data/proxies.json`（账号级 `credentials/<email>.json#proxy`、`upstream.proxy`、`HTTP(S)_PROXY` 仅兜底） |
+| 出网代理 | 控制台「代理设置」→ `/data/proxies.json`（账号级 `credentials/<账号ID>.json#proxy`、`upstream.proxy`、`HTTP(S)_PROXY` 仅兜底） |
 | 运行策略 | 控制台「免费额度策略」→ `/data/settings.json`（保存后立即生效） |
 | 监听地址 | `server.host` / `port`（`FREEBUFF_PROXY_HOST` / `FREEBUFF_PROXY_PORT` 覆盖） |
 | 管理员 | `ADMIN_USERNAME` / `ADMIN_PASSWORD`（或 `users.default_admin_*`） |
