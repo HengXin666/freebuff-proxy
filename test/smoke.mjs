@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import net from 'node:net'
 import { loadConfig } from '../src/config.js'
 import { AccountRuntimes } from '../src/app-context.js'
 import { startServer } from '../src/server.js'
 import { configureLogger } from '../src/util/log.js'
-import { requireModelId } from '../src/model.js'
+import { requireModelId, isFreeModel } from '../src/model.js'
 import { saveAccountUser, listAccounts, readAccountUser } from '../src/auth-store.js'
 import {
   ensureFreebuffSystemMessages,
@@ -225,6 +226,22 @@ globalThis.fetch = async (url, init = {}) => {
             controller.enqueue(new TextEncoder().encode(
               'data: {"id":"c1","object":"chat.completion.chunk","choices":[{"delta":{"content":"hi"}}]}\n\n'
             ))
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      )
+    }
+    // bigstall: 一次性下发大块数据后卡死——用于下游背压（客户端不读）场景，
+    // 大块写会让下游 socket 缓冲区填满 → write() 返回 false → 等待 drain
+    if (mockMode === 'bigstall') {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                'data: ' + 'x'.repeat(4 * 1024 * 1024) + '\n\n',
+              ),
+            )
           },
         }),
         { status: 200, headers: { 'content-type': 'text/event-stream' } },
@@ -1829,7 +1846,8 @@ assert.equal(requireModelId(''), null)
   // 3 个账号各 admit 一次（每个账号一个 session，第 4 个请求起复用）
   assert.equal(sessionPosts, 3, `expected 3 admissions (one per account), got ${sessionPosts}`)
 
-  // 并发冷启动也分散到不同账号（而不是挤在一个账号）
+  // 付费模型（premium）恒走热 session 复用，绝不暴力分散：并发冷启动也只
+  // admit 一次、全部请求钉在同一个账号（每次 admit 都是计费会话，分散 = 烧钱）
   sessionPosts = 0
   const seen = await Promise.all(
     Array.from({ length: 6 }, async () => {
@@ -1837,7 +1855,8 @@ assert.equal(requireModelId(''), null)
       return rt.key
     }),
   )
-  assert.equal(new Set(seen).size, 3, `并发冷启动应分散到全部账号, got ${seen}`)
+  assert.equal(new Set(seen).size, 1, `付费模型应复用同一账号, got ${seen}`)
+  assert.equal(sessionPosts, 1, `付费模型并发冷启动只应 admit 一次, got ${sessionPosts}`)
   await pool.shutdown()
   fs.rmSync(spDir, { recursive: true, force: true })
 }
@@ -3479,6 +3498,214 @@ assert.equal(requireModelId(''), null)
 
   rsServer.close()
   fs.rmSync(rsDir, { recursive: true, force: true })
+}
+
+// --- 免费模型会话剩余 <5 分钟不再调度（提前 re-admit）；付费模型用到接近过期 ---
+{
+  const ldDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-lead-'))
+  saveAccountUser(ldDir, { id: 'lda', email: 'lda@example.com', authToken: 'token-lda' })
+  const ldConfig = loadConfig()
+  ldConfig.upstream.credentialsDir = ldDir
+  ldConfig.session.pollIntervalSec = 3600
+  ldConfig.session.reAdmitLeadSec = 60
+  ldConfig.session.freeModelReAdmitLeadSec = 300
+  const ldPool = new AccountRuntimes(ldConfig)
+  const ldSm = ldPool.get('lda').sessions
+  mockMode = 'ok'
+
+  // 模型分类：免费（daily）vs 付费（premium）；未知模型按免费保守处理
+  assert.equal(isFreeModel('deepseek/deepseek-v4-flash'), true)
+  assert.equal(isFreeModel('mimo/mimo-v2.5'), true)
+  assert.equal(isFreeModel('deepseek/deepseek-v4-pro'), false)
+  assert.equal(isFreeModel('openai/gpt-5.6-luna'), false)
+  assert.equal(isFreeModel('unknown/vendor-model'), true)
+
+  // 免费模型：会话剩余 4 分钟（< 5 分钟阈值）→ 不再可用，提前 re-admit 换新会话
+  sessionExpiryMs = 4 * 60_000
+  sessionPosts = 0
+  await ldSm.ensureSession('deepseek/deepseek-v4-flash')
+  assert.equal(sessionPosts, 1)
+  assert.equal(
+    ldSm.isUsableForModel('deepseek/deepseek-v4-flash'),
+    false,
+    '免费会话剩余 4 分钟应视为不可复用（不足 5 分钟不调度）',
+  )
+  await ldSm.ensureSession('deepseek/deepseek-v4-flash')
+  assert.equal(sessionPosts, 2, '免费会话剩余 <5 分钟应提前 re-admit')
+
+  // 付费模型：会话剩余 4 分钟（> 60s lead）→ 仍可复用（不浪费已付费会话）
+  sessionExpiryMs = 4 * 60_000
+  await ldSm.ensureSession('deepseek/deepseek-v4-pro')
+  assert.equal(
+    ldSm.isUsableForModel('deepseek/deepseek-v4-pro'),
+    true,
+    '付费会话剩余 4 分钟应可复用（60s 提前量）',
+  )
+  // 付费模型：剩余 30s < 60s lead → 才不可复用
+  ldSm.session.expiresAt = new Date(Date.now() + 30_000).toISOString()
+  assert.equal(
+    ldSm.isUsableForModel('deepseek/deepseek-v4-pro'),
+    false,
+    '付费会话剩余 30s 应不可复用（接近过期）',
+  )
+
+  sessionExpiryMs = 3600_000
+  await ldPool.shutdown()
+  fs.rmSync(ldDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
+
+// --- 幽灵连接：下游背压（客户端不读）→ idle 超时后账号锁必须释放 ---
+//   回归：write() 返回 false 后裸等 drain（无 idle 定时器），客户端"活着但
+//   不再读"（网络波动/卡顿）会永久挂起 → 账号 chat 锁占死、后续请求全部超时
+{
+  const bdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-backpressure-'))
+  saveAccountUser(bdDir, { id: 'bda', email: 'bda@example.com', authToken: 'token-bda' })
+  const bdConfig = loadConfig()
+  bdConfig.server.host = '127.0.0.1'
+  bdConfig.server.port = 0
+  bdConfig.server.apiKeys = ['sk-test']
+  bdConfig.upstream.credentialsDir = bdDir
+  bdConfig.session.pollIntervalSec = 3600
+  bdConfig.limits.streamIdleTimeoutSec = 1
+
+  const bdRuntimes = new AccountRuntimes(bdConfig)
+  const bdServer = await startServer({
+    config: bdConfig,
+    runtimes: bdRuntimes,
+    ...(() => {
+      const rt = bdRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const bdPort = bdServer.address().port
+
+  // 原始 TCP 客户端：发请求后绝不读响应（窗口满 → 背压）
+  mockMode = 'bigstall'
+  sessionPosts = 0
+  completionAttempts = 0
+  const sock = net.connect(bdPort, '127.0.0.1')
+  try {
+    sock.setRecvBufferSize(1024) // 缩小接收窗口，尽快触发背压
+  } catch {
+    // 平台不支持则忽略
+  }
+  const bdBody = JSON.stringify({
+    model: 'deepseek/deepseek-v4-flash',
+    stream: true,
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+  sock.write(
+    `POST /v1/chat/completions HTTP/1.1\r\n` +
+      `Host: 127.0.0.1:${bdPort}\r\n` +
+      `Authorization: Bearer sk-test\r\n` +
+      `Content-Type: application/json\r\n` +
+      `Content-Length: ${Buffer.byteLength(bdBody)}\r\n\r\n` +
+      bdBody,
+  )
+  // 先等请求真正获取到账号锁（否则 waitFor(===0) 在锁未获取时就成立、空转通过）
+  await waitFor(
+    '背压请求应获取账号锁',
+    () => bdRuntimes.chatInFlight('bda') === 1,
+    10_000,
+  )
+  // 客户端不读响应 → 大块写触发下游背压；账号锁必须在 idle 超时（1s）后释放
+  await waitFor(
+    '背压卡死时账号锁应在 idle 超时后释放',
+    () => bdRuntimes.chatInFlight('bda') === 0,
+    10_000,
+  )
+  sock.destroy()
+
+  // 锁已释放 → 下一个请求立即可用（不再排队超时）
+  mockMode = 'ok'
+  const bdRes = await fetch(`http://127.0.0.1:${bdPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      stream: true,
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  assert.equal(bdRes.status, 200, await bdRes.clone().text())
+  await bdRes.text()
+
+  await bdRuntimes.shutdown()
+  bdServer.close()
+  fs.rmSync(bdDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
+
+// --- 账号被卡死（在途流占死唯一并发槽）时，其他连接换号成功而不是全部超时 ---
+{
+  const waDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-wedge-'))
+  saveAccountUser(waDir, { id: 'wa', email: 'wa@example.com', authToken: 'token-wa' })
+  saveAccountUser(waDir, { id: 'wb', email: 'wb@example.com', authToken: 'token-wb' })
+  const waConfig = loadConfig()
+  waConfig.server.host = '127.0.0.1'
+  waConfig.server.port = 0
+  waConfig.server.apiKeys = ['sk-test']
+  waConfig.upstream.credentialsDir = waDir
+  waConfig.session.pollIntervalSec = 3600
+  waConfig.limits.streamIdleTimeoutSec = 1
+  waConfig.limits.accountMaxConcurrency = 1
+
+  const waRuntimes = new AccountRuntimes(waConfig) // 默认 spread 开（免费模型分散）
+  const waServer = await startServer({
+    config: waConfig,
+    runtimes: waRuntimes,
+    ...(() => {
+      const rt = waRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const waPort = waServer.address().port
+  const waChat = (model = 'deepseek/deepseek-v4-flash', stream = true) =>
+    fetch(`http://127.0.0.1:${waPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+      body: JSON.stringify({ model, stream, messages: [{ role: 'user', content: 'hello' }] }),
+    })
+
+  mockMode = 'hold_once'
+  sessionPosts = 0
+  completionAttempts = 0
+  // A：wa 占住唯一并发槽（hold 流保持打开）
+  const resA = await waChat()
+  assert.equal(resA.status, 200)
+  assert.equal(waRuntimes.chatInFlight('wa'), 1, 'hold 流应占用 wa 的唯一并发槽')
+  // B：立刻打第二个请求 → 免费模型分散到 wb 成功，而不是排队等 wa 释放
+  const t0 = Date.now()
+  const resB = await waChat()
+  assert.equal(resB.status, 200, await resB.clone().text())
+  assert.equal(
+    resB.headers.get('x-freebuff-proxy-account'),
+    'wb@example.com',
+    'wa 被占死时新请求应换到 wb',
+  )
+  assert.ok(Date.now() - t0 < 15_000, `换号应快速完成, took ${Date.now() - t0}ms`)
+  await resB.text()
+  // 放行 A 的 hold（可能已被 idle 超时掐断，容错）
+  releaseHoldStreams()
+  try { await resA.text() } catch { /* 被 idle 掐断也符合预期 */ }
+
+  await waRuntimes.shutdown()
+  waServer.close()
+  fs.rmSync(waDir, { recursive: true, force: true })
+  mockMode = 'ok'
 }
 
 await runtimes.shutdown()

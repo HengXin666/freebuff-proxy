@@ -341,7 +341,11 @@ export function createProxyHandler(ctx) {
           lastKey = rt.key
 
           // 账号级串行化：同一账号同一时间只处理一个 chat（热会话排队复用，
-          // 超时兜底换号；预算耗尽时无限等待——持锁者受 idle 超时约束必然释放）。
+          // 超时兜底换号）。**任何一次获取都必须有界**：兜底阶段虽然预算已
+          // 耗尽（不会再换号），但若持锁者因网络波动卡死（幽灵连接），无限
+          // 等待会让本请求永久挂起、所有后续请求排队超时——必须像前面的
+          // acquire 一样设上界，超时把 account_busy 返回给客户端（可重试），
+          // 绝不无限等待。
           if (!heldRt) {
             try {
               releaseChat = await runtimes.acquireChat(rt.key, chatWaitMs(rt))
@@ -358,12 +362,14 @@ export function createProxyHandler(ctx) {
                 pendingNoCooldown = true
                 continue
               }
-              logger.warn('account busy; final fallback waiting for chat slot', {
+              logger.warn('account busy; final bounded wait for chat slot', {
                 key: rt.key,
                 email: rt.email,
                 model: upstreamModel,
+                attempt,
+                waitMs: chatWaitMs(rt),
               })
-              releaseChat = await runtimes.acquireChat(rt.key, 0)
+              releaseChat = await runtimes.acquireChat(rt.key, chatWaitMs(rt))
             }
             // 切换竞态：等待 chat 锁期间可能发生了代理/账号切换（本 runtime
             // 已被顶替，旧 session 正在被优雅释放）。此时不能继续用旧 runtime
@@ -670,6 +676,20 @@ export function createProxyHandler(ctx) {
     )
   }
 
+  /**
+   * chat/completions 响应头等待上限（毫秒）：与 body idle 同量级并带 30s 下限，
+   * 且不超过全局 upstreamTimeoutSec。上游 chat 是流式接口，正常秒级出响应头；
+   * 网络波动（TCP 黑洞/代理挂起）时等 upstreamTimeoutSec（默认 600s）才 abort，
+   * 账号 chat 锁会被占死 10 分钟、所有新请求超时——必须尽快释放。
+   */
+  function chatHeaderTimeoutMs() {
+    const idleSec = config.limits.streamIdleTimeoutSec
+    const idleMs = (Number.isFinite(idleSec) && idleSec > 0 ? idleSec : 120) * 1000
+    const bound = Math.max(30_000, idleMs)
+    const cap = (config.limits.upstreamTimeoutSec || 600) * 1000
+    return Math.min(cap, bound)
+  }
+
   async function forwardCompletions({
     req,
     res,
@@ -698,7 +718,11 @@ export function createProxyHandler(ctx) {
         headers,
         body: JSON.stringify(forwardBody),
         signal: abortCtrl.signal,
-        timeoutMs: config.limits.upstreamTimeoutSec * 1000,
+        // 响应头等待上限收紧到 body idle 同量级（默认 120s，带 30s 下限）：
+        // chat 是流式接口，正常秒级出响应头；网络波动（TCP 黑洞）时若等
+        // upstreamTimeoutSec（默认 600s）才 abort，账号 chat 锁会被占死
+        // 10 分钟，期间所有新请求超时——与幽灵连接同源，必须尽快释放。
+        timeoutMs: chatHeaderTimeoutMs(),
       })
     } finally {
       // 响应头已到/上游已失败：后续由 pipe 的 socket 监听接管，移除本监听器
@@ -1106,7 +1130,12 @@ async function pipeWebStreamToNode(
         wroteBytes += buf.length
         const ok = nodeRes.write(buf)
         if (!ok) {
-          // 下游背压：等待 drain 也可能被客户端卡住，同样受 idle 超时约束
+          // 下游背压：客户端 TCP 窗口满，等待 drain。clearTimer 已在 write 前
+          // 执行，若客户端"活着但不再读"（网络波动/卡顿，不关连接也不消费），
+          // onceDrain 永不触发 → 账号 chat 锁被永久占死、后续请求全部超时
+          // （与上游幽灵连接同源）。等待 drain 前必须重新武装 idle 定时器，
+          // drain 后 armTimer() 会再重置计时。
+          armTimer()
           await stallGuard(onceDrain(nodeRes))
           if (stalled) throw new StreamStallError(idleTimeoutMs)
           if (clientGone) throw new ClientGoneError()

@@ -1,5 +1,6 @@
 import { logger } from './util/log.js'
 import { UpstreamError } from './upstream/client.js'
+import { isFreeModel } from './model.js'
 
 /**
  * Manages a single Freebuff free-session slot for this proxy process.
@@ -129,10 +130,36 @@ export class SessionManager {
   /**
    * 会话剩余时间低于该阈值（秒）后不再承接新请求，提前 re-admit 换新会话，
    * 避免请求发到马上过期的会话上、中途卡住（切换流量更平滑）。
+   *
+   * 按模型计费方式分层：
+   * - 免费模型（daily/referral/limited_offer/helper）：剩余不足
+   *   `session.free_model_re_admit_lead_sec`（默认 300s = 5 分钟）即不再调度——
+   *   免费会话按次结算，过期中途被掐断会白占额度且响应截断，提前换最平滑；
+   * - 付费模型（premium）：每次 admit 都是计费会话，尽量用到接近过期
+   *   （沿用 `session.re_admit_lead_sec`，默认 60s），避免频繁新建付费会话。
+   * @param {string} model
    */
-  reAdmitLeadMs() {
+  reAdmitLeadMs(model) {
     const sec = this.config.session.reAdmitLeadSec
-    return (Number.isFinite(sec) && sec > 0 ? sec : 60) * 1000
+    const base = (Number.isFinite(sec) && sec > 0 ? sec : 60) * 1000
+    if (isFreeModel(model)) {
+      const freeSec = this.config.session.freeModelReAdmitLeadSec
+      const freeBase =
+        (Number.isFinite(freeSec) && freeSec > 0 ? freeSec : 300) * 1000
+      return Math.max(base, freeBase)
+    }
+    return base
+  }
+
+  /**
+   * 会话切换等待在途请求的上界（毫秒）：约等于"持锁者最坏存活时长"——响应头
+   * 等待（与 body idle 同量级）+ body idle 一个周期 + 余量。超过该值视为账号
+   * 卡死（网络波动叠加），放弃本账号让上层冷却/换号，绝不无限等待。
+   */
+  switchWaitMs() {
+    const idleSec = this.config.limits.streamIdleTimeoutSec
+    const idleMs = (Number.isFinite(idleSec) && idleSec > 0 ? idleSec : 120) * 1000
+    return 2 * idleMs + 60_000
   }
 
   isUsableForModel(model, session = this.session) {
@@ -152,7 +179,7 @@ export class SessionManager {
             ? session.remainingMs
             : null
       // 已过期 / 剩余时间不足 lead → 新请求需要 re-admit（提前平滑切换）
-      if (left != null && left <= this.reAdmitLeadMs()) return false
+      if (left != null && left <= this.reAdmitLeadMs(model)) return false
     }
     return session.status === 'active' && session.model === model
   }
@@ -180,18 +207,36 @@ export class SessionManager {
       // idle 超时约束，幽灵连接也会被掐断），再释放重建。
       // 用循环而非单次等待：某次归零的瞬间可能有新请求刚拿到 chat 锁开始
       // 在途，需继续等它，直到观察到真正的空闲窗口。
+      // **等待必须有上界**：在途流若因网络波动长时间不结束（虽然最终会受
+      // idle 超时约束结束），新请求不能无限干等——否则"一条链卡死 → 所有
+      // 后续请求全部超时"。超时放弃本账号，由上层冷却/换下一个账号。
+      const switchDeadline = Date.now() + this.switchWaitMs()
       while (
         this.hasLiveSlot() &&
         !this.isUsableForModel(model) &&
         this._inFlight > 0
       ) {
+        const left = switchDeadline - Date.now()
+        if (left <= 0) {
+          logger.warn('session switch timed out waiting for in-flight requests', {
+            model,
+            from: this.session?.model,
+            to: model,
+            inFlight: this._inFlight,
+            waitMs: this.switchWaitMs(),
+          })
+          throw new UpstreamError(
+            'session switch timed out: in-flight requests did not finish in time',
+            { status: 429, code: 'account_busy' },
+          )
+        }
         logger.info('waiting for in-flight requests before session switch', {
           model,
           from: this.session?.model,
           to: model,
           inFlight: this._inFlight,
         })
-        await this._waitForIdle()
+        await this._waitForIdle(Math.min(left, 2_000))
       }
       // 等待期间可能已被其他路径重建/续期，重新检查
       if (this.isUsableForModel(model)) return this.session
