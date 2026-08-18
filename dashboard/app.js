@@ -475,7 +475,7 @@ async function renderProxySettings(view) {
     el('div', { class: 'row spread' }, [
       el('div', {}, [
         el('span', {}, '免费模型分散到不同账号'),
-        el('div', { class: 'muted', style: 'font-size:12px' }, '免费模型不心疼额度：请求轮转分散，单账号被占死不再拖垮全部请求，多账号并行吞吐更高；关闭则恢复热 session 复用（最省额度）'),
+        el('div', { class: 'muted', style: 'font-size:12px' }, '仅免费模型生效（额度不心疼）：请求轮转分散，单账号被占死不再拖垮全部请求，多账号并行吞吐更高；关闭则恢复热 session 复用（最省额度）。付费模型（premium）恒走热 session 复用，不受此开关影响'),
       ]),
       el('label', { class: 'switch', for: 'spread-free-models' }, [
         el('input', spreadAttrs),

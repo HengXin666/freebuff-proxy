@@ -85,6 +85,23 @@ export function requireModelId(requested) {
 }
 
 /**
+ * 模型是否走"免费额度"计费（影响调度策略）：
+ * - 免费模型（pool 非 premium：daily / referral / limited_offer / helper）：
+ *   额度按次/按小时免费结算，可暴力分散到多账号、会话临近过期（<5 分钟）即提前
+ *   re-admit 换新会话——避免请求发到马上过期的会话上中途被掐断/白占额度。
+ * - 付费模型（pool=premium，如 deepseek-v4-pro / gpt-5.6-luna / minimax-m3）：
+ *   每次 admit 都会新建计费会话 → 调度必须热 session 复用（不分散、不浪费），
+ *   会话用到接近过期再切换。
+ * 未知模型按免费处理（保守：不阻塞可用性）。
+ * @param {string} modelId
+ * @returns {boolean}
+ */
+export function isFreeModel(modelId) {
+  const m = FREEBUFF_AVAILABLE_MODELS.find((x) => x.id === modelId)
+  return !m || m.pool !== 'premium'
+}
+
+/**
  * Build OpenAI-compatible /v1/models payload.
  *
  * @param {{

@@ -10,7 +10,7 @@ import { parse as parseYaml } from 'yaml'
  * @property {{apiBase: string, loginBase: string, credentialsDir: string | null, proxy: string | null, proxies: string[]}} upstream
  * @property {{cookieSecure: boolean, sessionTtlHours: number}} web
  * @property {{defaultAdminUsername: string, defaultAdminPassword: string | null}} users
- * @property {{releaseOnShutdown: boolean, reAdmitOnExpire: boolean, reAdmitLeadSec: number, pollIntervalSec: number, admitTimeoutMs: number}} session
+ * @property {{releaseOnShutdown: boolean, reAdmitOnExpire: boolean, reAdmitLeadSec: number, freeModelReAdmitLeadSec: number, pollIntervalSec: number, admitTimeoutMs: number}} session
  * @property {{maxConcurrentRequests: number, accountMaxConcurrency: number, upstreamTimeoutSec: number, streamIdleTimeoutSec: number, accountChatWaitMs: number, maxAutoRetryOnSessionError: number}} limits
  * @property {{level: 'debug' | 'info' | 'warn' | 'error'}} logging
  */
@@ -48,8 +48,13 @@ const DEFAULTS = {
     releaseOnShutdown: true,
     reAdmitOnExpire: true,
     // 会话剩余时间低于该值(秒)时不再承接新请求，提前 re-admit 换新会话，
-    // 避免请求发到马上过期的会话上、中途卡住（默认 60s）。
+    // 避免请求发到马上过期的会话上、中途卡住（默认 60s，付费模型适用——
+    // 付费会话每次 admit 都计费，尽量用到接近过期）。
     reAdmitLeadSec: 60,
+    // 免费模型（pool 非 premium）的提前切换阈值（秒）：会话剩余不足该值时
+    // 不再调度到该会话上，提前 re-admit 换全新会话（默认 300s = 5 分钟）。
+    // 免费会话按次/按小时结算，过期中途被掐断会白占额度且响应截断。
+    freeModelReAdmitLeadSec: 300,
     pollIntervalSec: 30,
     admitTimeoutMs: 30_000,
   },
@@ -86,6 +91,7 @@ const KEY_MAP = {
   release_on_shutdown: 'releaseOnShutdown',
   re_admit_on_expire: 'reAdmitOnExpire',
   re_admit_lead_sec: 'reAdmitLeadSec',
+  free_model_re_admit_lead_sec: 'freeModelReAdmitLeadSec',
   poll_interval_sec: 'pollIntervalSec',
   admit_timeout_ms: 'admitTimeoutMs',
   max_concurrent_requests: 'maxConcurrentRequests',

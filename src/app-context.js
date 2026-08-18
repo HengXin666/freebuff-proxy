@@ -8,6 +8,7 @@ import {
 import { createUpstreamClient } from './upstream/client.js'
 import { SessionManager } from './session-manager.js'
 import { UpstreamError } from './upstream/client.js'
+import { isFreeModel } from './model.js'
 import { logger } from './util/log.js'
 
 /** Errors where trying another logged-in account may succeed. */
@@ -410,11 +411,13 @@ export class AccountRuntimes {
     const keys = this.allKeys()
     if (!keys.length) return []
 
-    // 免费模型暴力分散（默认开）：不优先热 session，按 空闲槽位 → 在途少 →
-    // 未耗尽 → 轮询 排序，请求轮转分散到不同账号——单账号被占死不再拖垮
-    // 全部请求，且多账号并行吞吐更高（免费额度不心疼 admit）。
-    // 关闭时保持 Session-first 调度（额度最省）：优先复用热 session。
-    const spread = this._getSpreadFreeModels() !== false
+    // 免费模型暴力分散（默认开，仅对免费模型生效）：不优先热 session，按
+    // 空闲槽位 → 在途少 → 未耗尽 → 轮询 排序，请求轮转分散到不同账号——
+    // 单账号被占死不再拖垮全部请求，且多账号并行吞吐更高（免费额度不心疼 admit）。
+    // 付费模型（premium）恒走 Session-first 热 session 复用：每次 admit 都是
+    // 计费会话，绝不轮转分散（否则每个账号各 admit 一次付费会话，烧钱且抖动）。
+    // 关闭时对所有模型保持 Session-first 调度（额度最省）：优先复用热 session。
+    const spread = this._getSpreadFreeModels() !== false && isFreeModel(model)
     const start = this._rr % keys.length
     const candidates = []
     for (let i = 0; i < keys.length; i++) {
@@ -435,8 +438,17 @@ export class AccountRuntimes {
       const inFlight = chatLock?.inFlight || 0
       const capacity = chatLock?.capacity || this._accountConcurrency()
       if (spread) {
+        // 免费会话临近过期（剩余 <5 分钟，isUsableForModel=false）且正被在途流
+        // 占用：re-admit 必须等流结束（可能很久），把这类账号排到后面——优先把
+        // 新请求分散到有现成可用会话/空闲的账号，避免新请求干等旧流。
+        const nearExpiryInUse =
+          live &&
+          snap?.model === model &&
+          !usable &&
+          (sessions?.inFlightCount?.() || 0) > 0
         candidates.push({
           key,
+          nearExpiryInUse: nearExpiryInUse ? 1 : 0,
           busy: inFlight >= capacity ? 1 : 0,
           load: inFlight,
           exhausted: exhausted ? 1 : 0,
@@ -470,6 +482,7 @@ export class AccountRuntimes {
     if (spread) {
       candidates.sort(
         (a, b) =>
+          a.nearExpiryInUse - b.nearExpiryInUse ||
           a.busy - b.busy ||
           a.load - b.load ||
           a.exhausted - b.exhausted ||

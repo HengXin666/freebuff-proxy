@@ -29,6 +29,36 @@ function parseRetryAfterMs(value) {
   return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : undefined
 }
 
+/**
+ * 带单次超时的 undici fetch：超时主动 abort 本次尝试。用独立的子 AbortController
+ * 级联父 signal——单次尝试超时只拆掉这一次请求（回落池内下一个），不会把整个
+ * 请求/其他代理尝试一起 abort；父 signal（客户端断开 / 全局超时）abort 时本次
+ * 尝试立即随之失败。
+ * @param {string} url
+ * @param {{ signal?: AbortSignal, [k: string]: any }} init
+ * @param {number} timeoutMs
+ */
+async function fetchWithAttemptTimeout(url, init, timeoutMs) {
+  if (!(timeoutMs > 0)) return undiciFetch(url, init)
+  const controller = new AbortController()
+  const onParentAbort = () => controller.abort()
+  if (init.signal?.aborted) {
+    // 父 signal 已中止（客户端断开/全局超时已发生）：本次尝试立即失败，
+    // 不要等 20s 超时——否则池内每个代理都要空等一轮。
+    controller.abort()
+  } else {
+    init.signal?.addEventListener('abort', onParentAbort, { once: true })
+  }
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  if (timer.unref) timer.unref()
+  try {
+    return await undiciFetch(url, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+    init.signal?.removeEventListener('abort', onParentAbort)
+  }
+}
+
 
 /**
  * 解析出网代理配置，返回统一结构：
@@ -100,7 +130,9 @@ export function createUpstreamClient(config, token, opts = {}) {
   /**
    * 带代理池的 fetch：
    *  - 无代理 / 单代理 / env：直接走对应 dispatcher
-   *  - 全局池：优先本账号分配的代理，连接级失败（fetch 抛错）时依次回落到池内下一个
+   *  - 全局池：优先本账号分配的代理，连接级失败（fetch 抛错）时依次回落到池内下一个；
+   *    单次尝试带超时（`fetchWithAttemptTimeout`）——代理"连接成功但永不响应"
+   *    （网络波动/黑洞）也会被视为失败并回落下一个，而不是干等到全局 timeoutMs。
    */
   async function fetchWithProxy(url, init) {
     if (proxyRes.kind !== 'pool' || proxyRes.agents.length <= 1) {
@@ -110,11 +142,20 @@ export function createUpstreamClient(config, token, opts = {}) {
         ...(agent ? { dispatcher: agent } : {}),
       })
     }
+    // 单代理尝试超时：取调用方超时与 20s 的较小值（代理 CONNECT + TLS + 响应头
+    // 正常数秒内完成，20s 足够；整体请求的超时仍由 apiFetch 的 signal 兜底）。
+    const callerMs =
+      Number.isFinite(init.timeoutMs) && init.timeoutMs > 0 ? init.timeoutMs : 30_000
+    const attemptMs = Math.min(callerMs, 20_000)
     let lastErr
     for (let i = 0; i < proxyRes.agents.length; i++) {
       const idx = (poolIndex + i) % proxyRes.agents.length
       try {
-        return await undiciFetch(url, { ...init, dispatcher: proxyRes.agents[idx] })
+        return await fetchWithAttemptTimeout(
+          url,
+          { ...init, dispatcher: proxyRes.agents[idx] },
+          attemptMs,
+        )
       } catch (err) {
         lastErr = err
         logger.warn('proxy failed; trying next in pool', {
@@ -152,6 +193,7 @@ export function createUpstreamClient(config, token, opts = {}) {
         headers,
         body: init.body,
         signal: controller.signal,
+        timeoutMs,
         duplex: init.body && typeof init.body !== 'string' ? 'half' : undefined,
       })
       return res
