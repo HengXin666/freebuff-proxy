@@ -223,10 +223,15 @@ export function createUpstreamClient(config, token, opts = {}) {
     },
 
     async loginCode(fingerprintId) {
-      const res = await fetchWithProxy(`${loginBase}/api/auth/cli/code`, {
+      // 用 apiFetch（带超时 + 代理池回落）而不是裸 fetchWithProxy：
+      // freebuff.com 网络波动/被墙时裸 fetch 会永远挂起，轮询/弹窗
+      // 无限堆积 socket，把整个服务拖死（前台表现为「系统崩溃、只能重启」）。
+      const res = await apiFetch(`${loginBase}/api/auth/cli/code`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ fingerprintId }),
+        includeAuth: false,
+        timeoutMs: 15_000,
       })
       if (!res.ok) {
         throw new UpstreamError(`login code failed: ${res.status}`, {
@@ -243,8 +248,12 @@ export function createUpstreamClient(config, token, opts = {}) {
         fingerprintHash,
         expiresAt,
       })
-      const res = await fetchWithProxy(`${loginBase}/api/auth/cli/status?${qs}`, {
+      // 同上：必须带超时。登录轮询每 4s 一轮，若 status 永远挂起（上游
+      // 不可达），每轮都泄漏一个永不结束的 fetch/socket，服务最终被拖死。
+      const res = await apiFetch(`${loginBase}/api/auth/cli/status?${qs}`, {
         method: 'GET',
+        includeAuth: false,
+        timeoutMs: 15_000,
       })
       if (res.status === 401) return { pending: true }
       if (!res.ok) {
