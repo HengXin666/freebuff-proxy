@@ -33,12 +33,20 @@ export class LoginFlowManager {
     /** @type {Map<string, any>} */
     this.flows = new Map()
     this.load()
+    /** 上一轮 pollAll 是否还在跑（上游慢/挂起时防止每 4s 再堆一轮并发轮询）。 */
+    this._polling = false
     this._poller = setInterval(() => {
-      this.pollAll().catch((err) => {
-        logger.warn('login flow poller error', {
-          error: err instanceof Error ? err.message : String(err),
+      if (this._polling) return
+      this._polling = true
+      this.pollAll()
+        .catch((err) => {
+          logger.warn('login flow poller error', {
+            error: err instanceof Error ? err.message : String(err),
+          })
         })
-      })
+        .finally(() => {
+          this._polling = false
+        })
     }, 4000)
     this._poller.unref?.()
   }
