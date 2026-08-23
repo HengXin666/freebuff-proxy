@@ -448,9 +448,51 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   | `GET /v1/models` | 可用模型目录 |
   | `GET /v1/freebuff/status` | 当前账号与 session 快照 |
   | `GET /v1/freebuff/accounts` | 账号列表与冷却状态 |
+  | `POST /v1/freebuff/accounts/import` | **开放 API 导入账号**（Bearer API Key，单/批量，导入后自动探测预热） |
+  | `DELETE /v1/freebuff/accounts` | **开放 API 删除账号**（按 email/id/key，空 body 清空全部） |
   | `POST /v1/freebuff/session/end` | 释放全部 session |
   | `POST /v1/chat/completions` | 主路径（session + 透传） |
   | `* /v1/*`（非 chat） | 映射到上游 `/api/v1/*`，只注入 Freebuff 鉴权 |
+
+### 开放 API 账号导入（Open API）
+
+`/v1` 面新增账号管理端点，与下游 Agent 共用同一套 **Bearer API Key**（`server.api_keys` 超级 Key 或 Web 用户自己的 `sk-fb-...`），无需登录控制台即可脚本化运维账号池。
+
+**导入账号** `POST /v1/freebuff/accounts/import`：
+
+```bash
+# 单个账号
+curl http://127.0.0.1:8787/v1/freebuff/accounts/import \
+  -H "Authorization: Bearer sk-fb-xxxxxxxx" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","authToken":"<freebuff CLI token>","id":"<freebuff 用户ID（可选）>","name":"<昵称（可选）>"}'
+
+# 批量导入（数组 或 {"accounts":[...]} 或 {"json":"..."}）
+curl http://127.0.0.1:8787/v1/freebuff/accounts/import \
+  -H "Authorization: Bearer sk-fb-xxxxxxxx" \
+  -H "Content-Type: application/json" \
+  -d @accounts.json   # [{"email":...,"authToken":...}, ...]
+```
+
+- `authToken` 即 Freebuff/Codebuff 登录令牌（Web 会话 `__Secure-next-auth.session-token` 值或 CLI 登录返回的 token，二者对 `codebuff.com` API 均有效，`/api/v1/me` 实测 200）。
+- 带 `id` 可避免 GitHub/Google 同邮箱账号互相覆盖（按 `id` 存文件）；不带则按邮箱。
+- 导入后自动 `invalidate` 旧缓存 + 只读探测刷新（不占额度）。
+- 响应 `{ok, imported:[{key,email,id}], failures, total}`。
+
+**删除账号** `DELETE /v1/freebuff/accounts`：
+
+```bash
+# 按 email / id / key 删除单个
+curl -X DELETE http://127.0.0.1:8787/v1/freebuff/accounts \
+  -H "Authorization: Bearer sk-fb-xxxxxxxx" -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com"}'
+
+# 空 body = 清空所有账号（先释放 session 再删凭据）
+curl -X DELETE http://127.0.0.1:8787/v1/freebuff/accounts \
+  -H "Authorization: Bearer sk-fb-xxxxxxxx"
+```
+
+> 也兼容旧格式 `{"email":"...","authToken":"..."}`（Web 端粘贴导入）。
 
 ---
 

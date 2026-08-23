@@ -301,20 +301,27 @@ export function deleteAccountUser(dir, key) {
     }
   }
   if (!fs.existsSync(dir)) return false
+  const norm = String(key).trim().toLowerCase()
+  let removed = false
   for (const file of fs.readdirSync(dir)) {
     if (!file.endsWith('.json')) continue
     const full = path.join(dir, file)
     const u = coerceUser(readJsonFile(full))
-    if (u && accountKeyOf(u) === key) {
+    if (
+      u &&
+      (accountKeyOf(u) === key ||
+        String(u.email || '').trim().toLowerCase() === norm ||
+        String(u.id || '').trim().toLowerCase() === norm)
+    ) {
       try {
         fs.unlinkSync(full)
-        return true
+        removed = true
       } catch {
-        return false
+        // ignore single-file failure; keep scanning
       }
     }
   }
-  return false
+  return removed
 }
 
 /** Login-issued tokens need both headers (Bearer alone → 401). */

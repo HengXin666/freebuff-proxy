@@ -23,6 +23,11 @@ import {
 } from './util/http.js'
 import { freebuffAuthHeaders } from './auth-store.js'
 import {
+  coerceUser,
+  saveAccountUser,
+  deleteAccountUser,
+} from './auth-store.js'
+import {
   ensureFreebuffSystemMessages,
   ensureFreebuffToolSignature,
   normalizeReasoningFields,
@@ -93,6 +98,16 @@ export function createProxyHandler(ctx) {
 
     if (method === 'GET' && path === '/v1/freebuff/accounts') {
       sendJson(res, 200, { object: 'list', data: runtimes.list() })
+      return
+    }
+
+    if (method === 'POST' && path === '/v1/freebuff/accounts/import') {
+      await handleAccountsImport(req, res)
+      return
+    }
+
+    if (method === 'DELETE' && path === '/v1/freebuff/accounts') {
+      await handleAccountsDelete(req, res)
       return
     }
 
@@ -167,8 +182,192 @@ export function createProxyHandler(ctx) {
     )
   }
 
-  async function handleStatus(res) {
-    const accounts = runtimes.list()
+  /**
+   * POST /v1/freebuff/accounts/import — 开放 API 导入账号（Bearer API Key 鉴权）。
+   * body 支持三种形态：
+   *   {"email":"..","authToken":"..","id?":"..","name?":".."}      单个账号
+   *   {"json":"<stringified 账号>"}                                 兼容 Web 端导入格式
+   *   {"accounts":[{...},{...}]}                                    批量导入
+   */
+  async function handleAccountsImport(req, res) {
+    let rawBuf
+    try {
+      rawBuf = await readRequestBody(req)
+    } catch (err) {
+      sendJson(res, 400, {
+        error: {
+          message: err instanceof Error ? err.message : String(err),
+          type: 'invalid_request_error',
+          code: 'bad_request_body',
+        },
+      })
+      return
+    }
+    let body
+    try {
+      body = JSON.parse(rawBuf.toString('utf8'))
+    } catch {
+      sendJson(res, 400, {
+        error: {
+          message: '请求体不是合法 JSON',
+          type: 'invalid_request_error',
+          code: 'invalid_json',
+        },
+      })
+      return
+    }
+
+    /** @type {unknown[]} */
+    let rawList = []
+    if (Array.isArray(body)) {
+      rawList = body
+    } else if (Array.isArray(body.accounts)) {
+      rawList = body.accounts
+    } else if (typeof body.json === 'string') {
+      try {
+        const parsed = JSON.parse(body.json)
+        rawList = Array.isArray(parsed) ? parsed : [parsed]
+      } catch {
+        sendJson(res, 400, {
+          error: {
+            message: 'json 字段不是合法 JSON',
+            type: 'invalid_request_error',
+            code: 'invalid_json',
+          },
+        })
+        return
+      }
+    } else if (body && typeof body === 'object') {
+      rawList = [body]
+    } else {
+      sendJson(res, 400, {
+        error: {
+          message: '无法识别的导入结构：需为账号对象、账号数组、{accounts:[...]} 或 {json:"..."}',
+          type: 'invalid_request_error',
+          code: 'invalid_import_format',
+        },
+      })
+      return
+    }
+
+    if (rawList.length === 0) {
+      sendJson(res, 400, {
+        error: {
+          message: '导入列表为空',
+          type: 'invalid_request_error',
+          code: 'empty_import',
+        },
+      })
+      return
+    }
+    if (rawList.length > 200) {
+      sendJson(res, 400, {
+        error: {
+          message: '单次最多导入 200 个账号',
+          type: 'invalid_request_error',
+          code: 'too_many_accounts',
+        },
+      })
+      return
+    }
+
+    const imported = []
+    const failures = []
+    for (const raw of rawList) {
+      const u = coerceUser(raw)
+      if (!u) {
+        failures.push({
+          email: raw && typeof raw === 'object' ? raw.email || null : null,
+          error: '缺少 email / authToken（或格式不对）',
+        })
+        continue
+      }
+      try {
+        const saved = saveAccountUser(runtimes.dir, u)
+        await runtimes.invalidate(saved.key).catch(() => {})
+        // 只读探测预热：导入后立即刷新 session/额度缓存（不占额度）
+        try {
+          const rt = runtimes.get(saved.key)
+          await rt.sessions.refresh()
+        } catch {
+          // ignore — 探测失败不影响导入
+        }
+        imported.push({
+          key: saved.key,
+          email: saved.user.email,
+          id: saved.user.id || null,
+        })
+      } catch (err) {
+        failures.push({
+          email: u.email,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      object: 'import',
+      imported,
+      failures,
+      total: rawList.length,
+    })
+  }
+
+  /**
+   * DELETE /v1/freebuff/accounts — 开放 API 删除账号。
+   * body（可选）: {"email":".."} / {"key":".."} / {"id":".."}；空 body 或全部则清空所有账号。
+   */
+  async function handleAccountsDelete(req, res) {
+    let body = null
+    try {
+      const rawBuf = await readRequestBody(req)
+      if (rawBuf.length > 0) body = JSON.parse(rawBuf.toString('utf8'))
+    } catch {
+      body = null // 空 body / 非 JSON → 全部删除
+    }
+    const target = body && typeof body === 'object'
+      ? body.email || body.key || body.id || null
+      : null
+    const dir = runtimes.dir
+    if (target) {
+      try {
+        const deleted = deleteAccountUser(dir, String(target))
+        await runtimes.invalidate(String(target)).catch(() => {})
+        sendJson(res, 200, {
+          ok: true,
+          deleted: target,
+          existed: !!deleted,
+        })
+      } catch (err) {
+        sendJson(res, 500, {
+          error: {
+            message: err instanceof Error ? err.message : String(err),
+            type: 'proxy_error',
+            code: 'delete_failed',
+          },
+        })
+      }
+      return
+    }
+    // 空 body → 全部删除（先释放 session 再删凭据文件）
+    const rows = runtimes.list()
+    const removed = []
+    for (const row of rows) {
+      try {
+        const rt = runtimes.get(row.key)
+        await rt.sessions.release().catch(() => {})
+      } catch {
+        // ignore
+      }
+      deleteAccountUser(dir, row.key)
+      await runtimes.invalidate(row.key).catch(() => {})
+      removed.push(row.key)
+    }
+    sendJson(res, 200, { ok: true, object: 'delete', removed, total: removed.length })
+  }
+
+  async function handleStatus(res) {    const accounts = runtimes.list()
     let me = null
     let session = null
     let account = null
