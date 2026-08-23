@@ -4,6 +4,8 @@ import path from 'node:path'
 const DEFAULT_SETTINGS = Object.freeze({
   freeToolSignatureEnabled: true,
   // 每个账号同一时间可并发的 SSE 响应流数（负载均衡），默认 1:1。
+  // 单账号在途达到上限即"满了换号"：选号排序中满员账号排末尾，新请求优先去
+  // 有空闲槽位的账号；只有所有账号都满员时才排队（有界等待）。
   accountMaxConcurrency: 1,
   // 免费模型暴力分散到不同账号（默认开）：不钉死热 session，请求轮转分散，
   // 单账号被占死不再拖垮全部请求，且多账号并行吞吐更高。

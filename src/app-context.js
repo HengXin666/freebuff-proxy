@@ -414,9 +414,11 @@ export class AccountRuntimes {
     // 免费模型暴力分散（默认开，仅对免费模型生效）：不优先热 session，按
     // 空闲槽位 → 在途少 → 未耗尽 → 轮询 排序，请求轮转分散到不同账号——
     // 单账号被占死不再拖垮全部请求，且多账号并行吞吐更高（免费额度不心疼 admit）。
-    // 付费模型（premium）恒走 Session-first 热 session 复用：每次 admit 都是
-    // 计费会话，绝不轮转分散（否则每个账号各 admit 一次付费会话，烧钱且抖动）。
-    // 关闭时对所有模型保持 Session-first 调度（额度最省）：优先复用热 session。
+    // 付费模型（premium）/ 关闭分散时走 Session-first 调度：优先复用热 session
+    // （每次 admit 都是计费会话，绝不无谓轮转分散）；但账号并发上限（在途 >=
+    // 上限）时**必须换到有空闲槽位的账号**——并发上限就是"满了换号"的阈值，
+    // 而不是在满员账号上无限排队把并发全部钉死在一个账号。
+    // 两种模式的共同原则：空闲槽位优先；只有所有可用账号都满员时才排队（有界等待）。
     const spread = this._getSpreadFreeModels() !== false && isFreeModel(model)
     const start = this._rr % keys.length
     const candidates = []
@@ -491,9 +493,12 @@ export class AccountRuntimes {
     } else {
       candidates.sort(
         (a, b) =>
+          // 并发已满的账号排最后（核心）：单账号在途 >= 上限时，新请求优先去
+          // 有空闲槽位的账号，而不是继续钉在满员账号上排队。同层内才按
+          // 热 session → 同模型续期 → 在途少 → 轮询 打破平局。
+          a.busy - b.busy ||
           a.tier - b.tier ||
           b.sameModel - a.sameModel ||
-          a.busy - b.busy ||
           a.load - b.load ||
           a.exhausted - b.exhausted ||
           a.rotation - b.rotation,
@@ -503,8 +508,9 @@ export class AccountRuntimes {
   }
 
   /**
-   * Prefer a reusable same-model session. Cold accounts and model replacement
+   * Prefer a reusable same-model session; cold accounts and model replacement
    * are fallbacks; round-robin only breaks ties within those groups.
+   * 并发满员（在途 >= 账号并发上限）的账号永远排最后——上限即"满了换号"的阈值。
    * @param {string} model
    */
   async acquireForModel(model) {
@@ -654,6 +660,23 @@ export class AccountRuntimes {
             }),
             model,
           )
+        } else if (opts.switchAccount) {
+          // noCooldown 且 switchAccount（free_mode_capacity_deferred /
+          // account_busy / runtime_superseded）：**不是真故障，优先复用原账号**。
+          // 调用方（chat 流程）此时仍持有/正想持有该账号的锁——账号并发排序
+          // 会把"自己在用自己"误判成 busy（在途 >= 上限）而换到别的账号，
+          // 导致 capacity_deferred 这类瞬时重试被甩去新建一个 session。
+          // 原账号 session 仍可用于该模型时直接复用；不可用/已失效才走全新选号。
+          try {
+            const rt = this.get(opts.preferredKey)
+            if (rt.sessions.isUsableForModel(model)) {
+              this.clearCooldown(opts.preferredKey, model)
+              this._lastSuccessKey = opts.preferredKey
+              return rt
+            }
+          } catch {
+            // 账号已不可用（凭据变更等）→ 走全新选号
+          }
         }
       } else {
         try {

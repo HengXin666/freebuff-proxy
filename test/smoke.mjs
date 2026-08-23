@@ -2394,7 +2394,8 @@ assert.equal(requireModelId(''), null)
   fs.rmSync(convDir, { recursive: true, force: true })
 }
 
-// 无会话ID 的并发请求：冷启动原子化，全部共享一个上游 session
+// 无会话ID 的并发请求：spread 关 + 每账号并发上限 1 → 冷启动按空闲槽位分散，
+// 单账号同时最多 1 条流（满员即换号，不再把并发全部钉死在一个账号）
 {
   const rrDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-rr-'))
   saveAccountUser(rrDir, { id: 'ra', email: 'ra@example.com', authToken: 'token-ra' })
@@ -2406,7 +2407,58 @@ assert.equal(requireModelId(''), null)
   rrConfig.server.apiKeys = ['sk-test']
   rrConfig.upstream.credentialsDir = rrDir
   rrConfig.session.pollIntervalSec = 3600
-  const rrRuntimes = new AccountRuntimes(rrConfig, { getSpreadFreeModels: () => false })
+  rrConfig.limits.maxConcurrentRequests = 24
+  const rrRuntimes = new AccountRuntimes(rrConfig, {
+    getSpreadFreeModels: () => false,
+    getAccountConcurrency: () => 1,
+  })
+
+  // 慢流 mock：每流 ~300ms，保证并发期间锁一直占用，选号结果确定
+  let rrActive = 0
+  let rrActiveMax = 0
+  const origFetch = globalThis.fetch
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url)
+    if (u.includes('127.0.0.1') || u.includes('localhost')) return origFetch(url, init)
+    if (u.includes('/api/v1/chat/completions')) {
+      const body = JSON.parse(init.body)
+      if (body.stream) {
+        let closed = false
+        rrActive++
+        if (rrActive > rrActiveMax) rrActiveMax = rrActive
+        const stream = new ReadableStream({
+          start(controller) {
+            const enc = new TextEncoder()
+            async function emit(i) {
+              if (i >= 4 || closed) {
+                rrActive = Math.max(0, rrActive - 1)
+                if (!closed) controller.close()
+                return
+              }
+              controller.enqueue(enc.encode(`data: {"x":"${i}"}\n\n`))
+              await new Promise((r) => setTimeout(r, 100))
+              emit(i + 1)
+            }
+            emit(0)
+          },
+          cancel() {
+            closed = true
+            rrActive = Math.max(0, rrActive - 1)
+          },
+        })
+        return new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        })
+      }
+      return jsonRes({
+        id: 'c1', object: 'chat.completion',
+        choices: [{ message: { role: 'assistant', content: 'hi' } }],
+      })
+    }
+    return origFetch(url, init)
+  }
+
   const rrServer = await startServer({
     config: rrConfig,
     runtimes: rrRuntimes,
@@ -2425,7 +2477,6 @@ assert.equal(requireModelId(''), null)
   mockMode = 'ok'
   sessionPosts = 0
   completionAttempts = 0
-  calls = []
   const concurrent = await Promise.all(
     Array.from({ length: 9 }, () => fetch(`http://127.0.0.1:${rrPort}/v1/chat/completions`, {
       method: 'POST',
@@ -2435,20 +2486,26 @@ assert.equal(requireModelId(''), null)
       },
       body: JSON.stringify({
         model: 'deepseek/deepseek-v4-flash',
+        stream: true,
         messages: [{ role: 'user', content: 'hello' }],
       }),
     })),
   )
+  const rrAccounts = []
   for (const res of concurrent) {
     assert.equal(res.status, 200, await res.clone().text())
+    rrAccounts.push(res.headers.get('x-freebuff-proxy-account'))
   }
-  const rrByEmail = new Map(
-    rrRuntimes.list().map((a) => [a.email, a.requests]),
+  // 每账号并发上限 1：并发请求分散到 3 个账号（每个 admit 一次），单账号同时最多 1 条流
+  assert.deepEqual(
+    [...new Set(rrAccounts)].sort(),
+    ['ra@example.com', 'rb@example.com', 'rc@example.com'],
+    `并发应按空闲槽位分散到全部账号, got ${JSON.stringify(rrAccounts)}`,
   )
-  assert.equal(rrByEmail.get('ra@example.com'), 9)
-  assert.equal(rrByEmail.get('rb@example.com'), 0)
-  assert.equal(rrByEmail.get('rc@example.com'), 0)
-  assert.equal(sessionPosts, 1, `并发请求只应 admit 一次, got ${sessionPosts}`)
+  assert.equal(sessionPosts, 3, `每账号应各 admit 一次, got ${sessionPosts}`)
+  assert.equal(rrActiveMax, 3, `单账号并发上限 1 → 全局并发峰值应=账号数 3, got ${rrActiveMax}`)
+
+  globalThis.fetch = origFetch
   await rrRuntimes.shutdown()
   rrServer.close()
   fs.rmSync(rrDir, { recursive: true, force: true })
@@ -2992,7 +3049,7 @@ assert.equal(requireModelId(''), null)
   mockMode = 'ok'
 }
 
-// --- 账号级串行化：一个账号同一时间只处理一个 chat（慢流场景）---
+// --- 账号并发上限=1（慢流场景）：单账号同时 1 条流，满员即换号 ---
 {
   const scDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-serial-'))
   saveAccountUser(scDir, { id: 'sca', email: 'sca@example.com', authToken: 'token-sca' })
@@ -3005,7 +3062,10 @@ assert.equal(requireModelId(''), null)
   scConfig.session.pollIntervalSec = 3600
   scConfig.limits.maxConcurrentRequests = 12
 
-  const scRuntimes = new AccountRuntimes(scConfig, { getSpreadFreeModels: () => false })
+  const scRuntimes = new AccountRuntimes(scConfig, {
+    getSpreadFreeModels: () => false,
+    getAccountConcurrency: () => 1,
+  })
   const scServer = await startServer({
     config: scConfig,
     runtimes: scRuntimes,
@@ -3100,10 +3160,10 @@ assert.equal(requireModelId(''), null)
     const accountHeader = r.headers.get('x-freebuff-proxy-account')
     scAccounts.push(accountHeader)
   }
-  // 全部走同一个账号（热 session 优先串行化）
-  assert.equal(new Set(scAccounts).size, 1, `expected one account, got ${JSON.stringify(scAccounts)}`)
-  assert.equal(sessionPosts, 1, `expected 1 session admission, got ${sessionPosts}`)
-  assert.equal(streamActiveMax, 1, `expected max 1 concurrent stream, got ${streamActiveMax}`)
+  // 单账号并发上限 1：请求分散到 sca/scb（各 admit 一次），单账号同时最多 1 条流
+  assert.equal(new Set(scAccounts).size, 2, `expected two accounts, got ${JSON.stringify(scAccounts)}`)
+  assert.equal(sessionPosts, 2, `expected 2 session admissions, got ${sessionPosts}`)
+  assert.equal(streamActiveMax, 2, `expected max 2 concurrent streams (1 per account), got ${streamActiveMax}`)
 
   globalThis.fetch = origFetch
   await scRuntimes.shutdown()
@@ -3111,7 +3171,7 @@ assert.equal(requireModelId(''), null)
   fs.rmSync(scDir, { recursive: true, force: true })
 }
 
-// --- 账号并发上限：一个账号可同时转发 N 条 SSE 流（默认 1:1，可调大）---
+// --- 账号并发上限：一个账号可同时转发 N 条 SSE 流；满了换到下一个账号 ---
 {
   const ccDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-cc-'))
   saveAccountUser(ccDir, { id: 'cca', email: 'cca@example.com', authToken: 'token-cca' })
@@ -3210,10 +3270,10 @@ assert.equal(requireModelId(''), null)
     assert.equal(r.status, 200, await r.clone().text())
     ccAccounts.push(r.headers.get('x-freebuff-proxy-account'))
   }
-  // 并发上限 2：同一账号同一 session 同时最多 2 条流；全部 200、只 admit 一次
-  assert.equal(new Set(ccAccounts).size, 1, `expected one account, got ${JSON.stringify(ccAccounts)}`)
-  assert.equal(sessionPosts, 1, `expected 1 session admission, got ${sessionPosts}`)
-  assert.equal(streamActiveMax, 2, `expected max 2 concurrent streams, got ${streamActiveMax}`)
+  // 每账号并发上限 2：cca 先占满 2 条 → 换到 ccb（各 admit 一次）；单账号同时最多 2 条流
+  assert.equal(new Set(ccAccounts).size, 2, `expected two accounts, got ${JSON.stringify(ccAccounts)}`)
+  assert.equal(sessionPosts, 2, `expected 2 session admissions, got ${sessionPosts}`)
+  assert.equal(streamActiveMax, 4, `expected max 4 concurrent streams (2 per account), got ${streamActiveMax}`)
   // 监控字段：账号行带 在途/上限
   const ccRow = ccRuntimes.list().find((x) => x.email === 'cca@example.com')
   assert.equal(ccRow.concurrency, 2)
@@ -3223,6 +3283,141 @@ assert.equal(requireModelId(''), null)
   await ccRuntimes.shutdown()
   ccServer.close()
   fs.rmSync(ccDir, { recursive: true, force: true })
+}
+
+// --- regression: spread 关 + 并发上限 3 → 满了换号，不把并发钉死在一个账号 ---
+// 用户场景：关闭免费模型分散（模型实际已收费），上限设 3；并发超出 3 时必须
+// 换到下一个有空闲槽位的账号，而不是在满员账号上无限排队。
+{
+  const capDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-capspill-'))
+  saveAccountUser(capDir, { id: 'cpa', email: 'cpa@example.com', authToken: 'token-cpa' })
+  saveAccountUser(capDir, { id: 'cpb', email: 'cpb@example.com', authToken: 'token-cpb' })
+  const capConfig = loadConfig()
+  capConfig.server.host = '127.0.0.1'
+  capConfig.server.port = 0
+  capConfig.server.apiKeys = ['sk-test']
+  capConfig.upstream.credentialsDir = capDir
+  capConfig.session.pollIntervalSec = 3600
+  capConfig.limits.maxConcurrentRequests = 12
+  const capRuntimes = new AccountRuntimes(capConfig, {
+    getSpreadFreeModels: () => false, // 用户关闭了免费模型分散
+    getAccountConcurrency: () => 3,   // 用户设置的每账号并发上限
+  })
+  const capServer = await startServer({
+    config: capConfig,
+    runtimes: capRuntimes,
+    ...(() => {
+      const rt = capRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const capPort = capServer.address().port
+
+  let streamActive = 0
+  let streamActiveMax = 0
+  const origFetch = globalThis.fetch
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url)
+    if (u.includes('127.0.0.1') || u.includes('localhost')) return origFetch(url, init)
+    if (u.includes('/api/v1/chat/completions')) {
+      const body = JSON.parse(init.body)
+      if (body.stream) {
+        let closed = false
+        streamActive++
+        if (streamActive > streamActiveMax) streamActiveMax = streamActive
+        const stream = new ReadableStream({
+          start(controller) {
+            const enc = new TextEncoder()
+            async function emit(i) {
+              if (i >= 5 || closed) {
+                streamActive = Math.max(0, streamActive - 1)
+                if (!closed) controller.close()
+                return
+              }
+              controller.enqueue(enc.encode(`data: {"x":"${i}"}\n\n`))
+              await new Promise((r) => setTimeout(r, 100))
+              emit(i + 1)
+            }
+            emit(0)
+          },
+          cancel() {
+            closed = true
+            streamActive = Math.max(0, streamActive - 1)
+          },
+        })
+        return new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        })
+      }
+      return jsonRes({
+        id: 'c1', object: 'chat.completion',
+        choices: [{ message: { role: 'assistant', content: 'hi' } }],
+      })
+    }
+    return origFetch(url, init)
+  }
+
+  mockMode = 'ok'
+  sessionPosts = 0
+  completionAttempts = 0
+  // 8 个并发流，上限 3 → 应 4+4 分散到两个账号，单账号峰值 <= 3
+  const capReqs = Array.from({ length: 8 }, () =>
+    fetch(`http://127.0.0.1:${capPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'deepseek/deepseek-v4-flash',
+        stream: true,
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    }),
+  )
+  const capResponses = await Promise.all(capReqs)
+  const capAccounts = []
+  for (const r of capResponses) {
+    assert.equal(r.status, 200, await r.clone().text())
+    capAccounts.push(r.headers.get('x-freebuff-proxy-account'))
+  }
+  const byEmail = {}
+  for (const a of capAccounts) byEmail[a] = (byEmail[a] || 0) + 1
+  // 核心断言：不再全钉一个账号——两个账号都被用到；每账号承接 3..5 个
+  // （4+4 或 5+3 取决于选号/取锁的微时序，都在"上限 3 → 满员换号"的语义内）
+  assert.equal(Object.keys(byEmail).length, 2, `应分散到两个账号, got ${JSON.stringify(byEmail)}`)
+  for (const email of ['cpa@example.com', 'cpb@example.com']) {
+    assert.ok(
+      byEmail[email] >= 3 && byEmail[email] <= 5,
+      `${email} 承接数应在 3..5, got ${JSON.stringify(byEmail)}`,
+    )
+  }
+  assert.equal(sessionPosts, 2, `两个账号应各 admit 一次, got ${sessionPosts}`)
+  assert.ok(streamActiveMax <= 6, `全局并发峰值应 <= 2账号×上限3, got ${streamActiveMax}`)
+  assert.ok(streamActiveMax >= 4, `并发应真正叠加（>单账号上限3）, got ${streamActiveMax}`)
+
+  // 冷态顺序请求仍复用热 session（不无谓 admit）：
+  sessionPosts = 0
+  const seq = await fetch(`http://127.0.0.1:${capPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      stream: true,
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  assert.equal(seq.status, 200, await seq.clone().text())
+  assert.equal(sessionPosts, 0, `热 session 复用：顺序请求不应再 admit, got ${sessionPosts}`)
+
+  globalThis.fetch = origFetch
+  await capRuntimes.shutdown()
+  capServer.close()
+  fs.rmSync(capDir, { recursive: true, force: true })
 }
 
 // --- 会话临近过期：提前 re-admit 平滑切换（不再把新请求发到马上过期的会话）---

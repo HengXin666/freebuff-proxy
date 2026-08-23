@@ -63,7 +63,10 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 - **热 session 优先调度**：Freebuff 会话是**无状态**的（每次请求由客户端带全量历史），
   **不做 conversation_id 粘性/分组/记忆**；但创建 session 会消耗按时长结算的次数，因此选号必须优先复用
   同模型活跃 session。实测同一个 `instanceId` 支持多个并发 chat 流（两路同时 `200` 并完整 `[DONE]`），
-  并发不需要主动铺到多账号。冷启动的“选号 + admit”必须串行化，多个并发请求只创建一个 session。
+  并发不需要主动铺到多账号。冷启动的“选号 + admit”必须串行化，同一账号的并发请求只创建一个 session。
+  **并发上限即“满了换号”的阈值**：单账号在途流数达到 `accountMaxConcurrency` 时，该账号在选号排序中
+  排到末尾，新请求优先去有空闲槽位的账号（无论分散开关与否）——**绝不把并发全部钉死在一个账号上
+  无限排队**；只有所有可用账号都满员时才排队（有界等待，超时 `account_busy`）。
 - 没有同模型热 session 时：优先无活跃 session 的账号；仅当所有可用账号都被其他模型占用时才替换旧模型。
   同一层级内用轮询打破平局；限流/封禁/网络或上游故障仍冷却当前账号并切下一个。
 - **Flash / MiMo 纳入每日配额**：`deepseek/deepseek-v4-flash`、`mimo/mimo-v2.5`
@@ -107,8 +110,8 @@ docker build .
 - [x] 多账号池 + **热 session 优先调度**（无 conversation 粘性；同模型串行/并发均复用；冷启动只 admit 一次；新模型优先空闲账号）+ Flash/MiMo 实时每日配额 + **全链路故障转移**（chat/run/网络错误都换号，试完所有账号才报错；capacity_deferred 不冷却；gate 同号重试后升级换号）
 - [x] 前端「代理设置」全局池管理：多行代理、保存立即生效、持久化 `/data/proxies.json`、重启自动加载、无需重启
 - [x] 全局代理池（config 层兜底）+ 代理测试（出口 IP/国家/延迟/codebuff 状态、底层原因码）+ 账号级 proxy 仅内部字段（无 UI）
-- [x] **账号并发上限可配**（控制台「负载均衡设置」，默认 1:1；1..16，保存立即生效）+ 总览每账号「并发(在途/上限)」监控 + **会话临近过期提前 re-admit**（`session.re_admit_lead_sec`，默认 60s）平滑切换，流 idle 超时按会话剩余时间收敛
+- [x] **账号并发上限可配 = “满了换号”的阈值**（控制台「负载均衡设置」，默认 1:1；1..16，保存立即生效）：单账号在途达到上限即在选号排序中排末尾，新请求优先去有空闲槽位的账号——**无论免费分散开关与否**，不再把并发全部钉死在一个账号上排队；只有所有账号都满员时才排队（有界等待，超时 `account_busy`）。+ 总览每账号「并发(在途/上限)」监控 + **会话临近过期提前 re-admit**（`session.re_admit_lead_sec`，默认 60s）平滑切换，流 idle 超时按会话剩余时间收敛
 - [x] 前端「**全部断开重连**」（admin，`POST /api/system/reconnect`）：释放全部 session + 重置并发信号量，比重启更轻量；下个请求自动 re-admit
 - [x] **极简路由（路由模式）**（控制台「免费额度策略」开关，默认关闭；`minimalRoutingEnabled`/`minimalRoutingMode` 持久化 `/data/settings.json`）：代理侧按 dsh-routing-suite 协议改写请求——任务分类注入 spec/react/weak 极简 persona（**替换**客户端 persona 段、其余 section 保留——套件 applyPersona 语义，非简单前置）+ 首轮核心工具面（首个 tool_calls 后放行全部；工具保证：不裁空、`end_turn` 特殊签名工具始终保留）+ weak 模式近距离引导 + **路由风格钉死**（`minimalRoutingMode` auto/spec/react/weak）；**目标模型 = deepseek-v4-flash（fast）**：spec 的 we/let's 集体链按模型自适应锚定（Pro 远距 persona 锚定；Flash 远距反噬改近距 user 注入 + 首 token We 自锚定，实测 we=4~6/let's=3/let me=0；工具循环轮次也注入锚定，多轮不衰减）；free-mode 门禁标记不受影响，保存立即生效
 - [x] **客户端断开立即释放账号锁**（修复占死 bug）：监听底层 socket close（`req 'close'` 是 body 读完事件不可用），断开瞬间中止上游并释放锁，实测 3s 恢复（原 120s 超时）；pipe 内 client-gone 显式 race + once/removeListener 防泄漏
-- [x] **免费模型暴力分散**（`spreadFreeModels` 默认开，控制台「负载均衡设置」可关）：请求轮转分散到不同账号（空闲槽位→在途少→轮询），不钉死热 session；单账号占死不拖垮全局，多账号并行吞吐更高；关闭则恢复热 session 复用
+- [x] **免费模型暴力分散**（`spreadFreeModels` 默认开，控制台「负载均衡设置」可关）：请求轮转分散到不同账号（空闲槽位→在途少→轮询），不钉死热 session；单账号占死不拖垮全局，多账号并行吞吐更高；关闭则恢复热 session 复用（但并发上限的“满了换号”仍生效，见上条）

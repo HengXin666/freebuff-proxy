@@ -439,7 +439,7 @@ async function renderProxySettings(view) {
     el('div', { class: 'row spread' }, [
       el('div', {}, [
         el('h3', { style: 'margin:0 0 2px' }, '负载均衡设置'),
-        el('span', { class: 'muted' }, '每个账号同一时间最多转发的 SSE 响应流数（默认 1:1，一个账号一个并发）；保存立即生效，无需重启'),
+        el('span', { class: 'muted' }, '每个账号同一时间最多转发的 SSE 响应流数（默认 1:1，一个账号一个并发）；单账号在途达到上限即自动换到有空闲槽位的账号（“满了换号”），保存立即生效，无需重启'),
       ]),
       el('div', { class: 'row' }, [
         el('input', {
@@ -475,7 +475,7 @@ async function renderProxySettings(view) {
     el('div', { class: 'row spread' }, [
       el('div', {}, [
         el('span', {}, '免费模型分散到不同账号'),
-        el('div', { class: 'muted', style: 'font-size:12px' }, '仅免费模型生效（额度不心疼）：请求轮转分散，单账号被占死不再拖垮全部请求，多账号并行吞吐更高；关闭则恢复热 session 复用（最省额度）。付费模型（premium）恒走热 session 复用，不受此开关影响'),
+        el('div', { class: 'muted', style: 'font-size:12px' }, '仅免费模型生效（额度不心疼）：请求轮转分散，单账号被占死不再拖垮全部请求，多账号并行吞吐更高；关闭则恢复热 session 复用（最省额度）。付费模型（premium）恒走热 session 复用，不受此开关影响。无论开关状态，单账号并发满员时都会换到有空闲槽位的账号'),
       ]),
       el('label', { class: 'switch', for: 'spread-free-models' }, [
         el('input', spreadAttrs),

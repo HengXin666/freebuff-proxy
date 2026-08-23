@@ -496,7 +496,8 @@ export function createProxyHandler(ctx) {
     }
 
     /**
-     * 账号锁等待时长：
+     * 账号锁等待时长（仅在所有可用账号都满员时排队才生效；有账号空闲时
+     * 选号阶段就已换号，不会走到这里）：
      * - 热 session（同模型可直接复用）：等一个完整 idle 超时周期。上游卡死也会在
      *   streamIdleTimeoutSec 后被掐断释放锁，所以热会话优先排队复用而不是新建 session。
      * - 冷账号/换模型：只等固定窗口，超时即换下一个账号。
@@ -509,8 +510,10 @@ export function createProxyHandler(ctx) {
     }
 
     // Session-first scheduling: reuse a live same-model slot, serialized per
-    // account (one account handles one chat at a time). The upstream is
-    // stateless because clients send the full history.
+    // account (one account handles at most `accountMaxConcurrency` chats at a
+    // time). The upstream is stateless because clients send the full history.
+    // 账号并发上限即"满了换号"的阈值：在途已满的账号排最后，新请求优先去
+    // 有空闲槽位的账号；所有账号都满员时才排队（有界等待，超时 account_busy）。
     // 故障转移：除了 4xx 客户端错误，任何上游失败（session/run/chat/网络超时）都
     // 冷却当前账号并继续轮询下一个，只有试完所有账号才把错误返回给用户。
     try {
@@ -539,7 +542,8 @@ export function createProxyHandler(ctx) {
           }
           lastKey = rt.key
 
-          // 账号级串行化：同一账号同一时间只处理一个 chat（热会话排队复用，
+          // 账号并发上限：同一账号同时在途流数不超过上限（热会话优先复用，
+          // 选号阶段已把满员账号排后；只有所有账号都满员时才排队复用，
           // 超时兜底换号）。**任何一次获取都必须有界**：兜底阶段虽然预算已
           // 耗尽（不会再换号），但若持锁者因网络波动卡死（幽灵连接），无限
           // 等待会让本请求永久挂起、所有后续请求排队超时——必须像前面的
