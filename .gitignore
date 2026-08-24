@@ -10,6 +10,8 @@ data/
 # 上游账号凭据（credentials JSON 视为机密，勿提交）
 credentials/*.json
 credentials/active
+# OpenAPI 账号导入文件同样含 authToken，禁止入库
+accounts-import.json
 
 # 环境配置
 config.toml

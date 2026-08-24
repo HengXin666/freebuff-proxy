@@ -4,6 +4,7 @@ node_modules
 data
 # 本地账号凭据一律不进镜像（Docker 部署固定读 /data/credentials）
 credentials
+accounts-import.json
 *.log
 .DS_Store
 .idea
