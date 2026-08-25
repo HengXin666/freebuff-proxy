@@ -32,6 +32,7 @@ import {
   ensureFreebuffToolSignature,
   normalizeReasoningFields,
   normalizeOutputBudget,
+  stripFreebuffConversationState,
 } from './free-mode.js'
 import { applyMinimalRouting, applyStandardRouting } from './routing.js'
 import { logger } from './util/log.js'
@@ -812,7 +813,10 @@ export function createProxyHandler(ctx) {
 
   function buildForwardBody(clientBody, upstreamModel, instanceId, runId) {
     const { clientId } = newIds()
-    let body = { ...clientBody, model: upstreamModel }
+    let body = stripFreebuffConversationState({
+      ...clientBody,
+      model: upstreamModel,
+    })
     // One reasoning field only — avoids Freebuff default + client dual fields.
     body = normalizeReasoningFields(body)
     // 输出预算治理：客户端偏小的 max_tokens/max_completion_tokens 会把思考链
@@ -854,7 +858,7 @@ export function createProxyHandler(ctx) {
     body.codebuff_metadata = {
       ...existingMeta,
       run_id: runId,
-      client_id: existingMeta.client_id || clientId,
+      client_id: clientId,
       cost_mode: 'free',
       freebuff_instance_id: instanceId,
     }

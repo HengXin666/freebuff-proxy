@@ -103,6 +103,54 @@ function normalizeContentToText(content) {
   return String(content)
 }
 
+/**
+ * Remove client-owned conversation/session identity before forwarding to the
+ * stateless Freebuff completions route. The proxy sends the full message
+ * history on every request, so retaining these identifiers can bind a new run
+ * to a retired Luna conversation after Freebuff rotates its agent definitions.
+ *
+ * @param {Record<string, any>} body
+ * @returns {Record<string, any>}
+ */
+export function stripFreebuffConversationState(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body
+
+  const out = { ...body }
+  const stateKeys = [
+    'conversation',
+    'conversation_id',
+    'conversationId',
+    'thread_id',
+    'threadId',
+    'session_id',
+    'sessionId',
+    'instance_id',
+    'instanceId',
+    'agent_id',
+    'agentId',
+    'run_id',
+    'runId',
+    'freebuff_instance_id',
+  ]
+
+  for (const key of stateKeys) delete out[key]
+
+  if (
+    out.codebuff_metadata &&
+    typeof out.codebuff_metadata === 'object' &&
+    !Array.isArray(out.codebuff_metadata)
+  ) {
+    const metadata = { ...out.codebuff_metadata }
+    for (const key of stateKeys) delete metadata[key]
+    // client_id is assigned by buildForwardBody below and must never be
+    // inherited from a caller that may be resuming an old conversation.
+    delete metadata.client_id
+    out.codebuff_metadata = metadata
+  }
+
+  return out
+}
+
 
 /**
  * Freebuff/OpenAI reject requests that carry BOTH reasoning_effort and

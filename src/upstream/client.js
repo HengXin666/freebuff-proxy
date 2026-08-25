@@ -474,6 +474,9 @@ const GATE_CODES = new Set([
   'session_model_mismatch',
   'session_expired',
   'free_mode_capacity_deferred',
+  // Freebuff retires old Luna conversations after an agent rollout. This is
+  // recoverable by replacing the cached session, not by cooling the account.
+  'free_mode_legacy_luna_agent',
 ])
 
 /**
@@ -533,6 +536,7 @@ export function isSessionRecoverableGate(code) {
     code === 'session_expired' ||
     code === 'session_model_mismatch' ||
     code === 'session_superseded' ||
-    code === 'free_mode_capacity_deferred'
+    code === 'free_mode_capacity_deferred' ||
+    code === 'free_mode_legacy_luna_agent'
   )
 }

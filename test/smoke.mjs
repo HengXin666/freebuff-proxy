@@ -46,7 +46,7 @@ configureLogger({ level: 'error' })
 
 const originalFetch = globalThis.fetch
 let calls = []
-/** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion' | 'err_500_a' | 'capacity_once' | 'capacity_all' | 'run_500_a' | 'network_err_a' | 'gate_twice_a' | 'hold_once'} */
+/** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion' | 'err_500_a' | 'capacity_once' | 'capacity_all' | 'run_500_a' | 'network_err_a' | 'gate_twice_a' | 'hold_once' | 'legacy_luna_once'} */
 let mockMode = 'ok'
 let sessionPosts = 0
 let sessionDeletes = 0
@@ -170,6 +170,21 @@ globalThis.fetch = async (url, init = {}) => {
   if (u.includes('/api/v1/chat/completions')) {
     const body = JSON.parse(init.body)
     assert.match(body.model, /^[a-z0-9-]+\/[a-z0-9.-]+$/i)
+    if (
+      mockMode === 'legacy_luna_once' &&
+      body.model === 'openai/gpt-5.6-luna' &&
+      completionAttempts === 0
+    ) {
+      completionAttempts++
+      return jsonRes(
+        {
+          error: 'free_mode_legacy_luna_agent',
+          message:
+            'This conversation uses a retired Luna agent. Update Freebuff if needed, then start a new conversation.',
+        },
+        403,
+      )
+    }
     assert.equal(body.codebuff_metadata.cost_mode, 'free')
     assert.ok(body.codebuff_metadata.freebuff_instance_id)
     assert.equal(
@@ -936,6 +951,11 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
   )
   assert.equal(isSessionRecoverableGate('session_superseded'), true)
   assert.equal(isSessionRecoverableGate('session_expired'), true)
+  assert.equal(
+    extractGateError({ error: 'free_mode_legacy_luna_agent' }, 403),
+    'free_mode_legacy_luna_agent',
+  )
+  assert.equal(isSessionRecoverableGate('free_mode_legacy_luna_agent'), true)
   assert.equal(isSessionRecoverableGate('nope'), false)
 
   // account-level rate-limit codes (chat completions 429) → switch account
@@ -1374,6 +1394,46 @@ assert.equal(requireModelId(''), null)
   assert.ok(
     startCalls.some((c) => JSON.parse(c.body).agentId === 'base3-free-deepseek-flash'),
     `应回退到 base3 孪生 agent, got ${JSON.stringify(startCalls.map((c) => JSON.parse(c.body).agentId))}`,
+  )
+  mockMode = 'ok'
+}
+
+// retired Luna conversation → release/re-admit the same model session once,
+// without cooling the account or forwarding the stale conversation identity.
+{
+  await runtimes.get('u1').sessions.release()
+  mockMode = 'legacy_luna_once'
+  sessionPosts = 0
+  sessionDeletes = 0
+  completionAttempts = 0
+  calls = []
+  const res = await chat({
+    model: 'openai/gpt-5.6-luna',
+    conversation_id: 'old-top-level-conversation',
+    codebuff_metadata: {
+      conversation_id: 'old-nested-conversation',
+      client_id: 'old-client-id',
+      agent_id: 'retired-luna-agent',
+    },
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  assert.equal(sessionPosts, 2, 'legacy Luna error should admit a fresh session')
+  assert.equal(sessionDeletes, 1, 'legacy Luna recovery should release the old session')
+
+  const completionCalls = calls.filter((c) => c.url.includes('/chat/completions'))
+  assert.equal(completionCalls.length, 2, 'legacy Luna should retry once')
+  const forwarded = completionCalls.map((c) => JSON.parse(c.body))
+  for (const body of forwarded) {
+    assert.equal(body.conversation_id, undefined)
+    assert.equal(body.codebuff_metadata.conversation_id, undefined)
+    assert.equal(body.codebuff_metadata.agent_id, undefined)
+    assert.match(body.codebuff_metadata.client_id, /^freebuff-proxy-/)
+  }
+  assert.notEqual(
+    forwarded[0].codebuff_metadata.client_id,
+    'old-client-id',
+    'proxy must not inherit a retired client identity',
   )
   mockMode = 'ok'
 }
