@@ -2094,6 +2094,27 @@ assert.equal(requireModelId(''), null)
   assert.equal(pj.accounts[0].email, 'w@example.com')
   // mock GET 返回 status none → 探测后 session 状态可见
   assert.equal(pj.accounts[0].session.status, 'none')
+  // 账号凭证：任意已登录用户可查看完整凭据（含 authToken），404 与 401 正确
+  {
+    const cred = await fetch(`http://127.0.0.1:${wport}/api/accounts/w/credential`, {
+      headers: { cookie },
+    })
+    assert.equal(cred.status, 200)
+    const cj = await cred.json()
+    assert.equal(cj.ok, true)
+    assert.equal(cj.key, 'w')
+    assert.equal(cj.credential.email, 'w@example.com')
+    assert.equal(cj.credential.authToken, 'token-w')
+    assert.equal(cj.credential.id, 'w')
+
+    const missing = await fetch(`http://127.0.0.1:${wport}/api/accounts/nope/credential`, {
+      headers: { cookie },
+    })
+    assert.equal(missing.status, 404)
+
+    const anon = await fetch(`http://127.0.0.1:${wport}/api/accounts/w/credential`)
+    assert.equal(anon.status, 401)
+  }
   // 运行设置：默认开启，保存关闭后立即返回并持久化，重建 store 仍为关闭
   {
     const getDefault = await fetch(`http://127.0.0.1:${wport}/api/settings`, {

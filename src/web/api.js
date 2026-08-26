@@ -327,6 +327,35 @@ export function createWebApi(deps) {
       return true
     }
 
+    const credentialMatch = path.match(/^\/api\/accounts\/([^/]+)\/credential$/)
+    if (credentialMatch && method === 'GET') {
+      // 查看某个账号的凭据（与账号列表同权限：任意已登录用户可读）。
+      // 凭据直接读磁盘文件（runtime 里不带 authToken 之外的敏感字段），
+      // 与账号文件格式保持一致，方便导出/迁移。
+      const key = decodeURIComponent(credentialMatch[1])
+      const row = findAccountRow(runtimes.dir, key)
+      if (!row) {
+        sendJson(res, 404, { error: '账号不存在' })
+        return true
+      }
+      const raw = readJsonFile(row.path)
+      if (!raw || typeof raw.authToken !== 'string' || !raw.authToken) {
+        sendJson(res, 404, { error: '账号凭据缺失或格式异常' })
+        return true
+      }
+      const credential = {
+        id: raw.id || null,
+        email: raw.email,
+        name: raw.name || null,
+        authToken: raw.authToken,
+        fingerprintId: raw.fingerprintId || null,
+        fingerprintHash: raw.fingerprintHash || null,
+        proxy: raw.proxy || null,
+      }
+      sendJson(res, 200, { ok: true, key: row.key, credential })
+      return true
+    }
+
     if (acctMatch && method === 'DELETE') {
       if (user.role !== 'admin') {
         sendJson(res, 403, { error: '需要管理员权限' })

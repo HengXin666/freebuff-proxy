@@ -278,8 +278,11 @@ async function renderOverview(view) {
           el('td', {}, cd ? el('span', { class: 'badge warn' }, a.cooldownCode || 'cooldown') : '—'),
           el('td', {}, state.me.role === 'admin' ? el('div', { class: 'row' }, [
             el('button', { class: 'muted', onclick: () => clearCooldown(a.key) }, '解除冷却'),
+            el('button', { class: 'muted', onclick: () => openCredentialModal(a) }, '凭证'),
             el('button', { class: 'danger', onclick: () => removeAccount(a.key, a.email) }, '删除'),
-          ]) : '—'),
+          ]) : el('div', { class: 'row' }, [
+            el('button', { class: 'muted', onclick: () => openCredentialModal(a) }, '凭证'),
+          ])),
         ])
       })),
     ])
@@ -744,6 +747,59 @@ async function removeAccount(email) {
   await api(`/api/accounts/${encodeURIComponent(email)}`, { method: 'DELETE' })
   toast('已删除')
   render()
+}
+
+/* ---------------- account credential (view / copy / download) ---------------- */
+function downloadTextFile(name, content, mime = 'application/json') {
+  const blob = new Blob([content], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = el('a', { href: url, download: name })
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+async function openCredentialModal(account) {
+  const backdrop = el('div', { class: 'modal-backdrop' })
+  const body = el('div', { class: 'card modal' }, [
+    el('h3', {}, `账号凭证 · ${account.email}`),
+    el('p', { class: 'muted' }, '正在读取…'),
+  ])
+  backdrop.append(body)
+  document.body.append(backdrop)
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove() })
+
+  let res
+  try {
+    res = await api(`/api/accounts/${encodeURIComponent(account.key)}/credential`)
+  } catch (err) {
+    body.innerHTML = ''
+    body.append(el('h3', {}, '读取失败'), el('p', { class: 'muted' }, err.message))
+    return
+  }
+  const cred = res.credential
+  const json = JSON.stringify(cred, null, 2)
+  const filename = `${cred.email || 'account'}-credential.json`
+
+  body.innerHTML = ''
+  body.append(
+    el('h3', {}, `账号凭证 · ${cred.email}`),
+    el('p', { class: 'muted' }, '凭据 JSON 可直接用于导入到其他 Freebuff Proxy 实例，或重新粘贴到「导入账号」。明文显示，仅供迁移/备份。'),
+    el('textarea', {
+      id: 'cred-view',
+      rows: 12,
+      readonly: '',
+      style: 'margin-top:8px',
+    }),
+    el('div', { class: 'row', style: 'margin-top:12px' }, [
+      el('button', { class: 'primary', onclick: async () => {
+        await navigator.clipboard.writeText(json).catch(() => {})
+        toast('已复制完整凭据 JSON')
+      } }, '复制 JSON'),
+      el('button', { onclick: () => downloadTextFile(filename, json) }, '下载 JSON'),
+      el('button', { onclick: () => backdrop.remove() }, '关闭'),
+    ]),
+  )
+  $('#cred-view').value = json
 }
 
 function shortProxy(proxy) {
