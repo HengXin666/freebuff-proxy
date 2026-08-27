@@ -7,7 +7,13 @@ import { loadConfig } from '../src/config.js'
 import { AccountRuntimes } from '../src/app-context.js'
 import { startServer } from '../src/server.js'
 import { configureLogger } from '../src/util/log.js'
-import { requireModelId, isFreeModel } from '../src/model.js'
+import {
+  requireModelId,
+  isFreeModel,
+  buildModelsListResponse,
+  agentIdForModel,
+  agentFallbackForModel,
+} from '../src/model.js'
 import { saveAccountUser, listAccounts, readAccountUser } from '../src/auth-store.js'
 import {
   ensureFreebuffSystemMessages,
@@ -1317,6 +1323,34 @@ function chat(body, headers = {}) {
 
 assert.equal(requireModelId('  openai/gpt-5.6-luna  '), 'openai/gpt-5.6-luna')
 assert.equal(requireModelId(''), null)
+
+// Official Freebuff Web-only/god-only models must use their model-specific
+// roots; otherwise the upstream rejects the generic base2-free agent.
+const verifiedSpecialModels = [
+  {
+    id: 'crof/kimi-k3-eco',
+    base2: 'base2-free-kimi-k3-eco',
+    base3: 'base3-free-kimi-k3-eco',
+  },
+  {
+    id: 'openai/gpt-5.6-luna-es',
+    base2: 'base2-free-luna-es',
+    base3: 'base3-free-luna-es',
+  },
+  {
+    id: 'meta/muse-spark-1.2-contributor',
+    base2: 'base2-free-muse-spark',
+    base3: 'base3-free-muse-spark',
+  },
+]
+for (const model of verifiedSpecialModels) {
+  assert.equal(agentIdForModel(model.id), model.base2)
+  assert.equal(agentFallbackForModel(model.id), model.base3)
+  assert.equal(isFreeModel(model.id), false)
+  const listed = buildModelsListResponse().data.find((row) => row.id === model.id)
+  assert.ok(listed, `${model.id} should be present in /v1/models`)
+  assert.equal(listed.pool, 'premium')
+}
 
 // recoverable gate: exactly one re-admit (session POST again), one extra completion
 {
