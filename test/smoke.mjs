@@ -1342,14 +1342,27 @@ const verifiedSpecialModels = [
     base2: 'base2-free-muse-spark',
     base3: 'base3-free-muse-spark',
   },
+  {
+    id: 'z-ai/glm-5.3-flash',
+    base2: 'base2-free-glm-5-3-flash',
+    base3: 'base3-free-glm-5-3-flash',
+  },
+  {
+    id: 'stealth/ox-alpha',
+    base2: 'base2-free-ox-alpha',
+    base3: 'base3-free-ox-alpha',
+  },
+  {
+    id: 'z-ai/glm-5.2',
+    base2: 'base2-free-glm',
+    base3: 'base3-free-glm',
+  },
 ]
 for (const model of verifiedSpecialModels) {
   assert.equal(agentIdForModel(model.id), model.base2)
   assert.equal(agentFallbackForModel(model.id), model.base3)
-  assert.equal(isFreeModel(model.id), false)
   const listed = buildModelsListResponse().data.find((row) => row.id === model.id)
   assert.ok(listed, `${model.id} should be present in /v1/models`)
-  assert.equal(listed.pool, 'premium')
 }
 
 // recoverable gate: exactly one re-admit (session POST again), one extra completion
@@ -1856,8 +1869,8 @@ for (const model of verifiedSpecialModels) {
   const rrConfig = loadConfig()
   rrConfig.upstream.credentialsDir = rrDir
   rrConfig.session.pollIntervalSec = 3600
-  // 本用例回归热 session 复用（旧行为）→ 显式关闭免费模型分散
-  const pool = new AccountRuntimes(rrConfig, { getSpreadFreeModels: () => false })
+  // 本用例回归热 session 复用 → 平摊账号数=1（只用一个账号，永远复用热 session）
+  const pool = new AccountRuntimes(rrConfig, { getSpreadAccounts: () => 1 })
   mockMode = 'ok'
   sessionPosts = 0
   // 串行请求全部复用 a 的同一个热 session，只 admit 一次。
@@ -1940,8 +1953,10 @@ for (const model of verifiedSpecialModels) {
   // 3 个账号各 admit 一次（每个账号一个 session，第 4 个请求起复用）
   assert.equal(sessionPosts, 3, `expected 3 admissions (one per account), got ${sessionPosts}`)
 
-  // 付费模型（premium）恒走热 session 复用，绝不暴力分散：并发冷启动也只
-  // admit 一次、全部请求钉在同一个账号（每次 admit 都是计费会话，分散 = 烧钱）
+  // 平摊调度在所有模型统一生效：但并发冷启动时，若账号已全部铺满（前面 flash
+  // 已占用 a/b/c），新模型请求优先复用热 session 账号（账号内负载均衡）——
+  // 不会无谓替换其他账号的 session。这里 3 个账号都已被 flash 占用，pro 请求
+  // 全部复用 a（a 的 session 对 mock 上游所有模型可用）。
   sessionPosts = 0
   const seen = await Promise.all(
     Array.from({ length: 6 }, async () => {
@@ -1949,8 +1964,8 @@ for (const model of verifiedSpecialModels) {
       return rt.key
     }),
   )
-  assert.equal(new Set(seen).size, 1, `付费模型应复用同一账号, got ${seen}`)
-  assert.equal(sessionPosts, 1, `付费模型并发冷启动只应 admit 一次, got ${sessionPosts}`)
+  assert.equal(new Set(seen).size, 1, `账号已铺满时新模型应复用热账号, got ${seen}`)
+  assert.equal(sessionPosts, 1, `复用切换模型应最多 re-admit 一次, got ${sessionPosts}`)
   await pool.shutdown()
   fs.rmSync(spDir, { recursive: true, force: true })
 }
@@ -1978,7 +1993,7 @@ for (const model of verifiedSpecialModels) {
   const dupConfig = loadConfig()
   dupConfig.upstream.credentialsDir = dupDir
   dupConfig.session.pollIntervalSec = 3600
-  const dupPool = new AccountRuntimes(dupConfig, { getSpreadFreeModels: () => false })
+  const dupPool = new AccountRuntimes(dupConfig, { getSpreadAccounts: () => 1 })
   mockMode = 'ok'
   sessionPosts = 0
   const seen = await Promise.all(
@@ -2423,7 +2438,7 @@ for (const model of verifiedSpecialModels) {
   convConfig.server.apiKeys = ['sk-test']
   convConfig.upstream.credentialsDir = convDir
   convConfig.session.pollIntervalSec = 3600
-  const convRuntimes = new AccountRuntimes(convConfig, { getSpreadFreeModels: () => false })
+  const convRuntimes = new AccountRuntimes(convConfig, { getSpreadAccounts: () => 1 })
   const convServer = await startServer({
     config: convConfig,
     runtimes: convRuntimes,
@@ -2524,7 +2539,7 @@ for (const model of verifiedSpecialModels) {
   rrConfig.session.pollIntervalSec = 3600
   rrConfig.limits.maxConcurrentRequests = 24
   const rrRuntimes = new AccountRuntimes(rrConfig, {
-    getSpreadFreeModels: () => false,
+    getSpreadAccounts: () => 999,
     getAccountConcurrency: () => 1,
   })
 
@@ -2638,7 +2653,7 @@ for (const model of verifiedSpecialModels) {
   subConfig.server.apiKeys = ['sk-test']
   subConfig.upstream.credentialsDir = subDir
   subConfig.session.pollIntervalSec = 3600
-  const subRuntimes = new AccountRuntimes(subConfig, { getSpreadFreeModels: () => false })
+  const subRuntimes = new AccountRuntimes(subConfig, { getSpreadAccounts: () => 1 })
   const subServer = await startServer({
     config: subConfig,
     runtimes: subRuntimes,
@@ -2754,7 +2769,7 @@ for (const model of verifiedSpecialModels) {
   capConfig.server.apiKeys = ['sk-test']
   capConfig.upstream.credentialsDir = capDir
   capConfig.session.pollIntervalSec = 3600
-  const capRuntimes = new AccountRuntimes(capConfig, { getSpreadFreeModels: () => false })
+  const capRuntimes = new AccountRuntimes(capConfig, { getSpreadAccounts: () => 999 })
   const capServer = await startServer({
     config: capConfig,
     runtimes: capRuntimes,
@@ -2813,7 +2828,7 @@ for (const model of verifiedSpecialModels) {
   capConfig2.server.apiKeys = ['sk-test']
   capConfig2.upstream.credentialsDir = capDir2
   capConfig2.session.pollIntervalSec = 3600
-  const capRuntimes2 = new AccountRuntimes(capConfig2, { getSpreadFreeModels: () => false })
+  const capRuntimes2 = new AccountRuntimes(capConfig2, { getSpreadAccounts: () => 999 })
   const capServer2 = await startServer({
     config: capConfig2,
     runtimes: capRuntimes2,
@@ -3035,7 +3050,7 @@ for (const model of verifiedSpecialModels) {
   stConfig.session.pollIntervalSec = 3600
   stConfig.limits.streamIdleTimeoutSec = 1
 
-  const stRuntimes = new AccountRuntimes(stConfig, { getSpreadFreeModels: () => false })
+  const stRuntimes = new AccountRuntimes(stConfig, { getSpreadAccounts: () => 999 })
   const stServer = await startServer({
     config: stConfig,
     runtimes: stRuntimes,
@@ -3076,7 +3091,8 @@ for (const model of verifiedSpecialModels) {
   const elapsed = Date.now() - started
   assert.ok(elapsed < 30_000, `stall zero test took too long: ${elapsed}ms`)
 
-  // 幽灵连接不冷却同账号；下一请求仍可复用同一会话快速完成
+  // 幽灵连接（流 idle 超时被掐断）→ 账号短暂冷却（stallCooldownSec 默认 30s）：
+  // 该账号刚被掐断过一条卡死链路，下一请求应切到另一个账号，而不是继续撞同一条链路。
   mockMode = 'ok'
   const stRes2 = await fetch(`http://127.0.0.1:${stPort}/v1/chat/completions`, {
     method: 'POST',
@@ -3085,7 +3101,12 @@ for (const model of verifiedSpecialModels) {
   })
   assert.equal(stRes2.status, 200, await stRes2.clone().text())
   assert.ok(stRes2.headers.get('x-freebuff-proxy-account'), 'expected an account')
-  assert.equal(sessionPosts, 1, `should reuse one session, got ${sessionPosts}`)
+  assert.equal(sessionPosts, 2, `stall 后应切换到另一账号重新 admit, got ${sessionPosts}`)
+  assert.equal(
+    stRuntimes.list().find((x) => x.email === 'sa@example.com').available,
+    false,
+    '被掐断的账号应短暂冷却',
+  )
   await stRuntimes.shutdown()
   stServer.close()
   fs.rmSync(stDir, { recursive: true, force: true })
@@ -3105,8 +3126,11 @@ for (const model of verifiedSpecialModels) {
   spConfig.upstream.credentialsDir = spDir
   spConfig.session.pollIntervalSec = 3600
   spConfig.limits.streamIdleTimeoutSec = 1
+  // stallCooldownSec=0：关闭掐断后的冷却（保留旧行为可配置）——验证该开关
+  // 关闭时，幽灵连接只断开连接、下一请求仍可复用同一会话
+  spConfig.limits.stallCooldownSec = 0
 
-  const spRuntimes = new AccountRuntimes(spConfig, { getSpreadFreeModels: () => false })
+  const spRuntimes = new AccountRuntimes(spConfig, { getSpreadAccounts: () => 1 })
   const spServer = await startServer({
     config: spConfig,
     runtimes: spRuntimes,
@@ -3178,7 +3202,7 @@ for (const model of verifiedSpecialModels) {
   scConfig.limits.maxConcurrentRequests = 12
 
   const scRuntimes = new AccountRuntimes(scConfig, {
-    getSpreadFreeModels: () => false,
+    getSpreadAccounts: () => 999,
     getAccountConcurrency: () => 1,
   })
   const scServer = await startServer({
@@ -3300,7 +3324,7 @@ for (const model of verifiedSpecialModels) {
   ccConfig.limits.maxConcurrentRequests = 12
   // 模拟控制台把每账号并发上限调到 2
   const ccRuntimes = new AccountRuntimes(ccConfig, {
-    getSpreadFreeModels: () => false,
+    getSpreadAccounts: () => 999,
     getAccountConcurrency: () => 2,
   })
   const ccServer = await startServer({
@@ -3415,7 +3439,7 @@ for (const model of verifiedSpecialModels) {
   capConfig.session.pollIntervalSec = 3600
   capConfig.limits.maxConcurrentRequests = 12
   const capRuntimes = new AccountRuntimes(capConfig, {
-    getSpreadFreeModels: () => false, // 用户关闭了免费模型分散
+    getSpreadAccounts: () => 999, // 平摊账号数不设限（全部账号可用）
     getAccountConcurrency: () => 3,   // 用户设置的每账号并发上限
   })
   const capServer = await startServer({
@@ -3546,7 +3570,7 @@ for (const model of verifiedSpecialModels) {
   expConfig.server.apiKeys = ['sk-test']
   expConfig.upstream.credentialsDir = expDir
   expConfig.session.pollIntervalSec = 3600
-  const expRuntimes = new AccountRuntimes(expConfig, { getSpreadFreeModels: () => false })
+  const expRuntimes = new AccountRuntimes(expConfig, { getSpreadAccounts: () => 1 })
   const expServer = await startServer({
     config: expConfig,
     runtimes: expRuntimes,
@@ -3878,6 +3902,8 @@ for (const model of verifiedSpecialModels) {
   bdConfig.upstream.credentialsDir = bdDir
   bdConfig.session.pollIntervalSec = 3600
   bdConfig.limits.streamIdleTimeoutSec = 1
+  // 本用例只验证"背压 → idle 超时 → 锁释放"，不验证掐断后冷却（由 stall_zero 覆盖）
+  bdConfig.limits.stallCooldownSec = 0
 
   const bdRuntimes = new AccountRuntimes(bdConfig)
   const bdServer = await startServer({

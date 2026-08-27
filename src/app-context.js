@@ -8,7 +8,6 @@ import {
 import { createUpstreamClient } from './upstream/client.js'
 import { SessionManager } from './session-manager.js'
 import { UpstreamError } from './upstream/client.js'
-import { isFreeModel } from './model.js'
 import { logger } from './util/log.js'
 
 /** Errors where trying another logged-in account may succeed. */
@@ -158,12 +157,14 @@ class ChatMutex {
 export class AccountRuntimes {
   /**
    * @param {import('./config.js').ProxyConfig} config
-   * @param {{ getAccountConcurrency?: () => number, getSpreadFreeModels?: () => boolean }} [opts]
+   * @param {{ getAccountConcurrency?: () => number, getSpreadAccounts?: () => number, getCustomModels?: () => { id: string, pool?: string, agentId?: string, fallbackAgentId?: string, displayName?: string, multimodal?: boolean, note?: string }[] }} [opts]
    *   getAccountConcurrency: 每个账号的并发上限来源（控制台设置/配置），
    *   默认取 config.limits.accountMaxConcurrency。
-   *   getSpreadFreeModels: 免费模型是否暴力分散到不同账号（默认 true，控制台
-   *   「负载均衡设置」可关）。免费额度不受单账号热 session 钉死，分散可避免
-   *   单个账号被占死拖垮全部请求，并拿到多账号并行吞吐。
+   *   getSpreadAccounts: 平摊请求的账号数上限（控制台「负载均衡设置」可调，
+   *   默认 3）：并发请求最多同时铺开 N 个账号——先账号间负载均衡（未满开新
+   *   账号消费会话），再账号内负载均衡（单账号最多 accountMaxConcurrency）。
+   *   getCustomModels: 前端「模型管理」的自定义模型列表（覆盖内置目录），
+   *   影响 agent id 解析。
    */
   constructor(config, opts = {}) {
     this.config = config
@@ -172,10 +173,14 @@ export class AccountRuntimes {
       typeof opts.getAccountConcurrency === 'function'
         ? opts.getAccountConcurrency
         : () => this.config.limits.accountMaxConcurrency || 1
-    this._getSpreadFreeModels =
-      typeof opts.getSpreadFreeModels === 'function'
-        ? opts.getSpreadFreeModels
-        : () => true
+    this._getSpreadAccounts =
+      typeof opts.getSpreadAccounts === 'function'
+        ? opts.getSpreadAccounts
+        : () => 3
+    this._getCustomModels =
+      typeof opts.getCustomModels === 'function'
+        ? opts.getCustomModels
+        : () => []
     /** @type {Map<string, { key: string, email: string, id: string | null, authToken: string, user: any, upstream: any, sessions: SessionManager, source: string }>} */
     this.byKey = new Map()
     /**
@@ -286,6 +291,14 @@ export class AccountRuntimes {
   _accountConcurrency() {
     const n = this._getAccountConcurrency()
     return Number.isFinite(n) && n >= 1 ? Math.min(16, Math.floor(n)) : 1
+  }
+
+  /** 平摊请求的账号数上限（控制台设置，实时生效）：1..账号数。 */
+  _spreadAccounts() {
+    const n = this._getSpreadAccounts()
+    const total = this.allKeys().length
+    if (!Number.isFinite(n) || n < 1) return Math.min(3, Math.max(1, total))
+    return Math.min(Math.floor(n), Math.max(1, total))
   }
 
   chatLockFor(key) {
@@ -411,17 +424,29 @@ export class AccountRuntimes {
     const keys = this.allKeys()
     if (!keys.length) return []
 
-    // 免费模型暴力分散（默认开，仅对免费模型生效）：不优先热 session，按
-    // 空闲槽位 → 在途少 → 未耗尽 → 轮询 排序，请求轮转分散到不同账号——
-    // 单账号被占死不再拖垮全部请求，且多账号并行吞吐更高（免费额度不心疼 admit）。
-    // 付费模型（premium）/ 关闭分散时走 Session-first 调度：优先复用热 session
-    // （每次 admit 都是计费会话，绝不无谓轮转分散）；但账号并发上限（在途 >=
-    // 上限）时**必须换到有空闲槽位的账号**——并发上限就是"满了换号"的阈值，
-    // 而不是在满员账号上无限排队把并发全部钉死在一个账号。
-    // 两种模式的共同原则：空闲槽位优先；只有所有可用账号都满员时才排队（有界等待）。
-    const spread = this._getSpreadFreeModels() !== false && isFreeModel(model)
+    // 平摊请求调度（所有模型统一）：
+    // 1. 先账号间负载均衡：账号并发没满时，新请求可以直接开新账号消费一个会话
+    //    （而不是钉在已有账号上排队）——并发请求平摊到最多 `spreadAccounts` 个账号。
+    // 2. 再账号内负载均衡：同一账号内最多 `accountMaxConcurrency` 个并发会话，
+    //    满了必须开新账号。
+    // 排序核心：未满员账号 > 满员账号；未满员里优先热 session 复用（省 admit），
+    // 但还没达到平摊上限时优先开新账号；满员账号永远排最后。
+    const spreadLimit = this._spreadAccounts()
     const start = this._rr % keys.length
     const candidates = []
+    // 当前有活跃会话/在途的账号数（决定是否还可以开新账号平摊）
+    let activeAccounts = 0
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[(start + i) % keys.length]
+      if (this.isCoolingDown(key, model)) continue
+      const sessions = this.byKey.get(key)?.sessions
+      const snap = sessions?.getSnapshot?.()
+      const hasLive = snap?.instanceId != null
+      if (hasLive) activeAccounts++
+    }
+    if (process.env.FB_DEBUG_SCHED) {
+      console.error(`[sched] model=${model} activeAccounts=${activeAccounts}/${spreadLimit} keys=${keys.join(',')}`)
+    }
     for (let i = 0; i < keys.length; i++) {
       const key = keys[(start + i) % keys.length]
       if (this.isCoolingDown(key, model)) continue
@@ -429,6 +454,7 @@ export class AccountRuntimes {
       const usable = sessions?.isUsableForModel?.(model) === true
       const live = sessions?.hasLiveSlot?.() === true
       const snap = sessions?.getSnapshot?.()
+      const hasLive = snap?.instanceId != null
       const quota = snap?.quota?.byModel?.[model]
       const exhausted =
         !usable &&
@@ -439,70 +465,55 @@ export class AccountRuntimes {
       const chatLock = this.chatLocks.get(key)
       const inFlight = chatLock?.inFlight || 0
       const capacity = chatLock?.capacity || this._accountConcurrency()
-      if (spread) {
-        // 免费会话临近过期（剩余 <5 分钟，isUsableForModel=false）且正被在途流
-        // 占用：re-admit 必须等流结束（可能很久），把这类账号排到后面——优先把
-        // 新请求分散到有现成可用会话/空闲的账号，避免新请求干等旧流。
-        const nearExpiryInUse =
-          live &&
-          snap?.model === model &&
-          !usable &&
-          (sessions?.inFlightCount?.() || 0) > 0
-        candidates.push({
-          key,
-          nearExpiryInUse: nearExpiryInUse ? 1 : 0,
-          busy: inFlight >= capacity ? 1 : 0,
-          load: inFlight,
-          exhausted: exhausted ? 1 : 0,
-          rotation: i,
-        })
-        continue
-      }
       const sameModel = snap?.model === model
       // 同模型即将过期（live 但不可复用）且正被在途流占用：re-admit 必须等
-      // 流结束（见 SessionManager.ensureSession），有免费账号时不应让新请求
+      // 流结束（见 SessionManager.ensureSession），有账号空闲时不应让新请求
       // 干等——把它降为最后梯队，只有没有空闲账号时才等它续期。
       const busyNearExpiry =
         live &&
         sameModel &&
         !usable &&
         (sessions?.inFlightCount?.() || 0) > 0
+      // 未满员账号：负载均衡第一层——账号间平摊。
+      //   spreadReady = 还可以开新账号（活跃账号数 < 平摊上限）且本账号冷
+      //   （无活跃会话）→ 最高优先：把并发平摊到新账号
+      //   usable = 有同模型热 session → 优先复用（省 admit、保持出口稳定）
+      //   否则冷账号排前面，让请求分散
+      const canOpen = activeAccounts < spreadLimit && !hasLive
+      if (process.env.FB_DEBUG_SCHED) {
+        console.error(`[sched]   ${key} hasLive=${hasLive} usable=${usable} busy=${inFlight >= capacity} inFlight=${inFlight} canOpen=${canOpen}`)
+      }
       candidates.push({
         key,
-        // 同模型即将过期（live 但不可复用）≈ 冷账号：只需 re-admit 续期，
-        // 不应排到"要释放别的模型 session"的最后梯队（正被在途流占用时除外）
-        tier: usable ? 0 : live && !sameModel ? 2 : busyNearExpiry ? 2 : 1,
-        // 同模型过期时优先在同一账号 re-admit（保持出口稳定），而不是换账号新建
-        sameModel: sameModel ? 1 : 0,
-        // 达到并发上限的账号排后；同层级内优先在途少的账号
         busy: inFlight >= capacity ? 1 : 0,
+        // 冷账号且还可平摊：最高优先（开新账号消费会话）
+        open: canOpen ? 1 : 0,
+        // 有热 session 的排前面（复用省 admit）；同模型续期次之
+        tier: usable ? 0 : live && !sameModel ? 2 : busyNearExpiry ? 2 : 1,
+        sameModel: sameModel ? 1 : 0,
         load: inFlight,
         exhausted: exhausted ? 1 : 0,
         rotation: i,
       })
     }
-    if (spread) {
-      candidates.sort(
-        (a, b) =>
-          a.nearExpiryInUse - b.nearExpiryInUse ||
-          a.busy - b.busy ||
-          a.load - b.load ||
-          a.exhausted - b.exhausted ||
-          a.rotation - b.rotation,
-      )
-    } else {
-      candidates.sort(
-        (a, b) =>
-          // 并发已满的账号排最后（核心）：单账号在途 >= 上限时，新请求优先去
-          // 有空闲槽位的账号，而不是继续钉在满员账号上排队。同层内才按
-          // 热 session → 同模型续期 → 在途少 → 轮询 打破平局。
-          a.busy - b.busy ||
-          a.tier - b.tier ||
-          b.sameModel - a.sameModel ||
-          a.load - b.load ||
-          a.exhausted - b.exhausted ||
-          a.rotation - b.rotation,
-      )
+    candidates.sort(
+      (a, b) =>
+        // 并发已满的账号排最后（核心）：单账号在途 >= 上限时，新请求优先去
+        // 有空闲槽位的账号，而不是继续钉在满员账号上排队。
+        a.busy - b.busy ||
+        // 还能开新账号（未达平摊上限）的账号最优先——账号间负载均衡：
+        // 并发请求先铺满 N 个账号（每账号一个会话），绝不钉在第一个账号上
+        // （即使它有热 session）；只有活跃账号数 >= 平摊上限时才降级为复用。
+        b.open - a.open ||
+        // 未满员里：热 session → 同模型续期 → 冷账号 → 在途少 → 轮询
+        a.tier - b.tier ||
+        b.sameModel - a.sameModel ||
+        a.load - b.load ||
+        a.exhausted - b.exhausted ||
+        a.rotation - b.rotation,
+    )
+    if (process.env.FB_DEBUG_SCHED) {
+      console.error(`[sched]   order: ${candidates.map((c) => c.key).join(',')}`)
     }
     return candidates.map((item) => item.key)
   }
@@ -662,14 +673,24 @@ export class AccountRuntimes {
           )
         } else if (opts.switchAccount) {
           // noCooldown 且 switchAccount（free_mode_capacity_deferred /
-          // account_busy / runtime_superseded）：**不是真故障，优先复用原账号**。
-          // 调用方（chat 流程）此时仍持有/正想持有该账号的锁——账号并发排序
-          // 会把"自己在用自己"误判成 busy（在途 >= 上限）而换到别的账号，
-          // 导致 capacity_deferred 这类瞬时重试被甩去新建一个 session。
-          // 原账号 session 仍可用于该模型时直接复用；不可用/已失效才走全新选号。
+          // account_busy / runtime_superseded）：**不是真故障**。
+          // 分两种情况：
+          // 1) account_busy / runtime_superseded：调用方（chat 流程）**未持有**
+          //    原账号的锁（acquire 超时 / 已被顶替），此时 busy 判断是准确的
+          //    ——原账号在途已满时不再把它钉住，走全新选号让有空闲槽位的账号
+          //    承接（并发上限即"满了换号"的阈值，见 candidateKeys）。
+          // 2) 其他瞬时 gate（capacity_deferred 等）：调用方**仍持有**原账号的
+          //    锁，busy 是"自己在用自己"造成的误判——session 仍可复用时直接
+          //    复用，不为瞬时容量无谓新建计费 session。
           try {
             const rt = this.get(opts.preferredKey)
-            if (rt.sessions.isUsableForModel(model)) {
+            const callerHoldsLock =
+              opts.gateCode !== 'account_busy' &&
+              opts.gateCode !== 'runtime_superseded'
+            if (
+              rt.sessions.isUsableForModel(model) &&
+              (callerHoldsLock || !this.isChatBusy(opts.preferredKey))
+            ) {
               this.clearCooldown(opts.preferredKey, model)
               this._lastSuccessKey = opts.preferredKey
               return rt
@@ -818,7 +839,7 @@ export class AccountRuntimes {
 
 /**
  * @param {import('./config.js').ProxyConfig} config
- * @param {{ getAccountConcurrency?: () => number }} [opts] 透传给 AccountRuntimes
+ * @param {{ getAccountConcurrency?: () => number, getSpreadFreeModels?: () => boolean, getCustomModels?: () => { id: string, pool?: string, agentId?: string, fallbackAgentId?: string, displayName?: string, multimodal?: boolean, note?: string }[] }} [opts] 透传给 AccountRuntimes
  */
 export function buildAppContext(config, opts = {}) {
   const runtimes = new AccountRuntimes(config, opts)

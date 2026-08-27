@@ -3,13 +3,14 @@ import path from 'node:path'
 
 const DEFAULT_SETTINGS = Object.freeze({
   freeToolSignatureEnabled: true,
-  // 每个账号同一时间可并发的 SSE 响应流数（负载均衡），默认 1:1。
+  // 每个账号同一时间可并发的 SSE 响应流数（账号内负载均衡），默认 1:1。
   // 单账号在途达到上限即"满了换号"：选号排序中满员账号排末尾，新请求优先去
   // 有空闲槽位的账号；只有所有账号都满员时才排队（有界等待）。
   accountMaxConcurrency: 1,
-  // 免费模型暴力分散到不同账号（默认开）：不钉死热 session，请求轮转分散，
-  // 单账号被占死不再拖垮全部请求，且多账号并行吞吐更高。
-  spreadFreeModels: true,
+  // 平摊请求的账号数上限（账号间负载均衡）：并发请求最多同时铺开 N 个账号
+  // 消费会话——账号并发没满时新请求可以直接开新账号，而不是钉在已有账号上
+  // 排队；所有模型统一生效（不再区分免费/付费分散开关）。
+  spreadAccounts: 3,
   // 极简路由（路由模式）：代理侧改写请求注入 persona/首轮核心工具面/近距离引导。
   minimalRoutingEnabled: false,
   // 路由风格钉死：auto（按任务分类）/ spec（计划-集体，we/let's 链）/ react（执行者）/ weak（内部路由）。
@@ -44,8 +45,10 @@ export class SettingsStore {
           raw.accountMaxConcurrency,
         )
       }
-      if (typeof raw?.spreadFreeModels === 'boolean') {
-        this.settings.spreadFreeModels = raw.spreadFreeModels
+      if (Number.isInteger(raw?.spreadAccounts)) {
+        this.settings.spreadAccounts = clampSpread(
+          raw.spreadAccounts,
+        )
       }
       if (typeof raw?.minimalRoutingEnabled === 'boolean') {
         this.settings.minimalRoutingEnabled = raw.minimalRoutingEnabled
@@ -86,11 +89,11 @@ export class SettingsStore {
         next.accountMaxConcurrency,
       )
     }
-    if (next?.spreadFreeModels !== undefined) {
-      if (typeof next.spreadFreeModels !== 'boolean') {
-        throw new TypeError('spreadFreeModels must be a boolean')
+    if (next?.spreadAccounts !== undefined) {
+      if (!Number.isInteger(next.spreadAccounts) || next.spreadAccounts < 1) {
+        throw new TypeError('spreadAccounts must be an integer >= 1')
       }
-      this.settings.spreadFreeModels = next.spreadFreeModels
+      this.settings.spreadAccounts = clampSpread(next.spreadAccounts)
     }
     if (next?.minimalRoutingEnabled !== undefined) {
       if (typeof next.minimalRoutingEnabled !== 'boolean') {
@@ -130,6 +133,11 @@ export class SettingsStore {
 
 /** 并发上限：1..16，防止误配造成上游顶号。 */
 function clampConcurrency(n) {
+  return Math.min(16, Math.max(1, n))
+}
+
+/** 平摊账号数：1..16（实际受账号总数约束，运行时再 clamp）。 */
+function clampSpread(n) {
   return Math.min(16, Math.max(1, n))
 }
 

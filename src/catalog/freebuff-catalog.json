@@ -1,0 +1,139 @@
+{
+  "version": 1,
+  "syncedAt": "2026-08-27T17:08:08.654Z",
+  "source": "CodebuffAI/codebuff common/src/constants/free-agents.ts + freebuff-models.ts + freebuff-model-ids.ts",
+  "models": [
+    {
+      "id": "openai/gpt-5.6-luna",
+      "displayName": "GPT-5.6 Luna",
+      "pool": "premium",
+      "multimodal": true,
+      "agentId": "base2-free-luna",
+      "fallbackAgentId": "base3-free-luna",
+      "note": "Default picker model; premium daily pool. Strong all-around with native images."
+    },
+    {
+      "id": "deepseek/deepseek-v4-flash",
+      "displayName": "DeepSeek V4 Flash 07/31",
+      "pool": "daily",
+      "multimodal": false,
+      "agentId": "base2-free-deepseek-flash",
+      "fallbackAgentId": "base3-free-deepseek-flash",
+      "note": "Fast coding and tool use; pauses during peak hours. Free daily quota."
+    },
+    {
+      "id": "mimo/mimo-v2.5",
+      "displayName": "MiMo 2.5",
+      "pool": "daily",
+      "multimodal": true,
+      "agentId": "base2-free-mimo",
+      "fallbackAgentId": "base3-free-mimo",
+      "note": "Limited-mode default; unmetered, costs no session."
+    },
+    {
+      "id": "z-ai/glm-5.3-flash",
+      "displayName": "GLM 5.3 Flash",
+      "pool": "daily",
+      "multimodal": false,
+      "agentId": "base2-free-glm-5-3-flash",
+      "fallbackAgentId": "base3-free-glm-5-3-flash",
+      "note": "Deep-reasoning pick (replaces retired DeepSeek V4 Pro); capped at 2 sessions/day."
+    },
+    {
+      "id": "z-ai/glm-5.2",
+      "displayName": "GLM 5.2",
+      "pool": "referral",
+      "multimodal": false,
+      "agentId": "base2-free-glm",
+      "fallbackAgentId": "base3-free-glm",
+      "note": "Referral/streak reward, not always joinable."
+    },
+    {
+      "id": "deepseek/deepseek-v4-pro",
+      "displayName": "DeepSeek V4 Pro (retired)",
+      "pool": "premium",
+      "multimodal": false,
+      "agentId": "base2-free-deepseek",
+      "fallbackAgentId": "base3-free-deepseek",
+      "note": "WITHDRAWN 2026-08-26 on cost. Id kept recognised so installed clients coerce, not wedge."
+    },
+    {
+      "id": "minimax/minimax-m3",
+      "displayName": "MiniMax M3",
+      "pool": "premium",
+      "multimodal": true,
+      "agentId": "base2-free-minimax-m3",
+      "fallbackAgentId": "base3-free-minimax-m3",
+      "note": "WITHDRAWN 2026-08-20 on cost. Id kept recognised so live sessions drain."
+    },
+    {
+      "id": "stealth/ox-alpha",
+      "displayName": "Ox Alpha",
+      "pool": "daily",
+      "multimodal": true,
+      "agentId": "base2-free-ox-alpha",
+      "fallbackAgentId": "base3-free-ox-alpha",
+      "note": "WITHDRAWN 2026-08-27 (anonymous host ended free promotion). 1M context stealth model."
+    },
+    {
+      "id": "anthropic/claude-fable-5",
+      "displayName": "Claude Fable 5",
+      "pool": "limited_offer",
+      "multimodal": false,
+      "agentId": "base2-free-fable",
+      "fallbackAgentId": "base3-free-fable",
+      "note": "Limited-offer trial; only when server advertises it."
+    },
+    {
+      "id": "crof/kimi-k3-eco",
+      "displayName": "Kimi K3 Eco",
+      "pool": "premium",
+      "multimodal": false,
+      "agentId": "base2-free-kimi-k3-eco",
+      "fallbackAgentId": "base3-free-kimi-k3-eco",
+      "note": "Web-only route; admission follows upstream entitlement."
+    },
+    {
+      "id": "openai/gpt-5.6-luna-es",
+      "displayName": "GPT-5.6 Luna ES",
+      "pool": "premium",
+      "multimodal": false,
+      "agentId": "base2-free-luna-es",
+      "fallbackAgentId": "base3-free-luna-es",
+      "note": "God-only evaluation route (Novita Codex session)."
+    },
+    {
+      "id": "meta/muse-spark-1.2-contributor",
+      "displayName": "Muse Spark 1.2 Contributor",
+      "pool": "premium",
+      "multimodal": false,
+      "agentId": "base2-free-muse-spark",
+      "fallbackAgentId": "base3-free-muse-spark",
+      "note": "Web-only Contributor route; admission follows entitlement and queue."
+    },
+    {
+      "id": "deepseek/deepseek-v4-flash-max",
+      "displayName": "DeepSeek V4 Flash (Max context)",
+      "pool": "premium",
+      "multimodal": false,
+      "agentId": "base2-free-deepseek-flash-max",
+      "note": "Provisioned extended-context tier (per-account grant)."
+    },
+    {
+      "id": "deepseek/deepseek-v4-pro-max",
+      "displayName": "DeepSeek V4 Pro (Max context)",
+      "pool": "premium",
+      "multimodal": false,
+      "agentId": "base2-free-deepseek-pro-max",
+      "note": "Provisioned extended-context tier (per-account grant)."
+    },
+    {
+      "id": "openai/gpt-5.6-luna-max",
+      "displayName": "GPT-5.6 Luna (Max context)",
+      "pool": "premium",
+      "multimodal": false,
+      "agentId": "base2-free-luna-max",
+      "note": "Provisioned extended-context tier (per-account grant)."
+    }
+  ]
+}

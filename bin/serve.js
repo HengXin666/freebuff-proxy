@@ -12,6 +12,7 @@ import { WebSessionStore } from '../src/web/session-store.js'
 import { LoginFlowManager } from '../src/web/login-flows.js'
 import { ProxyStore } from '../src/web/proxy-store.js'
 import { SettingsStore } from '../src/web/settings-store.js'
+import { ModelStore } from '../src/web/model-store.js'
 import { listAccounts } from '../src/auth-store.js'
 
 function isLoopbackHost(host) {
@@ -70,6 +71,8 @@ async function main() {
   // 前端「代理设置」管理的全局代理池（优先于 config.yaml 的 upstream.proxies）
   const proxyStore = new ProxyStore(path.join(dataDir, 'proxies.json'))
   const settingsStore = new SettingsStore(path.join(dataDir, 'settings.json'))
+  // 前端「模型管理」管理的自定义模型列表（覆盖/扩展内置目录）
+  const modelStore = new ModelStore(path.join(dataDir, 'custom-models.json'))
   if (proxyStore.list().length) {
     config.upstream.proxies = proxyStore.list()
   }
@@ -116,8 +119,10 @@ async function main() {
   const ctx = buildAppContext(config, {
     // 账号并发上限来自控制台设置（/data/settings.json，默认 1:1），实时生效
     getAccountConcurrency: () => settingsStore.get().accountMaxConcurrency,
-    // 免费模型暴力分散（默认开，控制台「负载均衡设置」可关）
-    getSpreadFreeModels: () => settingsStore.get().spreadFreeModels !== false,
+    // 平摊请求的账号数（控制台「负载均衡设置」可调，默认 3）：并发最多铺开 N 个账号
+    getSpreadAccounts: () => settingsStore.get().spreadAccounts,
+    // 自定义模型列表（前端「模型管理」，覆盖内置目录），实时生效
+    getCustomModels: () => modelStore.list(),
   })
   if (ctx.authEmail) {
     logger.info('upstream auth ready', {
@@ -203,6 +208,7 @@ async function main() {
     loginFlows,
     proxyStore,
     settingsStore,
+    modelStore,
     restart: scheduleRestart,
   })
 

@@ -11,7 +11,7 @@ import { parse as parseYaml } from 'yaml'
  * @property {{cookieSecure: boolean, sessionTtlHours: number}} web
  * @property {{defaultAdminUsername: string, defaultAdminPassword: string | null}} users
  * @property {{releaseOnShutdown: boolean, reAdmitOnExpire: boolean, reAdmitLeadSec: number, freeModelReAdmitLeadSec: number, pollIntervalSec: number, admitTimeoutMs: number}} session
- * @property {{maxConcurrentRequests: number, accountMaxConcurrency: number, upstreamTimeoutSec: number, streamIdleTimeoutSec: number, accountChatWaitMs: number, maxAutoRetryOnSessionError: number}} limits
+ * @property {{maxConcurrentRequests: number, accountMaxConcurrency: number, upstreamTimeoutSec: number, streamIdleTimeoutSec: number, accountChatWaitMs: number, maxAutoRetryOnSessionError: number, stallCooldownSec: number}} limits
  * @property {{level: 'debug' | 'info' | 'warn' | 'error'}} logging
  */
 
@@ -66,11 +66,18 @@ const DEFAULTS = {
     upstreamTimeoutSec: 600,
     // 上游流式响应 body 的 idle 超时（秒）：收到响应头后若长时间没有新数据块，
     // 视为上游卡死（幽灵连接），主动掐断/换号，避免连接永远挂着。
-    streamIdleTimeoutSec: 120,
+    // 默认 60s——网络不稳定的上游 1 分钟不吐数据就该切换（用户明确要求）；
+    // 慢思考模型（DeepSeek 等）思考期可能 >30s 才出首包，别设太小。
+    streamIdleTimeoutSec: 60,
     // 账号级串行化：同一账号同一时间只处理一个 chat。热 session 排队等待的
     // 上限（毫秒，约等于一个完整 idle 超时周期）；超时后换下一个可用账号。
     accountChatWaitMs: 120_000,
     maxAutoRetryOnSessionError: 1,
+    // 上游流被掐断（幽灵连接 idle 超时）后，账号的短暂冷却时长（秒）：
+    // 该账号刚被掐断过一次，说明上游/网络对该会话不稳定，短期内让新请求
+    // 优先去别的账号，避免反复撞上同一条卡死的链路。0 = 不冷却（旧行为，
+    // 掐断后下一请求仍可复用该会话）。
+    stallCooldownSec: 30,
   },
   logging: {
     level: 'info',
@@ -100,6 +107,7 @@ const KEY_MAP = {
   stream_idle_timeout_sec: 'streamIdleTimeoutSec',
   account_chat_wait_ms: 'accountChatWaitMs',
   max_auto_retry_on_session_error: 'maxAutoRetryOnSessionError',
+  stall_cooldown_sec: 'stallCooldownSec',
 }
 
 function isPlainObject(value) {

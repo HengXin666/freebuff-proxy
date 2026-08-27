@@ -5,7 +5,7 @@ import {
   serializeCookie,
 } from '../util/http.js'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
-import { buildModelsListResponse } from '../model.js'
+import { buildModelsListResponse, agentIdForModel } from '../model.js'
 import {
   saveAccountUser,
   coerceUser,
@@ -30,6 +30,7 @@ const SESSION_COOKIE = 'fb_session'
  *   runtimes: any,
  *   proxyStore?: import('./proxy-store.js').ProxyStore,
  *   settingsStore?: import('./settings-store.js').SettingsStore,
+ *   modelStore?: import('./model-store.js').ModelStore,
  *   restart?: () => void,
  * }} deps
  */
@@ -42,6 +43,7 @@ export function createWebApi(deps) {
     runtimes,
     proxyStore,
     settingsStore,
+    modelStore,
   } = deps
 
   function getSessionUser(req) {
@@ -58,6 +60,35 @@ export function createWebApi(deps) {
       return null
     }
     return user
+  }
+
+  // 上游 session 探测结果缓存（/api/models、/api/models/upstream 共用）。
+  // 每次实时 GET 上游要走代理、往返 2-4s，而 rateLimits 变化不频繁——
+  // 缓存 60s 让 playground/模型管理页秒开，同时大幅减少对上游的探测压力。
+  /** @type {{ data: any, at: number } | null} */
+  let upstreamSessionCache = null
+  const UPSTREAM_SESSION_CACHE_MS = 60_000
+
+  async function probeUpstreamSession(force = false) {
+    const now = Date.now()
+    if (!force && upstreamSessionCache && now - upstreamSessionCache.at < UPSTREAM_SESSION_CACHE_MS) {
+      return upstreamSessionCache.data
+    }
+    const accounts = runtimes.list()
+    if (!accounts.length) return null
+    try {
+      const rt = runtimes.getAny()
+      const session = await rt.upstream.freebuffSession('GET')
+      upstreamSessionCache = { data: session, at: now }
+      return session
+    } catch {
+      return null
+    }
+  }
+
+  // 显式刷新上游探测（单账号检测 / 探测刷新按钮用）：跳过缓存强制 GET
+  async function probeUpstreamSessionFresh() {
+    return probeUpstreamSession(true)
   }
 
   async function readJson(req) {
@@ -187,7 +218,10 @@ export function createWebApi(deps) {
     if (method === 'GET' && path === '/api/overview') {
       let models = []
       try {
-        models = buildModelsListResponse({ includeAllCatalog: true }).data
+        models = buildModelsListResponse({
+          includeAllCatalog: true,
+          hiddenModels: modelStore ? modelStore.hidden() : [],
+        }).data
       } catch {
         models = []
       }
@@ -208,27 +242,149 @@ export function createWebApi(deps) {
     if (method === 'GET' && path === '/api/models') {
       let accessTier = null
       let extraIds = []
-      const accounts = runtimes.list()
-      if (accounts.length) {
-        try {
-          const rt = runtimes.getAny()
-          const session = await rt.upstream.freebuffSession('GET')
-          if (session?.accessTier === 'full' || session?.accessTier === 'limited') {
-            accessTier = session.accessTier
-          }
-          extraIds = (session?.rateLimitsByModel
-            ? Object.keys(session.rateLimitsByModel)
-            : []
-          ).concat(session?.model ? [session.model] : [])
-        } catch {
-          // static catalog below
-        }
+      const session = await probeUpstreamSession()
+      if (session?.accessTier === 'full' || session?.accessTier === 'limited') {
+        accessTier = session.accessTier
       }
+      extraIds = (session?.rateLimitsByModel
+        ? Object.keys(session.rateLimitsByModel)
+        : []
+      ).concat(session?.model ? [session.model] : [])
       sendJson(
         res,
         200,
-        buildModelsListResponse({ accessTier, extraIds, includeAllCatalog: true }),
+        buildModelsListResponse({
+          accessTier,
+          extraIds,
+          includeAllCatalog: true,
+          customModels: modelStore ? modelStore.list() : [],
+          hiddenModels: modelStore ? modelStore.hidden() : [],
+        }),
       )
+      return true
+    }
+
+    // 前端「模型管理」：读取/保存自定义模型列表（覆盖/扩展内置 catalog，全局生效）。
+    if (method === 'GET' && path === '/api/models/custom') {
+      sendJson(res, 200, {
+        models: modelStore ? modelStore.list() : [],
+        hidden: modelStore ? modelStore.hidden() : [],
+        // 内置 catalog 供前端参考（含 agent 映射，只读；已过滤被隐藏模型）
+        catalog: buildModelsListResponse({
+          includeAllCatalog: true,
+          hiddenModels: modelStore ? modelStore.hidden() : [],
+        }).data,
+      })
+      return true
+    }
+
+    if (method === 'POST' && path === '/api/models/custom') {
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      if (!modelStore) {
+        sendJson(res, 501, { error: '当前进程未启用模型存储' })
+        return true
+      }
+      let body
+      try {
+        body = await readJson(req)
+      } catch {
+        sendJson(res, 400, { error: '无效的 JSON' })
+        return true
+      }
+      const models = modelStore.save(body.models)
+      logger.info('custom models updated via web', { count: models.length })
+      sendJson(res, 200, {
+        ok: true,
+        models,
+        note: models.length
+          ? '已保存并立即生效（自定义模型优先于内置目录）'
+          : '已清空自定义模型（回退到内置目录）',
+      })
+      return true
+    }
+
+    // 前端「模型管理」删除模型：把 id 加入 hidden（含内置目录的），彻底从列表/调度隐藏。
+    if (method === 'POST' && path === '/api/models/custom/hide') {
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      if (!modelStore) {
+        sendJson(res, 501, { error: '当前进程未启用模型存储' })
+        return true
+      }
+      const body = await readJson(req).catch(() => null)
+      const id = body && typeof body.id === 'string' ? body.id.trim() : ''
+      if (!id) {
+        sendJson(res, 400, { error: '缺少模型 id' })
+        return true
+      }
+      modelStore.hide(id)
+      logger.info('model hidden via web', { model: id })
+      sendJson(res, 200, { ok: true, hidden: modelStore.hidden(), note: `已删除/隐藏模型 ${id}` })
+      return true
+    }
+
+    // 前端「模型管理」恢复被隐藏的模型。
+    if (method === 'POST' && path === '/api/models/custom/unhide') {
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      if (!modelStore) {
+        sendJson(res, 501, { error: '当前进程未启用模型存储' })
+        return true
+      }
+      const body = await readJson(req).catch(() => null)
+      const id = body && typeof body.id === 'string' ? body.id.trim() : ''
+      if (!id) {
+        sendJson(res, 400, { error: '缺少模型 id' })
+        return true
+      }
+      modelStore.unhide(id)
+      logger.info('model unhidden via web', { model: id })
+      sendJson(res, 200, { ok: true, hidden: modelStore.hidden(), note: `已恢复模型 ${id}` })
+      return true
+    }
+
+    // 上游模型探测：读上游 rateLimitsByModel 目录（走 60s 缓存，不创建 session、不占额度）。
+    if (method === 'GET' && path === '/api/models/upstream') {
+      const accounts = runtimes.list()
+      if (!accounts.length) {
+        sendJson(res, 200, { models: [], note: '没有账号，无法探测上游' })
+        return true
+      }
+      try {
+        const session = await probeUpstreamSession()
+        const limits = session?.rateLimitsByModel || {}
+        // 上游探测返回上游真实存在的全部模型（不过滤 hidden）——
+        // 「同步上游模型」要能看到并拉回上游的完整列表；
+        // 用户是否隐藏由「模型管理」的 hidden 列表独立控制。
+        const models = Object.entries(limits).map(([id, info]) => ({
+          id,
+          limit: info?.limit ?? null,
+          recentCount: info?.recentCount ?? null,
+          pool: info?.pool ?? null,
+          poolLabel: info?.poolLabel ?? null,
+          resetAt: info?.resetAt ?? null,
+          resetTimeZone: info?.resetTimeZone ?? null,
+          agentId: agentIdForModel(id, modelStore ? modelStore.list() : []),
+        }))
+        sendJson(res, 200, {
+          models,
+          accessTier: session?.accessTier ?? null,
+          note: '只读探测，不创建 session',
+        })
+      } catch (err) {
+        sendJson(res, 502, {
+          models: [],
+          error: err instanceof Error ? err.message : String(err),
+          note: '上游探测失败（可能未登录/网络问题）',
+        })
+      }
       return true
     }
 
@@ -394,6 +550,40 @@ export function createWebApi(deps) {
       return true
     }
 
+    // 单账号只读检测（前端每个账号行的「检测」按钮）：
+    // GET session 刷新该账号状态与额度缓存，返回 可用/不可用+原因（封禁/限流/凭证失效…）。
+    // 不创建 session、不占额度。
+    const singleProbeMatch = path.match(/^\/api\/accounts\/([^/]+)\/probe$/)
+    if (singleProbeMatch && method === 'POST') {
+      const key = decodeURIComponent(singleProbeMatch[1])
+      const a = runtimes.list().find((x) => x.key === key)
+      if (!a) {
+        sendJson(res, 404, { error: '账号不存在' })
+        return true
+      }
+      try {
+        const rt = runtimes.get(key)
+        const session = await rt.sessions.refresh()
+        sendJson(res, 200, {
+          ok: true,
+          key,
+          email: a.email,
+          account: runtimes.list().find((x) => x.key === key),
+          session,
+          note: '只读探测，未创建 session',
+        })
+      } catch (err) {
+        sendJson(res, 200, {
+          ok: false,
+          key,
+          email: a.email,
+          error: err instanceof Error ? err.message : String(err),
+          note: '探测失败，见 error 字段',
+        })
+      }
+      return true
+    }
+
     const cooldownMatch = path.match(/^\/api\/accounts\/([^/]+)\/cooldown\/clear$/)
     if (cooldownMatch && method === 'POST') {
       if (user.role !== 'admin') {
@@ -538,7 +728,7 @@ export function createWebApi(deps) {
         freeToolSignatureEnabled:
           settingsStore?.get().freeToolSignatureEnabled !== false,
         accountMaxConcurrency: settingsStore?.get().accountMaxConcurrency ?? 1,
-        spreadFreeModels: settingsStore?.get().spreadFreeModels !== false,
+        spreadAccounts: settingsStore?.get().spreadAccounts ?? 3,
         minimalRoutingEnabled: settingsStore?.get().minimalRoutingEnabled === true,
         minimalRoutingMode: settingsStore?.get().minimalRoutingMode ?? 'auto',
         minimalRoutingStyle:
@@ -586,14 +776,18 @@ export function createWebApi(deps) {
         }
         patch.accountMaxConcurrency = body.accountMaxConcurrency
       }
-      if (body.spreadFreeModels !== undefined) {
-        if (typeof body.spreadFreeModels !== 'boolean') {
+      if (body.spreadAccounts !== undefined) {
+        if (
+          !Number.isInteger(body.spreadAccounts) ||
+          body.spreadAccounts < 1 ||
+          body.spreadAccounts > 16
+        ) {
           sendJson(res, 400, {
-            error: 'spreadFreeModels 必须是布尔值',
+            error: 'spreadAccounts 必须是 1..16 的整数',
           })
           return true
         }
-        patch.spreadFreeModels = body.spreadFreeModels
+        patch.spreadAccounts = body.spreadAccounts
       }
       if (body.minimalRoutingEnabled !== undefined) {
         if (typeof body.minimalRoutingEnabled !== 'boolean') {

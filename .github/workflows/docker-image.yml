@@ -30,6 +30,25 @@ jobs:
       - run: npm test
       - run: npm run typecheck
 
+  # 发版门禁：tag（v*）必须与 package.json 版本一致，否则直接失败。
+  # 这是「发版必须更新版本号」的强制保障——漏 bump 版本就推 tag 会在这一步被拦下。
+  check-version:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag matches package.json version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          echo "tag=${TAG_VERSION} package.json=${PKG_VERSION}"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Version mismatch: tag v${TAG_VERSION} != package.json ${PKG_VERSION}. Run 'npm version ${TAG_VERSION}' (or bump package.json) before tagging."
+            exit 1
+          fi
+          echo "version-ok=${TAG_VERSION}" >> "$GITHUB_OUTPUT"
+        id: verify
+
   build-push:
     needs: test
     if: github.event_name != 'pull_request'
@@ -62,6 +81,18 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
+
+      # 版本注入：把流水线解析出的版本号硬编码进镜像内 dashboard/version.json。
+      # 镜像里显示的版本由这里决定（tag→1.10.0；分支/PR→dev+sha），
+      # 与本地无关；package.json 版本只是本地开发/门禁参考。
+      - name: Inject version into frontend (hardcoded by pipeline)
+        run: |
+          VERSION="${{ steps.meta.outputs.version || 'dev' }}"
+          SHA="${{ github.sha }}"
+          node scripts/inject-version.mjs --version "${VERSION}" --repo "https://github.com/${{ github.repository }}"
+          # 额外把 commit sha 也带上，便于追版本来源
+          node -e "const fs=require('fs');const p='dashboard/version.json';const j=JSON.parse(fs.readFileSync(p));j.commit='${SHA}';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
+          cat dashboard/version.json
 
       - name: Build and push (GHCR)
         uses: docker/build-push-action@v6

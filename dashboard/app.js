@@ -1,26 +1,82 @@
-/* Freebuff Proxy 控制台 — 零依赖原生 JS SPA */
+/* Freebuff Proxy 控制台 — 零依赖原生 JS SPA
+ * 现代 UI：SVG 图标、局部刷新（不整页重建）、骨架屏/进度条加载态、
+ * 每账号「检测」按钮（单账号只读探测）、动画与响应式。
+ * 功能与后端 API 保持不变。
+ */
 'use strict'
 
-const state = { me: null, accounts: [], users: [], models: [], flows: [], proxies: [] }
+const state = { me: null, accounts: [], users: [], models: [], flows: [], proxies: [], version: null }
 
-const $ = (sel) => document.querySelector(sel)
+const $ = (sel, root = document) => root.querySelector(sel)
 const el = (tag, attrs = {}, children = []) => {
   const node = document.createElement(tag)
   for (const [k, v] of Object.entries(attrs)) {
     if (k === 'class') node.className = v
     else if (k === 'html') node.innerHTML = v
     else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v)
-    // false 值不 setAttribute：否则 selected:false / disabled:false 会被写成
-    // 字符串 "false" 变成"已设置"，导致下拉永远选中最后一项、按钮被误禁用。
     else if (v !== undefined && v !== null && v !== false) node.setAttribute(k, v)
   }
   for (const c of [].concat(children)) {
     if (c == null) continue
-    node.append(c.nodeType ? c : document.createTextNode(String(c)))
+    if (c.nodeType) {
+      node.append(c)
+    } else if (typeof c === 'string' && c.trimStart().startsWith('<')) {
+      // 字符串以 < 开头视为 HTML 片段（图标 SVG 等内部受控内容）直接注入；
+      // 其余字符串一律 createTextNode 安全转义（用户输入/API 返回不会以 < 开头）。
+      node.insertAdjacentHTML('beforeend', c)
+    } else {
+      node.append(document.createTextNode(String(c)))
+    }
   }
   return node
 }
 
+/* ---------------- SVG 图标库（不用文本 emoji） ---------------- */
+const ICONS = {
+  bolt: '<path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/>',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
+  refresh: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
+  plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  key: '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
+  check: '<polyline points="20 6 9 17 4 12"/>',
+  x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+  server: '<rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>',
+  zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+  activity: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  cpu: '<rect x="4" y="4" width="16" height="16" rx="2" ry="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>',
+  box: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  gauge: '<path d="M12 15l3.5-3.5"/><path d="M20.3 18a10 10 0 1 0-16.6 0"/>',
+  github: '<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/>',
+}
+function icon(name, size = 16) {
+  const paths = ICONS[name] || ICONS.bolt
+  const SVG_NS = 'http://www.w3.org/2000/svg'
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('width', size)
+  svg.setAttribute('height', size)
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', '2')
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  svg.innerHTML = paths
+  return svg
+}
+
+/* ---------------- api ---------------- */
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     headers: { 'content-type': 'application/json', ...(opts.headers || {}) },
@@ -37,17 +93,58 @@ async function api(path, opts = {}) {
   return body
 }
 
+/* ---------------- toast + progress ---------------- */
 let toastTimer = null
 function toast(msg, isErr = false) {
   const t = $('#toast')
   t.textContent = msg
-  t.style.borderColor = isErr ? 'var(--red)' : 'var(--border)'
+  t.classList.toggle('err', !!isErr)
   t.classList.add('show')
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => t.classList.remove('show'), 3200)
 }
 
+let progressTimer = null
+function startProgress() {
+  const bar = $('#progress')
+  bar.classList.remove('done')
+  bar.style.width = '0'
+  requestAnimationFrame(() => { bar.style.width = '70%' })
+  clearTimeout(progressTimer)
+  progressTimer = setTimeout(() => {
+    bar.style.width = '100%'
+    bar.classList.add('done')
+  }, 2000)
+}
+function endProgress() {
+  clearTimeout(progressTimer)
+  const bar = $('#progress')
+  bar.style.width = '100%'
+  bar.classList.add('done')
+}
+
+/* 按钮加载态：把按钮内容换成 spinner，返回恢复函数 */
+function withButtonLoading(btn, busyText = '') {
+  if (!btn) return () => {}
+  const original = btn.innerHTML
+  const wasDisabled = btn.disabled
+  btn.disabled = true
+  btn.classList.add('btn-loading')
+  btn.innerHTML = `<span class="spinner" style="border-color:currentColor;border-top-color:transparent"></span>${busyText ? `<span>${busyText}</span>` : ''}`
+  return () => {
+    btn.innerHTML = original
+    btn.disabled = wasDisabled
+    btn.classList.remove('btn-loading')
+  }
+}
+
 /* ---------------- render ---------------- */
+/**
+ * 路由渲染（标准 SPA）：
+ * - 登录态变化（登录/登出/401）→ 重建整个 #app 骨架
+ * - 其他情况（hash 切换 / 局部刷新回退）→ 只更新内容区 view，
+ *   header/nav 骨架完全不动，不重置任何 UI 状态
+ */
 async function render() {
   const app = $('#app')
   if (!state.me) {
@@ -55,12 +152,21 @@ async function render() {
     app.append(renderLogin())
     return
   }
-  app.innerHTML = ''
-  app.append(renderHeader())
-  app.append(renderNav())
   const route = (location.hash || '#overview').slice(1) || 'overview'
-  const view = document.createElement('div')
-  app.append(view)
+  // 骨架已存在且登录态没变 → 只更新内容区（标准 SPA 行为）
+  let view = app.querySelector('.view-enter, .view')
+  if (!app.querySelector('header') || !view) {
+    app.innerHTML = ''
+    app.append(renderHeader())
+    app.append(renderNav())
+    view = document.createElement('div')
+    view.className = 'view'
+    app.append(view)
+  }
+  updateNavActive(route)
+  view.classList.remove('view-enter')
+  void view.offsetWidth // reflow 以重放动画
+  view.classList.add('view-enter')
   if (route === 'users' && state.me.role === 'admin') await renderUsers(view)
   else if (route === 'playground') await renderPlayground(view)
   else if (route === 'me') await renderMe(view)
@@ -69,14 +175,14 @@ async function render() {
 
 function renderLogin() {
   const wrap = el('div', { class: 'login-wrap' }, [
-    el('h1', {}, '⚡ Freebuff Proxy'),
+    el('div', { class: 'brand' }, [icon('bolt', 22), 'Freebuff Proxy', versionBadge()]),
     el('div', { class: 'card' }, [
       el('label', {}, '用户名'),
       el('input', { id: 'login-user', autocomplete: 'username', placeholder: 'admin' }),
       el('label', {}, '密码'),
       el('input', { id: 'login-pass', type: 'password', autocomplete: 'current-password' }),
-      el('div', { style: 'margin-top:16px' }),
-      el('button', { class: 'primary', style: 'width:100%', onclick: doLogin }, '登 录'),
+      el('div', { style: 'margin-top:18px' }),
+      el('button', { class: 'primary', style: 'width:100%;justify-content:center', onclick: doLogin }, [icon('lock', 15), '登 录']),
     ]),
     el('div', { class: 'hint' }, '首次部署的管理员账号/密码会打印在 docker compose logs 里'),
   ])
@@ -84,6 +190,8 @@ function renderLogin() {
 }
 
 async function doLogin() {
+  const btn = $('.login-wrap button.primary')
+  const restore = withButtonLoading(btn, '登录中')
   try {
     const res = await api('/api/auth/login', {
       method: 'POST',
@@ -96,6 +204,7 @@ async function doLogin() {
     toast('登录成功')
     render()
   } catch (err) {
+    restore()
     toast(err.message, true)
   }
 }
@@ -104,45 +213,58 @@ function renderHeader() {
   const buttons = []
   if (state.me.role === 'admin') {
     buttons.push(el('button', {
-      class: 'danger',
       onclick: reconnectAll,
       title: '比重启更轻量：释放全部 session、清理死任务，下个请求自动重建（不重启进程）',
-    }, '全部断开重连'))
+    }, [icon('refresh', 14), '全部断开重连']))
     buttons.push(el('button', {
       class: 'danger',
       onclick: restartService,
       title: '彻底解决连接卡死等问题：重启整个代理服务（约几秒）',
-    }, '重启服务'))
+    }, [icon('cpu', 14), '重启服务']))
   }
-  buttons.push(el('button', { onclick: logout }, '退出'))
+  buttons.push(el('button', { onclick: logout }, [icon('logout', 14), '退出']))
   return el('header', {}, [
-    el('h1', {}, '⚡ Freebuff Proxy'),
+    el('h1', {}, [icon('bolt', 18), 'Freebuff Proxy', versionBadge()]),
     el('div', { class: 'spacer' }),
-    el('span', { class: 'muted' }, `👤 ${state.me.username} ${state.me.role === 'admin' ? el('span', { class: 'badge admin' }, 'admin') : ''}`),
+    el('span', { class: 'muted', style: 'display:inline-flex;align-items:center;gap:6px' }, [
+      icon('user', 14),
+      state.me.username,
+      state.me.role === 'admin' ? el('span', { class: 'badge admin' }, 'admin') : '',
+    ]),
     ...buttons,
   ])
 }
 
-/**
- * 前端「全部断开重连」：请求 API → 服务端释放所有账号 session 并重置并发信号量。
- * 比重启轻量（进程不重启），用于清理死任务/幽灵连接；下个请求自动重建 session。
- */
+/** 版本号徽章 + GitHub 仓库链接（版本号由发版流水线硬编码进 version.json） */
+function versionBadge() {
+  const v = state.version || { version: 'dev' }
+  const repoUrl = v.repo || 'https://github.com/HengXin666/freebuff-proxy'
+  return el('a', {
+    href: repoUrl,
+    target: '_blank',
+    rel: 'noopener',
+    title: `开源仓库（版本 v${v.version}${v.commit ? ' · commit ' + v.commit.slice(0, 7) : ''}）`,
+    style: 'display:inline-flex;align-items:center;gap:4px;text-decoration:none;margin-left:4px',
+  }, el('span', { class: 'badge', style: 'cursor:pointer' }, [
+    icon('github', 12),
+    'v' + v.version,
+  ]))
+}
+
 async function reconnectAll() {
   if (!confirm('确定要全部断开重连吗？\n\n将释放所有账号的 session（正在传输的 SSE 可能被中断），下一个请求会自动重建新 session。')) return
+  const restore = withButtonLoading(document.activeElement)
   try {
     const r = await api('/api/system/reconnect', { method: 'POST' })
     const failed = (r.accounts || []).filter((x) => !x.ok)
     toast(failed.length ? `已断开重连，${failed.length} 个账号失败` : '已全部断开重连，下个请求自动重建')
-    render()
+    refreshOverviewAfterAccountChange()
   } catch (err) {
+    restore()
     toast(err.message, true)
   }
 }
 
-/**
- * 前端「重启服务」兜底：请求 API → 服务端自重启 → 轮询 /healthz 直到恢复。
- * 重启期间所有连接会短暂中断，恢复后 Web 登录态仍在（会话持久化在 /data）。
- */
 async function restartService() {
   if (!confirm('确定要重启服务吗？\n\n重启会中断当前所有连接约几秒，期间请勿发送新请求。')) return
   try {
@@ -169,16 +291,28 @@ async function restartService() {
 }
 
 function renderNav() {
-  const items = [['overview', '总览'], ['playground', '测试对话']]
-  if (state.me.role === 'admin') items.push(['users', '用户管理'])
-  items.push(['me', '我的'])
+  const items = [['overview', '总览', 'gauge'], ['playground', '测试对话', 'chat']]
+  if (state.me.role === 'admin') items.push(['users', '用户管理', 'users'])
+  items.push(['me', '我的', 'user'])
   const route = (location.hash || '#overview').slice(1) || 'overview'
-  return el('nav', {}, items.map(([key, label]) =>
+  return el('nav', {}, items.map(([key, label, ic]) =>
     el('button', {
       class: key === route ? 'active' : '',
+      'data-route': key,
       onclick: () => { location.hash = key },
-    }, label),
+    }, [icon(ic, 14), label]),
   ))
+}
+
+/** 路由切换时只更新 nav 的高亮，不重建整个 nav（SPA 骨架保持） */
+function updateNavActive(route) {
+  const nav = document.querySelector('#app nav')
+  if (!nav) return
+  for (const btn of nav.querySelectorAll('button')) {
+    const key = btn.dataset.route
+    if (!key) continue
+    btn.classList.toggle('active', key === route)
+  }
 }
 
 function logout() {
@@ -188,124 +322,272 @@ function logout() {
   render()
 }
 
-/* ---------------- overview ---------------- */
+/* ================================================================
+   OVERVIEW — 局部刷新架构
+   总览页拆成独立区块：统计卡片 / 账号表 / 代理设置 / 模型管理 /
+   登录流程。每个区块独立渲染与刷新（局部更新，不整页重建）。
+   ================================================================ */
 async function renderOverview(view) {
   view.innerHTML = ''
-  let data
-  try { data = await api('/api/overview') } catch (err) { view.append(el('div', { class: 'card' }, err.message)); return }
-  state.accounts = data.accounts
+  // 骨架屏（首帧）
+  view.append(skeletonOverview())
+  startProgress()
+  try {
+    const data = await api('/api/overview')
+    state.accounts = data.accounts
+    endProgress()
+    view.innerHTML = ''
+    view.append(renderOverviewHeader(data))
+    view.append(renderStatCards(data))
+    view.append(await renderAccountsCard(data))
+    await renderProxySettings(view)
+    await renderModelSettings(view)
+    if (state.me.role === 'admin') await renderFlowsCard(view)
+  } catch (err) {
+    endProgress()
+    view.innerHTML = ''
+    view.append(el('div', { class: 'card' }, err.message))
+  }
+}
 
-  const head = el('div', { class: 'row spread' }, [
+function skeletonOverview() {
+  return el('div', {}, [
+    el('div', { class: 'stat-grid', style: 'margin-bottom:12px' }, [1, 2, 3, 4].map(() =>
+      el('div', { class: 'card', style: 'height:74px' }, el('div', { class: 'skeleton', style: 'height:16px;width:60%' })),
+    )),
+    el('div', { class: 'card', style: 'margin-top:12px' }, [1, 2, 3, 4, 5].map(() =>
+      el('div', { class: 'skeleton', style: 'height:34px;margin:8px 0' }),
+    )),
+  ])
+}
+
+function renderOverviewHeader(data) {
+  return el('div', { class: 'row spread', style: 'margin-bottom:16px' }, [
     el('div', {}, [
       el('h2', { style: 'margin:0 0 4px' }, `账号池（${data.accountCount}）`),
       el('span', { class: 'muted' }, `上游 ${data.upstream.apiBase} · 模型 ${data.models} · 数据目录 ${data.dataDir}`),
     ]),
     el('div', { class: 'row' }, [
-      el('button', { class: 'muted', onclick: async () => {
-        toast('正在探测上游…')
-        try {
-          const r = await api('/api/accounts/probe', { method: 'POST' })
-          state.accounts = r.accounts
-          const failed = (r.results || []).filter((x) => !x.ok)
-          toast(failed.length ? `探测完成，${failed.length} 个失败` : '探测完成（只读，不占额度）', !!failed.length)
-        } catch (err) { toast(err.message, true) }
-        render()
-      } }, '探测刷新'),
+      el('button', { onclick: probeAllAccounts }, [icon('refresh', 14), '探测刷新']),
       state.me.role === 'admin'
         ? el('div', { class: 'row' }, [
-            el('button', { onclick: () => openImportModal() }, '导入账号'),
-            el('button', { class: 'primary', onclick: () => openAddAccount() }, '+ 添加账号'),
+            el('button', { onclick: () => openImportModal() }, [icon('box', 14), '导入账号']),
+            el('button', { class: 'primary', onclick: () => openAddAccount() }, [icon('plus', 14), '添加账号']),
           ])
         : null,
     ]),
   ])
-  view.append(head)
+}
 
+/** 统计卡片 */
+function renderStatCards(data) {
+  const total = data.accounts.length
+  const available = data.accounts.filter((a) => a.available).length
+  const cooldown = data.accounts.filter((a) => a.cooldownUntil).length
+  const inFlight = data.accounts.reduce((n, a) => n + (a.inFlight || 0), 0)
+  const cards = [
+    { label: '账号总数', value: total, cls: '' },
+    { label: '可用账号', value: available, cls: 'green' },
+    { label: '冷却中', value: cooldown, cls: cooldown ? 'yellow' : 'green' },
+    { label: '在途请求', value: inFlight, cls: '' },
+  ]
+  return el('div', { class: 'stat-grid' }, cards.map((c, i) =>
+    el('div', { class: 'stat', style: `animation-delay:${i * 60}ms` }, [
+      el('div', { class: 'label' }, c.label),
+      el('div', { class: `value ${c.cls}` }, c.value),
+    ]),
+  ))
+}
+
+/** 账号表卡片（含每账号「检测」按钮） */
+async function renderAccountsCard(data) {
+  const card = el('div', { class: 'card', style: 'margin-top:12px' })
   if (!data.accounts.length) {
-    view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
-      el('p', {}, '还没有 Freebuff 账号。'),
+    card.append(
+      el('p', { style: 'margin:0 0 10px' }, '还没有 Freebuff 账号。'),
       state.me.role === 'admin'
-        ? el('button', { class: 'primary', onclick: () => openAddAccount() }, '立即添加第一个账号')
+        ? el('button', { class: 'primary', onclick: () => openAddAccount() }, [icon('plus', 14), '立即添加第一个账号'])
         : el('p', { class: 'muted' }, '请联系管理员添加账号。'),
-    ]))
-  } else {
-    // 负载均衡概览：各账号请求占比
-    const totalReq = data.accounts.reduce((n, a) => n + (a.requests || 0), 0)
-    if (totalReq > 0) {
-      const bar = el('div', { style: 'display:flex;height:6px;border-radius:3px;overflow:hidden;margin:10px 0 2px' })
-      for (const a of data.accounts) {
-        if (!a.requests) continue
-        const pct = Math.round((a.requests / totalReq) * 100)
-        bar.append(el('div', {
-          style: `width:${pct}%;background:${colorFor(a.email)}`,
-          title: `${a.email} ${pct}%（${a.requests}/${totalReq}）`,
-        }))
-      }
-      view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
-        el('div', { class: 'row spread' }, [
-          el('div', {}, [
-            el('span', { class: 'muted' }, `负载均衡 · 共 ${totalReq} 次选号 `),
-            el('span', { class: 'muted' }, '（热 session 优先复用，同一账号可配置并发上限；配额感知仅限额模型生效）'),
-          ]),
-          el('button', { class: 'muted', onclick: () => render() }, '刷新'),
-        ]),
-        bar,
-      ]))
-    }
-
-    const table = el('table', {}, [
-      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发(在途/上限)', '额度（今日）', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
-      el('tbody', {}, data.accounts.map((a) => {
-        const cd = a.cooldownUntil ? new Date(a.cooldownUntil).toLocaleString() : null
-        const sess = a.session?.live
-          ? `${a.session.model} · ${fmtMs(a.session.remainingMs)}`
-          : (a.session?.status === 'none' ? '无活跃' : (a.session?.status || '—'))
-        return el('tr', {}, [
-          el('td', {}, [
-            a.email,
-            a.id && a.id !== a.email
-              ? el('div', { class: 'muted', style: 'font-size:11px' }, `ID ${a.id}`)
-              : '',
-            a.lastUsed ? el('span', { class: 'badge ok', style: 'margin-left:6px' }, '最近使用') : '',
-          ]),
-          el('td', {}, a.available
-            ? el('span', { class: 'badge ok' }, '可用')
-            : el('span', { class: 'badge err' }, cd ? `冷却至 ${cd}` : '冷却中')),
-          el('td', { class: 'mono' }, sess),
-          el('td', { class: 'mono' }, `${a.inFlight || 0}/${a.concurrency || 1}`),
-          el('td', {}, fmtQuota(a.quota)),
-          el('td', { class: 'mono' }, `${a.requests || 0} 次`),
-          el('td', {}, cd ? el('span', { class: 'badge warn' }, a.cooldownCode || 'cooldown') : '—'),
-          el('td', {}, state.me.role === 'admin' ? el('div', { class: 'row' }, [
-            el('button', { class: 'muted', onclick: () => clearCooldown(a.key) }, '解除冷却'),
-            el('button', { class: 'muted', onclick: () => openCredentialModal(a) }, '凭证'),
-            el('button', { class: 'danger', onclick: () => removeAccount(a.key, a.email) }, '删除'),
-          ]) : el('div', { class: 'row' }, [
-            el('button', { class: 'muted', onclick: () => openCredentialModal(a) }, '凭证'),
-          ])),
-        ])
-      })),
-    ])
-    view.append(el('div', { class: 'card', style: 'margin-top:12px;overflow:auto' }, table))
+    )
+    return card
   }
 
-  // 代理设置（全局池，前端管理）
-  await renderProxySettings(view)
+  // 负载均衡概览
+  const totalReq = data.accounts.reduce((n, a) => n + (a.requests || 0), 0)
+  const head = el('div', { class: 'row spread' }, [
+    el('div', {}, [
+      el('h3', { style: 'margin:0 0 2px' }, '账号池'),
+      el('span', { class: 'muted' }, totalReq > 0 ? `负载均衡 · 共 ${totalReq} 次选号 · 热 session 优先复用` : '尚无请求记录'),
+    ]),
+    el('button', { class: 'muted', onclick: refreshAccountsCard }, [icon('refresh', 13), '局部刷新']),
+  ])
+  card.append(head)
 
-  // login flows
-  if (state.me.role === 'admin') {
+  if (totalReq > 0) {
+    const bar = el('div', { class: 'balance-bar' })
+    for (const a of data.accounts) {
+      if (!a.requests) continue
+      const pct = Math.round((a.requests / totalReq) * 100)
+      bar.append(el('div', {
+        style: `flex:${pct};background:${colorFor(a.email)}`,
+        title: `${a.email} ${pct}%（${a.requests}/${totalReq}）`,
+      }))
+    }
+    card.append(bar)
+  }
+
+  card.append(buildAccountsTable(data.accounts))
+  return card
+}
+
+function buildAccountsTable(accounts) {
+  const tbody = el('tbody', {}, accounts.map((a, i) => buildAccountRow(a, i)))
+  return el('div', { class: 'table-wrap', style: 'margin-top:12px' }, [
+    el('table', {}, [
+      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发', '额度（今日）', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
+      tbody,
+    ]),
+  ])
+}
+
+function buildAccountRow(a, i) {
+  const cd = a.cooldownUntil ? new Date(a.cooldownUntil).toLocaleString() : null
+  const sess = a.session?.live
+    ? `${a.session.model} · ${fmtMs(a.session.remainingMs)}`
+    : (a.session?.status === 'none' ? '无活跃' : (a.session?.status || '—'))
+  const statusDot = a.available
+    ? el('span', { class: 'status-dot ok' })
+    : el('span', { class: 'status-dot err' })
+  const statusText = a.available
+    ? '可用'
+    : (cd ? `冷却至 ${cd}` : '冷却中')
+  const ops = el('div', { class: 'row', style: 'gap:6px' }, [
+    el('button', { class: 'icon muted', title: '检测该账号（只读拉取状态/模型列表，不占额度）', onclick: (e) => probeAccount(a, e.currentTarget) }, icon('activity', 14)),
+    state.me.role === 'admin'
+      ? el('button', { class: 'icon muted', title: '解除冷却', onclick: () => clearCooldown(a.key) }, icon('zap', 14))
+      : null,
+    el('button', { class: 'icon muted', title: '查看/复制凭证', onclick: () => openCredentialModal(a) }, icon('key', 14)),
+    state.me.role === 'admin'
+      ? el('button', { class: 'icon danger', title: '删除账号', onclick: () => removeAccount(a.key, a.email) }, icon('trash', 14))
+      : null,
+  ])
+  return el('tr', { class: 'row-in', style: `animation-delay:${Math.min(i * 40, 400)}ms` }, [
+    el('td', {}, [
+      a.email,
+      a.id && a.id !== a.email ? el('div', { class: 'muted', style: 'font-size:11px' }, `ID ${a.id}`) : '',
+      a.lastUsed ? el('span', { class: 'badge ok', style: 'margin-left:6px' }, '最近使用') : '',
+    ]),
+    el('td', {}, el('span', { class: 'badge', class: a.available ? 'badge ok' : 'badge err', style: 'display:inline-flex' }, [statusDot, statusText])),
+    el('td', { class: 'mono', style: 'font-size:12px' }, sess),
+    el('td', { class: 'mono' }, `${a.inFlight || 0}/${a.concurrency || 1}`),
+    el('td', {}, fmtQuota(a.quota)),
+    el('td', { class: 'mono' }, `${a.requests || 0} 次`),
+    el('td', {}, cd ? el('span', { class: 'badge warn' }, a.cooldownCode || 'cooldown') : el('span', { class: 'muted' }, '—')),
+    el('td', {}, ops),
+  ])
+}
+
+/** 账号表局部刷新（不重建整个页面） */
+async function refreshAccountsCard() {
+  const wrap = $('.table-wrap', $('#app'))
+  if (!wrap) return render()
+  wrap.classList.add('refreshing')
+  try {
+    const data = await api('/api/overview')
+    state.accounts = data.accounts
+    const table = buildAccountsTable(data.accounts)
+    wrap.replaceWith(table)
+    // 更新统计卡片
+    const statGrid = $('.stat-grid', $('#app'))
+    if (statGrid) statGrid.replaceWith(renderStatCards(data))
+    toast('账号状态已刷新')
+  } catch (err) {
+    toast(err.message, true)
+  }
+}
+
+/**
+ * overview 局部刷新：只更新「账号池标题计数 + 统计卡 + 账号表」，不重建页面布局。
+ * 用于删除/导入账号、全部重连等会改变账号池结构、但页面骨架不变的操作。
+ */
+async function refreshOverviewAfterAccountChange() {
+  try {
+    const data = await api('/api/overview')
+    state.accounts = data.accounts
+    const wrap = $('.table-wrap', $('#app'))
+    if (wrap) wrap.replaceWith(buildAccountsTable(data.accounts))
+    const statGrid = $('.stat-grid', $('#app'))
+    if (statGrid) statGrid.replaceWith(renderStatCards(data))
+    // 更新 header「账号池（N）」计数
+    const h2 = $('#app h2')
+    if (h2 && h2.textContent.startsWith('账号池')) {
+      h2.textContent = `账号池（${data.accountCount}）`
+    }
+  } catch (err) {
+    toast(err.message, true)
+  }
+}
+
+/** 单账号检测：只读拉取该账号状态/额度，判断可用/封禁/凭证失效 */
+async function probeAccount(a, btn) {
+  const restore = withButtonLoading(btn)
+  try {
+    const r = await api(`/api/accounts/${encodeURIComponent(a.key)}/probe`, { method: 'POST' })
+    const sess = r.session || {}
+    const limits = sess.rateLimitsByModel || {}
+    const modelCount = Object.keys(limits).length
+    if (r.ok) {
+      const models = Object.entries(limits)
+        .map(([id, info]) => `${shortModel(id)} ${Math.ceil(Number(info?.recentCount) || 0)}/${info?.limit ?? '?'}`)
+        .join(' · ')
+      toast(`✅ ${a.email} 可用 · ${modelCount} 个模型${models ? '：' + models : ''}`)
+      refreshAccountsCard()
+    } else {
+      const code = sess?.status || sess?.error || r.error || '未知'
+      const bannedHint = /banned|ip_capped|free_mode_rate_limited|spend_limited|rate_limited/i.test(String(code))
+      toast(`⚠️ ${a.email} 检测异常：${String(code).slice(0, 120)}${bannedHint ? '（疑似封禁/限流）' : ''}`, true)
+    }
+  } catch (err) {
+    restore()
+    toast(`检测失败: ${err.message}`, true)
+  }
+}
+
+/** 全部账号探测（沿用原有逻辑 + 局部刷新） */
+async function probeAllAccounts() {
+  const btn = document.activeElement
+  const restore = withButtonLoading(btn, '探测中')
+  try {
+    const r = await api('/api/accounts/probe', { method: 'POST' })
+    state.accounts = r.accounts
+    const failed = (r.results || []).filter((x) => !x.ok)
+    toast(failed.length ? `探测完成，${failed.length} 个失败（点击行内检测图标看详情）` : '探测完成（只读，不占额度）', !!failed.length)
+    const wrap = $('.table-wrap', $('#app'))
+    if (wrap) {
+      wrap.replaceWith(buildAccountsTable(r.accounts))
+      const statGrid = $('.stat-grid', $('#app'))
+      if (statGrid) statGrid.replaceWith(renderStatCards({ accounts: r.accounts }))
+    } else render()
+  } catch (err) {
+    restore()
+    toast(err.message, true)
+  }
+}
+
+/** 等待中的登录流程卡片 */
+async function renderFlowsCard(view) {
+  try {
     state.flows = (await api('/api/accounts/login')).data
-    const activeFlows = state.flows.filter((f) => f.status === 'pending')
-    if (activeFlows.length) {
-      view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
-        el('h3', { style: 'margin:0 0 8px' }, '等待中的登录'),
-        ...activeFlows.map((f) => el('div', { class: 'row spread', style: 'padding:6px 0;border-bottom:1px solid var(--border)' }, [
-          el('span', { class: 'muted' }, `发起于 ${new Date(f.createdAt).toLocaleString()}`),
-          el('button', { onclick: () => openLoginFlow(f) }, '打开登录链接'),
-        ])),
-      ]))
-    }
-  }
+  } catch { return }
+  const activeFlows = state.flows.filter((f) => f.status === 'pending')
+  if (!activeFlows.length) return
+  view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
+    el('h3', { style: 'margin:0 0 8px' }, '等待中的登录'),
+    ...activeFlows.map((f) => el('div', { class: 'row spread', style: 'padding:8px 0;border-bottom:1px solid var(--border)' }, [
+      el('span', { class: 'muted', style: 'display:inline-flex;align-items:center;gap:6px' }, [icon('globe', 14), `发起于 ${new Date(f.createdAt).toLocaleString()}`]),
+      el('button', { onclick: () => openLoginFlow(f) }, [icon('globe', 14), '打开登录链接']),
+    ])),
+  ]))
 }
 
 /* ---------------- proxy settings ---------------- */
@@ -344,10 +626,6 @@ async function renderProxySettings(view) {
     ]),
   ]))
 
-  // 思维路由（路由模式）：代理侧改写请求，注入 persona / 首轮核心工具面 /
-  // 近距离引导（思路来自 dsh-routing-suite 的 router-standard preset 实测：
-  // 极简条件接近训练分布，同模型性能最高）。客户端侧路由注入经过翻译/反向
-  // 代理链可能被丢弃，此开关让代理兜底保证路由生效。
   const routingEnabled = settings.minimalRoutingEnabled === true
   const routingToggleAttrs = {
     id: 'minimal-routing',
@@ -360,7 +638,7 @@ async function renderProxySettings(view) {
   view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
     el('div', {}, [
       el('h3', { style: 'margin:0 0 2px' }, '思维路由（路由模式）'),
-      el('span', { class: 'muted' }, '代理侧注入 persona / 首轮核心工具面 / 近距离引导，保证客户端侧路由注入经反向代理链不被丢弃；一键开关，性能不佳可随时回退（参考 dsh-routing-suite）'),
+      el('span', { class: 'muted' }, '代理侧注入 persona / 首轮核心工具面 / 近距离引导，保证客户端侧路由注入经反向代理链不被丢弃；一键开关，性能不佳可随时回退'),
     ]),
     el('label', { class: 'switch', for: 'minimal-routing' }, [
       el('input', routingToggleAttrs),
@@ -369,8 +647,6 @@ async function renderProxySettings(view) {
     ]),
   ]))
 
-  // 路由实现风格：standard（默认，flash 恒走 weak 内路由 + 深度引导静态并入
-  // persona——不依赖动态注入，多轮对话稳定触发）/ minimal（按任务分类三带）
   const routingStyle = settings.minimalRoutingStyle ?? 'standard'
   const styleOptions = [
     ['standard', 'standard · 标准模式（flash 恒 weak + 深度引导静态并入，推荐）'],
@@ -379,7 +655,7 @@ async function renderProxySettings(view) {
   view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
     el('div', {}, [
       el('h3', { style: 'margin:0 0 2px' }, '路由实现风格'),
-      el('span', { class: 'muted' }, 'standard：flash 恒走 weak 内路由（w7 最优）+ 深度思考引导静态并入 persona，多轮对话稳定触发（参考 v4-flash-godmode）；minimal：旧的按任务分类行为。保存立即生效'),
+      el('span', { class: 'muted' }, 'standard：flash 恒走 weak 内路由 + 深度思考引导静态并入 persona；minimal：旧的按任务分类行为。保存立即生效'),
     ]),
     el('div', { class: 'row', style: 'margin-top:8px' }, [
       el('select', {
@@ -401,8 +677,6 @@ async function renderProxySettings(view) {
     ]),
   ]))
 
-  // 路由风格：钉死某条思维链（spec = we/let's 集体计划链；react = let me 执行链；
-  // weak = 模型自分类），默认 auto 按任务自动分类
   const routingMode = settings.minimalRoutingMode ?? 'auto'
   const modeOptions = [
     ['auto', 'auto · 按任务自动分类'],
@@ -436,65 +710,60 @@ async function renderProxySettings(view) {
     ]),
   ]))
 
-  // 负载均衡：每账号并发上限（1:1 默认；一个账号可同时转发多条 SSE 流）
   const concurrency = settings.accountMaxConcurrency ?? 1
+  const spreadAccounts = settings.spreadAccounts ?? 3
   view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
       el('div', {}, [
         el('h3', { style: 'margin:0 0 2px' }, '负载均衡设置'),
-        el('span', { class: 'muted' }, '每个账号同一时间最多转发的 SSE 响应流数（默认 1:1，一个账号一个并发）；单账号在途达到上限即自动换到有空闲槽位的账号（“满了换号”），保存立即生效，无需重启'),
+        el('span', { class: 'muted' }, '先账号间负载均衡，再账号内负载均衡：并发请求平摊到最多「平摊账号数」个账号，每个账号内最多「每账号并发」个会话。账号并发没满时新请求可直接开新账号消费会话，满员时必须换新账号'),
       ]),
-      el('div', { class: 'row' }, [
-        el('input', {
-          id: 'account-concurrency',
-          type: 'number',
-          min: 1,
-          max: 16,
-          style: 'width:70px',
-          value: concurrency,
-          ...(state.me.role === 'admin' ? {} : { disabled: '' }),
-        }),
-        state.me.role === 'admin'
-          ? el('button', { class: 'primary', onclick: saveAccountConcurrency }, '保存并生效')
-          : null,
+    ]),
+    el('div', { class: 'row', style: 'margin-top:12px;gap:24px;flex-wrap:wrap' }, [
+      el('div', {}, [
+        el('label', { style: 'margin:0 0 4px' }, '平摊账号数（并发最多用几个账号）'),
+        el('div', { class: 'row' }, [
+          el('input', {
+            id: 'spread-accounts',
+            type: 'number',
+            min: 1,
+            max: 16,
+            style: 'width:70px',
+            value: spreadAccounts,
+            ...(state.me.role === 'admin' ? {} : { disabled: '' }),
+          }),
+          state.me.role === 'admin'
+            ? el('button', { class: 'primary', onclick: saveLoadBalanceSettings }, '保存并生效')
+            : null,
+        ]),
+      ]),
+      el('div', {}, [
+        el('label', { style: 'margin:0 0 4px' }, '每账号并发（单账号同时几路流）'),
+        el('div', { class: 'row' }, [
+          el('input', {
+            id: 'account-concurrency',
+            type: 'number',
+            min: 1,
+            max: 16,
+            style: 'width:70px',
+            value: concurrency,
+            ...(state.me.role === 'admin' ? {} : { disabled: '' }),
+          }),
+        ]),
       ]),
     ]),
     state.me.role !== 'admin'
-      ? el('div', { class: 'muted', style: 'margin-top:8px' }, `当前每账号并发上限：${concurrency}（管理员可调）`)
+      ? el('div', { class: 'muted', style: 'margin-top:8px' }, `当前：平摊 ${spreadAccounts} 个账号 · 每账号 ${concurrency} 路并发（管理员可调）`)
       : null,
   ]))
 
-  // 免费模型暴力分散：不钉死热 session，请求轮转分散到不同账号
-  const spreadFreeModels = settings.spreadFreeModels !== false
-  const spreadAttrs = {
-    id: 'spread-free-models',
-    type: 'checkbox',
-    class: 'switch-input',
-    onchange: saveSpreadFreeModelsSetting,
-  }
-  if (spreadFreeModels) spreadAttrs.checked = ''
-  if (state.me.role !== 'admin') spreadAttrs.disabled = ''
-  view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
-    el('div', { class: 'row spread' }, [
-      el('div', {}, [
-        el('span', {}, '免费模型分散到不同账号'),
-        el('div', { class: 'muted', style: 'font-size:12px' }, '仅免费模型生效（额度不心疼）：请求轮转分散，单账号被占死不再拖垮全部请求，多账号并行吞吐更高；关闭则恢复热 session 复用（最省额度）。付费模型（premium）恒走热 session 复用，不受此开关影响。无论开关状态，单账号并发满员时都会换到有空闲槽位的账号'),
-      ]),
-      el('label', { class: 'switch', for: 'spread-free-models' }, [
-        el('input', spreadAttrs),
-        el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
-        el('span', { class: 'switch-status' }, spreadFreeModels ? '已开启' : '已关闭'),
-      ]),
-    ]),
-  ]))
-
-  const card = el('div', { class: 'card', style: 'margin-top:12px' }, [
+  const card = el('div', { id: 'proxy-card', class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
       el('div', {}, [
         el('h3', { style: 'margin:0 0 2px' }, '代理设置（全局代理池）'),
         el('span', { class: 'muted' }, '填一个或多个代理，保存立即生效；账号出口由系统内部分配（同一账号固定同一出口），无需逐个配置'),
       ]),
-      el('button', { class: 'primary', onclick: saveProxyPool }, '保存并生效'),
+      el('button', { class: 'primary', onclick: saveProxyPool }, [icon('globe', 14), '保存并生效']),
     ]),
     el('textarea', {
       id: 'proxy-pool',
@@ -510,7 +779,7 @@ async function renderProxySettings(view) {
         class: 'mono',
         style: 'flex:1',
       }),
-      el('button', { onclick: () => runProxyTest($('#proxy-test-url').value.trim() || null) }, '测 试'),
+      el('button', { onclick: () => runProxyTest($('#proxy-test-url').value.trim() || null) }, [icon('zap', 14), '测试']),
       el('button', { class: 'muted', onclick: () => runProxyTest(null) }, '测试已配置'),
     ]),
     el('div', { id: 'proxy-test-result', style: 'margin-top:8px' }),
@@ -531,12 +800,18 @@ async function saveFreeToolSignatureSetting(event) {
       body: JSON.stringify({ freeToolSignatureEnabled: enabled }),
     })
     toast(enabled ? '工具签名兼容已开启' : '工具签名兼容已关闭')
-    render()
+    // 从服务端回读一次，把开关还原为可交互状态并同步到真实值，避免按钮被永久禁用
+    try {
+      const s = await api('/api/settings')
+      const actual = s.freeToolSignatureEnabled !== false
+      input.checked = actual
+      updateSwitchLabel(input)
+    } catch { /* 忽略回读失败，仍保持可交互 */ }
   } catch (err) {
     input.checked = !enabled
-    input.disabled = false
     toast(err.message, true)
   }
+  input.disabled = false // 成功/失败后都恢复可交互
 }
 
 async function saveMinimalRoutingSetting(event) {
@@ -549,12 +824,25 @@ async function saveMinimalRoutingSetting(event) {
       body: JSON.stringify({ minimalRoutingEnabled: enabled }),
     })
     toast(enabled ? '极简路由已开启（下个请求生效）' : '极简路由已关闭')
-    render()
+    try {
+      const s = await api('/api/settings')
+      const actual = s.minimalRoutingEnabled === true
+      input.checked = actual
+      updateSwitchLabel(input)
+    } catch { /* 忽略回读失败 */ }
   } catch (err) {
     input.checked = !enabled
-    input.disabled = false
     toast(err.message, true)
   }
+  input.disabled = false
+}
+
+/** 同步 switch 旁边的「已开启/已关闭」文字标签，保持 DOM 与状态一致 */
+function updateSwitchLabel(input) {
+  const track = input.closest('.switch')
+  if (!track) return
+  const statusEl = track.querySelector('.switch-status')
+  if (statusEl) statusEl.textContent = input.checked ? '已开启' : '已关闭'
 }
 
 async function saveMinimalRoutingMode() {
@@ -566,7 +854,7 @@ async function saveMinimalRoutingMode() {
       body: JSON.stringify({ minimalRoutingMode: select.value }),
     })
     toast(`路由风格已设为 ${r.minimalRoutingMode}，下个请求生效`)
-    render()
+    updateSettingsStatusTexts()
   } catch (err) {
     toast(err.message, true)
   }
@@ -581,46 +869,45 @@ async function saveMinimalRoutingStyle() {
       body: JSON.stringify({ minimalRoutingStyle: select.value }),
     })
     toast(`路由实现风格已设为 ${r.minimalRoutingStyle}，下个请求生效`)
-    render()
+    updateSettingsStatusTexts()
   } catch (err) {
     toast(err.message, true)
   }
 }
 
-async function saveAccountConcurrency() {
-  const input = $('#account-concurrency')
-  if (!input) return
-  const n = Number(input.value)
-  if (!Number.isInteger(n) || n < 1 || n > 16) {
-    toast('并发数必须是 1..16 的整数', true)
-    return
+/** 更新设置卡片里的「当前生效」状态文字（保存后局部刷新，不重建页面） */
+function updateSettingsStatusTexts() {
+  const mode = $('#minimal-routing-mode')
+  const style = $('#minimal-routing-style')
+  if (mode) {
+    const label = (mode.options[mode.selectedIndex] || {}).text || mode.value
+    const node = [...document.querySelectorAll('.card .muted')].find((n) => n.textContent.includes('当前生效'))
+    if (node) node.textContent = `当前生效：${label}`
   }
-  try {
-    const r = await api('/api/settings', {
-      method: 'POST',
-      body: JSON.stringify({ accountMaxConcurrency: n }),
-    })
-    toast(`每账号并发上限已设为 ${r.accountMaxConcurrency}，立即生效`)
-    render()
-  } catch (err) {
-    toast(err.message, true)
+  if (style) {
+    const label = (style.options[style.selectedIndex] || {}).text || style.value
+    const nodes = [...document.querySelectorAll('.card .muted')].filter((n) => n.textContent.includes('当前生效'))
+    const last = nodes[nodes.length - 1]
+    if (last) last.textContent = `当前生效：${label}`
   }
 }
 
-async function saveSpreadFreeModelsSetting(event) {
-  const input = event.currentTarget
-  const enabled = input.checked
-  input.disabled = true
+async function saveLoadBalanceSettings() {
+  const acc = $('#account-concurrency')
+  const spread = $('#spread-accounts')
+  if (!acc || !spread) return
   try {
+    const v = Math.max(1, Math.min(16, parseInt(acc.value, 10) || 1))
+    const s = Math.max(1, Math.min(16, parseInt(spread.value, 10) || 1))
     await api('/api/settings', {
       method: 'POST',
-      body: JSON.stringify({ spreadFreeModels: enabled }),
+      body: JSON.stringify({ accountMaxConcurrency: v, spreadAccounts: s }),
     })
-    toast(enabled ? '免费模型分散已开启（下个请求生效）' : '已恢复热 session 复用（最省额度）')
-    render()
+    toast(`负载均衡已更新：平摊 ${s} 个账号 · 每账号 ${v} 路并发`)
+    // 非 admin 提示文字局部更新（admin 输入框本身已是最新值）
+    const hint = [...document.querySelectorAll('.card .muted')].find((n) => n.textContent.includes('当前：平摊'))
+    if (hint) hint.textContent = `当前：平摊 ${s} 个账号 · 每账号 ${v} 路并发（管理员可调）`
   } catch (err) {
-    input.checked = !enabled
-    input.disabled = false
     toast(err.message, true)
   }
 }
@@ -632,7 +919,17 @@ async function saveProxyPool() {
   try {
     const r = await api('/api/proxy', { method: 'POST', body: JSON.stringify({ proxies }) })
     toast(r.note || '已保存')
-    render()
+    // 局部刷新「当前生效代理」文字，不重建页面
+    try {
+      const pdata = await api('/api/proxy')
+      const eff = pdata.effective || []
+      const effNode = [...document.querySelectorAll('#proxy-card .muted')].find((n) => n.textContent.includes('当前生效代理'))
+      if (effNode) {
+        effNode.textContent = eff.length
+          ? `当前生效代理：${eff.map(shortProxy).join('、')}`
+          : '当前未配置代理（直连）'
+      }
+    } catch { /* ignore */ }
   } catch (err) {
     toast(err.message, true)
   }
@@ -642,7 +939,7 @@ async function runProxyTest(proxy) {
   const box = $('#proxy-test-result')
   if (!box) return
   box.innerHTML = ''
-  box.append(el('span', { class: 'muted' }, '测试中…（最多 ~12s/个）'))
+  box.append(el('span', { class: 'muted', style: 'display:inline-flex;align-items:center;gap:6px' }, [el('span', { class: 'spinner' }), '测试中…（最多 ~12s/个）']))
   try {
     const r = await api('/api/proxy/test', {
       method: 'POST',
@@ -655,8 +952,8 @@ async function runProxyTest(proxy) {
     }
     for (const res of r.results) {
       const head = res.ok
-        ? el('span', { class: 'badge ok' }, '✅ 可用')
-        : el('span', { class: 'badge err' }, '❌ 不可用')
+        ? el('span', { class: 'badge ok' }, [icon('check', 11), '可用'])
+        : el('span', { class: 'badge err' }, [icon('x', 11), '不可用'])
       const lines = [
         el('div', {}, [
           head,
@@ -688,10 +985,372 @@ function fmtMs(ms) {
   return `${m} 分钟`
 }
 
+/* ---------------- model settings ---------------- */
+async function renderModelSettings(view) {
+  let data = { models: [], catalog: [] }
+  let upstream = { models: [], accessTier: null }
+  try {
+    data = await api('/api/models/custom')
+  } catch { /* ignore */ }
+  try {
+    upstream = await api('/api/models/upstream')
+  } catch { /* ignore */ }
+
+  const known = new Map()
+  for (const m of data.catalog || []) known.set(m.id, { ...m, source: 'catalog' })
+  for (const m of upstream.models || []) {
+    if (known.has(m.id)) {
+      const prev = known.get(m.id)
+      known.set(m.id, { ...prev, ...m, source: 'upstream' })
+    } else {
+      known.set(m.id, { ...m, source: 'upstream' })
+    }
+  }
+  const rows = [...known.values()]
+  const isAdmin = state.me.role === 'admin'
+
+  const card = el('div', { id: 'models-card', class: 'card', style: 'margin-top:12px' }, [
+    el('div', { class: 'row spread' }, [
+      el('div', {}, [
+        el('h3', { style: 'margin:0 0 2px' }, '模型管理'),
+        el('span', { class: 'muted' }, '内置目录 + 上游实时 + 自定义覆盖。上游新模型不用等发版——点「同步上游模型」自动拉取并更新 agent，或手动添加。'),
+      ]),
+      isAdmin
+        ? el('div', { class: 'row' }, [
+            el('button', { class: 'primary', onclick: syncUpstreamModels }, [icon('refresh', 14), '同步上游模型']),
+          ])
+        : null,
+    ]),
+    upstream.accessTier
+      ? el('div', { class: 'muted', style: 'margin-top:6px;font-size:12px' },
+          `上游实时目录（${upstream.models.length} 个）· 当前 accessTier: ${upstream.accessTier}`)
+      : null,
+    el('div', { class: 'table-wrap', style: 'margin-top:10px;max-height:280px;overflow:auto' }, [
+      el('table', { style: 'font-size:12px' }, [
+        el('thead', {}, el('tr', {}, [
+          el('th', {}, '模型 id'),
+          el('th', {}, '显示名'),
+          el('th', {}, '池'),
+          el('th', {}, '额度（今日）'),
+          el('th', {}, 'agent (base2)'),
+          el('th', {}, '来源'),
+          isAdmin ? el('th', {}, '操作') : null,
+        ])),
+        el('tbody', {}, rows.map((m) => el('tr', {}, [
+          el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.id),
+          el('td', {}, m.display_name || m.displayName || '—'),
+          el('td', {}, el('span', { class: 'badge', class: poolBadgeClass(m.pool) }, poolLabel(m.pool))),
+          el('td', {}, m.limit != null
+            ? el('span', {
+                title: `重置 ${fmtReset(m.resetAt, m.resetTimeZone)}\n${fmtCountdown(m.resetAt)}`,
+                class: 'badge ' + quotaBadgeClass(m),
+              }, `${Math.ceil(Number(m.recentCount) || 0)}/${m.limit}`)
+            : el('span', { class: 'muted' }, '—')),
+          el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.agentId || m.agent_id || '—'),
+          el('td', {}, m.source === 'upstream'
+            ? el('span', { class: 'badge ok' }, '上游')
+            : el('span', { class: 'badge' }, '内置')),
+          isAdmin
+            ? el('td', {}, el('button', {
+                class: 'icon danger',
+                title: '删除该模型（从列表与调度中移除）',
+                onclick: () => removeCustomModel(m.id),
+              }, icon('trash', 13)))
+            : null,
+        ]))),
+      ]),
+    ]),
+    el('div', { style: 'margin-top:14px' }, [
+      el('label', { class: 'muted' }, '自定义模型（添加/编辑即自动保存，留空字段自动推导）'),
+      el('div', { id: 'custom-models-editor', style: 'margin-top:6px' }, buildCustomModelRows(data.models || [])),
+      el('div', { class: 'row', style: 'margin-top:8px' }, [
+        isAdmin
+          ? el('button', { onclick: () => addCustomModelRow() }, [icon('plus', 13), '添加模型'])
+          : null,
+        el('span', { class: 'muted', style: 'font-size:12px' },
+          '同 id 会覆盖内置目录的显示名 / 池 / agent；agent 留空时按命名规则自动推导（base2-free-<模型名>）'),
+      ]),
+    ]),
+    ...(isAdmin && (data.hidden || []).length
+      ? [el('div', { id: 'hidden-models-area', style: 'margin-top:14px;padding-top:12px;border-top:1px solid var(--border)' }, [
+          el('label', { class: 'muted' }, `已删除的模型（${data.hidden.length}）— 点击可恢复，恢复后重新出现在列表并可调度`),
+          el('div', { class: 'hidden-badges row', style: 'margin-top:6px;gap:6px;flex-wrap:wrap' }, (data.hidden || []).map((id) =>
+            el('span', { class: 'badge', style: 'display:inline-flex;align-items:center;gap:6px' }, [
+              el('code', { style: 'font-family:var(--mono);font-size:11px' }, id),
+              el('button', {
+                class: 'icon', title: '恢复该模型',
+                onclick: () => restoreCustomModel(id),
+              }, icon('refresh', 12)),
+            ]),
+          )),
+        ])]
+      : []),
+  ])
+  view.append(card)
+}
+
+/** 模型管理卡片局部刷新：只重建 models-card，不重渲染整页 */
+async function refreshModelSettingsCard() {
+  const wrap = document.createElement('div')
+  await renderModelSettings(wrap)
+  const card = wrap.querySelector('#models-card')
+  const old = $('#models-card')
+  if (card && old) old.replaceWith(card)
+}
+
+/** 同步上游模型到自定义列表：拉取 /api/models/upstream，自动补齐 agent 并保存 */
+async function syncUpstreamModels() {
+  const btn = document.querySelector('#models-card .primary, .card .primary')
+  let upstream
+  try {
+    upstream = await api('/api/models/upstream')
+  } catch (err) {
+    toast('拉取上游失败: ' + err.message, true)
+    return
+  }
+  if (!upstream.models?.length) {
+    toast('上游暂无可用模型', true)
+    return
+  }
+  try {
+    // 现有自定义模型（id → 定义），保留用户手动配置
+    const cur = await api('/api/models/custom')
+    const curById = new Map((cur.models || []).map((m) => [m.id, m]))
+    // 上游模型合并：agent 用上游探测的（或保留自定义的），显示名/池取上游
+    const merged = []
+    const seen = new Set()
+    for (const um of upstream.models) {
+      const id = um.id
+      if (!id) continue
+      seen.add(id)
+      const existing = curById.get(id) || {}
+      merged.push({
+        id,
+        displayName: existing.displayName || um.displayName || um.poolLabel || '',
+        pool: existing.pool || um.pool || '',
+        agentId: existing.agentId || um.agentId || '',
+      })
+    }
+    // 保留已有的自定义模型（上游没有的），不丢弃用户配置
+    for (const [id, m] of curById) {
+      if (!seen.has(id)) merged.push(m)
+    }
+    const r = await api('/api/models/custom', {
+      method: 'POST',
+      body: JSON.stringify({ models: merged }),
+    })
+    toast(`已同步 ${upstream.models.length} 个上游模型并更新 agent`)
+    refreshModelSettingsCard()
+  } catch (err) {
+    toast('同步失败: ' + err.message, true)
+  }
+}
+
+/** 删除某模型（加入 hidden，含内置目录的也会从列表/调度彻底移除） */
+async function removeCustomModel(id) {
+  // 乐观 UI：点击瞬间先从表格移除该行、插入恢复区（不等待任何网络请求）
+  const row = [...document.querySelectorAll('#models-card tbody tr')].find(
+    (r) => (r.querySelector('td') || {}).textContent === id,
+  )
+  if (row) row.remove()
+  const card = $('#models-card')
+  if (card) addRestoreBadge(card, id)
+  try {
+    await api('/api/models/custom/hide', {
+      method: 'POST',
+      body: JSON.stringify({ id }),
+    })
+    toast(`已删除模型 ${id}`)
+  } catch (err) {
+    // 失败：把行加回表格（用本地重建），并撤销恢复区，反馈错误
+    toast(err.message, true)
+    refreshModelSettingsCard()
+  }
+}
+
+/** 恢复被删除（隐藏）的模型 */
+async function restoreCustomModel(id) {
+  // 乐观：先从恢复区移除徽章，再后台请求
+  const badge = [...document.querySelectorAll('#models-card .badge')].find(
+    (b) => b.querySelector('.icon[title="恢复该模型"]') && b.textContent.includes(id),
+  )
+  if (badge) badge.remove()
+  try {
+    await api('/api/models/custom/unhide', {
+      method: 'POST',
+      body: JSON.stringify({ id }),
+    })
+    toast(`已恢复模型 ${id}`)
+    // 立即重建模型表卡（无需等重拉上游——本地已知恢复）
+    refreshModelSettingsCard()
+  } catch (err) {
+    toast(err.message, true)
+    refreshModelSettingsCard()
+  }
+}
+
+/** 在模型卡里追加一个"已删除模型"恢复徽章（没有恢复区则先创建） */
+function addRestoreBadge(card, id) {
+  let area = card.querySelector('#hidden-models-area')
+  if (!area) {
+    area = el('div', { id: 'hidden-models-area', style: 'margin-top:14px;padding-top:12px;border-top:1px solid var(--border)' }, [
+      el('label', { class: 'muted' }, '已删除的模型 — 点击可恢复'),
+      el('div', { class: 'hidden-badges row', style: 'margin-top:6px;gap:6px;flex-wrap:wrap' }, []),
+    ])
+    card.append(area)
+  }
+  const label = area.querySelector('.muted')
+  if (label) {
+    const n = area.querySelectorAll('.badge').length
+    label.textContent = `已删除的模型（${n}）— 点击可恢复，恢复后重新出现在列表并可调度`
+  }
+  area.querySelector('.hidden-badges').append(el('span', { class: 'badge', style: 'display:inline-flex;align-items:center;gap:6px' }, [
+    el('code', { style: 'font-family:var(--mono);font-size:11px' }, id),
+    el('button', { class: 'icon', title: '恢复该模型', onclick: () => restoreCustomModel(id) }, icon('refresh', 12)),
+  ]))
+}
+
+/** 渲染自定义模型编辑行（可视化表单，不填 JSON） */
+function buildCustomModelRows(models) {
+  const wrap = el('div', { class: 'cm-rows' })
+  if (!models.length) {
+    wrap.append(el('div', { class: 'muted', style: 'padding:8px 0;font-size:12px' }, '还没有自定义模型——点「添加模型」开始'))
+    return wrap
+  }
+  for (const m of models) wrap.append(customModelRow(m))
+  return wrap
+}
+
+function customModelRow(m = {}) {
+  const id = el('input', {
+    class: 'mono',
+    placeholder: 'z-ai/glm-5.3-flash',
+    value: m.id || '',
+    'data-f': 'id',
+    style: 'flex:2;min-width:120px',
+  })
+  const name = el('input', {
+    placeholder: '显示名（可选）',
+    value: m.displayName || m.display_name || '',
+    'data-f': 'displayName',
+    style: 'flex:1.2;min-width:90px',
+  })
+  const pool = el('select', {
+    'data-f': 'pool',
+    style: 'flex:1;min-width:90px',
+  }, ['', 'daily', 'premium', 'referral', 'limited_offer'].map((p) =>
+    el('option', { value: p, selected: (m.pool || '') === p }, p ? poolLabel(p) : '池（默认）')))
+  const agent = el('input', {
+    class: 'mono',
+    placeholder: 'base2-free-…（留空自动推导）',
+    value: m.agentId || m.agent_id || '',
+    'data-f': 'agentId',
+    style: 'flex:2;min-width:140px',
+  })
+  const del = el('button', {
+    class: 'icon danger',
+    title: '删除该模型（从列表与调度中移除）',
+    onclick: () => {
+      const id = row.querySelector('[data-f="id"]')?.value?.trim()
+      row.remove()
+      const editor = $('#custom-models-editor')
+      if (editor && !editor.querySelector('.cm-row')) {
+        editor.append(el('div', { class: 'muted', style: 'padding:8px 0;font-size:12px' }, '还没有自定义模型——点「添加模型」开始'))
+      }
+      // 保存剩余自定义模型（models），并把该 id 加入 hidden（彻底删除）
+      autoSaveCustomModels()
+      if (id) removeCustomModel(id)
+    },
+  }, icon('trash', 13))
+  const row = el('div', { class: 'cm-row' }, [id, name, pool, agent, del])
+  // 行内编辑自动保存（防抖 600ms）
+  for (const input of [id, name, pool, agent]) {
+    input.addEventListener('input', scheduleAutoSave)
+    input.addEventListener('change', scheduleAutoSave)
+  }
+  return row
+}
+
+function addCustomModelRow() {
+  const editor = $('#custom-models-editor')
+  const empty = editor.querySelector('.muted')
+  if (empty) empty.remove()
+  editor.append(customModelRow())
+  autoSaveCustomModels()
+}
+
+/** 行内编辑自动保存（防抖） */
+let _cmSaveTimer = null
+function scheduleAutoSave() {
+  clearTimeout(_cmSaveTimer)
+  _cmSaveTimer = setTimeout(() => autoSaveCustomModels(), 600)
+}
+
+/** 从可视化行收集模型数组并自动保存（前端自动组装，不填 JSON） */
+async function autoSaveCustomModels() {
+  const models = collectCustomModels()
+  if (!models.length) return
+  try {
+    await api('/api/models/custom', {
+      method: 'POST',
+      body: JSON.stringify({ models }),
+    })
+  } catch (err) {
+    toast('保存模型失败: ' + err.message, true)
+  }
+}
+
+/** 从可视化行收集模型数组（校验必填，前端自动组装） */
+function collectCustomModels() {
+  const models = []
+  for (const row of document.querySelectorAll('#custom-models-editor .cm-row')) {
+    const get = (f) => row.querySelector(`[data-f="${f}"]`)?.value?.trim() || ''
+    const id = get('id')
+    if (!id) continue // 空行跳过
+    const m = { id }
+    const name = get('displayName')
+    if (name) m.displayName = name
+    const pool = get('pool')
+    if (pool) m.pool = pool
+    const agent = get('agentId')
+    if (agent) m.agentId = agent
+    models.push(m)
+  }
+  return models
+}
+
+function poolBadgeClass(pool) {
+  if (pool === 'premium') return 'badge warn'
+  if (pool === 'referral') return 'badge admin'
+  return 'badge'
+}
+
+/** 池类型中文显示 */
+const POOL_LABELS = {
+  premium: '高级',
+  daily: '每日',
+  referral: '邀请',
+  limited_offer: '限时',
+  glm_v53_flash: 'GLM 5.3',
+}
+function poolLabel(pool) {
+  if (!pool) return '—'
+  return POOL_LABELS[pool] || pool
+}
+
+/** 额度徽章颜色：用尽=红，余量≤2=黄，其余=绿 */
+function quotaBadgeClass(m) {
+  const used = Math.ceil(Number(m.recentCount) || 0)
+  const limit = Number(m.limit)
+  if (!Number.isFinite(limit) || limit <= 0) return ''
+  const left = limit - used
+  return left <= 0 ? 'err' : left <= 2 ? 'warn' : 'ok'
+}
+
 /** 每个模型的每日免费 session 额度：已用/上限，以及重置时间 */
 function fmtQuota(quota) {
   if (!quota || !quota.byModel || !Object.keys(quota.byModel).length) {
-    return el('span', { class: 'muted', title: '尚无额度数据：账号首次 admit（发起对话/创建 session）后上游才会返回限额；可先点「探测刷新」查看 session 状态' }, '—')
+    return el('span', { class: 'muted', title: '尚无额度数据：账号首次 admit（发起对话/创建 session）后上游才会返回限额；可点行内「检测」查看' }, '—')
   }
   const chips = []
   for (const [model, q] of Object.entries(quota.byModel)) {
@@ -703,13 +1362,16 @@ function fmtQuota(quota) {
     chips.push(el('span', {
       class: `badge ${cls}`,
       style: 'margin:2px 4px 2px 0',
-      title: `${model} · ${used}/${q.limit} 次/日 · 重置 ${fmtReset(q.resetAt)}`,
+      title: `${model}\n已用 ${used}/${q.limit} 次/日 · 重置 ${fmtReset(q.resetAt, q.resetTimeZone)}\n${fmtCountdown(q.resetAt)}`,
     }, `${shortModel(model)} ${used}/${q.limit}`))
   }
   const reset = quota.rateLimit?.resetAt || firstReset(quota.byModel)
+  const resetTz = quota.rateLimit?.resetTimeZone || firstResetTz(quota.byModel)
   return el('div', {}, [
     el('div', {}, chips),
-    reset ? el('div', { class: 'muted', style: 'margin-top:2px' }, `重置 ${fmtReset(reset)}`) : null,
+    reset ? el('div', { class: 'muted', style: 'margin-top:2px' }, [
+      `重置 ${fmtReset(reset, resetTz)} · ${fmtCountdown(reset)}`,
+    ]) : null,
   ])
 }
 
@@ -718,11 +1380,72 @@ function firstReset(byModel) {
   return q?.resetAt || null
 }
 
-function fmtReset(iso) {
+function firstResetTz(byModel) {
+  const q = Object.values(byModel || {})[0]
+  return q?.resetTimeZone || null
+}
+
+/**
+ * 重置时刻展示：
+ * - 主显示：浏览器本地时区的具体时刻（用户最直观）
+ * - 附注：上游 resetTimeZone 的对应时刻 + 倒计时（明确"还有多久"）
+ * resetAt 是绝对 UTC 时刻，本地/LA 只是不同视角，绝无"不准"——差异来自时区换算。
+ */
+function fmtReset(iso, timeZone) {
   if (!iso) return '—'
   const d = new Date(iso)
+  if (!Number.isFinite(d.getTime())) return '—'
   const pad = (n) => String(n).padStart(2, '0')
-  return `${d.getMonth() + 1}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  const local = `${d.getMonth() + 1}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  if (timeZone && canUseTz(timeZone)) {
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(d)
+      const get = (type) => (parts.find((p) => p.type === type) || {}).value || '00'
+      return `${local}（上游 ${get('month')}-${get('day')} ${get('hour')}:${get('minute')} ${tzShort(timeZone)}）`
+    } catch {
+      // fall through to local only
+    }
+  }
+  return local
+}
+
+/** 距离重置还有多久（倒计时）。 */
+function fmtCountdown(iso) {
+  if (!iso) return ''
+  const ms = new Date(iso).getTime() - Date.now()
+  if (!Number.isFinite(ms)) return ''
+  if (ms <= 0) return '即将重置'
+  const totalMin = Math.floor(ms / 60000)
+  const h = Math.floor(totalMin / 60)
+  const m = totalMin % 60
+  if (h >= 24) {
+    const d = Math.floor(h / 24)
+    return `${d} 天 ${h % 24} 小时后`
+  }
+  return `${h} 小时 ${m} 分后`
+}
+
+/** IANA 时区名 → 简短标识（America/Los_Angeles → LA）。 */
+function tzShort(timeZone) {
+  const m = String(timeZone).split('/')
+  return m[m.length - 1] || timeZone
+}
+
+/** 浏览器是否支持该 IANA 时区（RangeError 时回退本地时区）。 */
+function canUseTz(timeZone) {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone })
+    return true
+  } catch {
+    return false
+  }
 }
 
 function shortModel(model) {
@@ -739,17 +1462,17 @@ function colorFor(email) {
 async function clearCooldown(email) {
   await api(`/api/accounts/${encodeURIComponent(email)}/cooldown/clear`, { method: 'POST' })
   toast('已解除冷却')
-  render()
+  refreshAccountsCard()
 }
 
 async function removeAccount(email) {
   if (!confirm(`确认删除账号 ${email}？`)) return
   await api(`/api/accounts/${encodeURIComponent(email)}`, { method: 'DELETE' })
   toast('已删除')
-  render()
+  refreshOverviewAfterAccountChange()
 }
 
-/* ---------------- account credential (view / copy / download) ---------------- */
+/* ---------------- account credential ---------------- */
 function downloadTextFile(name, content, mime = 'application/json') {
   const blob = new Blob([content], { type: mime })
   const url = URL.createObjectURL(blob)
@@ -762,7 +1485,7 @@ async function openCredentialModal(account) {
   const backdrop = el('div', { class: 'modal-backdrop' })
   const body = el('div', { class: 'card modal' }, [
     el('h3', {}, `账号凭证 · ${account.email}`),
-    el('p', { class: 'muted' }, '正在读取…'),
+    el('p', { class: 'muted', style: 'display:inline-flex;align-items:center;gap:6px' }, [el('span', { class: 'spinner' }), '正在读取…']),
   ])
   backdrop.append(body)
   document.body.append(backdrop)
@@ -794,8 +1517,8 @@ async function openCredentialModal(account) {
       el('button', { class: 'primary', onclick: async () => {
         await navigator.clipboard.writeText(json).catch(() => {})
         toast('已复制完整凭据 JSON')
-      } }, '复制 JSON'),
-      el('button', { onclick: () => downloadTextFile(filename, json) }, '下载 JSON'),
+      } }, [icon('copy', 14), '复制 JSON']),
+      el('button', { onclick: () => downloadTextFile(filename, json) }, [icon('download', 14), '下载 JSON']),
       el('button', { onclick: () => backdrop.remove() }, '关闭'),
     ]),
   )
@@ -812,8 +1535,7 @@ function openAddAccount() {
   const backdrop = el('div', { class: 'modal-backdrop' })
   const body = el('div', { class: 'card modal' }, [
     el('h3', {}, '添加 Freebuff 账号（浏览器登录）'),
-    el('p', { class: 'muted' }, '服务端正在向 Freebuff 申请登录链接…'),
-    el('div', { class: 'spinner' }),
+    el('p', { class: 'muted', style: 'display:inline-flex;align-items:center;gap:6px' }, [el('span', { class: 'spinner' }), '服务端正在向 Freebuff 申请登录链接…']),
   ])
   backdrop.append(body)
   document.body.append(backdrop)
@@ -826,7 +1548,7 @@ function openAddAccount() {
       el('p', { class: 'muted' }, '在你自己电脑的浏览器打开下面的链接并完成登录（容器内不会打开浏览器）：'),
       el('div', { class: 'flow-url' }, flow.loginUrl),
       el('div', { class: 'row' }, [
-        el('a', { class: 'primary', style: 'display:inline-block', href: flow.loginUrl, target: '_blank', rel: 'noopener' }, el('button', { class: 'primary' }, '打开链接并登录')),
+        el('a', { style: 'display:inline-block', href: flow.loginUrl, target: '_blank', rel: 'noopener' }, el('button', { class: 'primary' }, [icon('globe', 14), '打开链接并登录'])),
         el('span', { class: 'muted' }, '完成登录后本窗口会自动刷新'),
       ]),
       el('p', { id: 'flow-status', style: 'margin-top:12px', class: 'muted' }, '等待登录回调…'),
@@ -849,7 +1571,7 @@ async function pollFlow(id, body, backdrop) {
         statusEl.append(el('span', { class: 'badge ok' }, `登录成功：${flow.user?.email || ''}${flow.user?.id ? `（ID ${flow.user.id}）` : ''}`))
       }
       toast(`账号 ${flow.user?.email} 已添加，正在探测上游…`)
-      setTimeout(() => { backdrop.remove(); api('/api/accounts/probe', { method: 'POST' }).catch(() => {}).then(render) }, 1200)
+      setTimeout(() => { backdrop.remove(); api('/api/accounts/probe', { method: 'POST' }).catch(() => {}).then(refreshOverviewAfterAccountChange) }, 1200)
       return
     }
     if (flow.status === 'expired' || flow.status === 'cancelled') {
@@ -882,9 +1604,9 @@ function openImportModal() {
           toast('导入成功，正在探测上游…')
           backdrop.remove()
           try { await api('/api/accounts/probe', { method: 'POST' }) } catch { /* ignore */ }
-          render()
+          refreshOverviewAfterAccountChange()
         } catch (err) { toast(err.message, true) }
-      } }, '导入'),
+      } }, [icon('box', 14), '导入']),
       el('button', { onclick: () => backdrop.remove() }, '取消'),
     ]),
   ])
@@ -896,44 +1618,48 @@ function openImportModal() {
 /* ---------------- users ---------------- */
 async function renderUsers(view) {
   view.innerHTML = ''
+  view.append(el('div', { class: 'row spread', style: 'margin-bottom:16px' }, [
+    el('h2', { style: 'margin:0' }, '用户管理'),
+    el('button', { class: 'muted', onclick: () => renderUsers(view) }, [icon('refresh', 13), '局部刷新']),
+  ]))
   state.users = (await api('/api/users')).data
-  view.append(el('h2', { style: 'margin:0 0 12px' }, '用户管理'))
 
-  const table = el('table', {}, [
-    el('thead', {}, el('tr', {}, ['用户名', '角色', 'API Key', '操作'].map((t) => el('th', {}, t)))),
-    el('tbody', {}, state.users.map((u) => {
-      return el('tr', {}, [
-        el('td', {}, `${u.username} ${u.username === state.me.username ? el('span', { class: 'muted' }, '(我)') : ''}`),
-        el('td', {}, u.role === 'admin' ? el('span', { class: 'badge admin' }, 'admin') : el('span', { class: 'badge' }, 'user')),
-        el('td', {}, el('div', { class: 'row' }, [
-          el('code', { class: 'mono muted', style: 'font-size:12px' }, maskKey(u.apiKey)),
-          el('button', { onclick: async () => { await navigator.clipboard.writeText(u.apiKey).catch(() => {}); toast('已复制完整 Key') } }, '复制'),
-          el('button', { onclick: async () => {
-            if (!confirm(`重置 ${u.username} 的 API Key？旧 Key 立即失效`)) return
-            const r = await api(`/api/users/${encodeURIComponent(u.username)}/reset-key`, { method: 'POST' })
-            toast(`新 Key: ${r.apiKey}`)
-            renderUsers(view)
-          } }, '重置'),
-        ])),
-        el('td', {}, el('div', { class: 'row' }, [
-          el('button', { class: 'muted', onclick: () => openUserModal(u, view) }, '改密'),
-          u.username !== state.me.username
-            ? el('button', { class: 'danger', onclick: async () => {
-                if (!confirm(`删除用户 ${u.username}？`)) return
-                await api(`/api/users/${encodeURIComponent(u.username)}`, { method: 'DELETE' })
-                renderUsers(view)
-              } }, '删除')
-            : null,
-        ])),
-      ])
-    })),
+  const table = el('div', { class: 'table-wrap' }, [
+    el('table', {}, [
+      el('thead', {}, el('tr', {}, ['用户名', '角色', 'API Key', '操作'].map((t) => el('th', {}, t)))),
+      el('tbody', {}, state.users.map((u, i) => {
+        return el('tr', { class: 'row-in', style: `animation-delay:${i * 40}ms` }, [
+          el('td', {}, `${u.username} ${u.username === state.me.username ? el('span', { class: 'muted' }, '(我)') : ''}`),
+          el('td', {}, u.role === 'admin' ? el('span', { class: 'badge admin' }, 'admin') : el('span', { class: 'badge' }, 'user')),
+          el('td', {}, el('div', { class: 'row' }, [
+            el('code', { class: 'mono muted', style: 'font-size:12px' }, maskKey(u.apiKey)),
+            el('button', { class: 'icon', title: '复制完整 Key', onclick: async () => { await navigator.clipboard.writeText(u.apiKey).catch(() => {}); toast('已复制完整 Key') } }, icon('copy', 13)),
+            el('button', { onclick: async () => {
+              if (!confirm(`重置 ${u.username} 的 API Key？旧 Key 立即失效`)) return
+              const r = await api(`/api/users/${encodeURIComponent(u.username)}/reset-key`, { method: 'POST' })
+              toast(`新 Key: ${r.apiKey}`)
+              renderUsers(view)
+            } }, '重置'),
+          ])),
+          el('td', {}, el('div', { class: 'row' }, [
+            el('button', { class: 'muted', onclick: () => openUserModal(u, view) }, '改密'),
+            u.username !== state.me.username
+              ? el('button', { class: 'danger', onclick: async () => {
+                  if (!confirm(`删除用户 ${u.username}？`)) return
+                  await api(`/api/users/${encodeURIComponent(u.username)}`, { method: 'DELETE' })
+                  renderUsers(view)
+                } }, '删除')
+              : null,
+          ])),
+        ])
+      })),
+    ]),
   ])
-  view.append(el('div', { class: 'card', style: 'overflow:auto;margin-bottom:16px' }, table))
+  view.append(el('div', { class: 'card', style: 'padding:0;overflow:hidden;margin-bottom:16px' }, table))
 
-  // create user
   const form = el('div', { class: 'card' }, [
     el('h3', { style: 'margin:0 0 8px' }, '新建用户'),
-    el('div', { class: 'grid', style: 'grid-template-columns:1fr 1fr 1fr' }, [
+    el('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fit,minmax(180px,1fr))' }, [
       el('div', {}, [el('label', {}, '用户名'), el('input', { id: 'nu-user', placeholder: 'alice' })]),
       el('div', {}, [el('label', {}, '初始密码'), el('input', { id: 'nu-pass', placeholder: '≥6 位' })]),
       el('div', {}, [el('label', {}, '角色'), el('select', { id: 'nu-role' }, [el('option', { value: 'user' }, 'user'), el('option', { value: 'admin' }, 'admin')])]),
@@ -952,7 +1678,7 @@ async function renderUsers(view) {
         toast(`已创建 ${r.user.username}，API Key: ${r.user.apiKey}`)
         renderUsers(view)
       } catch (err) { toast(err.message, true) }
-    } }, '创建用户'),
+    } }, [icon('plus', 14), '创建用户']),
   ])
   view.append(form)
 }
@@ -978,7 +1704,7 @@ function openUserModal(u, view) {
           toast('密码已更新')
           backdrop.remove()
         } catch (err) { toast(err.message, true) }
-      } }, '保存'),
+      } }, [icon('check', 14), '保存']),
       el('button', { onclick: () => backdrop.remove() }, '取消'),
     ]),
   ])
@@ -996,9 +1722,12 @@ async function renderPlayground(view) {
     models = list.data.filter((m) => m.available !== false)
   } catch { /* ignore */ }
 
-  view.append(el('h2', { style: 'margin:0 0 12px' }, '测试对话'))
+  view.append(el('div', { class: 'row spread', style: 'margin-bottom:16px' }, [
+    el('h2', { style: 'margin:0' }, '测试对话'),
+    el('span', { class: 'muted' }, '经 /v1/chat/completions 真实转发（流式）'),
+  ]))
   const card = el('div', { class: 'card' }, [
-    el('div', { class: 'grid', style: 'grid-template-columns:1fr 1fr' }, [
+    el('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fit,minmax(220px,1fr))' }, [
       el('div', {}, [
         el('label', {}, '模型'),
         el('select', { id: 'pg-model' }, models.map((m) => el('option', { value: m.id, selected: m.id === 'deepseek/deepseek-v4-flash' }, m.id))),
@@ -1011,8 +1740,7 @@ async function renderPlayground(view) {
     el('label', {}, '消息（一行一条，user/assistant 前缀可选）'),
     el('textarea', { id: 'pg-msg', rows: 4, placeholder: '你好，介绍一下你自己' }),
     el('div', { class: 'row', style: 'margin-top:12px' }, [
-      el('button', { class: 'primary', onclick: sendChat }, '发送'),
-      el('span', { class: 'muted' }, '经 /v1/chat/completions 真实转发（流式）'),
+      el('button', { class: 'primary', onclick: sendChat }, [icon('chat', 14), '发送']),
     ]),
     el('div', { class: 'chat-log', id: 'pg-log', style: 'margin-top:12px' }, ''),
   ])
@@ -1030,7 +1758,7 @@ async function sendChat() {
     return m ? { role: m[1].toLowerCase(), content: m[2] } : { role: 'user', content: line }
   })
   log.textContent = ''
-  log.append(el('div', { class: 'user' }, '▶ ' + raw.split('\n')[0] + (raw.split('\n').length > 1 ? ' …' : '')))
+  log.append(el('div', { class: 'user' }, [icon('user', 12), ' ' + raw.split('\n')[0] + (raw.split('\n').length > 1 ? ' …' : '')]))
   try {
     const res = await fetch('/v1/chat/completions', {
       method: 'POST',
@@ -1046,7 +1774,7 @@ async function sendChat() {
     const reader = res.body.getReader()
     const dec = new TextDecoder()
     let buf = ''
-    let out = el('div', { class: 'assistant' }, '')
+    let out = el('div', { class: 'assistant assistant-typing' }, '')
     log.append(out)
     while (true) {
       const { done, value } = await reader.read()
@@ -1067,6 +1795,7 @@ async function sendChat() {
       }
       log.scrollTop = log.scrollHeight
     }
+    out.classList.remove('assistant-typing')
   } catch (err) {
     log.append(el('div', { style: 'color:var(--red)' }, '错误: ' + err.message))
   }
@@ -1076,21 +1805,27 @@ async function sendChat() {
 async function renderMe(view) {
   view.innerHTML = ''
   const me = state.me
-  const card = el('div', { class: 'card', style: 'max-width:560px' }, [
-    el('h2', { style: 'margin:0 0 12px' }, '我的信息'),
-    el('div', { class: 'row' }, [el('span', { class: 'muted' }, '用户名'), el('span', {}, me.username)]),
-    el('div', { class: 'row' }, [el('span', { class: 'muted' }, '角色'), el('span', {}, me.role)]),
-    el('div', { class: 'row' }, [
-      el('span', { class: 'muted' }, 'API Key'),
-      el('code', { class: 'mono' }, me.apiKey),
-      el('button', { onclick: async () => { await navigator.clipboard.writeText(me.apiKey).catch(() => {}); toast('已复制') } }, '复制'),
+  const card = el('div', { class: 'card', style: 'max-width:720px' }, [
+    el('div', { class: 'row spread', style: 'margin-bottom:16px' }, [
+      el('h2', { style: 'margin:0' }, '我的信息'),
+      el('span', { class: 'muted' }, me.role === 'admin' ? el('span', { class: 'badge admin' }, 'admin') : me.role),
     ]),
-    el('div', { class: 'row' }, [
-      el('span', { class: 'muted' }, '会话调度'),
-      el('span', {}, '热会话优先：同模型请求复用现有会话，故障时自动切换账号'),
+    // 定义列表
+    el('div', { class: 'kv-list' }, [
+      el('div', { class: 'kv' }, [el('span', { class: 'k muted' }, '用户名'), el('span', { class: 'v' }, me.username)]),
+      el('div', { class: 'kv' }, [el('span', { class: 'k muted' }, '角色'), el('span', { class: 'v' }, me.role === 'admin' ? '管理员' : '普通用户')]),
+      el('div', { class: 'kv' }, [el('span', { class: 'k muted' }, '会话调度'), el('span', { class: 'v' }, '热会话优先：同模型请求复用现有会话，故障时自动切换账号')]),
     ]),
-    el('p', { class: 'muted', style: 'margin-top:14px' }, '下游 Agent 接入：把上面 API Key 作为 Bearer token，base_url 指向本服务，例如'),
-    el('pre', { class: 'flow-url' }, 'curl http://127.0.0.1:8787/v1/chat/completions \\\n  -H "Authorization: Bearer ' + (me.apiKey || 'sk-fb-…') + '" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"model":"deepseek/deepseek-v4-flash","messages":[{"role":"user","content":"你好"}],"stream":true}\''),
+    // API Key 独立代码块
+    el('label', { style: 'margin-top:20px' }, 'API Key（下游 Bearer token）'),
+    el('div', { class: 'key-block' }, [
+      el('code', { class: 'mono', id: 'me-key', style: 'font-size:12px;word-break:break-all;flex:1;min-width:0' }, me.apiKey),
+      el('button', { class: 'icon', title: '复制', onclick: async () => { await navigator.clipboard.writeText(me.apiKey).catch(() => {}); toast('已复制') } }, icon('copy', 14)),
+    ]),
+    el('p', { class: 'muted', style: 'margin-top:16px' }, '下游 Agent 接入：把上面 API Key 作为 Bearer token，base_url 指向本服务，例如'),
+    // curl 示例：深色代码块，横向滚动不溢出卡片
+    el('pre', { class: 'code-block mono' },
+      `curl http://127.0.0.1:8787/v1/chat/completions \\\n  -H "Authorization: Bearer ${me.apiKey || 'sk-fb-…'}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"deepseek/deepseek-v4-flash","messages":[{"role":"user","content":"你好"}],"stream":true}'`),
   ])
   view.append(card)
 }
@@ -1098,6 +1833,11 @@ async function renderMe(view) {
 /* ---------------- boot ---------------- */
 window.addEventListener('hashchange', render)
 window.addEventListener('DOMContentLoaded', async () => {
+  // 版本号/仓库地址：由发版流水线硬编码进 dashboard/version.json；本地没有则 fallback dev
+  try {
+    const res = await fetch('/version.json', { cache: 'no-store' })
+    if (res.ok) state.version = await res.json()
+  } catch { /* 本地开发没有 version.json，保持 dev */ }
   try {
     const { user } = await api('/api/me')
     state.me = user

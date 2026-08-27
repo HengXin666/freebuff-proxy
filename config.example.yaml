@@ -55,11 +55,15 @@ limits:
   account_max_concurrency: 1
   upstream_timeout_sec: 600
   # 上游流式响应 body idle 超时（秒）：上游发了响应头后长时间不再吐数据
-  # （幽灵连接）→ 主动掐断/换号，避免连接永远挂着。
-  stream_idle_timeout_sec: 120
+  # （幽灵连接）→ 主动掐断/换号，避免连接永远挂着。默认 60s——网络不稳定
+  # 的上游 1 分钟不吐数据就该切换；慢思考模型思考期可能 >30s 才出首包，别设太小。
+  stream_idle_timeout_sec: 60
   # 账号级串行化：一个账号同一时间只处理一个 chat；超过该等待时长(ms)后换号
   account_chat_wait_ms: 120000
   max_auto_retry_on_session_error: 1
+  # 流被掐断（幽灵连接 idle 超时）后账号的短暂冷却（秒）：刚被掐断的账号
+  # 说明上游/网络对它不稳定，短期内让新请求优先去别的账号。0 = 不冷却。
+  stall_cooldown_sec: 30
 
 logging:
   level: info

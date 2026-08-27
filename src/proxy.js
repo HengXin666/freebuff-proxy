@@ -51,6 +51,18 @@ export function createProxyHandler(ctx) {
     throw new Error('createProxyHandler requires ctx.runtimes (AccountRuntimes)')
   }
 
+  /** 前端「模型管理」配置的自定义模型（覆盖内置目录），实时生效。 */
+  function customModels() {
+    return typeof ctx.modelStore?.list === 'function' ? ctx.modelStore.list() : []
+  }
+
+  /** 前端「模型管理」删除（隐藏）的模型 id，实时生效。 */
+  function hiddenModels() {
+    return typeof ctx.modelStore?.hidden === 'function'
+      ? ctx.modelStore.hidden()
+      : []
+  }
+
   function authorize(req, res) {
     const keys = config.server.apiKeys || []
     if (keys.length === 0 && !userStore) return true
@@ -179,6 +191,8 @@ export function createProxyHandler(ctx) {
         accessTier,
         extraIds,
         includeAllCatalog: true,
+        customModels: customModels(),
+        hiddenModels: hiddenModels(),
       }),
     )
   }
@@ -483,6 +497,8 @@ export function createProxyHandler(ctx) {
     let heldRt = null
     /** 当前持有的账号 chat 锁释放函数。 */
     let releaseChat = null
+    /** 是否已完整等待过账号锁（account_busy 超时一次后，再等只给短窗，避免 5 次重试 × 长等待）。 */
+    let chatWaited = false
 
     /** 释放当前账号的串行化锁与在途标记（换号/请求结束时调用）。 */
     function dropChatHold() {
@@ -551,8 +567,13 @@ export function createProxyHandler(ctx) {
           // acquire 一样设上界，超时把 account_busy 返回给客户端（可重试），
           // 绝不无限等待。
           if (!heldRt) {
+            // 已在上一轮完整等待过账号锁（account_busy）→ 本轮只给短窗
+            // （账号并发上限即"满了换号"阈值：所有账号都满员时才排队复用热
+            // 会话，但排队只等一次完整 idle 周期，之后必须尽快换下一个账号，
+            // 而不是在满员账号上反复长等把并发全部钉死）。
+            const waitMs = chatWaited ? Math.min(chatWaitMs(rt), 5_000) : chatWaitMs(rt)
             try {
-              releaseChat = await runtimes.acquireChat(rt.key, chatWaitMs(rt))
+              releaseChat = await runtimes.acquireChat(rt.key, waitMs)
             } catch (lockErr) {
               if (lockErr?.code === 'account_busy' && attempt < maxAttempts) {
                 logger.warn('account busy; trying next account', {
@@ -560,7 +581,9 @@ export function createProxyHandler(ctx) {
                   email: rt.email,
                   model: upstreamModel,
                   attempt,
+                  waitedMs: waitMs,
                 })
+                chatWaited = true
                 pendingGateCode = 'account_busy'
                 pendingSwitchAccount = true
                 pendingNoCooldown = true
@@ -619,7 +642,7 @@ export function createProxyHandler(ctx) {
             // agent 选择：主 agent 被上游以 free_mode_invalid_agent_model 拒绝时
             // （上游按用途/推理任务可能只接受特定 agent，且部分 agent 带单次
             // output 限制会截断长思考链），回退 base3 孪生 agent 再试一次。
-            const agentId = agentIdForModel(upstreamModel)
+            const agentId = agentIdForModel(upstreamModel, customModels())
             try {
               runId = await rt.upstream.startAgentRun({ agentId })
             } catch (agentErr) {
@@ -629,7 +652,10 @@ export function createProxyHandler(ctx) {
                   agentErr.code === 'free_mode_invalid_agent_model') &&
                 agentErr.status === 403
               ) {
-                const fbAgentId = agentFallbackForModel(upstreamModel)
+                const fbAgentId = agentFallbackForModel(
+                  upstreamModel,
+                  customModels(),
+                )
                 if (fbAgentId !== agentId) {
                   logger.warn('primary agent rejected; falling back', {
                     agentId,
@@ -682,6 +708,33 @@ export function createProxyHandler(ctx) {
           }
 
           if (result.ok) return
+
+          // 幽灵连接（流 idle 超时被掐断）：响应头已提交、无法整体重试，但
+          // 该账号刚被掐断过一条卡死的链路——上游/网络对该会话不稳定。给账号
+          // 一个短暂冷却（stallCooldownSec，默认 30s），让后续新请求优先去别的
+          // 账号，避免反复撞上同一条卡死链路；不冷却会导致卡死的账号继续吸收
+          // 新流量（用户实测：一个账号 3/3 满了还在持续接收请求）。
+          if (
+            result.gateCode === 'stream_idle_timeout' &&
+            !result.ok &&
+            config.limits.stallCooldownSec > 0
+          ) {
+            runtimes.markCooldown(
+              lastKey,
+              new UpstreamError('stream_idle_timeout', {
+                code: 'stream_idle_timeout',
+                status: 504,
+                retryAfterMs: config.limits.stallCooldownSec * 1000,
+              }),
+              upstreamModel,
+            )
+            logger.warn('stream stall; cooling account briefly', {
+              key: lastKey,
+              email: rt?.email,
+              model: upstreamModel,
+              cooldownSec: config.limits.stallCooldownSec,
+            })
+          }
 
           if (result.recoverable && attempt < maxAttempts) {
             if (result.switchAccount) {

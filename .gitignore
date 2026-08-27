@@ -1,6 +1,8 @@
 node_modules/
 dashboard/node_modules/
 dashboard/dist/
+# 构建产物：版本号由发版流水线注入（scripts/inject-version.mjs），不入库
+dashboard/version.json
 
 # 本地运行数据（Docker 挂载 /data 到宿主机时同样忽略）
 data/
