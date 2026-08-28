@@ -42,6 +42,7 @@ import {
   GUIDE_DEEP,
 } from '../src/routing.js'
 import { SettingsStore } from '../src/web/settings-store.js'
+import { ModelStore } from '../src/web/model-store.js'
 import {
   extractGateError,
   extractRateLimitError,
@@ -52,11 +53,13 @@ configureLogger({ level: 'error' })
 
 const originalFetch = globalThis.fetch
 let calls = []
-/** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion' | 'err_500_a' | 'capacity_once' | 'capacity_all' | 'run_500_a' | 'network_err_a' | 'gate_twice_a' | 'hold_once' | 'legacy_luna_once'} */
+/** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion' | 'err_500_a' | 'capacity_once' | 'capacity_all' | 'run_500_a' | 'network_err_a' | 'gate_twice_a' | 'hold_once' | 'legacy_luna_once' | 'luna_base2_retired'} */
 let mockMode = 'ok'
 let sessionPosts = 0
 let sessionDeletes = 0
 let completionAttempts = 0
+/** 历次 startAgentRun 使用的 agentId（agent 兜底/退役验证用）。 */
+let startAgentCalls = []
 /** 会话有效期（毫秒）：近过期/重连测试用 */
 let sessionExpiryMs = 3600_000
 /** hold_once 模式：被挂起的流式响应控制器（等 releaseHoldStreams 放行） */
@@ -166,6 +169,14 @@ globalThis.fetch = async (url, init = {}) => {
           403,
         )
       }
+      // 退役 Luna agent：chat 阶段 free_mode_legacy_luna_agent 场景——base2
+      // startAgentRun 能成功（runId 正常返回），但 chat 转发后上游说
+      // "此对话用了退役 agent"。重试必须切 base3。
+      if (mockMode === 'luna_base2_retired' && body.agentId === 'base2-free-luna') {
+        startAgentCalls.push(body.agentId)
+        return jsonRes({ runId: '00000000-0000-4000-8000-000000000002' })
+      }
+      startAgentCalls.push(body.agentId)
       return jsonRes({ runId: '00000000-0000-4000-8000-000000000001' })
     }
     if (body.action === 'FINISH') {
@@ -178,6 +189,23 @@ globalThis.fetch = async (url, init = {}) => {
     assert.match(body.model, /^[a-z0-9-]+\/[a-z0-9.-]+$/i)
     if (
       mockMode === 'legacy_luna_once' &&
+      body.model === 'openai/gpt-5.6-luna' &&
+      completionAttempts === 0
+    ) {
+      completionAttempts++
+      return jsonRes(
+        {
+          error: 'free_mode_legacy_luna_agent',
+          message:
+            'This conversation uses a retired Luna agent. Update Freebuff if needed, then start a new conversation.',
+        },
+        403,
+      )
+    }
+    // luna_base2_retired：base2 的 runId 指向退役 agent，chat 第一次必撞
+    // free_mode_legacy_luna_agent；重试（切 base3 + 新 runId）后成功。
+    if (
+      mockMode === 'luna_base2_retired' &&
       body.model === 'openai/gpt-5.6-luna' &&
       completionAttempts === 0
     ) {
@@ -998,6 +1026,7 @@ config.limits.maxConcurrentRequests = 2
 
 const runtimes = new AccountRuntimes(config)
 const settingsStore = new SettingsStore(path.join(tmpDir, 'settings.json'))
+const modelStore = new ModelStore(path.join(tmpDir, 'custom-models.json'))
 const server = await startServer({
   config,
   runtimes,
@@ -1012,6 +1041,7 @@ const server = await startServer({
     }
   })(),
   settingsStore,
+  modelStore,
 })
 const port = server.address().port
 const base = `http://127.0.0.1:${port}`
@@ -1336,6 +1366,8 @@ const verifiedSpecialModels = [
     id: 'openai/gpt-5.6-luna-es',
     base2: 'base2-free-luna-es',
     base3: 'base3-free-luna-es',
+    // luna 系强制 base3（风控保护）：agentIdForModel 直接返回 base3，不再用 base2
+    forcedBase3: true,
   },
   {
     id: 'meta/muse-spark-1.2-contributor',
@@ -1359,7 +1391,9 @@ const verifiedSpecialModels = [
   },
 ]
 for (const model of verifiedSpecialModels) {
-  assert.equal(agentIdForModel(model.id), model.base2)
+  // luna 系强制 base3：主 agent 直接是 base3（风控保护，绝不用 base2）
+  const expected = model.forcedBase3 ? model.base3 : model.base2
+  assert.equal(agentIdForModel(model.id), expected)
   assert.equal(agentFallbackForModel(model.id), model.base3)
   const listed = buildModelsListResponse().data.find((row) => row.id === model.id)
   assert.ok(listed, `${model.id} should be present in /v1/models`)
@@ -1482,6 +1516,64 @@ for (const model of verifiedSpecialModels) {
     'old-client-id',
     'proxy must not inherit a retired client identity',
   )
+  mockMode = 'ok'
+}
+
+// luna 系强制 base3（风控保护）：agentIdForModel 对 luna 永远返回 base3-free-luna，
+// 无论自定义/catalog 写了 base2——任何 base2 尝试都会触发上游风控。
+// 验证：真实 chat 里 startAgentRun 只用 base3，绝无 base2 出现。
+{
+  await runtimes.get('u1').sessions.release()
+  mockMode = 'ok'
+  sessionPosts = 0
+  sessionDeletes = 0
+  completionAttempts = 0
+  startAgentCalls = []
+  calls = []
+  const res = await chat({
+    model: 'openai/gpt-5.6-luna',
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  assert.ok(
+    startAgentCalls.length >= 1,
+    `startAgentRun 至少调用一次, got ${JSON.stringify(startAgentCalls)}`,
+  )
+  assert.ok(
+    startAgentCalls.every((a) => a === 'base3-free-luna'),
+    `luna 只允许 base3-free-luna, got ${JSON.stringify(startAgentCalls)}`,
+  )
+  assert.ok(
+    !startAgentCalls.some((a) => a.includes('base2')),
+    `luna 绝不允许 base2, got ${JSON.stringify(startAgentCalls)}`,
+  )
+  // luna-es 同样强制 base3（base3-free-luna-es，绝无 base2）
+  startAgentCalls = []
+  const resEs = await chat({
+    model: 'openai/gpt-5.6-luna-es',
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+  assert.equal(resEs.status, 200, await resEs.clone().text())
+  assert.ok(
+    startAgentCalls.every((a) => a === 'base3-free-luna-es'),
+    `luna-es 应只用 base3-free-luna-es, got ${JSON.stringify(startAgentCalls)}`,
+  )
+  mockMode = 'ok'
+}
+
+// 模型白名单：APP 里没有的模型 id 一律 400 拒绝，绝不盲发上游
+{
+  calls = []
+  completionAttempts = 0
+  // 完全未知的模型 id（不在 catalog / 自定义 / 上游探测里）
+  const res = await chat({
+    model: 'openai/gpt-5.7-unknown',
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+  assert.equal(res.status, 400, await res.clone().text())
+  const j = await res.json()
+  assert.equal(j.error.code, 'model_not_allowed')
+  assert.equal(completionAttempts, 0, '未知模型不应打到上游')
   mockMode = 'ok'
 }
 

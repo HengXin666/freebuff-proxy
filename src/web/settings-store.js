@@ -19,6 +19,11 @@ const DEFAULT_SETTINGS = Object.freeze({
   // 静态并入 persona，多轮稳定；参考 v4-flash-godmode） / minimal（极简模式，
   // 按任务分类三带 persona）。性能不佳可一键切回 minimal 或关闭总开关。
   minimalRoutingStyle: 'standard',
+  // 一键屏蔽收费模型（pool=premium，如 gpt-5.6-luna / kimi-k3-eco / 各 -max）。
+  // 免费反代用户用不了收费模型，放着在列表里既占位又容易误触风控——开/关由
+  // 前端「模型管理」一键切换：开启则从 /v1/models 列表和调度（白名单）彻底排除。
+  // 默认关闭以保持升级不改变现有行为；免费反代场景建议开启。
+  blockPremiumModels: false,
 })
 
 const ROUTING_MODES = Object.freeze(['auto', 'spec', 'react', 'weak'])
@@ -58,6 +63,9 @@ export class SettingsStore {
       }
       if (ROUTING_STYLES.includes(raw?.minimalRoutingStyle)) {
         this.settings.minimalRoutingStyle = raw.minimalRoutingStyle
+      }
+      if (typeof raw?.blockPremiumModels === 'boolean') {
+        this.settings.blockPremiumModels = raw.blockPremiumModels
       }
     } catch (err) {
       console.error(
@@ -116,6 +124,12 @@ export class SettingsStore {
         )
       }
       this.settings.minimalRoutingStyle = next.minimalRoutingStyle
+    }
+    if (next?.blockPremiumModels !== undefined) {
+      if (typeof next.blockPremiumModels !== 'boolean') {
+        throw new TypeError('blockPremiumModels must be a boolean')
+      }
+      this.settings.blockPremiumModels = next.blockPremiumModels
     }
     const settings = { ...this.settings }
     fs.mkdirSync(path.dirname(this.file), { recursive: true })

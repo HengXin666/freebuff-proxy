@@ -87,6 +87,19 @@ export class ModelStore {
   }
 
   /**
+   * 彻底移除一个用户手动添加的自定义模型（不加入 hidden，不等到同步覆盖）。
+   * 与 hide 的区别：hide 标记"隐藏内置模型"（可恢复、同步会拉回），
+   * remove 是真正删除一条自定义条目（该 id 不再有自定义覆盖，回退 catalog）。
+   * @param {string} id
+   */
+  remove(id) {
+    if (!id) return this.models
+    this.models = this.models.filter((m) => m.id !== id)
+    this.#persist()
+    return this.models
+  }
+
+  /**
    * 恢复一个被隐藏的模型。
    * @param {string} id
    */
@@ -112,6 +125,7 @@ export class ModelStore {
     this.models = [...byId.values()]
     // 一致性：写回的模型（用户手动添加/同步上游）自动解除隐藏，
     // 避免「models 里有 + hidden 里也有」的矛盾状态（删不掉的模型）。
+    // 「同步上游不复活已删模型」由同步调用方负责过滤 hidden（见 api.js）。
     const added = new Set(this.models.map((m) => m.id))
     if (added.size) {
       this.hiddenIds = this.hiddenIds.filter((id) => !added.has(id))

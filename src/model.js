@@ -138,14 +138,17 @@ export function isFreeModel(modelId, customModels) {
  *   includeAllCatalog?: boolean,
  *   extraIds?: string[],
  *   customModels?: { id: string, displayName?: string, pool?: string, multimodal?: boolean, agentId?: string, note?: string }[],
+ *   blockPremium?: boolean,
  * }} [opts]
  */
 export function buildModelsListResponse(opts = {}) {
   const accessTier = opts.accessTier ?? null
   const includeAllCatalog = opts.includeAllCatalog !== false
+  // 一键屏蔽收费模型（pool=premium）时，从列表彻底移除——用户用不了，占位还误触风控。
+  const blockPremium = opts.blockPremium === true
   // 用户在前端「模型管理」删除（隐藏）的模型 id：从列表里彻底移除
   const hidden = new Set(opts.hiddenModels || [])
-  const skip = (id) => hidden.has(id)
+  const skip = (id) => hidden.has(id) || (blockPremium && isPremiumModel(id))
 
   /** @type {Map<string, object>} */
   const byId = new Map()
@@ -262,11 +265,18 @@ function customModelIndex(customModels) {
 /**
  * Freebuff free-mode root agent id for a model (server run registry)。
  * 解析顺序：前端自定义 agentId > 内置 catalog > 命名规则推导 > 通用 base2-free。
+ *
+ * ⚠️ 硬性例外（风控保护）：luna 系列只能用 base3 孪生 agent。上游已退役
+ * base2-free-luna 且任何 base2 尝试都会触发账号风控（实测）。因此 luna 的
+ * agentId 一律强制为 base3-free-luna，**无论**自定义覆盖还是 catalog 写了
+ * base2——宁可用 base3 失败，绝不拿 base2 去冒险。
  * @param {string} modelId
  * @param {{ id: string, agentId?: string }[]} [customModels] 前端配置的自定义模型（可覆盖 agentId）
  * @returns {string}
  */
 export function agentIdForModel(modelId, customModels) {
+  const forced = forcedBase3AgentForModel(modelId)
+  if (forced) return forced
   const cm = customModelIndex(customModels).get(modelId)
   if (cm?.agentId) return cm.agentId
   const known = CATALOG_AGENT_BY_MODEL.get(modelId)
@@ -281,14 +291,106 @@ export function agentIdForModel(modelId, customModels) {
  * 解析顺序：前端自定义 fallbackAgentId > 内置 catalog > 通用 base2-free。
  * 注意：不搞"推导 base3"——catalog 里没有 base3 孪生的模型（如 -max 系列）
  * 推导出的 base3-free-* 很可能不存在，回退 base2-free 反而更稳。
+ *
+ * 硬性例外同 agentIdForModel：luna 系列的兜底也强制 base3（本来主 agent 就是
+ * base3，兜底一致，绝无 base2 参与）。
  * @param {string} modelId
  * @param {{ id: string, fallbackAgentId?: string }[]} [customModels]
  * @returns {string}
  */
 export function agentFallbackForModel(modelId, customModels) {
+  const forced = forcedBase3AgentForModel(modelId)
+  if (forced) return forced
   const cm = customModelIndex(customModels).get(modelId)
   if (cm?.fallbackAgentId) return cm.fallbackAgentId
   const known = CATALOG_FALLBACK_BY_MODEL.get(modelId)
   if (known) return known
   return 'base2-free'
+}
+
+/**
+ * luna 系模型（上游已退役 base2 孪生、任何 base2 尝试触发风控）强制返回
+ * base3 agent；非 luna 返回 null（不强制）。
+ * 映射（与 catalog 的 base3 孪生一致，只把 base2 强制为 base3）：
+ *   gpt-5.6-luna    → base3-free-luna
+ *   gpt-5.6-luna-es → base3-free-luna-es
+ *   gpt-5.6-luna-max → 无 base3 孪生，但 base2 同样有风控风险，回退通用
+ *                      base3-free-luna（宁可用可能不存在的 base3，绝不碰 base2）
+ * @param {string} modelId
+ * @returns {string | null}
+ */
+function forcedBase3AgentForModel(modelId) {
+  if (typeof modelId !== 'string' || !modelId) return null
+  const slug = modelId.split('/').pop()?.toLowerCase() || ''
+  if (slug === 'gpt-5.6-luna') return 'base3-free-luna'
+  if (slug === 'gpt-5.6-luna-es') return 'base3-free-luna-es'
+  if (slug === 'gpt-5.6-luna-max') return 'base3-free-luna'
+  return null
+}
+
+/**
+ * 单条模型解析后的完整 agent 元信息（供前端展示/同步参考，不参与调度决策）。
+ * @param {string} modelId
+ * @param {{ id: string, agentId?: string, fallbackAgentId?: string }[]} [customModels]
+ * @returns {{ agentId: string, fallbackAgentId: string }}
+ */
+export function agentMetaForModel(modelId, customModels) {
+  return {
+    agentId: agentIdForModel(modelId, customModels),
+    fallbackAgentId: agentFallbackForModel(modelId, customModels),
+  }
+}
+
+/**
+ * 模型是否在代理"可调度"白名单内（未隐藏 + 已知模型/自定义/上游会话出现过）。
+ *
+ * 用于 /v1/chat/completions 的 model 字段校验：任何不在白名单的模型 id
+ * 一律 400 拒绝，绝不盲发上游——避免把"APP 里没有的模型"探测请求打到
+ * Freebuff（上游会把这些当异常行为标记账号，这正是免费反代被封号的主要诱因）。
+ *
+ * 白名单 = 内置 catalog（未隐藏） ∪ 自定义模型（未隐藏） ∪ 上游会话实际出现过的 id
+ *           ∪ 顶层 model 字段（session 当前模型）
+ *
+ * @param {string} modelId
+ * @param {{
+ *   customModels?: { id: string }[],
+ *   hiddenModels?: string[],
+ *   sessionModelIds?: string[],
+ *   sessionModel?: string | null,
+ *   blockPremium?: boolean,
+ * }} [opts]
+ * @returns {boolean}
+ */
+export function isModelAllowed(modelId, opts = {}) {
+  if (!modelId || typeof modelId !== 'string') return false
+  const hidden = new Set(opts.hiddenModels || [])
+  if (hidden.has(modelId)) return false
+  // 一键屏蔽收费模型：premium 模型直接拒用（不盲发上游，避免风控）。
+  if (opts.blockPremium && isPremiumModel(modelId)) return false
+
+  // 1) 内置 catalog（未隐藏）——含 WITHDRAWN 标记的退役模型也放行：
+  //    退役标记只是提示，直接拒绝会误伤仍在用旧对话/存量 session 的用户；
+  //    上游会话探测若确认没有，会走第 3 层兜底拒绝。
+  if (CATALOG_MODELS.some((m) => m.id === modelId)) return true
+  // 2) 前端自定义（未隐藏）
+  if ((opts.customModels || []).some((m) => m && m.id === modelId)) return true
+  // 3) 上游会话实际出现过（rateLimitsByModel / limitedModelOffers / 当前 model）
+  const seen = new Set(opts.sessionModelIds || [])
+  if (opts.sessionModel) seen.add(opts.sessionModel)
+  return seen.has(modelId)
+}
+
+/**
+ * 模型是否为收费模型（pool=premium）：用户用不了、做了还占额度/触风控。
+ * 判定优先级：自定义条目（可强制改 pool）> catalog > 按命名规律推断。
+ * @param {string} modelId
+ * @param {{ id: string, pool?: string }[]} [customModels]
+ * @returns {boolean}
+ */
+export function isPremiumModel(modelId, customModels) {
+  const cm = (customModels || []).find((m) => m && m.id === modelId)
+  if (cm) return (cm.pool || 'daily') === 'premium'
+  const cat = FREEBUFF_AVAILABLE_MODELS.find((m) => m.id === modelId)
+  if (cat) return cat.pool === 'premium'
+  return false
 }

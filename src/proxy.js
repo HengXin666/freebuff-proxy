@@ -4,6 +4,7 @@ import {
   modelIdsFromSession,
   agentIdForModel,
   agentFallbackForModel,
+  isModelAllowed,
 } from './model.js'
 import {
   extractGateError,
@@ -61,6 +62,49 @@ export function createProxyHandler(ctx) {
     return typeof ctx.modelStore?.hidden === 'function'
       ? ctx.modelStore.hidden()
       : []
+  }
+
+  /**
+   * 上游会话探测的轻量缓存（60s）：白名单校验用它判断"上游会话实际出现过
+   * 哪些模型"，避免每次 chat 请求都实时打上游。探测失败不影响主流程。
+   * @type {{ ids: string[], model: string | null, at: number } | null}
+   */
+  let sessionProbeCache = null
+  const SESSION_PROBE_CACHE_MS = 60_000
+
+  async function probeUpstreamSessionCached() {
+    const now = Date.now()
+    if (
+      sessionProbeCache &&
+      now - sessionProbeCache.at < SESSION_PROBE_CACHE_MS
+    ) {
+      return sessionProbeCache
+    }
+    try {
+      const rt = runtimes.getAny()
+      const session = await rt.upstream.freebuffSession('GET')
+      sessionProbeCache = {
+        ids: modelIdsFromSession(session),
+        model:
+          session && typeof session === 'object' && typeof session.model === 'string'
+            ? session.model
+            : null,
+        at: now,
+      }
+    } catch {
+      sessionProbeCache = { ids: [], model: null, at: now }
+    }
+    return sessionProbeCache
+  }
+
+  /** 上游会话出现过/限流表里的模型 id（白名单校验用）。 */
+  function upstreamSessionModelIds() {
+    return sessionProbeCache?.ids || []
+  }
+
+  /** 上游会话当前模型（白名单校验用）。 */
+  function upstreamSessionModel() {
+    return sessionProbeCache?.model ?? null
   }
 
   function authorize(req, res) {
@@ -193,8 +237,14 @@ export function createProxyHandler(ctx) {
         includeAllCatalog: true,
         customModels: customModels(),
         hiddenModels: hiddenModels(),
+        blockPremium: blockPremiumModels(),
       }),
     )
+  }
+
+  /** 一键屏蔽收费模型开关（前端「模型管理」，实时生效）。 */
+  function blockPremiumModels() {
+    return settingsStore?.get()?.blockPremiumModels === true
   }
 
   /**
@@ -471,6 +521,37 @@ export function createProxyHandler(ctx) {
       return
     }
 
+    // 模型白名单校验：未隐藏 + catalog/自定义/上游会话出现过才放行。
+    // 避免把"APP 里没有的模型"探测请求盲发上游（上游会标记异常行为，是免费
+    // 反代被封号的主要诱因）。未知模型不拦截免费用户（保守：catalog 更新有
+    // 滞后，硬拒绝会误伤合法新模型），只对上游明确说"没有"的模型硬拒绝。
+    // 校验前先预热一次上游会话探测（60s 缓存，只读 GET、不占额度；失败静默
+    // 降级为 catalog+自定义白名单），让上游真实存在的模型能通过校验。
+    await probeUpstreamSessionCached().catch(() => {})
+    const allowed = isModelAllowed(upstreamModel, {
+      customModels: customModels(),
+      hiddenModels: hiddenModels(),
+      sessionModelIds: upstreamSessionModelIds(),
+      sessionModel: upstreamSessionModel(),
+      blockPremium: blockPremiumModels(),
+    })
+    if (!allowed) {
+      logger.warn('model not allowed; rejecting before upstream', {
+        model: upstreamModel,
+      })
+      sendJson(res, 400, {
+        error: {
+          message: `Model '${upstreamModel}' is not in this proxy's model list. ` +
+            'Check the model id against GET /v1/models (or the web console「模型管理」). ' +
+            'Unknown/retired ids are rejected to protect the account from upstream anomaly flags.',
+          type: 'invalid_request_error',
+          code: 'model_not_allowed',
+          model: upstreamModel,
+        },
+      })
+      return
+    }
+
     const stream = Boolean(body.stream)
     let attempt = 0
     const maxRetry = config.limits.maxAutoRetryOnSessionError ?? 1
@@ -499,6 +580,13 @@ export function createProxyHandler(ctx) {
     let releaseChat = null
     /** 是否已完整等待过账号锁（account_busy 超时一次后，再等只给短窗，避免 5 次重试 × 长等待）。 */
     let chatWaited = false
+    /**
+     * agent 覆盖（本次请求内贯穿重试）：startAgentRun 被上游以
+     * free_mode_invalid_agent_model 拒绝时回退 base3 孪生（通用模型兜底）。
+     * 注意：luna 系不经过这里——agentIdForModel 已强制 base3，永不尝试 base2。
+     * @type {string | null}
+     */
+    let agentOverride = null
 
     /** 释放当前账号的串行化锁与在途标记（换号/请求结束时调用）。 */
     function dropChatHold() {
@@ -642,7 +730,9 @@ export function createProxyHandler(ctx) {
             // agent 选择：主 agent 被上游以 free_mode_invalid_agent_model 拒绝时
             // （上游按用途/推理任务可能只接受特定 agent，且部分 agent 带单次
             // output 限制会截断长思考链），回退 base3 孪生 agent 再试一次。
-            const agentId = agentIdForModel(upstreamModel, customModels())
+            // agentOverride：本请求上一次尝试因 free_mode_legacy_luna_agent 失败
+            // 后置为 base3 孪生（上游退役旧 agent 时换 session 没用，必须换 agent）。
+            const agentId = agentOverride || agentIdForModel(upstreamModel, customModels())
             try {
               runId = await rt.upstream.startAgentRun({ agentId })
             } catch (agentErr) {
@@ -663,6 +753,7 @@ export function createProxyHandler(ctx) {
                     model: upstreamModel,
                     key: rt.key,
                   })
+                  agentOverride = fbAgentId
                   runId = await rt.upstream.startAgentRun({ agentId: fbAgentId })
                 } else {
                   throw agentErr
@@ -743,6 +834,9 @@ export function createProxyHandler(ctx) {
               // 同账号 gate 重试计数：连续两次 gate 失败 → 升级为换号
               sameAccountGateRetries += 1
             }
+            // free_mode_legacy_luna_agent：上游退役旧 Luna agent。agentIdForModel
+            // 已对 luna 系强制 base3（见 model.js），重试换 session 即用新 agent，
+            // 不再需要额外的 agentOverride——任何 base2 尝试都不会发生。
             logger.warn('session error; will re-acquire', {
               code: result.gateCode,
               attempt,

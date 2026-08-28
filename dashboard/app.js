@@ -814,6 +814,32 @@ async function saveFreeToolSignatureSetting(event) {
   input.disabled = false // 成功/失败后都恢复可交互
 }
 
+/** 一键屏蔽收费模型开关：pool=premium（gpt-5.6-luna / kimi / -max 等）从列表与调度排除 */
+async function saveBlockPremiumSetting(event) {
+  const input = event.currentTarget
+  const enabled = input.checked
+  input.disabled = true
+  try {
+    await api('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({ blockPremiumModels: enabled }),
+    })
+    toast(enabled ? '已屏蔽收费模型（列表与调度已排除）' : '已显示收费模型')
+    try {
+      const s = await api('/api/settings')
+      const actual = s.blockPremiumModels !== false
+      input.checked = actual
+      updateSwitchLabel(input)
+    } catch { /* 忽略回读失败 */ }
+    // 切换后即时刷新模型表（收费模型隐藏/恢复）
+    refreshModelSettingsCard()
+  } catch (err) {
+    input.checked = !enabled
+    toast(err.message, true)
+    input.disabled = false
+  }
+}
+
 async function saveMinimalRoutingSetting(event) {
   const input = event.currentTarget
   const enabled = input.checked
@@ -997,17 +1023,39 @@ async function renderModelSettings(view) {
   } catch { /* ignore */ }
 
   const known = new Map()
+  // catalog 先行：agent/兜底 agent 以 catalog 为准（内置目录是 agent 映射的权威源）
   for (const m of data.catalog || []) known.set(m.id, { ...m, source: 'catalog' })
+  // 上游只补充额度/实时信息，不覆盖 agent（否则表格显示的 agent 与调度实际用
+  // 的不一致——调度是「自定义 > catalog」，上游探测的 agentId 只是参考值）
   for (const m of upstream.models || []) {
-    if (known.has(m.id)) {
-      const prev = known.get(m.id)
-      known.set(m.id, { ...prev, ...m, source: 'upstream' })
+    const prev = known.get(m.id)
+    if (prev) {
+      known.set(m.id, {
+        ...prev,
+        ...m,
+        // 保留 catalog 的 agent/fallback（上游探测值不作为调度依据）
+        agentId: prev.agentId || m.agentId,
+        fallbackAgentId: prev.fallbackAgentId || m.fallbackAgentId,
+        source: 'upstream',
+      })
     } else {
       known.set(m.id, { ...m, source: 'upstream' })
     }
   }
   const rows = [...known.values()]
   const isAdmin = state.me.role === 'admin'
+  // 屏蔽收费模型开关（读全局设置，默认开）
+  let settings = { blockPremiumModels: true }
+  try { settings = await api('/api/settings') } catch { /* 忽略 */ }
+  const blockPremium = settings.blockPremiumModels !== false
+  const blockToggleAttrs = {
+    id: 'block-premium',
+    type: 'checkbox',
+    class: 'switch-input',
+    onchange: saveBlockPremiumSetting,
+  }
+  if (blockPremium) blockToggleAttrs.checked = ''
+  if (state.me.role !== 'admin') blockToggleAttrs.disabled = ''
 
   const card = el('div', { id: 'models-card', class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
@@ -1021,6 +1069,15 @@ async function renderModelSettings(view) {
           ])
         : null,
     ]),
+    el('div', { class: 'row', style: 'margin-top:8px;align-items:center;gap:8px' }, [
+      el('label', { class: 'switch', for: 'block-premium' }, [
+        el('input', blockToggleAttrs),
+        el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
+        el('span', { class: 'switch-status' }, blockPremium ? '已开启' : '已关闭'),
+      ]),
+      el('span', { class: 'muted', style: 'font-size:12px' },
+        `屏蔽收费模型（pool=premium 如 gpt-5.6-luna / kimi / -max：免费账号用不了，从列表与调度彻底排除，避免占额度/触风控）`),
+    ]),
     upstream.accessTier
       ? el('div', { class: 'muted', style: 'margin-top:6px;font-size:12px' },
           `上游实时目录（${upstream.models.length} 个）· 当前 accessTier: ${upstream.accessTier}`)
@@ -1033,6 +1090,7 @@ async function renderModelSettings(view) {
           el('th', {}, '池'),
           el('th', {}, '额度（今日）'),
           el('th', {}, 'agent (base2)'),
+          el('th', {}, '兜底 agent (base3)'),
           el('th', {}, '来源'),
           isAdmin ? el('th', {}, '操作') : null,
         ])),
@@ -1047,6 +1105,7 @@ async function renderModelSettings(view) {
               }, `${Math.ceil(Number(m.recentCount) || 0)}/${m.limit}`)
             : el('span', { class: 'muted' }, '—')),
           el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.agentId || m.agent_id || '—'),
+          el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.fallbackAgentId || m.fallback_agent_id || '—'),
           el('td', {}, m.source === 'upstream'
             ? el('span', { class: 'badge ok' }, '上游')
             : el('span', { class: 'badge' }, '内置')),
@@ -1098,7 +1157,9 @@ async function refreshModelSettingsCard() {
   if (card && old) old.replaceWith(card)
 }
 
-/** 同步上游模型到自定义列表：拉取 /api/models/upstream，自动补齐 agent 并保存 */
+/** 同步上游模型：只补「上游有、catalog 没有」的新模型，catalog 已有的不写入自定义。
+ * 删除语义：内置模型删除=隐藏（同步会按最新上游完整拉回，不永久卡在 hidden）；
+ * 手动添加的自定义模型删除=彻底移除（上游没有它，同步自然不会回来）。 */
 async function syncUpstreamModels() {
   const btn = document.querySelector('#models-card .primary, .card .primary')
   let upstream
@@ -1113,41 +1174,45 @@ async function syncUpstreamModels() {
     return
   }
   try {
-    // 现有自定义模型（id → 定义），保留用户手动配置
+    // 现有自定义模型（id → 定义），保留用户手动配置与彻底移除语义
     const cur = await api('/api/models/custom')
     const curById = new Map((cur.models || []).map((m) => [m.id, m]))
-    // 上游模型合并：agent 用上游探测的（或保留自定义的），显示名/池取上游
+    // catalog 已有 id：同步绝不固化这些（catalog 就是权威，写进自定义只会冗余/错覆盖）
+    const catalogSet = new Set((cur.catalog || []).map((m) => m.id))
+    // merged = 保留现有自定义 +（上游有 & catalog 没有的）新模型
+    // 内置被隐藏（hidden）的模型：同步按最新上游完整拉回（用户选「删除只影响当前列表」）
     const merged = []
-    const seen = new Set()
+    for (const [id, m] of curById) merged.push(m) // 保留已存在的自定义/覆盖
     for (const um of upstream.models) {
       const id = um.id
       if (!id) continue
-      seen.add(id)
+      if (catalogSet.has(id)) continue // catalog 已有，不用写自定义
       const existing = curById.get(id) || {}
       merged.push({
         id,
         displayName: existing.displayName || um.displayName || um.poolLabel || '',
         pool: existing.pool || um.pool || '',
         agentId: existing.agentId || um.agentId || '',
+        fallbackAgentId: existing.fallbackAgentId || um.fallbackAgentId || '',
       })
-    }
-    // 保留已有的自定义模型（上游没有的），不丢弃用户配置
-    for (const [id, m] of curById) {
-      if (!seen.has(id)) merged.push(m)
     }
     const r = await api('/api/models/custom', {
       method: 'POST',
       body: JSON.stringify({ models: merged }),
     })
-    toast(`已同步 ${upstream.models.length} 个上游模型并更新 agent`)
+    // save() 会把写回的自定义条目自动解除 hidden——被隐藏的内置模型同步后自然拉回
+    toast(`已同步上游（自定义 ${r.models.length} 条，内置按 catalog 为准）`)
     refreshModelSettingsCard()
   } catch (err) {
     toast('同步失败: ' + err.message, true)
   }
 }
 
-/** 删除某模型（加入 hidden，含内置目录的也会从列表/调度彻底移除） */
-async function removeCustomModel(id) {
+/** 删除表格里的模型（内置/catalog/上游模型）：加入 hidden 隐藏，可恢复；
+ * 重新「同步上游」会按最新上游拉回，不会永久丢失。
+ * （用户手动添加的自定义模型在下方编辑器里删，那个是彻底移除。） */
+async function removeCustomModel(id, source) {
+  if (!confirm(`确定隐藏模型 ${id}？\n（内置模型隐藏后可恢复；重新同步上游会按最新列表拉回）`)) return
   // 乐观 UI：点击瞬间先从表格移除该行、插入恢复区（不等待任何网络请求）
   const row = [...document.querySelectorAll('#models-card tbody tr')].find(
     (r) => (r.querySelector('td') || {}).textContent === id,
@@ -1160,11 +1225,26 @@ async function removeCustomModel(id) {
       method: 'POST',
       body: JSON.stringify({ id }),
     })
-    toast(`已删除模型 ${id}`)
+    toast(`已隐藏模型 ${id}`)
   } catch (err) {
     // 失败：把行加回表格（用本地重建），并撤销恢复区，反馈错误
     toast(err.message, true)
     refreshModelSettingsCard()
+  }
+}
+
+/** 彻底移除一个用户手动添加的自定义模型（回退内置目录，不会在同步时回来）。 */
+async function removeCustomOnlyModel(id) {
+  if (!confirm(`确定移除自定义模型 ${id}？\n（这是彻底删除，将回退到内置目录）`)) return
+  try {
+    const r = await api('/api/models/custom/remove', {
+      method: 'POST',
+      body: JSON.stringify({ id }),
+    })
+    toast(`已移除自定义模型 ${id}`)
+    refreshModelSettingsCard()
+  } catch (err) {
+    toast(err.message, true)
   }
 }
 
@@ -1247,6 +1327,13 @@ function customModelRow(m = {}) {
     'data-f': 'agentId',
     style: 'flex:2;min-width:140px',
   })
+  const fbAgent = el('input', {
+    class: 'mono',
+    placeholder: 'base3-free-…（兜底，可选）',
+    value: m.fallbackAgentId || m.fallback_agent_id || '',
+    'data-f': 'fallbackAgentId',
+    style: 'flex:2;min-width:140px',
+  })
   const del = el('button', {
     class: 'icon danger',
     title: '删除该模型（从列表与调度中移除）',
@@ -1257,14 +1344,14 @@ function customModelRow(m = {}) {
       if (editor && !editor.querySelector('.cm-row')) {
         editor.append(el('div', { class: 'muted', style: 'padding:8px 0;font-size:12px' }, '还没有自定义模型——点「添加模型」开始'))
       }
-      // 保存剩余自定义模型（models），并把该 id 加入 hidden（彻底删除）
+      // 移除这条自定义模型（彻底删除，回退内置目录；同步不会把它加回来）
       autoSaveCustomModels()
-      if (id) removeCustomModel(id)
+      if (id) removeCustomOnlyModel(id)
     },
   }, icon('trash', 13))
-  const row = el('div', { class: 'cm-row' }, [id, name, pool, agent, del])
+  const row = el('div', { class: 'cm-row' }, [id, name, pool, agent, fbAgent, del])
   // 行内编辑自动保存（防抖 600ms）
-  for (const input of [id, name, pool, agent]) {
+  for (const input of [id, name, pool, agent, fbAgent]) {
     input.addEventListener('input', scheduleAutoSave)
     input.addEventListener('change', scheduleAutoSave)
   }
@@ -1314,6 +1401,8 @@ function collectCustomModels() {
     if (pool) m.pool = pool
     const agent = get('agentId')
     if (agent) m.agentId = agent
+    const fbAgent = get('fallbackAgentId')
+    if (fbAgent) m.fallbackAgentId = fbAgent
     models.push(m)
   }
   return models

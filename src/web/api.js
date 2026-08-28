@@ -5,7 +5,7 @@ import {
   serializeCookie,
 } from '../util/http.js'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
-import { buildModelsListResponse, agentIdForModel } from '../model.js'
+import { buildModelsListResponse, agentIdForModel, agentFallbackForModel } from '../model.js'
 import {
   saveAccountUser,
   coerceUser,
@@ -324,7 +324,29 @@ export function createWebApi(deps) {
       }
       modelStore.hide(id)
       logger.info('model hidden via web', { model: id })
-      sendJson(res, 200, { ok: true, hidden: modelStore.hidden(), note: `已删除/隐藏模型 ${id}` })
+      sendJson(res, 200, { ok: true, hidden: modelStore.hidden(), note: `已隐藏模型 ${id}` })
+      return true
+    }
+
+    // 前端「模型管理」彻底移除一个自定义模型（不加入 hidden，回退 catalog）。
+    if (method === 'POST' && path === '/api/models/custom/remove') {
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      if (!modelStore) {
+        sendJson(res, 501, { error: '当前进程未启用模型存储' })
+        return true
+      }
+      const body = await readJson(req).catch(() => null)
+      const id = body && typeof body.id === 'string' ? body.id.trim() : ''
+      if (!id) {
+        sendJson(res, 400, { error: '缺少模型 id' })
+        return true
+      }
+      modelStore.remove(id)
+      logger.info('custom model removed via web', { model: id })
+      sendJson(res, 200, { ok: true, models: modelStore.list(), note: `已移除自定义模型 ${id}（回退内置目录）` })
       return true
     }
 
@@ -372,6 +394,10 @@ export function createWebApi(deps) {
           resetAt: info?.resetAt ?? null,
           resetTimeZone: info?.resetTimeZone ?? null,
           agentId: agentIdForModel(id, modelStore ? modelStore.list() : []),
+          fallbackAgentId: agentFallbackForModel(
+            id,
+            modelStore ? modelStore.list() : [],
+          ),
         }))
         sendJson(res, 200, {
           models,
@@ -733,6 +759,8 @@ export function createWebApi(deps) {
         minimalRoutingMode: settingsStore?.get().minimalRoutingMode ?? 'auto',
         minimalRoutingStyle:
           settingsStore?.get().minimalRoutingStyle ?? 'standard',
+        blockPremiumModels:
+          settingsStore?.get().blockPremiumModels === true,
       })
       return true
     }
@@ -815,6 +843,15 @@ export function createWebApi(deps) {
           return true
         }
         patch.minimalRoutingStyle = body.minimalRoutingStyle
+      }
+      if (body.blockPremiumModels !== undefined) {
+        if (typeof body.blockPremiumModels !== 'boolean') {
+          sendJson(res, 400, {
+            error: 'blockPremiumModels 必须是布尔值',
+          })
+          return true
+        }
+        patch.blockPremiumModels = body.blockPremiumModels
       }
       if (!Object.keys(patch).length) {
         sendJson(res, 400, {
