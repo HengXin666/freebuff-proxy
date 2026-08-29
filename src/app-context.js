@@ -217,6 +217,9 @@ export class AccountRuntimes {
         inFlight: chatLock?.inFlight || 0,
         concurrency: chatLock?.capacity || this._accountConcurrency(),
         effectiveProxy: rt?.effectiveProxy || null,
+        // 最近一次探测（refresh GET / probe）结果：让控制台展示"为什么刷新失败"
+        // （country_blocked 强风控 / rate_limited / banned / 凭证无效…）
+        lastProbe: snap?.lastProbe || null,
         session: snap
           ? {
               status: snap.status,

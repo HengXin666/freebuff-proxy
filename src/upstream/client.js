@@ -6,6 +6,13 @@ export const FREEBUFF_INSTANCE_HEADER = 'x-freebuff-instance-id'
 export const FREEBUFF_MODEL_HEADER = 'x-freebuff-model'
 export const FREEBUFF_COMPACT_SESSION_HEADER = 'x-freebuff-compact-session'
 
+/**
+ * 官方 CLI 非 chat 调用的默认 UA（裸 bun fetch，无 UA 覆盖时 Bun 自带）。
+ * 对齐 trefeon bunUserAgent = Bun/1.3.14（匹配 pinned reference/freebuff
+ * .bun-version 与线上探测）。chat 用 ai-sdk UA，见 proxy.js。
+ */
+export const BUN_USER_AGENT = 'Bun/1.3.14'
+
 export class UpstreamError extends Error {
   /**
    * @param {string} message
@@ -171,6 +178,13 @@ export function createUpstreamClient(config, token, opts = {}) {
     const url = path.startsWith('http') ? path : `${apiBase}${path}`
     const headers = {
       ...(init.headers || {}),
+    }
+    // 官方 CLI 的非 chat 调用（session/agent-runs/me/usage）都是裸 bun fetch，
+    // 默认 UA = `Bun/<version>`（对齐 trefeon bunUserAgent = Bun/1.3.14，
+    // 匹配 pinned reference/freebuff/.bun-version）。chat 请求由调用方显式传
+    // ai-sdk UA 覆盖（见 proxy.js forwardCompletions）。
+    if (!headers['user-agent'] && !headers['User-Agent']) {
+      headers['user-agent'] = BUN_USER_AGENT
     }
     // Login-issued tokens require x-codebuff-api-key (Bearer alone → 401).
     if (token && init.includeAuth !== false) {

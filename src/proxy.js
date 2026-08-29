@@ -13,7 +13,7 @@ import {
   safeText,
   UpstreamError,
 } from './upstream/client.js'
-import { timingSafeEqual } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import {
   filterRequestHeaders,
   filterResponseHeaders,
@@ -714,6 +714,10 @@ export function createProxyHandler(ctx) {
 
           let result
           let runId
+          /** 本 run 的 client_id（对齐 trefeon：每个 run 一个 client_id，
+           * 整个 run 的所有 chat 调用复用——client_id 绑定 run 生命周期，
+           * 绝不在同一 run 的多次 chat 间 fanout（free_mode_run_fanout）。 */
+          let clientId
           {
             // 可观测性：响应头标明本次实际使用的账号。
             res.setHeader('x-freebuff-proxy-account', rt.email)
@@ -735,6 +739,7 @@ export function createProxyHandler(ctx) {
             const agentId = agentOverride || agentIdForModel(upstreamModel, customModels())
             try {
               runId = await rt.upstream.startAgentRun({ agentId })
+              clientId = newIds().clientId
             } catch (agentErr) {
               if (
                 agentErr instanceof UpstreamError &&
@@ -755,6 +760,7 @@ export function createProxyHandler(ctx) {
                   })
                   agentOverride = fbAgentId
                   runId = await rt.upstream.startAgentRun({ agentId: fbAgentId })
+                  clientId = newIds().clientId
                 } else {
                   throw agentErr
                 }
@@ -775,6 +781,8 @@ export function createProxyHandler(ctx) {
               upstreamModel,
               snap.instanceId,
               runId,
+              agentId,
+              clientId,
             )
             result = await forwardCompletions({
               req,
@@ -958,8 +966,9 @@ export function createProxyHandler(ctx) {
     }
   }
 
-  function buildForwardBody(clientBody, upstreamModel, instanceId, runId) {
-    const { clientId } = newIds()
+  function buildForwardBody(clientBody, upstreamModel, instanceId, runId, agentId, clientId) {
+    const { clientId: fallbackClientId } = newIds()
+    const effectiveClientId = clientId || fallbackClientId
     let body = stripFreebuffConversationState({
       ...clientBody,
       model: upstreamModel,
@@ -988,8 +997,10 @@ export function createProxyHandler(ctx) {
     }
     // Free mode requires a system message opening with the Freebuff CLI marker
     // ("You are Buffy, the strategic coding assistant."). Without it the
-    // upstream returns free_mode_cli_required.
-    body.messages = ensureFreebuffSystemMessages(body.messages)
+    // upstream returns free_mode_cli_required. base3-free-* agent 用 base3
+    // 规范开场（对齐 trefeon PR #207：base3 run 必须以 base3 canonical 身份
+    // 开头，而不是 base2 的 strategic-assistant 身份）。
+    body.messages = ensureFreebuffSystemMessages(body.messages, agentId)
     const freeToolSignatureEnabled =
       settingsStore?.get().freeToolSignatureEnabled !== false
     body.tools = ensureFreebuffToolSignature(
@@ -1002,15 +1013,32 @@ export function createProxyHandler(ctx) {
         ? { ...body.codebuff_metadata }
         : {}
     // run_id MUST be server-issued via POST /api/v1/agent-runs (START).
+    // client_id：SDK 形 13 位 base36（对齐官方 CLI），每 run 一次，绝不用
+    // 自有前缀——上游 cf-worker-signals.ts 的 looksLikeProxyClientId 会指纹
+    // 代理形态 client id（详见 util/http.js generateClientId）。
     body.codebuff_metadata = {
       ...existingMeta,
       run_id: runId,
-      client_id: clientId,
+      client_id: effectiveClientId,
       cost_mode: 'free',
       freebuff_instance_id: instanceId,
+      ...(existingMeta.trace_session_id
+        ? {}
+        : { trace_session_id: randomUUID() }),
     }
-    if (body.provider && typeof body.provider === 'object') {
-      body.provider = { ...body.provider }
+    // provider.data_collection=deny：官方 CLI 每次 chat 都带（拒绝数据采集），
+    // 缺失反而与官方客户端不一致。客户端自带 provider 时保留其字段，补上 deny。
+    body.provider = {
+      ...(body.provider && typeof body.provider === 'object'
+        ? body.provider
+        : {}),
+      data_collection: 'deny',
+    }
+    // CLI 全局停止序列：JSON 编码带引号的哨兵 `"cb_easp"`（agent-runtime
+    // globalStopSequence = JSON.stringify(endsAgentStepParam)），客户端没给
+    // stop 时补上，与官方 CLI 一致。
+    if (!body.stop) {
+      body.stop = [`"cb_easp"`]
     }
     return body
   }
@@ -1055,12 +1083,15 @@ export function createProxyHandler(ctx) {
     const headers = {
       ...filterRequestHeaders(req.headers),
       'content-type': 'application/json',
-      accept:
-        stream
-          ? 'text/event-stream'
-          : req.headers.accept || 'application/json',
-      // Match Codebuff/Freebuff SDK UA used on the official free path.
-      'user-agent': 'ai-sdk/openai-compatible/freebuff-proxy/codebuff',
+      // 官方 CLI chat 的 Accept 是 `application/json, text/event-stream`
+      // （对齐 trefeon chat.go:105）。流式路径用官方值；非流式保持 application/json。
+      accept: stream
+        ? 'application/json, text/event-stream'
+        : req.headers.accept || 'application/json',
+      // Match the official CLI chat UA exactly（对齐 trefeon cliUserAgent）：
+      // ai-sdk/openai-compatible/<sdk-version>/codebuff。绝不能带 freebuff-proxy
+      // 等自有标记——上游按 UA 指纹代理客户端（参考 trefeon client.go 注释）。
+      'user-agent': 'ai-sdk/openai-compatible/1.0.0/codebuff',
       ...freebuffAuthHeaders(upstream.token),
     }
 

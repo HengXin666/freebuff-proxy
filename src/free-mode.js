@@ -8,6 +8,20 @@ export const FREEBUFF_SYSTEM_OPENING =
   'You are Buffy, the strategic coding assistant.'
 
 /**
+ * base3 世代 root（base3-free-*）的规范开场（对齐 trefeon cliSystemMarkerBase3：
+ * agents/base3.ts createBase3 的 canonical opening）。base3 运行必须以它开头，
+ * 而不是 base2 的 "strategic coding assistant"（对齐 trefeon PR #207：
+ * "a base3 run must open with the BASE3 canonical identity, not base2's"）。
+ */
+export const FREEBUFF_SYSTEM_OPENING_BASE3 =
+  'You are Buffy, the coding agent behind Codebuff.'
+
+/** 判断 agentId 是否 base3 世代 root（base3-free-*）。 */
+export function isBase3Agent(agentId) {
+  return typeof agentId === 'string' && /^base3-/.test(agentId)
+}
+
+/**
  * Minimal system prompt that satisfies free_mode system-marker checks.
  * Kept short so user content dominates; opening must be byte-prefix exact.
  */
@@ -58,22 +72,36 @@ export function ensureFreebuffToolSignature(tools, enabled = true) {
  * that gate requirement.
  *
  * @param {unknown} messages
+ * @param {string} [agentId]  base3-free-* 时用 base3 规范开场（对齐 trefeon）
  * @returns {any[]}
  */
-export function ensureFreebuffSystemMessages(messages) {
+export function ensureFreebuffSystemMessages(messages, agentId) {
   const list = Array.isArray(messages) ? messages.map((m) => ({ ...m })) : []
+
+  const opening = isBase3Agent(agentId)
+    ? FREEBUFF_SYSTEM_OPENING_BASE3
+    : FREEBUFF_SYSTEM_OPENING
+  const freePrompt = isBase3Agent(agentId)
+    ? `${FREEBUFF_SYSTEM_OPENING_BASE3}
+
+You help the user with coding and technical questions. Be concise and accurate.
+Follow the user's instructions in subsequent messages.
+`
+    : FREEBUFF_FREE_SYSTEM_PROMPT
 
   const firstSystemIdx = list.findIndex((m) => m && m.role === 'system')
   if (firstSystemIdx === -1) {
-    return [
-      { role: 'system', content: FREEBUFF_FREE_SYSTEM_PROMPT },
-      ...list,
-    ]
+    return [{ role: 'system', content: freePrompt }, ...list]
   }
 
   const sys = list[firstSystemIdx]
   const content = normalizeContentToText(sys.content)
-  if (content.trimStart().startsWith(FREEBUFF_SYSTEM_OPENING)) {
+  // 任一规范开场已存在则保持原样（门禁是 any-of-5 trimmed prefix）。
+  const anyCanonical = [
+    FREEBUFF_SYSTEM_OPENING,
+    FREEBUFF_SYSTEM_OPENING_BASE3,
+  ].some((o) => content.trimStart().startsWith(o))
+  if (anyCanonical) {
     // Keep as-is (already valid freebuff opening)
     return list
   }
@@ -81,7 +109,7 @@ export function ensureFreebuffSystemMessages(messages) {
   // Prepend canonical opening without discarding the caller's system text.
   list[firstSystemIdx] = {
     ...sys,
-    content: `${FREEBUFF_SYSTEM_OPENING}\n\n${content}`,
+    content: `${opening}\n\n${content}`,
   }
   return list
 }

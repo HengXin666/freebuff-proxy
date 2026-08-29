@@ -26,6 +26,26 @@ export function startServer(deps) {
   const proxy = createProxyHandler(deps)
   const web = createWebApi(deps)
 
+  // 运行时 catalog 自动同步（对齐 trefeon Registry.Refresh：启动立即一次 + 每 6h，
+  // 失败保留旧缓存）。不阻塞启动；失败静默回落内置 catalog。
+  try {
+    import('./model.js')
+      .then((m) => {
+        m.startCatalogSync?.({
+          log: (msg) => logger.info(msg),
+        })
+      })
+      .catch((err) => {
+        logger.warn('catalog auto-sync disabled', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+  } catch (err) {
+    logger.warn('catalog auto-sync disabled', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
   const server = http.createServer((req, res) => {
     handle(req, res).catch((err) => {
       logger.error('unhandled request error', {

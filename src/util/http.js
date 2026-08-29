@@ -32,10 +32,29 @@ export function sendJson(res, status, body, extraHeaders = {}) {
   res.end(payload)
 }
 
+/**
+ * SDK-faithful 13-char base36 client id（对齐官方 CLI：
+ * `Math.random().toString(36).substring(2, 15)`）。
+ *
+ * 风控关键：上游 cf-worker-signals.ts 的 looksLikeProxyClientId 会把
+ * `sess:`/`run:` 前缀、`wf-<8hex>` 等自定义形态指纹为代理客户端。
+ * 绝不能带 freebuff-proxy 等自有前缀——必须长得像官方 SDK 随机 id。
+ * @returns {string} 13 位 base36
+ */
+export function generateClientId() {
+  // 每字符 0-9a-z；36^13 ≈ 1.7e20，与 Math.random() 双精度 53 位随机
+  // 粒度对齐即可（官方也是 Math.random 伪随机，非加密）。
+  let out = ''
+  for (let i = 0; i < 13; i++) {
+    out += Math.floor(Math.random() * 36).toString(36)
+  }
+  return out
+}
+
 export function newIds() {
   return {
     runId: randomUUID(),
-    clientId: `freebuff-proxy-${randomUUID().slice(0, 8)}`,
+    clientId: generateClientId(),
   }
 }
 
@@ -53,6 +72,34 @@ export function filterRequestHeaders(headers) {
     'te',
     'trailers',
     'upgrade',
+    // 代理/自动化识别头（对齐 trefeon stealth.SanitizeHeaders proxyHeaders）：
+    // 真实客户端从不发这些；下游若带（ingress 反代/代理链注入），透传上游
+    // 就是自报代理身份，必须剥离。
+    'x-forwarded-for',
+    'x-forwarded-proto',
+    'x-forwarded-host',
+    'x-real-ip',
+    'x-proxy-user-ip',
+    'via',
+    'x-via',
+    'proxy-connection',
+    'x-proxy-agent',
+    'x-request-id',
+    'cf-connecting-ip',
+    'cf-ipcountry',
+    'cf-ray',
+    'cf-visitor',
+    'true-client-ip',
+    'x-originating-ip',
+    'x-remote-ip',
+    'x-remote-addr',
+    'x-client-ip',
+    'x-host',
+    'x-correlation-id',
+    'x-trace-id',
+    'x-amzn-trace-id',
+    'x-cache',
+    'x-served-by',
   ])
   /** @type {Record<string, string>} */
   const out = {}

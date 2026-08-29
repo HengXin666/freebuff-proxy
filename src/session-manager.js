@@ -37,6 +37,13 @@ export class SessionManager {
     this._pollTimer = null
     /** 当前正在处理中的请求数（在途 chat 时跳过轮询 GET，避免干扰活跃会话）。 */
     this._inFlight = 0
+    /**
+     * 最近一次探测（refresh GET）的结果：成功/失败 + 具体原因。
+     * 供控制台展示"为什么这个账号刷新失败"（country_blocked / rate_limited /
+     * invalid key…），而不是笼统的"冷却中"。成功时 ok=true。
+     * @type {null | { ok: boolean, at: string, code?: string | null, status?: number | null, message?: string } }
+     */
+    this.lastProbe = null
     /** 等待在途请求归零的监听器（会话平滑切换/优雅释放时用）。 */
     this._idleWaiters = []
   }
@@ -106,7 +113,7 @@ export class SessionManager {
 
   getSnapshot() {
     const s = this.session
-    if (!s) return { status: 'none', quota: this.quota }
+    if (!s) return { status: 'none', quota: this.quota, lastProbe: this.lastProbe }
     const remainingMs =
       s.expiresAt != null
         ? Math.max(0, Date.parse(s.expiresAt) - Date.now())
@@ -116,6 +123,7 @@ export class SessionManager {
       remainingMs,
       live: this.hasLiveSlot(s),
       quota: this.quota,
+      lastProbe: this.lastProbe,
     }
   }
 
@@ -367,12 +375,38 @@ export class SessionManager {
       if (this._inFlight > 0) return this.session
       const opts = {}
       if (this.session?.instanceId) opts.instanceId = this.session.instanceId
-      const body = await this.upstream.freebuffSession('GET', opts)
-      this._apply(body)
-      if (this.hasLiveSlot()) this._armPoll()
-      else this._clearPoll()
-      return this.session
+      try {
+        const body = await this.upstream.freebuffSession('GET', opts)
+        this._apply(body)
+        this._setLastProbe({ ok: true })
+        if (this.hasLiveSlot()) this._armPoll()
+        else this._clearPoll()
+        return this.session
+      } catch (err) {
+        this._setLastProbe({
+          ok: false,
+          code: err?.code || (err instanceof Error ? err.name : null),
+          status: err?.status ?? null,
+          message: err instanceof Error ? err.message : String(err),
+        })
+        throw err
+      }
     })
+  }
+
+  _setLastProbe(patch) {
+    const now = new Date().toISOString()
+    if (patch.ok) {
+      this.lastProbe = { ok: true, at: now, code: null, status: null, message: null }
+    } else {
+      this.lastProbe = {
+        ok: false,
+        at: now,
+        code: patch.code ?? null,
+        status: patch.status ?? null,
+        message: patch.message ?? null,
+      }
+    }
   }
 
   async release() {

@@ -568,6 +568,8 @@ export function createWebApi(deps) {
             key: a.key,
             email: a.email,
             ok: false,
+            code: err?.code ?? null,
+            status: err?.status ?? null,
             error: err instanceof Error ? err.message : String(err),
           })
         }
@@ -603,8 +605,10 @@ export function createWebApi(deps) {
           ok: false,
           key,
           email: a.email,
+          code: err?.code ?? null,
+          status: err?.status ?? null,
           error: err instanceof Error ? err.message : String(err),
-          note: '探测失败，见 error 字段',
+          note: '探测失败，见 code/error 字段',
         })
       }
       return true

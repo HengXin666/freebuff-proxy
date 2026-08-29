@@ -455,12 +455,20 @@ function buildAccountRow(a, i) {
   const sess = a.session?.live
     ? `${a.session.model} · ${fmtMs(a.session.remainingMs)}`
     : (a.session?.status === 'none' ? '无活跃' : (a.session?.status || '—'))
+  // 探测失败原因（country_blocked 强风控 / rate_limited / banned / 凭证无效…）
+  const probeFail = a.lastProbe && a.lastProbe.ok === false ? a.lastProbe : null
+  const probe = probeFail ? probeReason(probeFail.code, probeFail.message) : null
   const statusDot = a.available
     ? el('span', { class: 'status-dot ok' })
     : el('span', { class: 'status-dot err' })
   const statusText = a.available
     ? '可用'
     : (cd ? `冷却至 ${cd}` : '冷却中')
+  const statusBadge = probe
+    ? el('span', { class: 'badge err', style: 'display:inline-flex', title: probe.tip },
+        [statusDot, probe.label])
+    : el('span', { class: a.available ? 'badge ok' : 'badge err', style: 'display:inline-flex' },
+        [statusDot, statusText])
   const ops = el('div', { class: 'row', style: 'gap:6px' }, [
     el('button', { class: 'icon muted', title: '检测该账号（只读拉取状态/模型列表，不占额度）', onclick: (e) => probeAccount(a, e.currentTarget) }, icon('activity', 14)),
     state.me.role === 'admin'
@@ -477,7 +485,7 @@ function buildAccountRow(a, i) {
       a.id && a.id !== a.email ? el('div', { class: 'muted', style: 'font-size:11px' }, `ID ${a.id}`) : '',
       a.lastUsed ? el('span', { class: 'badge ok', style: 'margin-left:6px' }, '最近使用') : '',
     ]),
-    el('td', {}, el('span', { class: 'badge', class: a.available ? 'badge ok' : 'badge err', style: 'display:inline-flex' }, [statusDot, statusText])),
+    el('td', {}, statusBadge),
     el('td', { class: 'mono', style: 'font-size:12px' }, sess),
     el('td', { class: 'mono' }, `${a.inFlight || 0}/${a.concurrency || 1}`),
     el('td', {}, fmtQuota(a.quota)),
@@ -485,6 +493,31 @@ function buildAccountRow(a, i) {
     el('td', {}, cd ? el('span', { class: 'badge warn' }, a.cooldownCode || 'cooldown') : el('span', { class: 'muted' }, '—')),
     el('td', {}, ops),
   ])
+}
+
+/**
+ * 探测失败原因 → 可读文案（强风控国家封锁 / 限流 / 封禁 / 凭证无效等）。
+ * label 用于徽章短标签，tip 是 tooltip 完整原因。
+ */
+function probeReason(code, message) {
+  const c = String(code || '').toLowerCase()
+  const msg = message || c || '未知原因'
+  if (c.includes('country_blocked') || c.includes('countryblocked')) {
+    return { label: '出口风控', tip: `国家/出口 IP 风控：${msg}` }
+  }
+  if (c.includes('banned')) {
+    return { label: '已封禁', tip: `账号被封禁：${msg}` }
+  }
+  if (c.includes('ip_capped')) {
+    return { label: 'IP 上限', tip: `IP 达上限：${msg}` }
+  }
+  if (/rate_limited|spend_limited|free_mode_rate_limited/.test(c)) {
+    return { label: '限流', tip: `账号限流/额度：${msg}` }
+  }
+  if (c.includes('unauthorized') || c.includes('invalid') || c.includes('401')) {
+    return { label: '凭证无效', tip: `凭据失效（需重新登录）：${msg}` }
+  }
+  return { label: '探测失败', tip: msg }
 }
 
 /** 账号表局部刷新（不重建整个页面） */
@@ -543,9 +576,9 @@ async function probeAccount(a, btn) {
       toast(`✅ ${a.email} 可用 · ${modelCount} 个模型${models ? '：' + models : ''}`)
       refreshAccountsCard()
     } else {
-      const code = sess?.status || sess?.error || r.error || '未知'
-      const bannedHint = /banned|ip_capped|free_mode_rate_limited|spend_limited|rate_limited/i.test(String(code))
-      toast(`⚠️ ${a.email} 检测异常：${String(code).slice(0, 120)}${bannedHint ? '（疑似封禁/限流）' : ''}`, true)
+      const code = r.code || sess?.status || sess?.error || r.error || '未知'
+      const reason = probeReason(code, r.error || r.message)
+      toast(`⚠️ ${a.email} 检测异常：${reason.label} — ${String(reason.tip).slice(0, 140)}`, true)
     }
   } catch (err) {
     restore()

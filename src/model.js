@@ -21,8 +21,25 @@ const CATALOG_PATH = path.join(
   'freebuff-catalog.json',
 )
 
-/** 读取内置 catalog（解析失败时回退空列表，不阻塞启动）。 */
-function loadCatalog() {
+/**
+ * 运行时 catalog 缓存（src/catalog/runtime-sync.mjs 写入）。
+ * 对齐 trefeon/freebuff-proxy Registry.Refresh：启动后每 6h 从上游源码拉取
+ * model→agent 映射写到这里；model.js 优先读它（存在则用之），否则回落内置 catalog。
+ * 缓存损坏/不存在时静默回落，绝不阻塞启动。
+ */
+export const CATALOG_CACHE_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'data',
+  'catalog-cache.json',
+)
+
+/**
+ * 读取内置 catalog（解析失败时回退空列表，不阻塞启动）。
+ * 内置 catalog 的 pool/note/displayName 是手工精修过的静态元信息
+ * （premium/referral/withdrawn 语义），动态缓存不覆盖它们。
+ */
+function loadBuiltinCatalog() {
   try {
     const raw = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf8'))
     return Array.isArray(raw?.models) ? raw.models : []
@@ -34,6 +51,42 @@ function loadCatalog() {
     )
     return []
   }
+}
+
+/**
+ * 加载合并后的 catalog：
+ *   内置 catalog（静态元信息：pool/note/displayName/accessTiers）+
+ *   运行时缓存（data/catalog-cache.json，动态 agent 映射：agentId/fallbackAgentId）。
+ *
+ * 合并规则（对齐 trefeon：registry 管 agent 映射、modelcat 管 pool/cap）：
+ *   - 缓存里的模型若内置 catalog 已存在 → 保留内置的 pool/note 等元信息，
+ *     但 agent 映射（agentId/fallbackAgentId）用缓存的（跟随上游最新状态）；
+ *   - 缓存里新增的模型（内置没有）→ 直接采用缓存条目；
+ *   - 缓存不存在/损坏/为空 → 纯内置 catalog（基线行为，与改动前一致）。
+ */
+function loadCatalog() {
+  const builtin = loadBuiltinCatalog()
+  let cached = null
+  try {
+    const raw = JSON.parse(fs.readFileSync(CATALOG_CACHE_PATH, 'utf8'))
+    if (Array.isArray(raw?.models) && raw.models.length > 0) cached = raw.models
+  } catch {
+    // 缓存不存在/损坏 → 纯内置 catalog
+  }
+  if (!cached) return builtin
+
+  const builtinById = new Map(builtin.map((m) => [m.id, m]))
+  return cached.map((cm) => {
+    const bm = builtinById.get(cm.id)
+    if (!bm) return cm
+    // 内置元信息优先（手工精修），agent 映射跟随缓存（上游最新）。
+    return {
+      ...cm,
+      ...bm,
+      agentId: cm.agentId || bm.agentId,
+      fallbackAgentId: cm.fallbackAgentId || bm.fallbackAgentId,
+    }
+  })
 }
 
 /**
@@ -393,4 +446,47 @@ export function isPremiumModel(modelId, customModels) {
   const cat = FREEBUFF_AVAILABLE_MODELS.find((m) => m.id === modelId)
   if (cat) return cat.pool === 'premium'
   return false
+}
+
+/**
+ * 启动运行时 catalog 自动同步（对齐 trefeon refreshLoop：启动立即一次 + 每 intervalMs 一次）。
+ * 拉上游源码解析 model→agent，原子写 CATALOG_CACHE_PATH；失败保留旧缓存。
+ * 供 server 启动时调用；懒 import runtime-sync，避免 model.js 顶部引入网络依赖。
+ *
+ * @param {{ intervalMs?: number, log?: (msg: string) => void }} [opts]
+ * @returns {{ stop: () => void, refresh: () => Promise<{ ok: boolean, error?: string, models?: number }> }}
+ */
+export function startCatalogSync(opts = {}) {
+  // 动态 import：仅在 server 主动调用时加载网络同步逻辑。
+  let sync = null
+  try {
+    // eslint-disable-next-line no-undef
+    sync = { start: (...a) => import('./catalog/runtime-sync.mjs').then((m) => m.startCatalogSync(...a)) }
+  } catch {
+    /* runtime-sync 缺失时静默禁用自动同步 */
+  }
+  if (!sync) {
+    return { stop: () => {}, refresh: async () => ({ ok: false, error: 'runtime-sync unavailable' }) }
+  }
+  const inner = { current: null }
+  // 先同步拉起模块再启动循环（首启即刷）。
+  import('./catalog/runtime-sync.mjs')
+    .then((m) => {
+      inner.current = m.startCatalogSync(CATALOG_CACHE_PATH, {
+        intervalMs: opts.intervalMs,
+        log: opts.log,
+      })
+    })
+    .catch((err) => {
+      if (opts.log) {
+        opts.log(`catalog sync disabled: ${err instanceof Error ? err.message : err}`)
+      }
+    })
+  return {
+    stop: () => inner.current?.stop?.(),
+    refresh: () =>
+      inner.current
+        ? inner.current.refresh()
+        : Promise.resolve({ ok: false, error: 'sync not started yet' }),
+  }
 }

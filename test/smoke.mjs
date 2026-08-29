@@ -227,8 +227,18 @@ globalThis.fetch = async (url, init = {}) => {
     )
     assert.ok(Array.isArray(body.messages))
     assert.equal(body.messages[0].role, 'system')
+    // base3 世代 root（base3-free-*）用 base3 规范开场（对齐 trefeon PR #207）：
+    // "a base3 run must open with the BASE3 canonical identity, not base2's"。
+    // luna 系在本项目强制 base3，故其请求以 base3 开场是正确行为。
+    // chat 请求 body 里没有 agentId 字段（agentId 只在 agent-runs START），
+    // 这里按模型推断：luna 系 = base3 run。
+    const isBase3Run = /luna/.test(body.model)
+    const msg0 = String(body.messages[0].content)
     assert.ok(
-      String(body.messages[0].content).startsWith(FREEBUFF_SYSTEM_OPENING),
+      isBase3Run
+        ? msg0.startsWith('You are Buffy, the coding agent behind Codebuff.')
+        : msg0.startsWith(FREEBUFF_SYSTEM_OPENING),
+      `messages[0] 应以 ${isBase3Run ? 'base3' : 'base2'} 规范开场, got ${msg0.slice(0, 80)}`,
     )
     const userMsg = body.messages.find((m) => m.role === 'user')
     assert.ok(userMsg && String(userMsg.content).length > 0)
@@ -1509,7 +1519,15 @@ for (const model of verifiedSpecialModels) {
     assert.equal(body.conversation_id, undefined)
     assert.equal(body.codebuff_metadata.conversation_id, undefined)
     assert.equal(body.codebuff_metadata.agent_id, undefined)
-    assert.match(body.codebuff_metadata.client_id, /^freebuff-proxy-/)
+    // client_id 必须是 SDK 形 13 位 base36（对齐官方 CLI
+    // Math.random().toString(36).substring(2,15)）——绝不能用 freebuff-proxy
+    // 等自有前缀：上游 cf-worker-signals.ts 的 looksLikeProxyClientId 会把
+    // 自定义形态指纹为代理客户端（对齐 trefeon generateClientID）。
+    assert.match(
+      body.codebuff_metadata.client_id,
+      /^[0-9a-z]{13}$/,
+      `client_id 应为 13 位 base36 SDK 形, got ${body.codebuff_metadata.client_id}`,
+    )
   }
   assert.notEqual(
     forwarded[0].codebuff_metadata.client_id,
