@@ -1,6 +1,6 @@
 {
   "name": "freebuff-proxy",
-  "version": "1.10.2",
+  "version": "1.10.3",
   "private": true,
   "description": "OpenAI-compatible reverse proxy that handles Freebuff auth and free-session admission",
   "repository": {
