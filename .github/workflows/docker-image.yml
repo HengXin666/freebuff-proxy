@@ -85,9 +85,15 @@ jobs:
       # 版本注入：把流水线解析出的版本号硬编码进镜像内 dashboard/version.json。
       # 镜像里显示的版本由这里决定（tag→1.10.0；分支/PR→dev+sha），
       # 与本地无关；package.json 版本只是本地开发/门禁参考。
+      # 注意：docker/metadata-action 的 `version` 输出只在**语义化 tag** 构建时才有值，
+      # 主分支 push 时（同时会推 latest 镜像）`outputs.version` 为空，若直接回退 'dev'
+      # 会导致 latest 镜像永远显示 dev。因此 tag 用 metadata 版本，分支/默认分支构建
+      # 回退到 package.json 版本（发版时已由 npm version 同步 bump，是唯一版本真源），
+      # 保证 `latest` 也带上真实版本号而不是 dev。
       - name: Inject version into frontend (hardcoded by pipeline)
         run: |
-          VERSION="${{ steps.meta.outputs.version || 'dev' }}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          VERSION="${steps.meta.outputs.version:-${PKG_VERSION}}"
           SHA="${{ github.sha }}"
           node scripts/inject-version.mjs --version "${VERSION}" --repo "https://github.com/${{ github.repository }}"
           # 额外把 commit sha 也带上，便于追版本来源

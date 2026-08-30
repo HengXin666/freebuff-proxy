@@ -53,7 +53,7 @@ configureLogger({ level: 'error' })
 
 const originalFetch = globalThis.fetch
 let calls = []
-/** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion' | 'err_500_a' | 'capacity_once' | 'capacity_all' | 'run_500_a' | 'network_err_a' | 'gate_twice_a' | 'hold_once' | 'legacy_luna_once' | 'luna_base2_retired'} */
+/** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion' | 'err_500_a' | 'capacity_once' | 'capacity_all' | 'run_500_a' | 'run_403_a' | 'network_err_a' | 'gate_twice_a' | 'hold_once' | 'legacy_luna_once' | 'luna_base2_retired'} */
 let mockMode = 'ok'
 let sessionPosts = 0
 let sessionDeletes = 0
@@ -161,6 +161,19 @@ globalThis.fetch = async (url, init = {}) => {
         ''
       if (mockMode === 'run_500_a' && String(runAuth).includes('token-a')) {
         return jsonRes({ error: 'internal_error', message: 'run boom' }, 500)
+      }
+      // startAgentRun 以 403 拒绝该账号（非 banned/ip_capped 等账号级封禁 code，
+      // 只是该账号+agent 组合不可用）：必须冷却当前账号并换下一个，而不是
+      // 把 start_agent_run_failed 直接甩给用户（回归：403 曾因不在换号条件内而
+      // 不换号、第一次尝试就报错给用户）。
+      if (mockMode === 'run_403_a' && String(runAuth).includes('token-a')) {
+        return jsonRes(
+          {
+            error: 'start_agent_run_failed',
+            message: 'This account/agent combination cannot start a run.',
+          },
+          403,
+        )
       }
       // agent 兜底：主 agent（base2）被拒，base3 孪生成功
       if (mockMode === 'agent_fallback' && body.agentId === 'base2-free-deepseek-flash') {
@@ -3033,6 +3046,62 @@ for (const model of verifiedSpecialModels) {
   await runRuntimes.shutdown()
   runServer.close()
   fs.rmSync(runDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
+
+// startAgentRun 403（start_agent_run_failed，非账号级封禁 code）→ 也应冷却
+// 当前账号换下一个，最终成功（回归：403 不在换号条件内，曾不换号、首次即报错给用户）
+{
+  const run403Dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-run403-'))
+  saveAccountUser(run403Dir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
+  saveAccountUser(run403Dir, { id: 'b', email: 'b@example.com', authToken: 'token-b' })
+  const run403Config = loadConfig()
+  run403Config.server.host = '127.0.0.1'
+  run403Config.server.port = 0
+  run403Config.server.apiKeys = ['sk-test']
+  run403Config.upstream.credentialsDir = run403Dir
+  run403Config.session.pollIntervalSec = 3600
+  const run403Runtimes = new AccountRuntimes(run403Config)
+  const run403Server = await startServer({
+    config: run403Config,
+    runtimes: run403Runtimes,
+    ...(() => {
+      const rt = run403Runtimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const run403Port = run403Server.address().port
+  mockMode = 'run_403_a'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  const res = await fetch(`http://127.0.0.1:${run403Port}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  assert.equal(res.headers.get('x-freebuff-proxy-account'), 'b@example.com')
+  assert.equal(sessionPosts, 2, `expected 2 session POSTs, got ${sessionPosts}`)
+  const run403Accounts = run403Runtimes.list()
+  const run403A = run403Accounts.find((x) => x.email === 'a@example.com')
+  assert.equal(run403A.available, false)
+  assert.equal(run403A.cooldownCode, 'start_agent_run_failed')
+  await run403Runtimes.shutdown()
+  run403Server.close()
+  fs.rmSync(run403Dir, { recursive: true, force: true })
   mockMode = 'ok'
 }
 

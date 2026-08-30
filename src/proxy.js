@@ -644,6 +644,19 @@ export function createProxyHandler(ctx) {
             // 已经换到不同账号 → 重置同账号 gate 计数，并释放上一账号的串行化锁
             sameAccountGateRetries = 0
             dropChatHold()
+            // agentOverride 是针对上一账号的 agent 覆盖（free_mode_invalid_agent_model
+            // 等按该账号+agent 组合判定）。换到新账号后必须清空，让新账号从它自己的
+            // 主 agent 重新尝试——否则上一账号被拒的 agent 覆盖会泄漏到新账号上，
+            // 使新账号跳过主 agent、直接用孪生/兜底（偏离其应有主 agent）。
+            if (agentOverride !== null) {
+              logger.warn('reset agent override on account switch', {
+                fromKey: lastKey,
+                toKey: rt.key,
+                model: upstreamModel,
+                wasAgentOverride: agentOverride,
+              })
+              agentOverride = null
+            }
           }
           lastKey = rt.key
 
@@ -1345,8 +1358,10 @@ function methodHasBody(method) {
 
 /**
  * 上游 chat/completions 报错时是否应冷却当前账号并换号重试：
- * 429（限流/配额）、5xx（服务端故障）、403 账号级封禁（banned/country_blocked/ip_capped）
- * 以及 free_mode_rate_limited 等账号级限流 code。4xx 客户端错误不换号。
+ * 429（限流/配额）、5xx（服务端故障）、403 账号级封禁（banned/country_blocked/ip_capped）、
+ * free_mode_rate_limited 等账号级限流 code，以及 start_agent_run_failed（startAgentRun
+ * 被上游拒绝＝该账号+agent 组合不可用／账号级问题，即使 403/4xx 也应按账号故障换号）。
+ * 其余 4xx 客户端错误不换号。
  * @param {number} status
  * @param {unknown} code
  * @returns {boolean}
@@ -1354,12 +1369,17 @@ function methodHasBody(method) {
 function shouldSwitchAccountOnError(status, code) {
   if (status >= 500) return true
   if (status === 429) return true
+  const codeStr = String(code)
   if (
     status === 403 &&
-    ['banned', 'country_blocked', 'ip_capped'].includes(String(code))
+    ['banned', 'country_blocked', 'ip_capped'].includes(codeStr)
   ) {
     return true
   }
+  // startAgentRun 失败：上游拒绝启动 run（模型/agent 不可用、该账号被限制等）。
+  // 无论返回什么状态码都冷却当前账号换下一个，而不是直接把错误甩给用户——
+  // 试完所有账号（预算=账号数+1）才把错误返回给客户端。
+  if (codeStr === 'start_agent_run_failed') return true
   return extractRateLimitError({ error: code }) !== null
 }
 
