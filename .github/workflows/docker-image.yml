@@ -92,8 +92,14 @@ jobs:
       # 保证 `latest` 也带上真实版本号而不是 dev。
       - name: Inject version into frontend (hardcoded by pipeline)
         run: |
-          PKG_VERSION="$(node -p "require('./package.json').version")"
-          VERSION="${steps.meta.outputs.version:-${PKG_VERSION}}"
+          # metadata-action 的 version 输出：语义化 tag 才有值（如 1.10.3）；
+          # 主分支 push（同时推 latest）时为空。空则回退到 package.json 版本
+          # （发版时已由 npm version 同步 bump，是唯一版本真源），保证 latest
+          # 也带真实版本号，而不是永远显示 dev。
+          VERSION="${{ steps.meta.outputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="$(node -p "require('./package.json').version")"
+          fi
           SHA="${{ github.sha }}"
           node scripts/inject-version.mjs --version "${VERSION}" --repo "https://github.com/${{ github.repository }}"
           # 额外把 commit sha 也带上，便于追版本来源
