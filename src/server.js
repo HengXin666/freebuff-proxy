@@ -1,6 +1,7 @@
 import http from 'node:http'
 import path from 'node:path'
 import { createProxyHandler } from './proxy.js'
+import { createProxyFetch } from './upstream/client.js'
 import { createWebApi } from './web/api.js'
 import { serveStatic } from './web/static.js'
 import { logger } from './util/log.js'
@@ -33,6 +34,8 @@ export function startServer(deps) {
       .then((m) => {
         m.startCatalogSync?.({
           log: (msg) => logger.info(msg),
+          // catalog 拉 GitHub 源也走配置的代理（含全局池），避免旁路直连。
+          fetchImpl: createProxyFetch(config).fetch,
         })
       })
       .catch((err) => {

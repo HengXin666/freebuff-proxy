@@ -117,6 +117,78 @@ function hashIndex(key, n) {
 }
 
 /**
+ * 构造带代理池的 fetch（供 createUpstreamClient / createProxyFetch 共用）。
+ *  - 无代理 / 单代理 / env：直接走对应 dispatcher
+ *  - 全局池：优先分配到的代理，连接级失败（fetch 抛错）时依次回落到池内下一个；
+ *    单次尝试带超时（`fetchWithAttemptTimeout`）——代理"连接成功但永不响应"
+ *    （网络波动/黑洞）也会被视为失败并回落下一个，而不是干等到全局 timeoutMs。
+ *
+ * 重要：**单代理池也必须走 pool 分支**。resolveProxy 的 pool 分支只返回 agents
+ * 数组、没有 agent 字段；若把 <=1 的池当"非池"处理，agent 恒为 undefined →
+ * 走 globalThis.fetch 直连，代理被整个绕过（上游拿到宿主真实出口 IP，账号被
+ * 按地区判定、报 session_model_mismatch/limited 等——issue #5 根因）。
+ * 单代理池走同一循环：dispatcher=池内唯一代理，连接失败仍走兜底重试。
+ * @param {ReturnType<typeof resolveProxy>} proxyRes
+ * @param {number} poolIndex 本账号分配到的池内下标（稳定哈希）
+ */
+function buildFetchWithProxy(proxyRes, poolIndex) {
+  return async function fetchWithProxy(url, init) {
+    if (proxyRes.kind !== 'pool') {
+      const agent = proxyRes.agent
+      return (agent ? undiciFetch : globalThis.fetch)(url, {
+        ...init,
+        ...(agent ? { dispatcher: agent } : {}),
+      })
+    }
+    // 单代理尝试超时：取调用方超时与 20s 的较小值（代理 CONNECT + TLS + 响应头
+    // 正常数秒内完成，20s 足够；整体请求的超时仍由调用方 signal 兜底）。
+    const callerMs =
+      Number.isFinite(init.timeoutMs) && init.timeoutMs > 0 ? init.timeoutMs : 30_000
+    const attemptMs = Math.min(callerMs, 20_000)
+    let lastErr
+    for (let i = 0; i < proxyRes.agents.length; i++) {
+      const idx = (poolIndex + i) % proxyRes.agents.length
+      try {
+        return await fetchWithAttemptTimeout(
+          url,
+          { ...init, dispatcher: proxyRes.agents[idx] },
+          attemptMs,
+        )
+      } catch (err) {
+        lastErr = err
+        logger.warn('proxy failed; trying next in pool', {
+          proxy: proxyRes.urls[idx],
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    throw lastErr
+  }
+}
+
+/**
+ * 供非上游 API 的出网请求使用的代理感知 fetch（如 catalog 自动同步拉 GitHub 源）。
+ * 复用与上游调用完全相同的代理解析与池回落逻辑，避免旁路直连。
+ * 优先级：账号显式 proxy（可传） > upstream.proxies（全局池） > upstream.proxy > HTTP(S)_PROXY env > 直连。
+ * 池分配 key 默认 'catalog'（池内稳定固定一个出口），可传 accountId 覆盖。
+ * @param {import('../config.js').ProxyConfig} config
+ * @param {{ proxy?: string | null, accountId?: string }} [opts]
+ * @returns {{ fetch: (url: string, init?: any) => Promise<Response>, proxyUrl: string | null }}
+ */
+export function createProxyFetch(config, opts = {}) {
+  const proxyRes = resolveProxy(config, opts.proxy, null)
+  const poolIndex = proxyRes.kind === 'pool'
+    ? proxyRes.indexFor(opts.accountId || 'catalog')
+    : 0
+  const proxyUrl =
+    proxyRes.kind === 'pool' ? proxyRes.urls[poolIndex] : proxyRes.url
+  return {
+    fetch: buildFetchWithProxy(proxyRes, poolIndex),
+    proxyUrl: proxyUrl || null,
+  }
+}
+
+/**
  * @param {import('../config.js').ProxyConfig} config
  * @param {string} token
  * @param {{ proxy?: string | null, accountId?: string }} [opts]
@@ -140,39 +212,9 @@ export function createUpstreamClient(config, token, opts = {}) {
    *  - 全局池：优先本账号分配的代理，连接级失败（fetch 抛错）时依次回落到池内下一个；
    *    单次尝试带超时（`fetchWithAttemptTimeout`）——代理"连接成功但永不响应"
    *    （网络波动/黑洞）也会被视为失败并回落下一个，而不是干等到全局 timeoutMs。
+   * 注意：**单代理池也必须走 pool 分支**（见 buildFetchWithProxy）。
    */
-  async function fetchWithProxy(url, init) {
-    if (proxyRes.kind !== 'pool' || proxyRes.agents.length <= 1) {
-      const agent = proxyRes.agent
-      return (agent ? undiciFetch : globalThis.fetch)(url, {
-        ...init,
-        ...(agent ? { dispatcher: agent } : {}),
-      })
-    }
-    // 单代理尝试超时：取调用方超时与 20s 的较小值（代理 CONNECT + TLS + 响应头
-    // 正常数秒内完成，20s 足够；整体请求的超时仍由 apiFetch 的 signal 兜底）。
-    const callerMs =
-      Number.isFinite(init.timeoutMs) && init.timeoutMs > 0 ? init.timeoutMs : 30_000
-    const attemptMs = Math.min(callerMs, 20_000)
-    let lastErr
-    for (let i = 0; i < proxyRes.agents.length; i++) {
-      const idx = (poolIndex + i) % proxyRes.agents.length
-      try {
-        return await fetchWithAttemptTimeout(
-          url,
-          { ...init, dispatcher: proxyRes.agents[idx] },
-          attemptMs,
-        )
-      } catch (err) {
-        lastErr = err
-        logger.warn('proxy failed; trying next in pool', {
-          proxy: proxyRes.urls[idx],
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
-    }
-    throw lastErr
-  }
+  const fetchWithProxy = buildFetchWithProxy(proxyRes, poolIndex)
 
   async function apiFetch(path, init = {}) {
     const url = path.startsWith('http') ? path : `${apiBase}${path}`

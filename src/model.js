@@ -475,6 +475,7 @@ export function startCatalogSync(opts = {}) {
       inner.current = m.startCatalogSync(CATALOG_CACHE_PATH, {
         intervalMs: opts.intervalMs,
         log: opts.log,
+        fetchImpl: opts.fetchImpl,
       })
     })
     .catch((err) => {
