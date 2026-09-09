@@ -7,7 +7,7 @@ import {
 } from './auth-store.js'
 import { createUpstreamClient } from './upstream/client.js'
 import { SessionManager } from './session-manager.js'
-import { UpstreamError } from './upstream/client.js'
+import { UpstreamError, isSessionRecoverableGate } from './upstream/client.js'
 import { logger } from './util/log.js'
 
 /** Errors where trying another logged-in account may succeed. */
@@ -65,6 +65,11 @@ class ChatMutex {
   /** 当前在途 chat 数（监控用）。 */
   get inFlight() {
     return this._held
+  }
+
+  /** 排队等待槽位的请求数（监控/空闲释放判断用）。 */
+  get queued() {
+    return this._queue.length
   }
 
   /** 当前并发上限（监控用）。 */
@@ -157,12 +162,10 @@ class ChatMutex {
 export class AccountRuntimes {
   /**
    * @param {import('./config.js').ProxyConfig} config
-   * @param {{ getAccountConcurrency?: () => number, getSpreadAccounts?: () => number, getCustomModels?: () => { id: string, pool?: string, agentId?: string, fallbackAgentId?: string, displayName?: string, multimodal?: boolean, note?: string }[] }} [opts]
+   * @param {{ getAccountConcurrency?: () => number, getSessionSettings?: () => { idleReleaseSec?: number, maxNewSessionsPerRequest?: number } | null, getCustomModels?: () => { id: string, pool?: string, agentId?: string, fallbackAgentId?: string, displayName?: string, multimodal?: boolean, note?: string }[] }} [opts]
    *   getAccountConcurrency: 每个账号的并发上限来源（控制台设置/配置），
-   *   默认取 config.limits.accountMaxConcurrency。
-   *   getSpreadAccounts: 平摊请求的账号数上限（控制台「负载均衡设置」可调，
-   *   默认 3）：并发请求最多同时铺开 N 个账号——先账号间负载均衡（未满开新
-   *   账号消费会话），再账号内负载均衡（单账号最多 accountMaxConcurrency）。
+   *   默认取 config.limits.accountMaxConcurrency。账号调度是"粘性优先"：
+   *   并发请求先挤同一账号（上限即溢出阈值），不主动平摊到新账号。
    *   getCustomModels: 前端「模型管理」的自定义模型列表（覆盖内置目录），
    *   影响 agent id 解析。
    */
@@ -173,14 +176,18 @@ export class AccountRuntimes {
       typeof opts.getAccountConcurrency === 'function'
         ? opts.getAccountConcurrency
         : () => this.config.limits.accountMaxConcurrency || 1
-    this._getSpreadAccounts =
-      typeof opts.getSpreadAccounts === 'function'
-        ? opts.getSpreadAccounts
-        : () => 3
     this._getCustomModels =
       typeof opts.getCustomModels === 'function'
         ? opts.getCustomModels
         : () => []
+    /**
+     * 前端「额度保护」设置来源（settings.json，实时生效）：
+     * idleReleaseSec / maxNewSessionsPerRequest。缺省回落 config.yaml。
+     */
+    this._getSessionSettings =
+      typeof opts.getSessionSettings === 'function'
+        ? opts.getSessionSettings
+        : () => null
     /** @type {Map<string, { key: string, email: string, id: string | null, authToken: string, user: any, upstream: any, sessions: SessionManager, source: string }>} */
     this.byKey = new Map()
     /**
@@ -196,6 +203,12 @@ export class AccountRuntimes {
     this._lastSuccessKey = null
     /** Per-account success counters (in-memory, for load-balance visibility). */
     this.stats = { total: 0, byKey: new Map() }
+    /**
+     * 每个账号最近一次被选中/成功的时间戳（粘性调度的核心输入）：
+     * 优先继续用刚用过的账号，而不是轮换到下一个健康账号。
+     * @type {Map<string, number>}
+     */
+    this._lastUsedAt = new Map()
   }
 
   list() {
@@ -213,6 +226,11 @@ export class AccountRuntimes {
         cooldownUntil: cooling ? new Date(cd.until).toISOString() : null,
         cooldownCode: cooling ? cd.code : null,
         requests: this.stats.byKey.get(a.key) || 0,
+        // 是否被使用过（粘性调度：未用过的账号排最后启用）+ 最近使用时间
+        used: this.everUsed(a.key),
+        lastUsedAt: this._lastUsedAt.has(a.key)
+          ? new Date(this._lastUsedAt.get(a.key)).toISOString()
+          : null,
         // 负载均衡监控：当前在途 SSE 流数 / 账号并发上限
         inFlight: chatLock?.inFlight || 0,
         concurrency: chatLock?.capacity || this._accountConcurrency(),
@@ -230,6 +248,11 @@ export class AccountRuntimes {
           : null,
         // 每日免费 session 额度（来自最近一次 admit/refresh 的上游返回）
         quota: snap?.quota || null,
+        // Freebucks 计量（2026-09 改版）：余额 / 每日池 / 每模型 session 单价。
+        // 控制台据此显示"这个号还剩多少、这个模型一次多少钱"。
+        freebucks: snap?.freebucks || null,
+        // 最近一次早退 DELETE 的退款回执（空闲释放/换号释放都会产生）
+        lastRefund: snap?.lastRefund || null,
       }
     })
   }
@@ -267,7 +290,16 @@ export class AccountRuntimes {
       proxy: user.proxy || null,
       accountId: accountKey,
     })
-    const sessions = new SessionManager({ upstream, config: this.config })
+    const sessions = new SessionManager({
+      upstream,
+      config: this.config,
+      getSessionSettings: this._getSessionSettings,
+      // 该账号还有在途/排队的 chat 时，空闲释放让路（见 SessionManager._armIdleRelease）
+      hasPendingUser: () => {
+        const lock = this.chatLocks.get(accountKey)
+        return Boolean(lock && (lock.inFlight > 0 || lock.queued > 0))
+      },
+    })
     const runtime = {
       key: accountKey,
       id: user.id || null,
@@ -294,14 +326,6 @@ export class AccountRuntimes {
   _accountConcurrency() {
     const n = this._getAccountConcurrency()
     return Number.isFinite(n) && n >= 1 ? Math.min(16, Math.floor(n)) : 1
-  }
-
-  /** 平摊请求的账号数上限（控制台设置，实时生效）：1..账号数。 */
-  _spreadAccounts() {
-    const n = this._getSpreadAccounts()
-    const total = this.allKeys().length
-    if (!Number.isFinite(n) || n < 1) return Math.min(3, Math.max(1, total))
-    return Math.min(Math.floor(n), Math.max(1, total))
   }
 
   chatLockFor(key) {
@@ -403,6 +427,7 @@ export class AccountRuntimes {
   _recordSuccess(key) {
     this.stats.total += 1
     this.stats.byKey.set(key, (this.stats.byKey.get(key) || 0) + 1)
+    this._lastUsedAt.set(key, Date.now())
   }
 
   async _withAcquireLock(fn) {
@@ -421,43 +446,41 @@ export class AccountRuntimes {
   }
 
   /**
+   * 选号排序（2026-09 Freebucks 改版 + 参考项目 ADR-0012 反封控契约）：
+   *
+   * **粘性优先 / drain, not rotate**——把请求集中到尽可能少的账号上，用尽
+   * （限流 / 额度耗尽 / 冷却 / 满员排队超时）才换下一个；**从未用过的账号
+   * 排最后**，只有已用账号都不可用时才启用。上游把"轮换健康账号"直接当作
+   * 账号农场特征（ADR-0012: cycling healthy keys looks like account farming），
+   * 而 Freebucks 按 session-hour 计费，换号 = 多买一条计费会话。
+   *
+   * 排序维度（从前到后）：
+   *   1. tier（会话状态）：同模型热 session（复用零成本）> 冷账号 > 活跃 session
+   *      绑在别的模型上（换模型要释放它）。冷账号优先于"杀掉另一个模型的热会话"，
+   *      否则多模型交替会在同一账号上反复 release/admit（每次都买一条计费会话）；
+   *   2. used：同一 tier 内**已用过的账号 > 从未用过的账号**（不轻易碰新账号）；
+   *   3. busy：优先有空闲槽位的。满员账号**不再一律排最后**——它只要属于已用账号，
+   *      仍排在"从未用过的账号"之前，新请求会在它上面做一次有界排队（省一条计费
+   *      会话），超时后由 proxy.js 加进 skipKeys 才真正溢出；
+   *   4. lastUsedAt 倒序（粘性：优先继续用刚用过的那个）；
+   *   5. 在途少 > 额度耗尽 > 余额不足 > 轮询（平局打破）。
    * @param {string} model
+   * @param {{ skipKeys?: Set<string> }} [opts] skipKeys：本次请求已经排队超时过的
+   *   账号，不再重复选中（否则会一直排在第一位反复等）。
    */
-  candidateKeys(model) {
+  candidateKeys(model, opts = {}) {
     const keys = this.allKeys()
     if (!keys.length) return []
-
-    // 平摊请求调度（所有模型统一）：
-    // 1. 先账号间负载均衡：账号并发没满时，新请求可以直接开新账号消费一个会话
-    //    （而不是钉在已有账号上排队）——并发请求平摊到最多 `spreadAccounts` 个账号。
-    // 2. 再账号内负载均衡：同一账号内最多 `accountMaxConcurrency` 个并发会话，
-    //    满了必须开新账号。
-    // 排序核心：未满员账号 > 满员账号；未满员里优先热 session 复用（省 admit），
-    // 但还没达到平摊上限时优先开新账号；满员账号永远排最后。
-    const spreadLimit = this._spreadAccounts()
+    const skip = opts.skipKeys instanceof Set ? opts.skipKeys : null
     const start = this._rr % keys.length
     const candidates = []
-    // 当前有活跃会话/在途的账号数（决定是否还可以开新账号平摊）
-    let activeAccounts = 0
     for (let i = 0; i < keys.length; i++) {
       const key = keys[(start + i) % keys.length]
-      if (this.isCoolingDown(key, model)) continue
-      const sessions = this.byKey.get(key)?.sessions
-      const snap = sessions?.getSnapshot?.()
-      const hasLive = snap?.instanceId != null
-      if (hasLive) activeAccounts++
-    }
-    if (process.env.FB_DEBUG_SCHED) {
-      console.error(`[sched] model=${model} activeAccounts=${activeAccounts}/${spreadLimit} keys=${keys.join(',')}`)
-    }
-    for (let i = 0; i < keys.length; i++) {
-      const key = keys[(start + i) % keys.length]
+      if (skip?.has(key)) continue
       if (this.isCoolingDown(key, model)) continue
       const sessions = this.byKey.get(key)?.sessions
       const usable = sessions?.isUsableForModel?.(model) === true
-      const live = sessions?.hasLiveSlot?.() === true
       const snap = sessions?.getSnapshot?.()
-      const hasLive = snap?.instanceId != null
       const quota = snap?.quota?.byModel?.[model]
       const exhausted =
         !usable &&
@@ -465,73 +488,101 @@ export class AccountRuntimes {
         Number.isFinite(quota.limit) &&
         quota.limit > 0 &&
         (Number(quota.recentCount) || 0) >= quota.limit
+      const live = sessions?.hasLiveSlot?.() === true
+      const sameModel = snap?.model === model
       const chatLock = this.chatLocks.get(key)
       const inFlight = chatLock?.inFlight || 0
       const capacity = chatLock?.capacity || this._accountConcurrency()
-      const sameModel = snap?.model === model
-      // 同模型即将过期（live 但不可复用）且正被在途流占用：re-admit 必须等
-      // 流结束（见 SessionManager.ensureSession），有账号空闲时不应让新请求
-      // 干等——把它降为最后梯队，只有没有空闲账号时才等它续期。
+      // Freebucks 余额买不起该模型（balance < prices[model]）→ 排到最后：
+      // 调度不会为了它白开一条计费 session（上游反正也会 429）。
+      const fbInfo = sessions?.freebucksFor?.(model)
+      const unaffordable = fbInfo?.known && fbInfo.affordable === false ? 1 : 0
+      const used = this.everUsed(key, sessions)
+      // tier 按"会话状态"分（与 used 无关）：
+      //   0 = 同模型热 session（复用零成本）
+      //   1 = 冷账号（没有活跃会话）或同模型即将过期
+      //   2 = 活跃 session 绑在别的模型上（换模型要释放它）
+      // 先按 tier 排：冷账号优先于"杀掉另一个模型的热会话"——否则多模型
+      // 交替使用会在同一个账号上反复 release/admit（每次都是一条计费会话）。
+      const otherModelLive = live && sameModel === false
       const busyNearExpiry =
-        live &&
-        sameModel &&
-        !usable &&
-        (sessions?.inFlightCount?.() || 0) > 0
-      // 未满员账号：负载均衡第一层——账号间平摊。
-      //   spreadReady = 还可以开新账号（活跃账号数 < 平摊上限）且本账号冷
-      //   （无活跃会话）→ 最高优先：把并发平摊到新账号
-      //   usable = 有同模型热 session → 优先复用（省 admit、保持出口稳定）
-      //   否则冷账号排前面，让请求分散
-      const canOpen = activeAccounts < spreadLimit && !hasLive
+        live && sameModel && !usable && (sessions?.inFlightCount?.() || 0) > 0
+      const tier = usable ? 0 : otherModelLive || busyNearExpiry ? 2 : 1
       if (process.env.FB_DEBUG_SCHED) {
-        console.error(`[sched]   ${key} hasLive=${hasLive} usable=${usable} busy=${inFlight >= capacity} inFlight=${inFlight} canOpen=${canOpen}`)
+        console.error(
+          `[sched]   ${key} tier=${tier} used=${used} usable=${usable} inFlight=${inFlight}/${capacity}`,
+        )
       }
       candidates.push({
         key,
+        tier,
+        // 已用过的账号优先于从未用过的（同一 tier 内）——"最少换号"的核心
+        used: used ? 0 : 1,
         busy: inFlight >= capacity ? 1 : 0,
-        // 冷账号且还可平摊：最高优先（开新账号消费会话）
-        open: canOpen ? 1 : 0,
-        // 有热 session 的排前面（复用省 admit）；同模型续期次之
-        tier: usable ? 0 : live && !sameModel ? 2 : busyNearExpiry ? 2 : 1,
-        sameModel: sameModel ? 1 : 0,
+        lastUsedAt: this._lastUsedAt.get(key) || 0,
         load: inFlight,
         exhausted: exhausted ? 1 : 0,
+        unaffordable,
         rotation: i,
       })
     }
     candidates.sort(
       (a, b) =>
-        // 并发已满的账号排最后（核心）：单账号在途 >= 上限时，新请求优先去
-        // 有空闲槽位的账号，而不是继续钉在满员账号上排队。
-        a.busy - b.busy ||
-        // 还能开新账号（未达平摊上限）的账号最优先——账号间负载均衡：
-        // 并发请求先铺满 N 个账号（每账号一个会话），绝不钉在第一个账号上
-        // （即使它有热 session）；只有活跃账号数 >= 平摊上限时才降级为复用。
-        b.open - a.open ||
-        // 未满员里：热 session → 同模型续期 → 冷账号 → 在途少 → 轮询
+        // 1) 同模型热 session > 冷账号 > 别的模型占着（避免模型交替时反复
+        //    release/admit 同一个账号）
         a.tier - b.tier ||
-        b.sameModel - a.sameModel ||
+        // 2) 同一梯队里：已用过的账号 > 从未用过的账号（不轻易碰新账号）
+        a.used - b.used ||
+        // 3) 优先有空闲槽位的账号
+        a.busy - b.busy ||
+        // 粘性：优先继续用最近用过的那个账号
+        b.lastUsedAt - a.lastUsedAt ||
         a.load - b.load ||
         a.exhausted - b.exhausted ||
+        // 余额买不起的账号排最后（复用它的热 session 仍然优先——不计费）
+        a.unaffordable - b.unaffordable ||
         a.rotation - b.rotation,
     )
     if (process.env.FB_DEBUG_SCHED) {
-      console.error(`[sched]   order: ${candidates.map((c) => c.key).join(',')}`)
+      console.error(
+        `[sched] model=${model} order: ${candidates.map((c) => `${c.key}#${c.tier}`).join(',')}`,
+      )
     }
     return candidates.map((item) => item.key)
   }
 
   /**
-   * Prefer a reusable same-model session; cold accounts and model replacement
-   * are fallbacks; round-robin only breaks ties within those groups.
-   * 并发满员（在途 >= 账号并发上限）的账号永远排最后——上限即"满了换号"的阈值。
-   * @param {string} model
+   * 该账号是否"被使用过"：有过 admit / 有活跃 session / 发过请求。
+   * 从未用过的账号在选号里排最后——只在已用账号都不可用（冷却/额度耗尽/
+   * 满员排队超时）时才启用，避免把每个账号都摸一遍（账号农场特征）。
+   * @param {string} key
+   * @param {import('./session-manager.js').SessionManager} [sessions]
    */
-  async acquireForModel(model) {
-    return this._withAcquireLock(() => this._acquireForModelUnlocked(model))
+  everUsed(key, sessions) {
+    const s = sessions || this.byKey.get(key)?.sessions
+    if (s?.admitCount > 0) return true
+    if (s?.hasLiveSlot?.() === true) return true
+    if ((this.stats.byKey.get(key) || 0) > 0) return true
+    return this._lastUsedAt.has(key)
   }
 
-  async _acquireForModelUnlocked(model) {
+  /**
+   * 选号并确保会话（粘性优先，见 candidateKeys）：
+   * 同模型热 session > 已用过的账号（最近用过的优先）> 从未用过的账号；
+   * 冷却 / 余额不足 / 新会话预算耗尽的账号跳过。
+   * @param {string} model
+   * @param {{ sessionBudget?: { remaining: number }, skipKeys?: Set<string> }} [opts]
+   *   sessionBudget: 本次下游请求还能新建几个上游会话（Freebucks 计费单位）。
+   *   复用已有热 session 不消耗预算；预算耗尽后只允许复用，不再 admit。
+   *   skipKeys: 本次请求已排队超时过的账号，不再重复选中。
+   */
+  async acquireForModel(model, opts = {}) {
+    return this._withAcquireLock(() =>
+      this._acquireForModelUnlocked(model, opts),
+    )
+  }
+
+  async _acquireForModelUnlocked(model, opts = {}) {
     if (!model) {
       throw new UpstreamError('model is required', {
         status: 400,
@@ -549,7 +600,7 @@ export class AccountRuntimes {
     }
     const emailByKey = new Map(rows.map((r) => [r.key, r.email]))
 
-    const order = this.candidateKeys(model)
+    const order = this.candidateKeys(model, { skipKeys: opts.skipKeys })
     /** @type {Array<{ key: string, email?: string, code?: string, message: string }>} */
     const failures = []
 
@@ -598,9 +649,57 @@ export class AccountRuntimes {
         continue
       }
 
+      const reusable = rt.sessions.isUsableForModel(model)
+      if (!reusable) {
+        // Freebucks 余额买不起该模型：不 admit（上游会 429 freebucksShortfall，
+        // 白跑一趟还可能留下计费行），直接跳过这个账号。
+        const fb = rt.sessions.freebucksFor?.(model)
+        if (fb?.known && fb.affordable === false) {
+          failures.push({
+            key,
+            email: emailByKey.get(key),
+            code: 'freebucks_exhausted',
+            message:
+              `freebucks balance ${fb.balance} < price ${fb.price} for ${model}` +
+              (fb.resetAt ? ` (refills ${fb.resetAt})` : ''),
+          })
+          logger.info('skip account: freebucks cannot afford model', {
+            key,
+            email: emailByKey.get(key),
+            model,
+            balance: fb.balance,
+            price: fb.price,
+          })
+          continue
+        }
+        // 新会话预算：上游按 session-hour 计费，一个失败的下游请求不该把
+        // 多个账号各买一条 1 小时计费行（issue #7）。被上游拒绝的 admit
+        // （rate_limited 等）不占额度，所以只在这里做「还有没有预算」的预检，
+        // 真正扣减在 admit 成功之后。
+        if (opts.sessionBudget && opts.sessionBudget.remaining <= 0) {
+          failures.push({
+            key,
+            email: emailByKey.get(key),
+            code: 'session_budget_exhausted',
+            message:
+              'new-session budget for this request is used up (Freebucks meter)',
+          })
+          continue
+        }
+      }
+
+      const admitsBefore = rt.sessions.admitCount || 0
       try {
-        const reusedSession = rt.sessions.isUsableForModel(model)
+        const reusedSession = reusable
         await rt.sessions.ensureSession(model)
+        // 只有真的新建了计费会话才扣预算（复用热 session / 被拒绝的 admit 不扣）。
+        if (
+          !reusedSession &&
+          opts.sessionBudget &&
+          (rt.sessions.admitCount || 0) > admitsBefore
+        ) {
+          opts.sessionBudget.remaining -= 1
+        }
         this.clearCooldown(key, model)
         this._lastSuccessKey = key
         // 指针推进到"被选中账号"的下一位：冷却账号被跳过时依然保持公平轮询
@@ -704,9 +803,19 @@ export class AccountRuntimes {
         }
       } else {
         try {
+          const rt = this.get(opts.preferredKey)
+          // 非 session-gate 的失败（5xx / 网络抖动 / 上游瞬时故障）在同一账号上
+          // 重试：会话还能用就直接复用——绝不为了重试再买一条计费 session。
+          if (
+            (!opts.gateCode || !isSessionRecoverableGate(opts.gateCode)) &&
+            rt.sessions.isUsableForModel(model)
+          ) {
+            this.clearCooldown(opts.preferredKey, model)
+            this._lastSuccessKey = opts.preferredKey
+            return rt
+          }
           // 同账号 gate 重试时，调用方（chat 流程）已持有该账号的串行化锁，
           // 不会与另一个在途 chat 冲突，可直接 forceReadmit。
-          const rt = this.get(opts.preferredKey)
           await rt.sessions.forceReadmit(model)
           this.clearCooldown(opts.preferredKey, model)
           this._lastSuccessKey = opts.preferredKey
@@ -720,7 +829,24 @@ export class AccountRuntimes {
         }
       }
     }
-    return this._acquireForModelUnlocked(model)
+    return this._acquireForModelUnlocked(model, opts)
+  }
+
+  /**
+   * 释放某账号的上游会话（早退 DELETE → Freebucks 退款）。
+   * 换号/冷却时调用：失败账号的会话没人再用，留着只会白扣一小时额度；
+   * 有在途流时等它结束再释放（releaseWhenIdle），绝不掐断正在传输的 SSE。
+   * @param {string} key
+   */
+  releaseSession(key) {
+    const rt = this.byKey.get(key)
+    if (!rt) return
+    rt.sessions.releaseWhenIdle().catch((err) => {
+      logger.warn('release failed session on account switch failed', {
+        key,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
   }
 
   earliestCooldownMs() {

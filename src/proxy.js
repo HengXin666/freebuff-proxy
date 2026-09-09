@@ -35,7 +35,6 @@ import {
   normalizeOutputBudget,
   stripFreebuffConversationState,
 } from './free-mode.js'
-import { applyMinimalRouting, applyStandardRouting } from './routing.js'
 import { logger } from './util/log.js'
 
 /**
@@ -572,8 +571,30 @@ export function createProxyHandler(ctx) {
     let pendingSwitchAccount = false
     /** @type {boolean} */
     let pendingNoCooldown = false
-    /** 同一账号连续 gate 失败计数：gate 已同号 re-admit 重试过一次仍失败 → 升级为换号。 */
-    let sameAccountGateRetries = 0
+    /** 同一账号连续重试计数：同号重试过一次仍失败 → 升级为换号。 */
+    let sameAccountRetries = 0
+    /**
+     * 本次请求已经"满员排队超时"过的账号：粘性调度会优先继续用已用账号
+     * （甚至排队等它），若不在选号里排除，超时后会再次选中同一个账号反复等。
+     */
+    const skipKeys = new Set()
+    /**
+     * 本次下游请求允许新建的上游会话数（Freebucks 计费单位）。
+     * 上游按 session-hour 计费、admit 一次扣一次，旧行为在报错时把「账号数+1」
+     * 个账号挨个 admit 一遍，几个账号一起在后台白扣一小时（issue #7）。
+     * 复用已有热 session 不消耗预算。
+     */
+    const budgetSetting = settingsStore?.get?.()?.maxNewSessionsPerRequest
+    const sessionBudget = {
+      remaining: Math.max(
+        0,
+        Math.floor(
+          Number.isFinite(budgetSetting)
+            ? budgetSetting
+            : (config.limits.maxNewSessionsPerRequest ?? 2),
+        ),
+      ),
+    }
     /** 当前持锁账号 runtime（账号级串行化：一个账号同一时间只处理一个 chat）。 */
     let heldRt = null
     /** 当前持有的账号 chat 锁释放函数。 */
@@ -628,21 +649,26 @@ export function createProxyHandler(ctx) {
           // Single reacquire path: first attempt acquires; retries use gate from previous failure.
           const rt =
             attempt === 1
-              ? await runtimes.acquireForModel(upstreamModel)
+              ? await runtimes.acquireForModel(upstreamModel, {
+                  sessionBudget,
+                  skipKeys,
+                })
               : await runtimes.reacquireAfterGate(upstreamModel, {
                   preferredKey: lastKey,
                   gateCode: pendingGateCode,
                   retryAfterMs: pendingRetryAfterMs,
                   switchAccount: pendingSwitchAccount,
                   noCooldown: pendingNoCooldown,
+                  sessionBudget,
+                  skipKeys,
                 })
           pendingGateCode = null
           pendingRetryAfterMs = null
           pendingSwitchAccount = false
           pendingNoCooldown = false
           if (lastKey && rt.key !== lastKey) {
-            // 已经换到不同账号 → 重置同账号 gate 计数，并释放上一账号的串行化锁
-            sameAccountGateRetries = 0
+            // 已经换到不同账号 → 重置同账号重试计数，并释放上一账号的串行化锁
+            sameAccountRetries = 0
             dropChatHold()
             // agentOverride 是针对上一账号的 agent 覆盖（free_mode_invalid_agent_model
             // 等按该账号+agent 组合判定）。换到新账号后必须清空，让新账号从它自己的
@@ -685,6 +711,9 @@ export function createProxyHandler(ctx) {
                   waitedMs: waitMs,
                 })
                 chatWaited = true
+                // 满员排队超时：把该账号从本次请求的候选中排除，下一轮才
+                // 真正换到别的账号（否则粘性排序会再次选中它反复等）。
+                skipKeys.add(rt.key)
                 pendingGateCode = 'account_busy'
                 pendingSwitchAccount = true
                 pendingNoCooldown = true
@@ -849,12 +878,11 @@ export function createProxyHandler(ctx) {
           }
 
           if (result.recoverable && attempt < maxAttempts) {
-            if (result.switchAccount) {
-              sameAccountGateRetries = 0
-            } else {
-              // 同账号 gate 重试计数：连续两次 gate 失败 → 升级为换号
-              sameAccountGateRetries += 1
-            }
+            // 先判定是否换号，再累加同号重试计数（顺序不能反：反了会让
+            // 第一次同号重试就被判成"该换号"）。
+            const willSwitch =
+              result.switchAccount === true || sameAccountRetries >= 1
+            sameAccountRetries = willSwitch ? 0 : sameAccountRetries + 1
             // free_mode_legacy_luna_agent：上游退役旧 Luna agent。agentIdForModel
             // 已对 luna 系强制 base3（见 model.js），重试换 session 即用新 agent，
             // 不再需要额外的 agentOverride——任何 base2 尝试都不会发生。
@@ -864,16 +892,17 @@ export function createProxyHandler(ctx) {
               budget: maxAttempts,
               model: upstreamModel,
               key: lastKey,
-              switchAccount:
-                result.switchAccount === true || sameAccountGateRetries >= 2,
+              switchAccount: willSwitch,
               noCooldown: result.noCooldown === true,
               retryAfterMs: result.retryAfterMs ?? null,
             })
             pendingGateCode = result.gateCode
             pendingRetryAfterMs = result.retryAfterMs ?? null
-            pendingSwitchAccount =
-              result.switchAccount === true || sameAccountGateRetries >= 2
+            pendingSwitchAccount = willSwitch
             pendingNoCooldown = result.noCooldown === true
+            // 换号前把失败账号的会话早退 DELETE（拿 Freebucks 退款）：
+            // 它已经在冷却，没人会再用它，留着只会白扣一整小时。
+            if (willSwitch && lastKey) runtimes.releaseSession(lastKey)
             continue
           }
 
@@ -902,58 +931,86 @@ export function createProxyHandler(ctx) {
           return
         } catch (err) {
           if (err instanceof UpstreamError) {
-            if (isSessionRecoverableGate(err.code) && attempt < maxAttempts) {
-              logger.warn('recoverable session error; will re-acquire', {
-                code: err.code,
-                attempt,
-                key: lastKey,
-              })
-              pendingGateCode = err.code
-              pendingSwitchAccount = false
-              pendingNoCooldown = false
-              continue
-            }
-            // 其他上游错误（startAgentRun 失败 / no_session / admit 后异常等）：
-            // 只要还有重试预算，就冷却当前账号换下一个，而不是直接把错误甩给用户。
+            // 终态错误：没有可用账号 / 参数缺失，直接返回。
             const isTerminal =
               err.code === 'no_available_account' ||
               err.code === 'model_required' ||
               err.code === 'upstream_auth_missing'
-            if (
-              !isTerminal &&
-              attempt < maxAttempts &&
-              shouldSwitchAccountOnError(err.status, err.code)
-            ) {
-              logger.warn('upstream error; switching account', {
-                code: err.code,
-                status: err.status,
-                attempt,
-                key: lastKey,
-                model: upstreamModel,
-              })
+            if (isTerminal) {
+              mapAndSendError(res, err)
+              return
+            }
+            if (attempt < maxAttempts) {
+              if (isSessionRecoverableGate(err.code)) {
+                logger.warn('recoverable session error; will re-acquire', {
+                  code: err.code,
+                  attempt,
+                  key: lastKey,
+                })
+                // 同号 re-admit 一次；再失败即换号（见下方 sameAccountRetries）。
+                const willSwitch = sameAccountRetries >= 1
+                sameAccountRetries += 1
+                pendingGateCode = err.code
+                pendingSwitchAccount = willSwitch
+                pendingNoCooldown = false
+                if (willSwitch && lastKey) runtimes.releaseSession(lastKey)
+                continue
+              }
+              // 上游错误（startAgentRun 失败 / no_session / 5xx 等）：
+              // - 账号级故障（限流/封禁/配额）→ 冷却换号；
+              // - 其他（5xx/网络/上游瞬时故障）→ 先在同一账号上重试一次：
+              //   复用热 session，不新建计费会话；同号再失败才换号。
+              const accountSpecific = shouldSwitchAccountOnError(
+                err.status,
+                err.code,
+              )
+              const willSwitch = accountSpecific || sameAccountRetries >= 1
+              logger.warn(
+                willSwitch
+                  ? 'upstream error; switching account'
+                  : 'upstream error; retrying same account (no new session)',
+                {
+                  code: err.code,
+                  status: err.status,
+                  attempt,
+                  key: lastKey,
+                  model: upstreamModel,
+                },
+              )
+              sameAccountRetries = willSwitch ? 0 : sameAccountRetries + 1
               pendingGateCode = err.code || `http_${err.status || 502}`
               pendingRetryAfterMs = err.retryAfterMs ?? null
-              pendingSwitchAccount = true
+              pendingSwitchAccount = willSwitch
               pendingNoCooldown = false
+              if (willSwitch && lastKey) runtimes.releaseSession(lastKey)
               continue
             }
             mapAndSendError(res, err)
             return
           }
           // 非 UpstreamError：网络错误 / 上游超时（socket 断开、代理不可达等）。
-          // 只要还有重试预算就冷却当前账号换下一个；客户端是否已断开无法可靠区分
-          // （req.destroyed 在请求体读完后就为 true），多试一轮最多浪费一次上游调用。
+          // 先同号重试一次（热 session 复用，不新建计费会话），再失败才换号；
+          // 客户端是否已断开无法可靠区分（req.destroyed 在请求体读完后就为 true），
+          // 多试一轮最多浪费一次上游调用。
           if (attempt < maxAttempts) {
-            logger.warn('upstream network error; switching account', {
-              error: err instanceof Error ? err.message : String(err),
-              attempt,
-              key: lastKey,
-              model: upstreamModel,
-            })
+            const willSwitch = sameAccountRetries >= 1
+            logger.warn(
+              willSwitch
+                ? 'upstream network error; switching account'
+                : 'upstream network error; retrying same account (no new session)',
+              {
+                error: err instanceof Error ? err.message : String(err),
+                attempt,
+                key: lastKey,
+                model: upstreamModel,
+              },
+            )
+            sameAccountRetries = willSwitch ? 0 : sameAccountRetries + 1
             pendingGateCode = 'upstream_network_error'
             pendingRetryAfterMs = null
-            pendingSwitchAccount = true
+            pendingSwitchAccount = willSwitch
             pendingNoCooldown = false
+            if (willSwitch && lastKey) runtimes.releaseSession(lastKey)
             continue
           }
           logger.error('chat completions failed', {
@@ -992,22 +1049,6 @@ export function createProxyHandler(ctx) {
     // （reasoning token 计入该预算）提前掐断（finish_reason=length）——参考
     // freebuff2api-wokers#8「DS4 思考链稍长即截断」。转发上游前抬到 floor。
     body = normalizeOutputBudget(body)
-    // 极简路由（路由模式）：代理侧注入 persona + 首轮核心工具面 + 近距离引导。
-    // 参考 dsh-routing-suite（dsh-router-standard）的请求协议——当客户端侧的
-    // 路由注入经过翻译/反向代理链被改写或丢弃时，由代理兜底保证路由生效。
-    // 改写后的第一条 system 消息以 free-mode 门禁标记开头，后续
-    // ensureFreebuffSystemMessages 不会再重复加前缀。
-    // 实现风格：standard（默认，flash 恒走 weak 内路由 + 深度引导静态并入
-    // persona，多轮稳定；参考 v4-flash-godmode） / minimal（按任务分类三带）。
-    if (settingsStore?.get().minimalRoutingEnabled === true) {
-      const routingStyle = settingsStore?.get().minimalRoutingStyle ?? 'standard'
-      body =
-        routingStyle === 'minimal'
-          ? applyMinimalRouting(body, upstreamModel, {
-              modeOverride: settingsStore?.get().minimalRoutingMode ?? 'auto',
-            })
-          : applyStandardRouting(body, upstreamModel)
-    }
     // Free mode requires a system message opening with the Freebuff CLI marker
     // ("You are Buffy, the strategic coding assistant."). Without it the
     // upstream returns free_mode_cli_required. base3-free-* agent 用 base3
@@ -1107,6 +1148,12 @@ export function createProxyHandler(ctx) {
       'user-agent': 'ai-sdk/openai-compatible/1.0.0/codebuff',
       ...freebuffAuthHeaders(upstream.token),
     }
+
+    // 风控：chat 调用前打散节奏（随机 [0, requestJitterMs)）。上游按请求
+    // 节奏指纹自动化脚本，等间隔的机器式调用是明显特征（参考项目 SAFE_MODE
+    // 默认 200ms）。0 = 关闭。
+    const jitterMs = Number(config.limits.requestJitterMs) || 0
+    if (jitterMs > 0) await sleep(Math.random() * jitterMs)
 
     const abortCtrl = reqToAbortSignal(req)
     let upstreamRes
@@ -1349,6 +1396,14 @@ function handleStreamPipeFailure(err, req, res) {
     }
   }
   throw err
+}
+
+/** 有界等待（毫秒）。 */
+function sleep(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    if (timer.unref) timer.unref()
+  })
 }
 
 function methodHasBody(method) {

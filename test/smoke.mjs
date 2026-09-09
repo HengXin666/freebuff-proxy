@@ -24,24 +24,6 @@ import {
   FREEBUFF_SIGNATURE_TOOL_NAME,
   FREEBUFF_SYSTEM_OPENING,
 } from '../src/free-mode.js'
-import {
-  applyMinimalRouting,
-  applyStandardRouting,
-  bandOf,
-  classifyTask,
-  coreFor,
-  personaFor,
-  resolveMode,
-  SPEC_PERSONA,
-  REACT_PERSONA,
-  WEAK_PRO,
-  WEAK_FLASH,
-  STANDARD_FLASH_PERSONA,
-  STANDARD_PRO_PERSONA,
-  WE_CHAIN_ANCHOR_FLASH,
-  GUIDE_WEAK,
-  GUIDE_DEEP,
-} from '../src/routing.js'
 import { SettingsStore } from '../src/web/settings-store.js'
 import { ModelStore } from '../src/web/model-store.js'
 import {
@@ -63,6 +45,18 @@ let completionAttempts = 0
 let startAgentCalls = []
 /** 会话有效期（毫秒）：近过期/重连测试用 */
 let sessionExpiryMs = 3600_000
+/**
+ * 模拟上游 Freebucks 计量块（2026-09 改版）：设成对象后，每个 session 响应
+ * （POST/GET/DELETE）都会带上它；null = 老上游（无计量，不拦截）。
+ * @type {null | { balance: number, daily?: any, wallet?: any, prices?: Record<string, number>, quotaExempt?: boolean, planId?: string | null }}
+ */
+let mockFreebucks = null
+/** 每次 DELETE 退还给调用方的 Freebucks（模拟"提前结束退款"）。 */
+let mockRefund = 1.5
+/** DELETE 收到过的 x-freebuff-instance-id（回归：不带会被上游 400）。 */
+let deleteInstanceIds = []
+/** 模拟上游 DELETE 缺 instance id 时返回 400 instance_required。 */
+let requireDeleteInstance = true
 /** hold_once 模式：被挂起的流式响应控制器（等 releaseHoldStreams 放行） */
 let holdStreamControllers = []
 
@@ -143,14 +137,33 @@ globalThis.fetch = async (url, init = {}) => {
       accessTier: 'full',
       rateLimit,
       rateLimitsByModel: { [model]: rateLimit },
+      ...(mockFreebucks ? { freebucks: mockFreebucks } : {}),
     })
   }
   if (u.includes('/api/v1/freebuff/session') && method === 'GET') {
-    return jsonRes({ status: 'none', accessTier: 'full' })
+    return jsonRes({
+      status: 'none',
+      accessTier: 'full',
+      ...(mockFreebucks ? { freebucks: mockFreebucks } : {}),
+    })
   }
   if (u.includes('/api/v1/freebuff/session') && method === 'DELETE') {
     sessionDeletes++
-    return jsonRes({ status: 'none' })
+    const instanceId =
+      headers['x-freebuff-instance-id'] ||
+      headers['X-Freebuff-Instance-Id'] ||
+      ''
+    deleteInstanceIds.push(instanceId)
+    // 上游 2026-09 行为：DELETE 不带 x-freebuff-instance-id 会 400
+    // instance_required，会话删不掉、退款也拿不到。
+    if (requireDeleteInstance && !instanceId) {
+      return jsonRes({ error: 'instance_required' }, 400)
+    }
+    return jsonRes({
+      status: 'ended',
+      freebucksRefund: mockRefund,
+      ...(mockFreebucks ? { freebucks: mockFreebucks } : {}),
+    })
   }
   if (u.includes('/api/v1/agent-runs') && method === 'POST') {
     const body = JSON.parse(init.body || '{}')
@@ -347,6 +360,10 @@ globalThis.fetch = async (url, init = {}) => {
         { 'retry-after': '60' },
       )
     }
+    // 所有账号的 chat 都 500（账号级故障 → 连续换号），用于验证新会话预算
+    if (mockMode === 'err_500_all') {
+      return jsonRes({ error: 'internal_error', message: 'boom' }, 500)
+    }
     if (mockMode === 'err_500_a' && String(compAuth).includes('token-a')) {
       return jsonRes({ error: 'internal_error', message: 'boom' }, 500)
     }
@@ -516,491 +533,6 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
   )
 }
 
-// --- unit: minimal routing (dsh-routing-suite protocol, proxy-side) ---
-{
-  // task classification: build → react, fix → spec, ambiguous → weak
-  assert.equal(classifyTask('帮我写一个爬虫脚本抓取数据'), 1)
-  assert.equal(classifyTask('修复这个崩溃的 bug 并排查原因'), 0)
-  assert.equal(classifyTask('你好，随便聊聊'), 'weak')
-  assert.equal(classifyTask(''), 'weak')
-  assert.equal(classifyTask(undefined), 'weak')
-
-  // bands
-  assert.equal(bandOf(0), 'spec')
-  assert.equal(bandOf(0.3), 'transition')
-  assert.equal(bandOf(1), 'react')
-  assert.equal(bandOf('weak'), 'weak')
-
-  // 路由风格钉死（we/let's 链 / let me 链 / weak / auto 分类）
-  assert.equal(resolveMode('spec', '从零开发一个网页应用'), 0)
-  assert.equal(resolveMode('react', '请修复这个报错'), 1)
-  assert.equal(resolveMode('weak', '从零开发一个网页应用'), 'weak')
-  assert.equal(resolveMode('auto', '从零开发一个网页应用'), 1)
-  assert.equal(resolveMode(null, '从零开发一个网页应用'), 1)
-  assert.equal(resolveMode(undefined, '请修复这个报错'), 0)
-
-  // personas by mode + model
-  assert.equal(personaFor(0, 'deepseek/deepseek-v4-pro'), SPEC_PERSONA)
-  assert.equal(personaFor(1, 'deepseek/deepseek-v4-pro'), REACT_PERSONA)
-  assert.equal(personaFor('weak', 'deepseek/deepseek-v4-pro'), WEAK_PRO)
-  assert.equal(personaFor('weak', 'deepseek/deepseek-v4-flash'), WEAK_FLASH)
-  assert.deepEqual(coreFor(0), ['read', 'edit', 'glob', 'grep'])
-  assert.deepEqual(coreFor(1), ['read', 'write', 'edit'])
-
-  const allTools = [
-    { type: 'function', function: { name: 'read' } },
-    { type: 'function', function: { name: 'edit' } },
-    { type: 'function', function: { name: 'glob' } },
-    { type: 'function', function: { name: 'grep' } },
-    { type: 'function', function: { name: 'write' } },
-    { type: 'function', function: { name: 'bash' } },
-    { type: 'function', function: { name: 'todo_write' } },
-    { type: 'function', function: { name: 'skill' } },
-    { type: 'function', function: { name: 'workflow' } },
-  ]
-
-  // fix task → spec persona 置顶 + 读优先工具面；客户端 system 保留在后面；
-  // 无引导（非 weak）；其他字段（model/stream/thinking）原样保留
-  {
-    const out = applyMinimalRouting(
-      {
-        model: 'deepseek/deepseek-v4-pro',
-        stream: true,
-        thinking: { type: 'enabled' },
-        messages: [
-          { role: 'system', content: 'You are Buffy, the strategic coding assistant.\n\nKeep the role.' },
-          { role: 'user', content: '请修复这个报错并排查根因' },
-        ],
-        tools: allTools,
-      },
-      'deepseek/deepseek-v4-pro',
-    )
-    assert.equal(out.model, 'deepseek/deepseek-v4-pro')
-    assert.equal(out.stream, true)
-    assert.deepEqual(out.thinking, { type: 'enabled' })
-    assert.equal(out.messages[0].role, 'system')
-    assert.ok(out.messages[0].content.startsWith(FREEBUFF_SYSTEM_OPENING))
-    assert.ok(out.messages[0].content.includes(SPEC_PERSONA))
-    // spec 模式缀上 we/let's 集体链锚定
-    assert.ok(!out.messages[0].content.includes('Plan and reason collectively'))
-    // 套件 applyPersona 语义：客户端 persona 段被替换，其余 section 保留在同一条
-    // system 消息里（路由 persona 在前，Keep the role 在后）——不再是前置两条 system
-    assert.ok(out.messages[0].content.indexOf(SPEC_PERSONA) < out.messages[0].content.indexOf('Keep the role'))
-    assert.ok(!out.messages[0].content.includes('Keep the role.\n\nYou are'))
-    // end_turn 由 proxy.js 的 ensureFreebuffToolSignature 在改写后追加，此处不出现
-    assert.deepEqual(
-      out.tools.map((t) => t.function.name),
-      ['read', 'edit', 'glob', 'grep', 'bash'],
-    )
-    // 非 weak 不追加引导（替换后的 system + user = 2）
-    assert.equal(out.messages.length, 2)
-  }
-
-  // build task → react persona + 写优先工具面
-  {
-    const out = applyMinimalRouting(
-      {
-        messages: [{ role: 'user', content: '从零开发一个网页应用' }],
-        tools: allTools,
-      },
-      'deepseek/deepseek-v4-pro',
-    )
-    assert.ok(out.messages[0].content.includes(REACT_PERSONA))
-    // 过滤保持原始工具顺序
-    assert.deepEqual(
-      out.tools.map((t) => t.function.name),
-      ['read', 'edit', 'write', 'bash'],
-    )
-  }
-
-  // 模糊任务 → weak persona + 近距离引导（简单任务用 GUIDE_WEAK）
-  {
-    const out = applyMinimalRouting(
-      {
-        messages: [{ role: 'user', content: '你好' }],
-        tools: allTools,
-      },
-      'deepseek/deepseek-v4-pro',
-    )
-    assert.ok(out.messages[0].content.includes(WEAK_PRO))
-    assert.equal(out.messages.length, 3) // system + user + guide
-    assert.equal(out.messages[2].role, 'user')
-    assert.equal(out.messages[2].content, GUIDE_WEAK)
-  }
-
-  // 复杂任务 → GUIDE_DEEP（>120 字符且无强 build/fix 关键词 → weak + 深度引导）
-  {
-    const longNeutral =
-      '我们需要综合考虑当前的状况和未来的目标，从不同维度评估可能的走向，并给出一个平衡的结论，涵盖利弊、风险与收益，同时说明在哪些情况下应该调整优先级，在哪些情况下保持现状即可，另外还需要注意资源与时间上的约束，以及不同阶段之间如何衔接才能让整体推进更加顺畅。'
-    assert.ok(longNeutral.length > 120)
-    const out = applyMinimalRouting(
-      {
-        messages: [{ role: 'user', content: longNeutral }],
-      },
-      'deepseek/deepseek-v4-pro',
-    )
-    assert.equal(out.messages.at(-1).content, GUIDE_DEEP)
-  }
-
-  // Flash 模型 → weak 用 WEAK_FLASH
-  {
-    const out = applyMinimalRouting(
-      { messages: [{ role: 'user', content: '随便聊聊' }] },
-      'deepseek/deepseek-v4-flash',
-    )
-    assert.ok(out.messages[0].content.includes(WEAK_FLASH))
-  }
-
-  // Flash + spec（auto 分类命中）：system 保持纯 spec 句（远距锚定在 flash 上反噬），
-  // 改由近距离 user 消息注入 we/let's 首 token 锚定
-  {
-    const out = applyMinimalRouting(
-      { messages: [{ role: 'user', content: '请修复这个报错' }], tools: allTools },
-      'deepseek/deepseek-v4-flash',
-    )
-    assert.ok(out.messages[0].content.includes(SPEC_PERSONA))
-    assert.ok(!out.messages[0].content.includes('Plan and reason collectively')) // persona 逐字符原样
-    assert.equal(out.messages.at(-1).role, 'user')
-    assert.equal(out.messages.at(-1).content, WE_CHAIN_ANCHOR_FLASH)
-  }
-
-  // Flash + spec 钉死（build 任务也强制）：同样近距锚定
-  {
-    const out = applyMinimalRouting(
-      { messages: [{ role: 'user', content: '从零开发一个网页应用' }], tools: allTools },
-      'deepseek/deepseek-v4-flash',
-      { modeOverride: 'spec' },
-    )
-    assert.ok(out.messages[0].content.includes(SPEC_PERSONA))
-    assert.ok(!out.messages[0].content.includes('Plan and reason collectively'))
-    assert.equal(out.messages.at(-1).content, WE_CHAIN_ANCHOR_FLASH)
-  }
-
-  // Pro + spec：远距 persona 锚定，无近距引导
-  {
-    const out = applyMinimalRouting(
-      { messages: [{ role: 'user', content: '请修复这个报错' }] },
-      'deepseek/deepseek-v4-pro',
-    )
-    assert.ok(!out.messages[0].content.includes('Plan and reason collectively'))
-    assert.equal(out.messages.at(-1).role, 'user')
-    assert.equal(out.messages.at(-1).content, '请修复这个报错')
-  }
-
-  // 工具循环轮次（最后一条是 tool 结果）→ flash+spec 锚定仍注入（修复思维链衰减）
-  {
-    const out = applyMinimalRouting(
-      {
-        messages: [
-          { role: 'user', content: '做一个我的世界网页版' },
-          {
-            role: 'assistant',
-            content: '',
-            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
-          },
-          { role: 'tool', tool_call_id: 'c1', content: 'total 0' },
-        ],
-        tools: allTools,
-      },
-      'deepseek/deepseek-v4-flash',
-      { modeOverride: 'spec' },
-    )
-    assert.equal(out.messages.at(-1).role, 'user')
-    assert.equal(out.messages.at(-1).content, WE_CHAIN_ANCHOR_FLASH)
-    // 已有 tool_calls → 工具放行全部
-    assert.equal(out.tools.length, allTools.length)
-  }
-
-  // weak 模式工具循环轮次 → 引导仍注入
-  {
-    const out = applyMinimalRouting(
-      {
-        messages: [
-          { role: 'user', content: '随便聊聊' },
-          {
-            role: 'assistant',
-            content: '',
-            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
-          },
-          { role: 'tool', tool_call_id: 'c1', content: 'ok' },
-        ],
-      },
-      'deepseek/deepseek-v4-pro',
-    )
-    assert.equal(out.messages.at(-1).role, 'user')
-    assert.equal(out.messages.at(-1).content, GUIDE_WEAK)
-  }
-
-  // assistant 文本回复是最后一条 → 不追加（避免"用户插话"）
-  {
-    const out = applyMinimalRouting(
-      {
-        messages: [
-          { role: 'user', content: '做一个我的世界网页版' },
-          { role: 'assistant', content: '好的，我来做。' },
-        ],
-      },
-      'deepseek/deepseek-v4-flash',
-      { modeOverride: 'spec' },
-    )
-    assert.equal(out.messages.at(-1).role, 'assistant')
-  }
-
-  // 历史已有 assistant tool_calls → 放行全部工具（首轮锚定完成，不再裁剪）
-  {
-    const out = applyMinimalRouting(
-      {
-        messages: [
-          { role: 'user', content: '写一个脚本' },
-          {
-            role: 'assistant',
-            content: '',
-            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
-          },
-          { role: 'tool', tool_call_id: 'c1', content: 'ok' },
-        ],
-        tools: allTools,
-      },
-      'deepseek/deepseek-v4-pro',
-    )
-    assert.deepEqual(
-      out.tools.map((t) => t.function.name),
-      allTools.map((t) => t.function.name),
-    )
-    // 最后一个消息是 tool 结果 → 不追加引导
-    assert.equal(out.messages.length, 4)
-  }
-
-  // 最后一个消息不是用户消息（assistant 文本回复）→ 不追加引导
-  {
-    const out = applyMinimalRouting(
-      {
-        messages: [
-          { role: 'user', content: '你好' },
-          { role: 'assistant', content: '你好！有什么可以帮你？' },
-        ],
-      },
-      'deepseek/deepseek-v4-pro',
-    )
-    assert.equal(out.messages.length, 3) // system + user + assistant
-    assert.equal(out.messages[2].role, 'assistant')
-  }
-
-  // 标准预设形态：客户端 persona（"You are a coding agent powered by..."）被替换，
-  // "### " 工具/工作区 section 保留在路由 persona 之后
-  {
-    const stdSystem =
-      'You are a coding agent powered by the deepseek/deepseek-v4-flash model. Your working directory is /workspace.\n\n### 工具使用\n用 read/edit/write/glob/grep/bash 操作文件。\n### 工作区\nAGENTS.md 是最高优先级约定。'
-    const out = applyMinimalRouting(
-      { messages: [{ role: 'system', content: stdSystem }, { role: 'user', content: '修复 bug' }], tools: allTools },
-      'deepseek/deepseek-v4-pro',
-    )
-    const sys0 = out.messages[0].content
-    assert.ok(sys0.startsWith(FREEBUFF_SYSTEM_OPENING))
-    assert.ok(sys0.includes(SPEC_PERSONA))
-    // 原 persona 句被移除，其余 section 保留
-    assert.ok(!sys0.includes('coding agent powered by'))
-    assert.ok(sys0.includes('### 工具使用'))
-    assert.ok(sys0.includes('AGENTS.md 是最高优先级约定'))
-    assert.equal(out.messages.length, 2) // 替换后的 system + user
-  }
-
-  // 客户端 system 不以 "You are" 开头 → 无法识别 persona 段，回退前置 persona 消息
-  {
-    const out = applyMinimalRouting(
-      { messages: [{ role: 'system', content: 'Be brief. 只给结论。' }, { role: 'user', content: '修复 bug' }] },
-      'deepseek/deepseek-v4-pro',
-    )
-    assert.equal(out.messages[0].role, 'system')
-    assert.ok(out.messages[0].content.startsWith(FREEBUFF_SYSTEM_OPENING))
-    assert.equal(out.messages[1].content, 'Be brief. 只给结论。') // 原样保留
-    assert.equal(out.messages.length, 3) // 前置 persona + 客户端 system + user
-  }
-
-  // 客户端没有 tools → 保持空
-  {
-    const out = applyMinimalRouting(
-      { messages: [{ role: 'user', content: '修复 bug' }] },
-      'deepseek/deepseek-v4-pro',
-    )
-    assert.deepEqual(out.tools, [])
-  }
-
-  // 路由风格钉死：build 任务强制 spec（we/let's 链）→ spec persona + 锚定 + 读优先工具
-  {
-    const out = applyMinimalRouting(
-      { messages: [{ role: 'user', content: '从零开发一个网页应用' }], tools: allTools },
-      'deepseek/deepseek-v4-pro',
-      { modeOverride: 'spec' },
-    )
-    assert.ok(out.messages[0].content.includes(SPEC_PERSONA))
-    assert.ok(!out.messages[0].content.includes('Plan and reason collectively'))
-    assert.deepEqual(
-      out.tools.map((t) => t.function.name),
-      ['read', 'edit', 'glob', 'grep', 'bash'],
-    )
-  }
-
-  // 路由风格钉死：fix 任务强制 react → react persona（无锚定）+ 写优先工具
-  {
-    const out = applyMinimalRouting(
-      { messages: [{ role: 'user', content: '请修复这个报错' }], tools: allTools },
-      'deepseek/deepseek-v4-pro',
-      { modeOverride: 'react' },
-    )
-    assert.ok(out.messages[0].content.includes(REACT_PERSONA))
-    assert.ok(!out.messages[0].content.includes('Plan and reason collectively'))
-    assert.deepEqual(
-      out.tools.map((t) => t.function.name),
-      ['read', 'edit', 'write', 'bash'],
-    )
-  }
-
-  // 工具保证：客户端工具全是非常规名 → 核心裁剪为空 → 保留原工具集（模型仍可调用工具）
-  {
-    const weirdTools = [
-      { type: 'function', function: { name: 'web_search' } },
-      { type: 'function', function: { name: 'fetch_page' } },
-    ]
-    const out = applyMinimalRouting(
-      { messages: [{ role: 'user', content: '修复 bug' }], tools: weirdTools },
-      'deepseek/deepseek-v4-pro',
-    )
-    assert.deepEqual(
-      out.tools.map((t) => t.function.name),
-      ['web_search', 'fetch_page'],
-    )
-  }
-
-  // 特殊签名工具保证：原工具集里带 end_turn → 裁剪后必须保留
-  {
-    const signedTools = [
-      { type: 'function', function: { name: 'read' } },
-      { type: 'function', function: { name: 'edit' } },
-      { type: 'function', function: { name: 'todo_write' } },
-      { type: 'function', function: { name: 'end_turn' } },
-    ]
-    const out = applyMinimalRouting(
-      { messages: [{ role: 'user', content: '修复 bug' }], tools: signedTools },
-      'deepseek/deepseek-v4-pro',
-    )
-    const names = out.tools.map((t) => t.function.name)
-    assert.deepEqual(names, ['read', 'edit', 'end_turn'])
-  }
-
-  // ── 标准模式（applyStandardRouting）：flash 恒走 weak + 深度引导静态并入 ──
-  {
-    // flash：恒用 STANDARD_FLASH_PERSONA（不按任务分类），深度思考引导静态并入
-    // persona（v4-flash-godmode rc.6 教训：动态注入不可靠 → 静态并入，多轮稳定）
-    const out = applyStandardRouting(
-      {
-        messages: [
-          { role: 'system', content: 'You are a coding agent powered by the deepseek/deepseek-v4-flash model.\n\n### 工具使用\n用工具操作文件。' },
-          { role: 'user', content: '从零开发一个网页应用' },
-        ],
-        tools: allTools,
-      },
-      'deepseek/deepseek-v4-flash',
-    )
-    const sys0 = out.messages[0].content
-    assert.ok(sys0.startsWith(FREEBUFF_SYSTEM_OPENING))
-    assert.ok(sys0.includes(STANDARD_FLASH_PERSONA))
-    // 深度引导静态并入 persona（关键：多轮稳定，不依赖动态注入）
-    assert.ok(sys0.includes('Think deeply about the architecture'))
-    assert.ok(sys0.includes('decide the task type (build or fix)'))
-    // 客户端 persona 段被替换、其余 section 保留（套件 applyPersona 语义）
-    assert.ok(!sys0.includes('coding agent powered by'))
-    assert.ok(sys0.includes('### 工具使用'))
-    // 首轮 weak 核心工具面（read/write/edit + shell）
-    assert.deepEqual(
-      out.tools.map((t) => t.function.name),
-      ['read', 'edit', 'write', 'bash'],
-    )
-    // 标准模式不追加逐轮动态引导（v4-flash-godmode rc.6 教训：动态注入不可靠，
-    // 每轮 GUIDE 随轮次变化 → 思维链混用）。深度引导已静态并入 persona。
-    assert.equal(out.messages.length, 2) // system + user
-    assert.equal(out.messages.at(-1).role, 'user')
-    assert.equal(out.messages.at(-1).content, '从零开发一个网页应用')
-  }
-
-  // 标准模式 Pro/其他模型 → STANDARD_PRO_PERSONA（w6c，无锚、无逐轮引导）
-  {
-    const out = applyStandardRouting(
-      { messages: [{ role: 'user', content: '请全面重构这个系统的架构设计并优化性能' }] },
-      'deepseek/deepseek-v4-pro',
-    )
-    assert.ok(out.messages[0].content.includes(STANDARD_PRO_PERSONA))
-    assert.equal(out.messages.length, 2) // system + user，不追加引导
-    assert.equal(out.messages.at(-1).content, '请全面重构这个系统的架构设计并优化性能')
-  }
-
-  // 标准模式 Pro：简单任务同样不追加引导（persona 恒定 = 多轮稳定）
-  {
-    const out = applyStandardRouting(
-      { messages: [{ role: 'user', content: '修复这个报错' }] },
-      'deepseek/deepseek-v4-pro',
-    )
-    assert.ok(out.messages[0].content.includes(STANDARD_PRO_PERSONA))
-    assert.equal(out.messages.length, 2)
-  }
-
-  // 标准模式：历史已有 tool_calls → 放行全部工具（promote 语义，多轮不裁剪）
-  {
-    const out = applyStandardRouting(
-      {
-        messages: [
-          { role: 'user', content: '写一个脚本' },
-          {
-            role: 'assistant',
-            content: '',
-            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
-          },
-          { role: 'tool', tool_call_id: 'c1', content: 'ok' },
-        ],
-        tools: allTools,
-      },
-      'deepseek/deepseek-v4-flash',
-    )
-    assert.deepEqual(
-      out.tools.map((t) => t.function.name),
-      allTools.map((t) => t.function.name),
-    )
-    // 无 system → 前置 persona（1）+ 原始 3 条 = 4；标准模式不追加逐轮引导
-    assert.equal(out.messages.length, 4)
-    assert.equal(out.messages.at(-1).role, 'tool')
-    assert.equal(out.messages.at(-1).content, 'ok')
-  }
-
-  // 标准模式多轮稳定：第二轮（历史带 assistant 文本回复）仍注入标准 persona，
-  // 且 persona 内容与首轮逐字一致（哈希不变，多轮触发不衰减）
-  {
-    const first = applyStandardRouting(
-      { messages: [{ role: 'user', content: '帮我重构这个模块' }] },
-      'deepseek/deepseek-v4-flash',
-    )
-    const second = applyStandardRouting(
-      {
-        messages: [
-          { role: 'user', content: '帮我重构这个模块' },
-          { role: 'assistant', content: '好的，我先看一下现有代码结构。' },
-          { role: 'user', content: '继续，顺便加上单元测试' },
-        ],
-      },
-      'deepseek/deepseek-v4-flash',
-    )
-    // 两轮注入的 persona 逐字一致（静态并入 → 多轮稳定触发）
-    assert.equal(
-      first.messages[0].content.includes(STANDARD_FLASH_PERSONA),
-      true,
-    )
-    assert.equal(
-      second.messages[0].content.includes(STANDARD_FLASH_PERSONA),
-      true,
-    )
-    assert.ok(second.messages[0].content.includes('Think deeply about the architecture'))
-  }
-}
-
 // --- unit: gate helpers ---
 {
   assert.equal(
@@ -1154,187 +686,6 @@ function chat(body, headers = {}) {
   settingsStore.save({ freeToolSignatureEnabled: true })
 }
 
-// minimal routing: 默认关闭 → 透传不改写；开启 → persona 置顶 + 首轮工具面裁剪
-{
-  // 本块专门验证 minimal 实现风格（旧行为），显式钉死，避免受默认 standard 影响
-  settingsStore.save({ minimalRoutingStyle: 'minimal' })
-  calls = []
-  completionAttempts = 0
-  const tools = [
-    { type: 'function', function: { name: 'read' } },
-    { type: 'function', function: { name: 'edit' } },
-    { type: 'function', function: { name: 'glob' } },
-    { type: 'function', function: { name: 'grep' } },
-    { type: 'function', function: { name: 'write' } },
-    { type: 'function', function: { name: 'bash' } },
-    { type: 'function', function: { name: 'todo_write' } },
-    { type: 'function', function: { name: 'skill' } },
-  ]
-  const msgs = [
-    { role: 'system', content: 'You are Buffy, the strategic coding assistant.\n\nKeep the role.' },
-    { role: 'user', content: '请修复这个报错并排查根因' },
-  ]
-
-  // 关闭：原样透传（仅 free-mode 门禁补齐），tools 只追加签名工具
-  assert.equal(settingsStore.get().minimalRoutingEnabled, false)
-  const offRes = await chat({
-    model: 'deepseek/deepseek-v4-pro',
-    messages: msgs,
-    tools,
-  })
-  assert.equal(offRes.status, 200, await offRes.clone().text())
-  const offCall = calls.find((c) => c.url.includes('/chat/completions'))
-  const offBody = JSON.parse(offCall.body)
-  assert.equal(offBody.messages.length, 2)
-  assert.equal(offBody.messages[0].content, msgs[0].content)
-  assert.deepEqual(
-    offBody.tools.map((t) => t.function.name),
-    ['read', 'edit', 'glob', 'grep', 'write', 'bash', 'todo_write', 'skill', 'end_turn'],
-  )
-
-  // 开启：spec persona 置顶（门禁标记保留）、客户端 system 在后、工具裁剪为
-  // read/edit/glob/grep + bash + end_turn、非 weak 不追加引导
-  settingsStore.save({ minimalRoutingEnabled: true })
-  calls = []
-  completionAttempts = 0
-  const onRes = await chat({
-    model: 'deepseek/deepseek-v4-pro',
-    messages: msgs,
-    tools,
-  })
-  assert.equal(onRes.status, 200, await onRes.clone().text())
-  const onCall = calls.find((c) => c.url.includes('/chat/completions'))
-  const onBody = JSON.parse(onCall.body)
-  assert.equal(onBody.messages[0].role, 'system')
-  assert.ok(onBody.messages[0].content.startsWith(FREEBUFF_SYSTEM_OPENING))
-  assert.ok(onBody.messages[0].content.includes(SPEC_PERSONA))
-  // 套件 applyPersona 语义：客户端 persona 段被路由 persona 替换，其余 section 保留
-  assert.ok(onBody.messages[0].content.includes('Keep the role'))
-  assert.ok(!onBody.messages[0].content.includes('Keep the role.\n\nYou are'))
-  assert.equal(onBody.messages[1].role, 'user')
-  assert.equal(onBody.messages.length, 2) // 替换后的 system + user，非 weak 无引导
-  assert.deepEqual(
-    onBody.tools.map((t) => t.function.name),
-    ['read', 'edit', 'glob', 'grep', 'bash', 'end_turn'],
-  )
-
-  // 已有 tool_calls 历史 → 放行全部工具
-  calls = []
-  completionAttempts = 0
-  const toolMsgs = [
-    { role: 'user', content: '写一个脚本' },
-    {
-      role: 'assistant',
-      content: '',
-      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
-    },
-    { role: 'tool', tool_call_id: 'c1', content: 'ok' },
-  ]
-  const toolRes = await chat({
-    model: 'deepseek/deepseek-v4-pro',
-    messages: toolMsgs,
-    tools,
-  })
-  assert.equal(toolRes.status, 200, await toolRes.clone().text())
-  const toolCall = calls.find((c) => c.url.includes('/chat/completions'))
-  const toolBody = JSON.parse(toolCall.body)
-  assert.deepEqual(
-    toolBody.tools.map((t) => t.function.name),
-    ['read', 'edit', 'glob', 'grep', 'write', 'bash', 'todo_write', 'skill', 'end_turn'],
-  )
-
-  // 路由风格钉死 spec：build 任务也被路由到 we/let's 集体链（spec persona + 锚定 + 读优先工具）
-  settingsStore.save({ minimalRoutingMode: 'spec' })
-  calls = []
-  completionAttempts = 0
-  const pinnedRes = await chat({
-    model: 'deepseek/deepseek-v4-pro',
-    messages: [{ role: 'user', content: '从零开发一个网页应用' }],
-    tools,
-  })
-  assert.equal(pinnedRes.status, 200, await pinnedRes.clone().text())
-  const pinnedCall = calls.find((c) => c.url.includes('/chat/completions'))
-  const pinnedBody = JSON.parse(pinnedCall.body)
-  assert.ok(pinnedBody.messages[0].content.includes(SPEC_PERSONA))
-  assert.ok(!pinnedBody.messages[0].content.includes('Plan and reason collectively'))
-  assert.deepEqual(
-    pinnedBody.tools.map((t) => t.function.name),
-    ['read', 'edit', 'glob', 'grep', 'bash', 'end_turn'],
-  )
-  settingsStore.save({ minimalRoutingMode: 'auto' })
-
-  // Flash + spec 钉死：system 无远距锚定，近距 user 注入 we/let's 首 token 锚定
-  settingsStore.save({ minimalRoutingMode: 'spec' })
-  calls = []
-  completionAttempts = 0
-  const flashSpecRes = await chat({
-    model: 'deepseek/deepseek-v4-flash',
-    messages: [{ role: 'user', content: '从零开发一个网页应用' }],
-    tools,
-  })
-  assert.equal(flashSpecRes.status, 200, await flashSpecRes.clone().text())
-  const flashSpecCall = calls.find((c) => c.url.includes('/chat/completions'))
-  const flashSpecBody = JSON.parse(flashSpecCall.body)
-  assert.ok(flashSpecBody.messages[0].content.includes(SPEC_PERSONA))
-  assert.ok(!flashSpecBody.messages[0].content.includes('Plan and reason collectively'))
-  assert.equal(flashSpecBody.messages.at(-1).content, WE_CHAIN_ANCHOR_FLASH)
-  settingsStore.save({ minimalRoutingMode: 'auto' })
-
-  // 模糊任务（weak 模式）+ Flash 模型 → WEAK_FLASH persona + 近距离引导
-  calls = []
-  completionAttempts = 0
-  const weakRes = await chat({
-    model: 'deepseek/deepseek-v4-flash',
-    messages: [{ role: 'user', content: '随便聊聊' }],
-  })
-  assert.equal(weakRes.status, 200, await weakRes.clone().text())
-  const weakCall = calls.find((c) => c.url.includes('/chat/completions'))
-  const weakBody = JSON.parse(weakCall.body)
-  assert.ok(weakBody.messages[0].content.includes(WEAK_FLASH))
-  assert.equal(weakBody.messages.at(-1).role, 'user')
-  assert.equal(weakBody.messages.at(-1).content, GUIDE_WEAK)
-  settingsStore.save({ minimalRoutingEnabled: false, minimalRoutingStyle: 'standard' })
-}
-
-// standard routing（默认实现风格）：flash 恒走 weak 内路由 + 深度引导静态并入 persona
-{
-  const tools = [
-    { type: 'function', function: { name: 'read' } },
-    { type: 'function', function: { name: 'edit' } },
-    { type: 'function', function: { name: 'glob' } },
-    { type: 'function', function: { name: 'grep' } },
-    { type: 'function', function: { name: 'write' } },
-    { type: 'function', function: { name: 'bash' } },
-    { type: 'function', function: { name: 'todo_write' } },
-    { type: 'function', function: { name: 'skill' } },
-  ]
-  settingsStore.save({ minimalRoutingEnabled: true, minimalRoutingStyle: 'standard' })
-  calls = []
-  completionAttempts = 0
-  const res = await chat({
-    model: 'deepseek/deepseek-v4-flash',
-    messages: [{ role: 'user', content: '从零开发一个网页应用' }],
-    tools,
-  })
-  assert.equal(res.status, 200, await res.clone().text())
-  const call = calls.find((c) => c.url.includes('/chat/completions'))
-  const body = JSON.parse(call.body)
-  const sys0 = body.messages[0].content
-  // flash 恒走 weak 标准 persona（不按任务分类），深度思考引导静态并入
-  assert.ok(sys0.includes(STANDARD_FLASH_PERSONA))
-  assert.ok(sys0.includes('Think deeply about the architecture'))
-  // 首轮 weak 核心工具面（read/write/edit + bash + end_turn 签名）
-  assert.deepEqual(
-    body.tools.map((t) => t.function.name),
-    ['read', 'edit', 'write', 'bash', 'end_turn'],
-  )
-  // 标准模式不追加逐轮动态引导（v4-flash-godmode rc.6 教训：动态注入不可靠、
-  // 每轮 GUIDE 随轮次变化 → 思维链混用）；深度引导静态并入 persona。
-  assert.equal(body.messages.length, 2) // system + user
-  assert.equal(body.messages.at(-1).role, 'user')
-  assert.equal(body.messages.at(-1).content, '从零开发一个网页应用')
-  settingsStore.save({ minimalRoutingEnabled: false })
-}
 
 // stream
 {
@@ -2021,7 +1372,7 @@ for (const model of verifiedSpecialModels) {
   rrConfig.upstream.credentialsDir = rrDir
   rrConfig.session.pollIntervalSec = 3600
   // 本用例回归热 session 复用 → 平摊账号数=1（只用一个账号，永远复用热 session）
-  const pool = new AccountRuntimes(rrConfig, { getSpreadAccounts: () => 1 })
+  const pool = new AccountRuntimes(rrConfig)
   mockMode = 'ok'
   sessionPosts = 0
   // 串行请求全部复用 a 的同一个热 session，只 admit 一次。
@@ -2071,19 +1422,19 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(rrDir, { recursive: true, force: true })
 }
 
-// --- unit: 免费模型暴力分散（spread 默认开）——轮转分散到不同账号 ---
+// --- unit: 粘性调度（drain, not rotate）——集中用一个账号，未用过的排最后 ---
 {
-  const spDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-spread-'))
+  const spDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-sticky-'))
   saveAccountUser(spDir, { id: 'a', email: 'sp-a@example.com', authToken: 'token-a' })
   saveAccountUser(spDir, { id: 'b', email: 'sp-b@example.com', authToken: 'token-b' })
   saveAccountUser(spDir, { id: 'c', email: 'sp-c@example.com', authToken: 'token-c' })
   const spConfig = loadConfig()
   spConfig.upstream.credentialsDir = spDir
   spConfig.session.pollIntervalSec = 3600
-  const pool = new AccountRuntimes(spConfig) // 默认 spread=true
+  const pool = new AccountRuntimes(spConfig)
   mockMode = 'ok'
   sessionPosts = 0
-  // 串行请求轮转 A→B→C→A→B→C，不钉死热 session
+  // 串行请求全部粘在 a 上（同一个热 session，只 admit 一次）——绝不轮换健康账号
   const emails = []
   for (let i = 0; i < 6; i++) {
     const rt = await pool.acquireForModel('deepseek/deepseek-v4-flash')
@@ -2091,32 +1442,39 @@ for (const model of verifiedSpecialModels) {
   }
   assert.deepEqual(
     emails,
-    [
-      'sp-a@example.com',
-      'sp-b@example.com',
-      'sp-c@example.com',
-      'sp-a@example.com',
-      'sp-b@example.com',
-      'sp-c@example.com',
-    ],
-    `免费模型应轮转分散, got ${JSON.stringify(emails)}`,
+    Array(6).fill('sp-a@example.com'),
+    `请求应粘在同一账号, got ${JSON.stringify(emails)}`,
   )
-  // 3 个账号各 admit 一次（每个账号一个 session，第 4 个请求起复用）
-  assert.equal(sessionPosts, 3, `expected 3 admissions (one per account), got ${sessionPosts}`)
+  assert.equal(sessionPosts, 1, `expected one admission, got ${sessionPosts}`)
+  // 从未用过的账号一个都不能碰
+  const rows = pool.list()
+  assert.equal(rows.find((r) => r.key === 'a').used, true, 'a 应标记为已用')
+  assert.equal(rows.find((r) => r.key === 'b').used, false, 'b 不应被使用')
+  assert.equal(rows.find((r) => r.key === 'c').used, false, 'c 不应被使用')
 
-  // 平摊调度在所有模型统一生效：但并发冷启动时，若账号已全部铺满（前面 flash
-  // 已占用 a/b/c），新模型请求优先复用热 session 账号（账号内负载均衡）——
-  // 不会无谓替换其他账号的 session。这里 3 个账号都已被 flash 占用，pro 请求
-  // 全部复用 a（a 的 session 对 mock 上游所有模型可用）。
-  sessionPosts = 0
-  const seen = await Promise.all(
-    Array.from({ length: 6 }, async () => {
-      const rt = await pool.acquireForModel('deepseek/deepseek-v4-pro')
-      return rt.key
-    }),
+  // a 冷却（限流/额度耗尽）→ 才启用一个从未用过的账号，并继续粘住它
+  pool.markCooldown('a', { code: 'rate_limited', retryAfterMs: 60_000 })
+  const after = []
+  for (let i = 0; i < 3; i++) {
+    after.push((await pool.acquireForModel('deepseek/deepseek-v4-flash')).email)
+  }
+  assert.deepEqual(
+    after,
+    Array(3).fill('sp-b@example.com'),
+    `换号后应粘住新账号, got ${JSON.stringify(after)}`,
   )
-  assert.equal(new Set(seen).size, 1, `账号已铺满时新模型应复用热账号, got ${seen}`)
-  assert.equal(sessionPosts, 1, `复用切换模型应最多 re-admit 一次, got ${sessionPosts}`)
+  assert.equal(pool.list().find((r) => r.key === 'c').used, false, 'c 仍不应被使用')
+
+  // b 也冷却 → 才轮到最后一个从未用过的账号 c
+  pool.markCooldown('b', { code: 'rate_limited', retryAfterMs: 60_000 })
+  const last = await pool.acquireForModel('deepseek/deepseek-v4-flash')
+  assert.equal(last.email, 'sp-c@example.com', '最后一个账号才启用 c')
+
+  // 只剩 c 可用且它持有 flash 热 session：换模型请求复用同一账号（释放旧 session）
+  sessionPosts = 0
+  const luna = await pool.acquireForModel('openai/gpt-5.6-luna')
+  assert.equal(luna.email, 'sp-c@example.com', '无其他可用账号时应复用已用账号换模型')
+  assert.equal(sessionPosts, 1, `换模型应只 admit 一次, got ${sessionPosts}`)
   await pool.shutdown()
   fs.rmSync(spDir, { recursive: true, force: true })
 }
@@ -2144,7 +1502,7 @@ for (const model of verifiedSpecialModels) {
   const dupConfig = loadConfig()
   dupConfig.upstream.credentialsDir = dupDir
   dupConfig.session.pollIntervalSec = 3600
-  const dupPool = new AccountRuntimes(dupConfig, { getSpreadAccounts: () => 1 })
+  const dupPool = new AccountRuntimes(dupConfig)
   mockMode = 'ok'
   sessionPosts = 0
   const seen = await Promise.all(
@@ -2393,12 +1751,12 @@ for (const model of verifiedSpecialModels) {
       false,
     )
   }
-  // 运行设置：账号并发上限（负载均衡）——默认 1，校验非法值，保存后持久化
+  // 运行设置：账号并发上限（粘性调度）——默认 2，校验非法值，保存后持久化
   {
     const getDefault = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
       headers: { cookie },
     })
-    assert.equal((await getDefault.json()).accountMaxConcurrency, 1)
+    assert.equal((await getDefault.json()).accountMaxConcurrency, 2)
 
     for (const bad of [0, -1, 17, 1.5, 'x']) {
       const res = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
@@ -2429,76 +1787,36 @@ for (const model of verifiedSpecialModels) {
       body: JSON.stringify({ accountMaxConcurrency: 1 }),
     })
   }
-  // 运行设置：极简路由开关——默认关闭，非法值拒绝，保存后立即生效并持久化
+  // 运行设置：额度保护（空闲释放 + 单请求新会话预算）——非法值拒绝，保存即持久化
   {
     const getDefault = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
       headers: { cookie },
     })
-    assert.equal((await getDefault.json()).minimalRoutingEnabled, false)
+    const def = await getDefault.json()
+    assert.equal(def.idleReleaseSec, 300, '未保存过时应回落 config.yaml 默认值')
+    assert.equal(def.maxNewSessionsPerRequest, 2)
 
-    const invalid = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
-      method: 'POST',
-      headers: { cookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ minimalRoutingEnabled: 'yes' }),
-    })
-    assert.equal(invalid.status, 400)
-
-    const save = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
-      method: 'POST',
-      headers: { cookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ minimalRoutingEnabled: true }),
-    })
-    assert.equal(save.status, 200)
-    assert.equal((await save.json()).minimalRoutingEnabled, true)
-    assert.equal(settingsStore.get().minimalRoutingEnabled, true)
-    assert.equal(
-      new SettingsStore(path.join(wDir, 'settings.json')).get()
-        .minimalRoutingEnabled,
-      true,
-    )
-    // 恢复默认
-    await fetch(`http://127.0.0.1:${wport}/api/settings`, {
-      method: 'POST',
-      headers: { cookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ minimalRoutingEnabled: false }),
-    })
-    assert.equal(settingsStore.get().minimalRoutingEnabled, false)
-  }
-  // 运行设置：路由风格（思维链钉死）——默认 auto，非法值拒绝，保存后持久化
-  {
-    const getDefault = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
-      headers: { cookie },
-    })
-    assert.equal((await getDefault.json()).minimalRoutingMode, 'auto')
-
-    for (const bad of ['foo', 'SPEC', 1, null]) {
+    for (const bad of [-1, 'x', null, 999999]) {
       const res = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
         method: 'POST',
         headers: { cookie, 'content-type': 'application/json' },
-        body: JSON.stringify({ minimalRoutingMode: bad }),
+        body: JSON.stringify({ idleReleaseSec: bad }),
       })
-      assert.equal(res.status, 400, `minimalRoutingMode=${bad} should be rejected`)
+      assert.equal(res.status, 400, `idleReleaseSec=${bad} should be rejected`)
     }
 
     const save = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
       method: 'POST',
       headers: { cookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ minimalRoutingMode: 'spec' }),
+      body: JSON.stringify({ idleReleaseSec: 600, maxNewSessionsPerRequest: 3 }),
     })
     assert.equal(save.status, 200)
-    assert.equal((await save.json()).minimalRoutingMode, 'spec')
-    assert.equal(settingsStore.get().minimalRoutingMode, 'spec')
-    assert.equal(
-      new SettingsStore(path.join(wDir, 'settings.json')).get().minimalRoutingMode,
-      'spec',
-    )
-    // 恢复默认
-    await fetch(`http://127.0.0.1:${wport}/api/settings`, {
-      method: 'POST',
-      headers: { cookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ minimalRoutingMode: 'auto' }),
-    })
-    assert.equal(settingsStore.get().minimalRoutingMode, 'auto')
+    assert.equal((await save.json()).idleReleaseSec, 600)
+    assert.equal(settingsStore.get().idleReleaseSec, 600)
+    assert.equal(settingsStore.get().maxNewSessionsPerRequest, 3)
+    const persisted = new SettingsStore(path.join(wDir, 'settings.json')).get()
+    assert.equal(persisted.idleReleaseSec, 600, '保存后应持久化到 settings.json')
+    assert.equal(persisted.maxNewSessionsPerRequest, 3)
   }
   // 代理管理 API：GET 空池 → POST 保存（持久化 + 立即生效）→ GET 返回
   {
@@ -2638,7 +1956,7 @@ for (const model of verifiedSpecialModels) {
   convConfig.server.apiKeys = ['sk-test']
   convConfig.upstream.credentialsDir = convDir
   convConfig.session.pollIntervalSec = 3600
-  const convRuntimes = new AccountRuntimes(convConfig, { getSpreadAccounts: () => 1 })
+  const convRuntimes = new AccountRuntimes(convConfig)
   const convServer = await startServer({
     config: convConfig,
     runtimes: convRuntimes,
@@ -2724,8 +2042,8 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(convDir, { recursive: true, force: true })
 }
 
-// 无会话ID 的并发请求：spread 关 + 每账号并发上限 1 → 冷启动按空闲槽位分散，
-// 单账号同时最多 1 条流（满员即换号，不再把并发全部钉死在一个账号）
+// 无会话ID 的并发请求：粘性调度 + 每账号并发上限 1 → 全部挤在同一账号上排队，
+// 不主动开新账号（换号 = 多买一条 Freebucks 计费会话）
 {
   const rrDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-rr-'))
   saveAccountUser(rrDir, { id: 'ra', email: 'ra@example.com', authToken: 'token-ra' })
@@ -2739,7 +2057,6 @@ for (const model of verifiedSpecialModels) {
   rrConfig.session.pollIntervalSec = 3600
   rrConfig.limits.maxConcurrentRequests = 24
   const rrRuntimes = new AccountRuntimes(rrConfig, {
-    getSpreadAccounts: () => 999,
     getAccountConcurrency: () => 1,
   })
 
@@ -2826,14 +2143,32 @@ for (const model of verifiedSpecialModels) {
     assert.equal(res.status, 200, await res.clone().text())
     rrAccounts.push(res.headers.get('x-freebuff-proxy-account'))
   }
-  // 每账号并发上限 1：并发请求分散到 3 个账号（每个 admit 一次），单账号同时最多 1 条流
+  // 粘性优先：9 条并发全部挤在 ra 上（有界排队），单账号同时最多 1 条流，
+  // 不为了并发去启用从未用过的 rb / rc
   assert.deepEqual(
-    [...new Set(rrAccounts)].sort(),
-    ['ra@example.com', 'rb@example.com', 'rc@example.com'],
-    `并发应按空闲槽位分散到全部账号, got ${JSON.stringify(rrAccounts)}`,
+    [...new Set(rrAccounts)],
+    ['ra@example.com'],
+    `并发请求应粘在同一账号, got ${JSON.stringify(rrAccounts)}`,
   )
-  assert.equal(sessionPosts, 3, `每账号应各 admit 一次, got ${sessionPosts}`)
-  assert.equal(rrActiveMax, 3, `单账号并发上限 1 → 全局并发峰值应=账号数 3, got ${rrActiveMax}`)
+  assert.equal(sessionPosts, 1, `只应 admit 一次, got ${sessionPosts}`)
+  assert.equal(rrActiveMax, 1, `单账号并发上限 1 → 上游并发峰值应为 1, got ${rrActiveMax}`)
+  const rrRows = rrRuntimes.list()
+  assert.equal(rrRows.find((r) => r.key === 'ra').used, true, 'ra 应标记已用')
+  assert.equal(rrRows.find((r) => r.key === 'rb').used, false, 'rb 不应被启用')
+  assert.equal(rrRows.find((r) => r.key === 'rc').used, false, 'rc 不应被启用')
+  // 满员账号仍排在未用过账号之前（先排队；只有排队超时被 skipKeys 排除后才溢出）
+  assert.deepEqual(
+    rrRuntimes.candidateKeys('deepseek/deepseek-v4-flash'),
+    ['ra', 'rb', 'rc'],
+    '满员的已用账号应排在未用过账号之前',
+  )
+  assert.deepEqual(
+    rrRuntimes.candidateKeys('deepseek/deepseek-v4-flash', {
+      skipKeys: new Set(['ra']),
+    }),
+    ['rb', 'rc'],
+    '排队超时后应把该账号排除，溢出到下一个',
+  )
 
   globalThis.fetch = origFetch
   await rrRuntimes.shutdown()
@@ -2853,7 +2188,7 @@ for (const model of verifiedSpecialModels) {
   subConfig.server.apiKeys = ['sk-test']
   subConfig.upstream.credentialsDir = subDir
   subConfig.session.pollIntervalSec = 3600
-  const subRuntimes = new AccountRuntimes(subConfig, { getSpreadAccounts: () => 1 })
+  const subRuntimes = new AccountRuntimes(subConfig)
   const subServer = await startServer({
     config: subConfig,
     runtimes: subRuntimes,
@@ -2969,7 +2304,7 @@ for (const model of verifiedSpecialModels) {
   capConfig.server.apiKeys = ['sk-test']
   capConfig.upstream.credentialsDir = capDir
   capConfig.session.pollIntervalSec = 3600
-  const capRuntimes = new AccountRuntimes(capConfig, { getSpreadAccounts: () => 999 })
+  const capRuntimes = new AccountRuntimes(capConfig)
   const capServer = await startServer({
     config: capConfig,
     runtimes: capRuntimes,
@@ -3028,7 +2363,7 @@ for (const model of verifiedSpecialModels) {
   capConfig2.server.apiKeys = ['sk-test']
   capConfig2.upstream.credentialsDir = capDir2
   capConfig2.session.pollIntervalSec = 3600
-  const capRuntimes2 = new AccountRuntimes(capConfig2, { getSpreadAccounts: () => 999 })
+  const capRuntimes2 = new AccountRuntimes(capConfig2)
   const capServer2 = await startServer({
     config: capConfig2,
     runtimes: capRuntimes2,
@@ -3306,7 +2641,7 @@ for (const model of verifiedSpecialModels) {
   stConfig.session.pollIntervalSec = 3600
   stConfig.limits.streamIdleTimeoutSec = 1
 
-  const stRuntimes = new AccountRuntimes(stConfig, { getSpreadAccounts: () => 999 })
+  const stRuntimes = new AccountRuntimes(stConfig)
   const stServer = await startServer({
     config: stConfig,
     runtimes: stRuntimes,
@@ -3386,7 +2721,7 @@ for (const model of verifiedSpecialModels) {
   // 关闭时，幽灵连接只断开连接、下一请求仍可复用同一会话
   spConfig.limits.stallCooldownSec = 0
 
-  const spRuntimes = new AccountRuntimes(spConfig, { getSpreadAccounts: () => 1 })
+  const spRuntimes = new AccountRuntimes(spConfig)
   const spServer = await startServer({
     config: spConfig,
     runtimes: spRuntimes,
@@ -3458,7 +2793,6 @@ for (const model of verifiedSpecialModels) {
   scConfig.limits.maxConcurrentRequests = 12
 
   const scRuntimes = new AccountRuntimes(scConfig, {
-    getSpreadAccounts: () => 999,
     getAccountConcurrency: () => 1,
   })
   const scServer = await startServer({
@@ -3555,10 +2889,10 @@ for (const model of verifiedSpecialModels) {
     const accountHeader = r.headers.get('x-freebuff-proxy-account')
     scAccounts.push(accountHeader)
   }
-  // 单账号并发上限 1：请求分散到 sca/scb（各 admit 一次），单账号同时最多 1 条流
-  assert.equal(new Set(scAccounts).size, 2, `expected two accounts, got ${JSON.stringify(scAccounts)}`)
-  assert.equal(sessionPosts, 2, `expected 2 session admissions, got ${sessionPosts}`)
-  assert.equal(streamActiveMax, 2, `expected max 2 concurrent streams (1 per account), got ${streamActiveMax}`)
+  // 粘性优先：单账号并发上限 1 → 6 条流全部排在 sca 上（不启用第二个账号）
+  assert.equal(new Set(scAccounts).size, 1, `expected one sticky account, got ${JSON.stringify(scAccounts)}`)
+  assert.equal(sessionPosts, 1, `expected one admission, got ${sessionPosts}`)
+  assert.equal(streamActiveMax, 1, `expected max 1 concurrent stream, got ${streamActiveMax}`)
 
   globalThis.fetch = origFetch
   await scRuntimes.shutdown()
@@ -3580,7 +2914,6 @@ for (const model of verifiedSpecialModels) {
   ccConfig.limits.maxConcurrentRequests = 12
   // 模拟控制台把每账号并发上限调到 2
   const ccRuntimes = new AccountRuntimes(ccConfig, {
-    getSpreadAccounts: () => 999,
     getAccountConcurrency: () => 2,
   })
   const ccServer = await startServer({
@@ -3665,10 +2998,11 @@ for (const model of verifiedSpecialModels) {
     assert.equal(r.status, 200, await r.clone().text())
     ccAccounts.push(r.headers.get('x-freebuff-proxy-account'))
   }
-  // 每账号并发上限 2：cca 先占满 2 条 → 换到 ccb（各 admit 一次）；单账号同时最多 2 条流
-  assert.equal(new Set(ccAccounts).size, 2, `expected two accounts, got ${JSON.stringify(ccAccounts)}`)
-  assert.equal(sessionPosts, 2, `expected 2 session admissions, got ${sessionPosts}`)
-  assert.equal(streamActiveMax, 4, `expected max 4 concurrent streams (2 per account), got ${streamActiveMax}`)
+  // 粘性优先：每账号并发上限 2 → 6 条流全部挤在 cca 上（2 条并行、其余排队），
+  // 不主动启用第二个账号（只有排队超时才溢出）
+  assert.equal(new Set(ccAccounts).size, 1, `expected one sticky account, got ${JSON.stringify(ccAccounts)}`)
+  assert.equal(sessionPosts, 1, `expected one admission, got ${sessionPosts}`)
+  assert.equal(streamActiveMax, 2, `expected max 2 concurrent streams, got ${streamActiveMax}`)
   // 监控字段：账号行带 在途/上限
   const ccRow = ccRuntimes.list().find((x) => x.email === 'cca@example.com')
   assert.equal(ccRow.concurrency, 2)
@@ -3695,7 +3029,6 @@ for (const model of verifiedSpecialModels) {
   capConfig.session.pollIntervalSec = 3600
   capConfig.limits.maxConcurrentRequests = 12
   const capRuntimes = new AccountRuntimes(capConfig, {
-    getSpreadAccounts: () => 999, // 平摊账号数不设限（全部账号可用）
     getAccountConcurrency: () => 3,   // 用户设置的每账号并发上限
   })
   const capServer = await startServer({
@@ -3762,7 +3095,7 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
   sessionPosts = 0
   completionAttempts = 0
-  // 8 个并发流，上限 3 → 应 4+4 分散到两个账号，单账号峰值 <= 3
+  // 8 个并发流，上限 3 → 全部挤在 cpa（3 并行 + 其余排队），不启用第二个账号
   const capReqs = Array.from({ length: 8 }, () =>
     fetch(`http://127.0.0.1:${capPort}/v1/chat/completions`, {
       method: 'POST',
@@ -3782,18 +3115,16 @@ for (const model of verifiedSpecialModels) {
   }
   const byEmail = {}
   for (const a of capAccounts) byEmail[a] = (byEmail[a] || 0) + 1
-  // 核心断言：不再全钉一个账号——两个账号都被用到；每账号承接 3..5 个
-  // （4+4 或 5+3 取决于选号/取锁的微时序，都在"上限 3 → 满员换号"的语义内）
-  assert.equal(Object.keys(byEmail).length, 2, `应分散到两个账号, got ${JSON.stringify(byEmail)}`)
-  for (const email of ['cpa@example.com', 'cpb@example.com']) {
-    assert.ok(
-      byEmail[email] >= 3 && byEmail[email] <= 5,
-      `${email} 承接数应在 3..5, got ${JSON.stringify(byEmail)}`,
-    )
-  }
-  assert.equal(sessionPosts, 2, `两个账号应各 admit 一次, got ${sessionPosts}`)
-  assert.ok(streamActiveMax <= 6, `全局并发峰值应 <= 2账号×上限3, got ${streamActiveMax}`)
-  assert.ok(streamActiveMax >= 4, `并发应真正叠加（>单账号上限3）, got ${streamActiveMax}`)
+  // 核心断言：粘性优先——8 条流全在 cpa 上（3 条并行 + 排队），
+  // 不为了并发去启用从未用过的 cpb（换号 = 多买一条 Freebucks 计费会话）
+  assert.deepEqual(byEmail, { 'cpa@example.com': 8 }, `应全部粘在 cpa, got ${JSON.stringify(byEmail)}`)
+  assert.equal(sessionPosts, 1, `只应 admit 一次, got ${sessionPosts}`)
+  assert.equal(streamActiveMax, 3, `单账号并发上限 3 → 上游并发峰值应为 3, got ${streamActiveMax}`)
+  assert.equal(
+    capRuntimes.list().find((r) => r.key === 'cpb').used,
+    false,
+    'cpb 不应被启用',
+  )
 
   // 冷态顺序请求仍复用热 session（不无谓 admit）：
   sessionPosts = 0
@@ -3826,7 +3157,7 @@ for (const model of verifiedSpecialModels) {
   expConfig.server.apiKeys = ['sk-test']
   expConfig.upstream.credentialsDir = expDir
   expConfig.session.pollIntervalSec = 3600
-  const expRuntimes = new AccountRuntimes(expConfig, { getSpreadAccounts: () => 1 })
+  const expRuntimes = new AccountRuntimes(expConfig)
   const expServer = await startServer({
     config: expConfig,
     runtimes: expRuntimes,
@@ -4249,7 +3580,7 @@ for (const model of verifiedSpecialModels) {
   waConfig.limits.streamIdleTimeoutSec = 1
   waConfig.limits.accountMaxConcurrency = 1
 
-  const waRuntimes = new AccountRuntimes(waConfig) // 默认 spread 开（免费模型分散）
+  const waRuntimes = new AccountRuntimes(waConfig) // 默认粘性调度（集中用一个账号）
   const waServer = await startServer({
     config: waConfig,
     runtimes: waRuntimes,
@@ -4279,16 +3610,17 @@ for (const model of verifiedSpecialModels) {
   const resA = await waChat()
   assert.equal(resA.status, 200)
   assert.equal(waRuntimes.chatInFlight('wa'), 1, 'hold 流应占用 wa 的唯一并发槽')
-  // B：立刻打第二个请求 → 免费模型分散到 wb 成功，而不是排队等 wa 释放
+  // B：立刻打第二个请求 → 粘性调度先在 wa 上有界排队；卡死的流会被 idle
+  // 超时（1s）掐断释放槽位，B 随即在 wa 上成功，而不是全部超时。
   const t0 = Date.now()
   const resB = await waChat()
   assert.equal(resB.status, 200, await resB.clone().text())
   assert.equal(
     resB.headers.get('x-freebuff-proxy-account'),
-    'wb@example.com',
-    'wa 被占死时新请求应换到 wb',
+    'wa@example.com',
+    '粘性优先：卡死流被 idle 超时掐断后，排队请求仍在 wa 上完成',
   )
-  assert.ok(Date.now() - t0 < 15_000, `换号应快速完成, took ${Date.now() - t0}ms`)
+  assert.ok(Date.now() - t0 < 15_000, `排队应有界快速完成, took ${Date.now() - t0}ms`)
   await resB.text()
   // 放行 A 的 hold（可能已被 idle 超时掐断，容错）
   releaseHoldStreams()
@@ -4411,6 +3743,229 @@ server.close()
   await runtimes2.shutdown()
   srv2.close()
   fs.rmSync(importDir, { recursive: true, force: true })
+}
+
+
+// ── Freebucks 计量改版（issue #7）：空闲早退退款 / 余额拦截 / 新会话预算 ──
+//
+// 上游 2026-09 起：session = 1 小时计费行，admit 时一次性扣 Freebucks，
+// 提前 DELETE 按未用时长退款。旧代理把 session 留到过期、报错时把每个账号
+// 都 admit 一遍，几个账号一起在后台白扣一小时额度——下面三条回归正是针对它。
+{
+  const fbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-fb-'))
+  saveAccountUser(fbDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
+  saveAccountUser(fbDir, { id: 'b', email: 'b@example.com', authToken: 'token-b' })
+  saveAccountUser(fbDir, { id: 'c', email: 'c@example.com', authToken: 'token-c' })
+  const fbConfig = loadConfig()
+  fbConfig.server.host = '127.0.0.1'
+  fbConfig.server.port = 0
+  fbConfig.server.apiKeys = ['sk-test']
+  fbConfig.upstream.credentialsDir = fbDir
+  fbConfig.session.pollIntervalSec = 3600
+  // 空闲释放调到 150ms（测试用），预算 2
+  fbConfig.session.idleReleaseSec = 0.15
+  fbConfig.limits.maxNewSessionsPerRequest = 2
+  const fbRuntimes = new AccountRuntimes(fbConfig)
+  const fbServer = await startServer({
+    config: fbConfig,
+    runtimes: fbRuntimes,
+    ...(() => {
+      const rt = fbRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const fbPort = fbServer.address().port
+  const fbChat = (body) =>
+    fetch(`http://127.0.0.1:${fbPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer sk-test',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    })
+
+  const futureReset = new Date(Date.now() + 6 * 3600_000).toISOString()
+  const freebucks25 = {
+    balance: 25,
+    daily: { limit: 25, spent: 0, remaining: 25, resetAt: futureReset },
+    wallet: { balance: 0, monthlyBonus: 0, nextBonusAt: null },
+    prices: { 'deepseek/deepseek-v4-flash': 2 },
+  }
+
+  // (1) 空闲自动释放：请求结束后空闲 > idleReleaseSec → 早退 DELETE（带
+  //     instance id，上游才肯退）→ 会话消失、退款回执落在快照里。
+  mockMode = 'ok'
+  mockFreebucks = freebucks25
+  sessionPosts = 0
+  sessionDeletes = 0
+  deleteInstanceIds = []
+  completionAttempts = 0
+  {
+    const res = await fbChat({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    })
+    assert.equal(res.status, 200, await res.clone().text())
+    assert.equal(sessionPosts, 1, 'first request admits one session')
+    const sm = fbRuntimes.get('a').sessions
+    // 拿到 freebucks 计量块（余额 / 单价 / 重置时间）
+    const snap0 = sm.getSnapshot()
+    assert.equal(snap0.freebucks?.balance, 25, 'freebucks balance parsed')
+    assert.equal(snap0.freebucks?.prices?.['deepseek/deepseek-v4-flash'], 2, 'price parsed')
+    assert.equal(sm.freebucksFor('deepseek/deepseek-v4-flash').affordable, true)
+    await waitFor('空闲自动释放触发 DELETE', () => sessionDeletes >= 1, 4_000)
+    assert.equal(deleteInstanceIds[0], 'inst-1', 'DELETE 必须带 x-freebuff-instance-id')
+    const snap = sm.getSnapshot()
+    assert.equal(snap.status, 'none', '空闲释放后会话应已结束')
+    assert.equal(snap.lastRefund?.refund, mockRefund, '退款回执应记录')
+    // 账号列表把 Freebucks 暴露给控制台
+    const row = fbRuntimes.list().find((x) => x.key === 'a')
+    assert.equal(row.freebucks?.balance, 25, '账号列表应带 freebucks')
+  }
+
+  // (2) 余额买不起该模型 → 不 admit（不发 POST），直接跳过该账号。
+  mockFreebucks = {
+    ...freebucks25,
+    balance: 0.5,
+    daily: { limit: 25, spent: 24.5, remaining: 0.5, resetAt: futureReset },
+  }
+  sessionPosts = 0
+  sessionDeletes = 0
+  completionAttempts = 0
+  {
+    // 粘性调度：warm 请求全部落在同一个账号（a）上，它的 freebucks 会更新成
+    // "只剩 0.5"。b/c 从未被使用过，压根不该被碰到。
+    for (let i = 0; i < 2; i++) {
+      const warm = await fbChat({
+        model: 'deepseek/deepseek-v4-flash',
+        messages: [{ role: 'user', content: `warm-${i}` }],
+      })
+      assert.equal(warm.status, 200, await warm.clone().text())
+      assert.equal(warm.headers.get('x-freebuff-proxy-account'), 'a@example.com')
+    }
+    assert.equal(fbRuntimes.list().find((x) => x.key === 'b').used, false, 'b 不应被使用')
+    // 把三个号都标成"余额只剩 0.5"（等价于它们各自的 session 响应都回写过计量块）
+    for (const key of ['a', 'b', 'c']) {
+      const sm = fbRuntimes.get(key).sessions
+      sm.freebucks = {
+        balance: 0.5,
+        daily: { limit: 25, spent: 24.5, remaining: 0.5, resetAt: futureReset },
+        wallet: { balance: 0, monthlyBonus: 0, nextBonusAt: null },
+        prices: { 'deepseek/deepseek-v4-flash': 2 },
+        quotaExempt: false,
+        planId: null,
+        monthly: null,
+        peak: null,
+        updatedAt: new Date().toISOString(),
+      }
+      await sm.release()
+      assert.equal(
+        sm.freebucksFor('deepseek/deepseek-v4-flash').affordable,
+        false,
+        `${key} 余额 0.5 < 单价 2 应判为买不起`,
+      )
+    }
+    const postsBefore = sessionPosts
+    const res = await fbChat({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    })
+    assert.equal(res.status, 429, await res.clone().text())
+    const j = await res.json()
+    assert.equal(j.error.code, 'no_available_account')
+    assert.ok(
+      (j.error.details?.failures || []).some((f) => f.code === 'freebucks_exhausted'),
+      `应记录 freebucks_exhausted，got ${JSON.stringify(j.error.details)}`,
+    )
+    assert.equal(
+      sessionPosts,
+      postsBefore,
+      '余额不足不得再 admit 新会话（白扣一小时）',
+    )
+  }
+
+  // (3) 单请求新会话预算：chat 一直 500（账号级故障 → 换号），3 个账号最多
+  //     新建 2 个计费会话，不会把每个账号都买一条 1 小时计费行。
+  mockFreebucks = null
+  // 清掉 (2) 里缓存的"余额 0.5"（否则这一步会被余额拦截，测不到预算）
+  for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
+  mockMode = 'err_500_all'
+  sessionPosts = 0
+  sessionDeletes = 0
+  completionAttempts = 0
+  {
+    const res = await fbChat({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    })
+    assert.equal(res.status, 429, await res.clone().text())
+    const j = await res.json()
+    assert.equal(j.error.code, 'no_available_account')
+    assert.equal(sessionPosts, 2, `新会话预算 2，不得轮询全部账号，got ${sessionPosts}`)
+    assert.ok(
+      (j.error.details?.failures || []).some(
+        (f) => f.code === 'session_budget_exhausted',
+      ),
+      '应记录 session_budget_exhausted',
+    )
+    // 失败账号的会话必须被早退释放（拿退款），不能空挂后台
+    await waitFor('失败账号会话被释放', () => sessionDeletes >= 1, 3_000)
+  }
+
+
+  // (4) 排队等 chat 锁的请求不得被空闲释放误删会话（选号阶段就 admit、请求
+  //     还没走到 beginRequest，在途计数为 0——只看在途会误删）。
+  mockFreebucks = null
+  for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
+  mockMode = 'hold_once'
+  sessionPosts = 0
+  sessionDeletes = 0
+  completionAttempts = 0
+  {
+    const resA = await fbChat({
+      model: 'deepseek/deepseek-v4-flash',
+      stream: true,
+      messages: [{ role: 'user', content: 'hold' }],
+    })
+    assert.equal(resA.status, 200, 'held stream should start')
+    const heldKey = resA.headers.get('x-freebuff-proxy-account-id')
+    const sm = fbRuntimes.get(heldKey).sessions
+    assert.equal(sm.inFlightCount(), 1, 'hold 流应在途')
+    // B 排在同一条会话的 chat 锁后面（每账号并发 1，粘性调度先排队不换号）
+    const pendingB = fbChat({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'queued' }],
+    })
+    await new Promise((r) => setTimeout(r, 600))
+    assert.equal(
+      sessionDeletes,
+      0,
+      '有请求排队等待该会话时，空闲释放不得删会话',
+    )
+    releaseHoldStreams()
+    await resA.text()
+    const resB = await pendingB
+    assert.equal(resB.status, 200, await resB.clone().text())
+    assert.equal(
+      resB.headers.get('x-freebuff-proxy-account-id'),
+      heldKey,
+      '排队请求应复用同一账号的会话，不得换号',
+    )
+    assert.equal(sessionPosts, 1, '排队请求应复用同一会话，不得新建')
+  }
+
+  mockMode = 'ok'
+  mockFreebucks = null
+  await fbRuntimes.shutdown()
+  fbServer.close()
+  fs.rmSync(fbDir, { recursive: true, force: true })
 }
 
 globalThis.fetch = originalFetch

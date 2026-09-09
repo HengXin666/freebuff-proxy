@@ -10,8 +10,8 @@ import { parse as parseYaml } from 'yaml'
  * @property {{apiBase: string, loginBase: string, credentialsDir: string | null, proxy: string | null, proxies: string[]}} upstream
  * @property {{cookieSecure: boolean, sessionTtlHours: number}} web
  * @property {{defaultAdminUsername: string, defaultAdminPassword: string | null}} users
- * @property {{releaseOnShutdown: boolean, reAdmitOnExpire: boolean, reAdmitLeadSec: number, freeModelReAdmitLeadSec: number, pollIntervalSec: number, admitTimeoutMs: number}} session
- * @property {{maxConcurrentRequests: number, accountMaxConcurrency: number, upstreamTimeoutSec: number, streamIdleTimeoutSec: number, accountChatWaitMs: number, maxAutoRetryOnSessionError: number, stallCooldownSec: number}} limits
+ * @property {{releaseOnShutdown: boolean, reAdmitOnExpire: boolean, reAdmitLeadSec: number, freeModelReAdmitLeadSec: number, pollIntervalSec: number, admitTimeoutMs: number, idleReleaseSec: number}} session
+ * @property {{maxConcurrentRequests: number, accountMaxConcurrency: number, upstreamTimeoutSec: number, streamIdleTimeoutSec: number, accountChatWaitMs: number, maxAutoRetryOnSessionError: number, stallCooldownSec: number, maxNewSessionsPerRequest: number, requestJitterMs: number}} limits
  * @property {{level: 'debug' | 'info' | 'warn' | 'error'}} logging
  */
 
@@ -52,17 +52,24 @@ const DEFAULTS = {
     // 付费会话每次 admit 都计费，尽量用到接近过期）。
     reAdmitLeadSec: 60,
     // 免费模型（pool 非 premium）的提前切换阈值（秒）：会话剩余不足该值时
-    // 不再调度到该会话上，提前 re-admit 换全新会话（默认 300s = 5 分钟）。
-    // 免费会话按次/按小时结算，过期中途被掐断会白占额度且响应截断。
-    freeModelReAdmitLeadSec: 300,
+    // 不再调度到该会话上，提前 re-admit 换全新会话（默认 60s = 1 分钟）。
+    // Freebucks 计费（2026-09）：每次 admit 都是一条 1 小时计费行（早退 DELETE
+    // 才退款），提前 re-admit = 多买一条计费行——只留最小的切换余量。
+    freeModelReAdmitLeadSec: 60,
     pollIntervalSec: 30,
     admitTimeoutMs: 30_000,
+    // 空闲自动释放（秒）：会话在途请求归零后，空闲超过该时长就早退 DELETE，
+    // 让上游按「提前结束」退款（freebucksRefund），避免账号空挂后台白扣一小时。
+    // 0 = 关闭（旧行为：会话一直留到过期，整整一小时额度照扣）。
+    // 默认 300s：交互式对话的停顿能复用同一会话，长时间没人用则立刻退款。
+    idleReleaseSec: 300,
   },
   limits: {
     maxConcurrentRequests: 32,
-    // 每个账号同一时间最多可转发的 SSE 响应流数（账号并发）。默认 1:1
-    // （一个账号一个并发）；可在控制台「负载均衡」实时调整，立即生效。
-    accountMaxConcurrency: 1,
+    // 每个账号同一时间最多可转发的 SSE 响应流数（账号并发）。默认 2：
+    // 并发请求先挤在同一账号上（粘性优先，换号 = 多买一条 Freebucks 计费会话），
+    // 超过该值才溢出到下一个账号。可在控制台「负载均衡」实时调整，立即生效。
+    accountMaxConcurrency: 2,
     upstreamTimeoutSec: 600,
     // 上游流式响应 body 的 idle 超时（秒）：收到响应头后若长时间没有新数据块，
     // 视为上游卡死（幽灵连接），主动掐断/换号，避免连接永远挂着。
@@ -78,6 +85,16 @@ const DEFAULTS = {
     // 优先去别的账号，避免反复撞上同一条卡死的链路。0 = 不冷却（旧行为，
     // 掐断后下一请求仍可复用该会话）。
     stallCooldownSec: 30,
+    // 上游 chat 调用前的随机抖动上限（毫秒）：每次请求前等 [0, N) 的随机时长，
+    // 打散机器式等间隔节奏（上游风控按请求节奏指纹自动化；参考项目 SAFE_MODE
+    // 默认 200ms）。0 = 关闭（最低延迟）。
+    requestJitterMs: 200,
+    // 一个下游请求最多新建几个上游会话（Freebucks 计费单位）。
+    // 上游按 session-hour 计费：admit 一次就扣一次钱（早退才退）。旧行为在
+    // 报错时把「账号数 +1」个账号挨个 admit 一遍，几个账号一起在后台白扣
+    // 一小时额度（issue #7）。默认 2：首个账号 + 一次换号兜底；复用已有热
+    // session 不消耗预算。0 = 不限制（仅保留给调试）。
+    maxNewSessionsPerRequest: 2,
   },
   logging: {
     level: 'info',
@@ -108,6 +125,9 @@ const KEY_MAP = {
   account_chat_wait_ms: 'accountChatWaitMs',
   max_auto_retry_on_session_error: 'maxAutoRetryOnSessionError',
   stall_cooldown_sec: 'stallCooldownSec',
+  max_new_sessions_per_request: 'maxNewSessionsPerRequest',
+  request_jitter_ms: 'requestJitterMs',
+  idle_release_sec: 'idleReleaseSec',
 }
 
 function isPlainObject(value) {

@@ -3,31 +3,21 @@ import path from 'node:path'
 
 const DEFAULT_SETTINGS = Object.freeze({
   freeToolSignatureEnabled: true,
-  // 每个账号同一时间可并发的 SSE 响应流数（账号内负载均衡），默认 1:1。
-  // 单账号在途达到上限即"满了换号"：选号排序中满员账号排末尾，新请求优先去
-  // 有空闲槽位的账号；只有所有账号都满员时才排队（有界等待）。
-  accountMaxConcurrency: 1,
-  // 平摊请求的账号数上限（账号间负载均衡）：并发请求最多同时铺开 N 个账号
-  // 消费会话——账号并发没满时新请求可以直接开新账号，而不是钉在已有账号上
-  // 排队；所有模型统一生效（不再区分免费/付费分散开关）。
-  spreadAccounts: 3,
-  // 极简路由（路由模式）：代理侧改写请求注入 persona/首轮核心工具面/近距离引导。
-  minimalRoutingEnabled: false,
-  // 路由风格钉死：auto（按任务分类）/ spec（计划-集体，we/let's 链）/ react（执行者）/ weak（内部路由）。
-  minimalRoutingMode: 'auto',
-  // 路由实现风格：standard（标准模式，默认——flash 恒走 weak 内路由 + 深度引导
-  // 静态并入 persona，多轮稳定；参考 v4-flash-godmode） / minimal（极简模式，
-  // 按任务分类三带 persona）。性能不佳可一键切回 minimal 或关闭总开关。
-  minimalRoutingStyle: 'standard',
+  // 每个账号同一时间可并发的 SSE 响应流数（账号内并发），默认 2。
+  // 账号调度是"粘性优先"（drain, not rotate）：并发请求先挤同一账号，超过该值
+  // 才溢出到下一个账号；从不主动平摊到新账号（上游把轮换健康账号当农场特征，
+  // 且 Freebucks 按 session-hour 计费，换号 = 多买一条计费会话）。
+  accountMaxConcurrency: 2,
   // 一键屏蔽收费模型（pool=premium，如 gpt-5.6-luna / kimi-k3-eco / 各 -max）。
   // 免费反代用户用不了收费模型，放着在列表里既占位又容易误触风控——开/关由
   // 前端「模型管理」一键切换：开启则从 /v1/models 列表和调度（白名单）彻底排除。
   // 默认关闭以保持升级不改变现有行为；免费反代场景建议开启。
   blockPremiumModels: false,
+  // 注意：额度保护两项（idleReleaseSec / maxNewSessionsPerRequest）**不写死默认值**
+  // ——只有用户在控制台保存过才进 settings.json，否则回落 config.yaml
+  // （session.idle_release_sec / limits.max_new_sessions_per_request），
+  // 这样"config.yaml 只作兜底默认值"的约定才成立。
 })
-
-const ROUTING_MODES = Object.freeze(['auto', 'spec', 'react', 'weak'])
-const ROUTING_STYLES = Object.freeze(['standard', 'minimal'])
 
 /** Frontend-managed runtime settings persisted under /data. */
 export class SettingsStore {
@@ -50,22 +40,16 @@ export class SettingsStore {
           raw.accountMaxConcurrency,
         )
       }
-      if (Number.isInteger(raw?.spreadAccounts)) {
-        this.settings.spreadAccounts = clampSpread(
-          raw.spreadAccounts,
-        )
-      }
-      if (typeof raw?.minimalRoutingEnabled === 'boolean') {
-        this.settings.minimalRoutingEnabled = raw.minimalRoutingEnabled
-      }
-      if (ROUTING_MODES.includes(raw?.minimalRoutingMode)) {
-        this.settings.minimalRoutingMode = raw.minimalRoutingMode
-      }
-      if (ROUTING_STYLES.includes(raw?.minimalRoutingStyle)) {
-        this.settings.minimalRoutingStyle = raw.minimalRoutingStyle
-      }
       if (typeof raw?.blockPremiumModels === 'boolean') {
         this.settings.blockPremiumModels = raw.blockPremiumModels
+      }
+      if (Number.isInteger(raw?.idleReleaseSec)) {
+        this.settings.idleReleaseSec = clampIdleReleaseSec(raw.idleReleaseSec)
+      }
+      if (Number.isInteger(raw?.maxNewSessionsPerRequest)) {
+        this.settings.maxNewSessionsPerRequest = clampNewSessions(
+          raw.maxNewSessionsPerRequest,
+        )
       }
     } catch (err) {
       console.error(
@@ -97,39 +81,28 @@ export class SettingsStore {
         next.accountMaxConcurrency,
       )
     }
-    if (next?.spreadAccounts !== undefined) {
-      if (!Number.isInteger(next.spreadAccounts) || next.spreadAccounts < 1) {
-        throw new TypeError('spreadAccounts must be an integer >= 1')
-      }
-      this.settings.spreadAccounts = clampSpread(next.spreadAccounts)
-    }
-    if (next?.minimalRoutingEnabled !== undefined) {
-      if (typeof next.minimalRoutingEnabled !== 'boolean') {
-        throw new TypeError('minimalRoutingEnabled must be a boolean')
-      }
-      this.settings.minimalRoutingEnabled = next.minimalRoutingEnabled
-    }
-    if (next?.minimalRoutingMode !== undefined) {
-      if (!ROUTING_MODES.includes(next.minimalRoutingMode)) {
-        throw new TypeError(
-          `minimalRoutingMode must be one of ${ROUTING_MODES.join('/')}`,
-        )
-      }
-      this.settings.minimalRoutingMode = next.minimalRoutingMode
-    }
-    if (next?.minimalRoutingStyle !== undefined) {
-      if (!ROUTING_STYLES.includes(next.minimalRoutingStyle)) {
-        throw new TypeError(
-          `minimalRoutingStyle must be one of ${ROUTING_STYLES.join('/')}`,
-        )
-      }
-      this.settings.minimalRoutingStyle = next.minimalRoutingStyle
-    }
     if (next?.blockPremiumModels !== undefined) {
       if (typeof next.blockPremiumModels !== 'boolean') {
         throw new TypeError('blockPremiumModels must be a boolean')
       }
       this.settings.blockPremiumModels = next.blockPremiumModels
+    }
+    if (next?.idleReleaseSec !== undefined) {
+      if (!Number.isInteger(next.idleReleaseSec) || next.idleReleaseSec < 0) {
+        throw new TypeError('idleReleaseSec must be an integer >= 0')
+      }
+      this.settings.idleReleaseSec = clampIdleReleaseSec(next.idleReleaseSec)
+    }
+    if (next?.maxNewSessionsPerRequest !== undefined) {
+      if (
+        !Number.isInteger(next.maxNewSessionsPerRequest) ||
+        next.maxNewSessionsPerRequest < 0
+      ) {
+        throw new TypeError('maxNewSessionsPerRequest must be an integer >= 0')
+      }
+      this.settings.maxNewSessionsPerRequest = clampNewSessions(
+        next.maxNewSessionsPerRequest,
+      )
     }
     const settings = { ...this.settings }
     fs.mkdirSync(path.dirname(this.file), { recursive: true })
@@ -150,8 +123,15 @@ function clampConcurrency(n) {
   return Math.min(16, Math.max(1, n))
 }
 
-/** 平摊账号数：1..16（实际受账号总数约束，运行时再 clamp）。 */
-function clampSpread(n) {
+/** 空闲释放：0（关闭）或 30s..24h。太短的间隔会把会话切成碎片、反复 admit。 */
+function clampIdleReleaseSec(n) {
+  if (n <= 0) return 0
+  return Math.min(86_400, Math.max(30, n))
+}
+
+/** 单请求新会话预算：0（不限制）或 1..16。 */
+function clampNewSessions(n) {
+  if (n <= 0) return 0
   return Math.min(16, Math.max(1, n))
 }
 

@@ -163,6 +163,11 @@ data/
 - **chat/completions 阶段上游报错自动换号**：429 限流（如 `free_mode_rate_limited`）、5xx、
   403 账号级封禁都会按上游 `Retry-After` 冷却当前账号并**换号重试**（最多试到账号数，封顶 5 次），
   而不是把错误直接甩给下游；4xx 客户端错误（400/401/404/422）不换号。
+- **换号不再"每个账号都买一条计费会话"**（2026-09 Freebucks 改版）：上游按 session-hour 计费，
+  因此单个下游请求最多新建 `limits.max_new_sessions_per_request`（默认 2）条会话——复用热
+  session 和被上游拒绝的 admit 都不占预算；换号前失败账号的会话会立即早退 DELETE 拿退款，
+  网络类瞬时故障先在同一账号上重试一次（复用热 session，不新建）。详见下方
+  「额度保护（Freebucks 计费，控制台可调）」。
 - 冷却信息（状态、剩余时间、原因）在控制台「总览」实时可见，可手动「解除冷却」。
 
 ### 热 session 优先调度
@@ -171,25 +176,23 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
 不存在"服务端记住某个 conversation"的概念；但 admit 会占用按时长结算的免费次数，因此代理按
 **最少新建 session**的目标调度：
 
-- **平摊账号数（所有模型统一，默认 3）**：控制台「负载均衡设置」可调。
-  并发请求**先账号间负载均衡**：平摊到最多 N 个账号（未达上限时新请求可直接开新账号
-  消费会话）；**再账号内负载均衡**：单账号最多 `accountMaxConcurrency` 路并发，满了必须
-  换新账号。**单账号被占死/卡住不再拖垮全部请求**，且多账号并行吞吐更高；
-- **最少新建 session**：创建 session 会占免费次数，因此同模型活跃 session 始终优先复用；
+- **粘性优先（drain, not rotate）**：选号顺序 = 同模型热 session → 已用过的账号（最近用过的
+  优先）→ **从未用过的账号（排最后，只有已用账号都不可用、或满员排队超时才启用）**。
+  上游把"轮换健康账号"直接当账号农场特征（参考项目 ADR-0012: *cycling healthy keys looks
+  like account farming*），而 Freebucks 又是 admit 一次扣一次——所以代理**绝不主动把并发
+  平摊到多个账号**：宁可把请求集中在一个账号上，用尽（限流/额度耗尽/冷却）才换下一个；
+- **最少新建 session**：创建 session 就是一条 1 小时计费行，因此同模型活跃 session 始终优先复用；
   `conversation_id` / `thread_id` / `user` / `client_id` 不参与选号；
-- **账号并发上限可配（即"满了换号"的阈值）**：默认 1:1（一个账号同一时间只转发一条 SSE 流）。
-  可在控制台「负载均衡设置」调整（1..16），实测同一 `instanceId` 支持多条并发 chat 流，调大后
-  一个账号可同时转发多条响应。**单账号在途流数达到上限即排到选号末尾，
-  新请求优先去有空闲槽位的账号**（热 session 仍优先复用，只是不再把并发全部钉死在一个账号上）；
-  只有所有可用账号都满员时才排队（有界等待，默认超时 `limits.account_chat_wait_ms` / 热会话
-  `stream_idle_timeout_sec + 15s` 后返回 `account_busy`）。总览里每个账号显示
-  `并发(在途/上限)` 实时监控；
+- **每账号并发上限是"溢出"阈值**：默认 **2**（可在控制台「账号调度」调整 1..16）。单账号在途流数
+  达到上限后，新请求先在该账号上**有界排队**（热会话等 `stream_idle_timeout_sec + 15s`、
+  冷账号等 `limits.account_chat_wait_ms`，超时返回 `account_busy` 并换下一个账号），
+  **不为了并发去启用从未用过的账号**。总览里每个账号显示 `并发(在途/上限)` 实时监控；
 - **会话临近过期提前切换（按模型分层）**：剩余时间低于提前量阈值的会话不再承接新请求，
   re-admit 换全新会话——避免请求发到马上过期的会话上、中途卡住（响应明显变慢/挂起）。
   提前量按计费方式分层：
-  - **免费模型**：`session.free_model_re_admit_lead_sec`（默认 300s = **5 分钟**）——
-    免费会话剩余不足 5 分钟即**不再调度到该会话**，提前 re-admit 换新会话（免费按次/按小时
-    结算，过期中途被掐断会白占额度且响应截断）；
+  - **免费模型**：`session.free_model_re_admit_lead_sec`（默认 60s = **1 分钟**）——
+    会话剩余不足 1 分钟即**不再调度到该会话**，提前 re-admit 换新会话（2026-09 Freebucks
+    计费下每次 admit 都是一条 1 小时计费行，提前 re-admit = 多买一条，所以只留最小余量）；
   - **付费模型**：`session.re_admit_lead_sec`（默认 60s）——付费会话每次 admit 都计费，
     尽量用到接近过期再切换。
   **切换是平滑的**：旧会话若正被在途 SSE 流使用，会先等在途流结束后才释放重建，
@@ -200,124 +203,77 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
   新请求走新出口；旧 runtime 的 session 在后台等所有在途 SSE 结束后再优雅释放，正在
   传输的流不受影响。排队等锁期间发生切换的请求会自动无冷却重新选号（走新出口），
   不会撞上已失效的旧会话；
-- 冷启动的选号与 admit 已原子化（`_acquireMutex` 串行化选号 + admit）：同一账号的并发请求只 admit 一次、共享该账号 session；不同账号按各自的并发上限分散承接；
-- 没有同模型热 session 时，优先选择没有活跃 session 的账号，避免提前释放其他模型的可用时段；
-- 多个同层级账号只在平局时轮询；**冷却中的账号跳过**；
+- 冷启动的选号与 admit 已原子化（`_acquireMutex` 串行化选号 + admit）：同一账号的并发请求只 admit 一次、共享该账号 session；
+- 没有同模型热 session 时，优先选择**没有活跃 session 的账号**，而不是替换别的模型的热 session
+  （同一账号上反复 release/admit 每次都要新买一条计费会话）；
+- 多个同层级账号只在平局时轮询（已用过的账号之间按"最近用过的优先"保持粘性）；**冷却中的账号跳过**；
 - 上游报错（gate 错误如 `session_expired` / `superseded`）自动同号 re-admit 重试一次；
-  429 限流 / 5xx / 403 账号级封禁则**冷却当前账号并换下一个账号**重试（最多试到账号数，封顶 5 次），
-  4xx 客户端错误（400/401/404/422）不换号。
+  429 限流 / 5xx / 403 账号级封禁则冷却当前账号并换下一个账号重试，4xx 客户端错误（400/401/404/422）不换号。
+  换号次数受"单请求新会话预算"约束（见「额度保护」）。
 
 控制台「总览」顶部显示各账号实际请求占比、活跃 session 与冷却状态。
 
-### 查看额度（每日免费 session）
+### 查看额度（Freebucks + rateLimitsByModel）
 
-Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByModel`，如
-`limit: 6 / recentCount: 已用 / resetAt: 重置时间`，按太平洋日重置）。
+上游 2026-09 起把免费额度改成 **Freebucks** 计量，两种计费方式并存：
+
+- **Freebucks 计量模型**（上游 `freebucks.prices` 里有价格的模型）：每条 session 是
+  **按小时计价的 1 小时计费行**，admit 时一次性扣掉该模型的单价，**提前 DELETE 按未用
+  时长退款**（响应里的 `freebucksRefund`）；每日池在**太平洋午夜**重置。
+  `freebucks.balance`（可花费余额）/ `daily.remaining`（今日池剩余）决定"还能买几条"。
+- **未计量模型**（`prices` 里没有该模型）：仍按 **模型 × 每日** 限次
+  （上游 `rateLimitsByModel`，如 `limit: 6 / recentCount: 已用 / resetAt: 重置时间`）。
 
 > ⚠️ 2026-08-09 实时探测：`deepseek/deepseek-v4-flash` 与
-> `mimo/mimo-v2.5` 已重新出现在上游 `rateLimitsByModel` 中（当前为 6 次/天）。
-> 代理不再对它们做不限量豁免，始终以上游实时返回的限额为准。
+> `mimo/mimo-v2.5` 已重新出现在上游 `rateLimitsByModel` 中（当时为 6 次/天）。
+> 代理不对它们做不限量豁免，始终以上游实时返回的限额为准。
 
-- 控制台「总览」每个账号有一列 **额度（今日）**：所有限额模型都显示 `已用/上限` 与重置时间（`已用满` 红色、`≤2` 黄色、正常绿色）。
-- 额度在 **admit 时自动抓取**（上游仅在 session 活跃时返回）；活跃 session 每 30s 轮询刷新，session 结束后保留最后一次缓存值直到下次 admit。
-- `recentCount` 可能是小数：admit 时先预占 1 小时额度，提前释放后按实际占用时长结算（实测最小步进为 `0.1`）。因此复用热 session 比平均铺开账号更省额度。
-- 同样可通过 `GET /v1/freebuff/status` 或 `GET /v1/freebuff/accounts` 拿到每个账号的 `quota`。
+- 控制台「总览」每个账号有两列额度：
+  **额度（今日）** = 未计量模型的 `已用/上限` 与重置时间（`已用满` 红色、`≤2` 黄色、
+  正常绿色）；**Freebucks** = 余额 / 当前模型单价（`N/h`）/ 今日池 `剩余/上限`，
+  悬停可看钱包余额与最近一次早退退款金额。
+- 两个来源都在 **admit 时自动抓取**（上游仅在 session 响应里返回）；活跃 session 每 30s
+  轮询刷新，session 结束后保留最后一次缓存值直到下次 admit。
+- 想主动刷新余额：账号行的「检测」按钮或 `POST /api/accounts/probe` 做**只读探测**
+  （GET session，不创建会话、不扣额度）。
+- `rateLimitsByModel.recentCount` 可能是小数：admit 时先预占 1 小时额度，提前释放后按
+  实际占用时长结算。因此**复用热 session + 空闲早退**比平均铺开账号更省额度。
+- 同样可通过 `GET /v1/freebuff/status` 或 `GET /v1/freebuff/accounts` 拿到每个账号的
+  `quota` 与 `freebucks`。
+
+### 额度保护（Freebucks 计费，控制台可调）
+
+`freebucks` 块是额度的唯一真源：
+
+```json
+{"balance":25,"daily":{"limit":25,"spent":0,"remaining":25,"resetAt":"..."},
+ "wallet":{"balance":0,"monthlyBonus":0},"prices":{"deepseek/deepseek-v4-flash":2},
+ "quotaExempt":false}
+```
+
+"账号空挂后台" = 白扣一整小时额度（issue #7），所以代理做了四件事：
+
+- **空闲自动释放（默认 300s）**：会话在途请求归零后开始计时，空闲超过该时长立即早退
+  `DELETE`——必须带 `x-freebuff-instance-id`，否则上游 400 `instance_required`，
+  会话既删不掉也拿不到退款。交互式对话的停顿能复用同一会话，长时间没人用就立刻退款。
+  `0` = 关闭（旧行为：留到过期，整小时照扣）。后台轮询不会顺延这个计时。
+- **单请求新会话预算（默认 2）**：一个下游请求最多新建 2 条计费会话（首个账号 + 一次
+  换号兜底）；复用热 session 不消耗预算，被上游拒绝的 admit（`rate_limited` 等）也不消耗
+  （只有真的新建了会话才扣）。旧行为在报错时把"账号数 +1"个账号挨个 admit 一遍，
+  几个账号一起在后台白扣一小时。
+- **余额买不起就不 admit**：`balance < prices[模型]` 且非 `quotaExempt` 的账号直接跳过
+  选号（上游反正会 429 `freebucksShortfall`）；每日池 `resetAt` 已过则视为本地数字过期，
+  放行一次真实 admit 用上游最新余额重新校准。
+- **换号即释放**：账号级故障换号前，先把失败账号的会话早退 DELETE 拿退款，不让它继续
+  在后台计时。
+
+两项都可在控制台「**额度保护**」卡片实时调整（持久化 `/data/settings.json`，无需重启）。
 
 ### 工具签名兼容
 
 控制台「总览 → 免费额度策略」提供「工具签名兼容」开关，默认开启。开启时，代理会在非空
 `tools` 列表末尾补充 Freebuff 官方工具名 `end_turn`，避免工具请求被识别为外来工具集；关闭时
 原样转发客户端工具列表。切换后立即生效并持久化到 `/data/settings.json`，无需重启。
-
-### 极简路由（路由模式）
-
-控制台「总览 → 免费额度策略」提供「**极简路由（路由模式）**」开关，默认关闭。开启后，代理在
-转发每个 chat 请求前按 [dsh-routing-suite](https://github.com/yjh051108/dsh-routing-suite)
-（dsh-router-standard preset，P1-P30 实测）的请求协议改写请求：
-
-1. **persona 替换**：按会话首个用户消息自动分类任务 → `spec`（修复/排查，计划-集体）、
-   `react`（构建/开发，执行-个体）、`weak`（模糊任务，模型自分类，按模型选最优：
-   Pro=spec 句，Flash=neutral+classify）。与 dsh-routing-suite 的 `applyPersona` 语义
-   一致：**移除**客户端系统提示开头的 persona 段，换成路由 persona 置于最前，
-   其余 section（工具指导/工作区说明/回复格式等）**原样保留**——模型只看到一个身份，
-   不会被客户端原 persona 稀释；无法识别 persona 段时回退为前置一条 persona 消息。
-2. **首轮核心工具面**：历史里还没有 `assistant tool_calls` 时，把 `tools` 裁剪到该模式的
-   核心工具集（spec 读优先 `read/edit/glob/grep`，react 写优先 `read/write/edit`）+ `bash/pwsh`；
-   首个工具调用之后自动放行全部工具（首轮锚定，路径提交后不再干预）。
-   **工具保证**：客户端给了工具就绝不裁空（核心集裁剪为空则保留原工具集，模型始终能调用
-   工具）；Freebuff 特殊签名工具 `end_turn` 始终保留（上游凭它保留请求模型/额度）。
-3. **近距离引导（weak 模式）**：最后一个用户消息后追加一条固定引导文本——简单任务快速收敛、
-   复杂任务（长文本/架构词）深度收敛；固定文本保持上游缓存命中（92-94%）。
-4. **路由风格（思维链）**：可把路由钉死到某条思维链——`spec` = we/let's 集体计划链、
-   `react` = let me 执行链、`weak` = 模型自分类、`auto` = 按任务自动分类（默认）。
-   we/let's 链的锚定方式按模型自适应：
-   - **v4-pro**：persona 远距锚定即生效（persona 后附加
-     `Plan and reason collectively: use first-person plural (we / let's).`）；
-   - **v4-flash（fast）**：远距锚定反噬（实测 we 9→0），改在用户消息后**近距注入**
-     `... Begin your reasoning with "We".` 做首 token 自锚定（P15 机制），
-     实测工具化多轮会话中 we/let's 链稳定出现（we=4~6, let's=3, let me=0）；
-     锚定在**工具循环轮次同样注入**（最后一条是 tool 结果也追加，实测 turn2
-     we=8/let's=6/let me=1，不会衰减回 let me）。
-
-同一套路由在客户端（DSH 侧）注入时，经过翻译层/中间代理可能被改写或丢弃而"不生效"；
-本开关让代理兜底执行路由协议，与客户端是否安装路由插件无关。切换后立即生效并持久化到
-`/data/settings.json`，无需重启。free-mode 门禁不受影响：改写后的第一条 system 消息仍以
-`You are Buffy, the strategic coding assistant.` 开头，`end_turn` 签名工具照常补充。
-
-> 提示：路由改写面向所有走 `/v1/chat/completions` 的客户端。若你的 Agent 自带路由预设，
-> 建议关闭本开关（客户端已注入）；若 Agent 的路由经代理链"失效"，开启本开关由代理兜底。
-
----
-
-## 基准测试与验证（Benchmark）
-
-> **目标模型**：本项目的极简路由面向 **`deepseek/deepseek-v4-flash`（V4 Fast）**，
-> 同时给出 `deepseek/deepseek-v4-pro` 的对照数据。判定思维链的特征词：
-> `we` / `let's`（计划-集体）vs `let me`（执行-个体）在模型思维链（`reasoning_content`）
-> 中的出现次数。
-
-### 测试归属（谁做的）
-
-| 测试 | 执行者 | 环境 |
-|---|---|---|
-| **理论实验 P1–P30**（persona 轴三行为带、近距离引导、首 token 自锚定等） | [dsh-routing-suite](https://github.com/yjh051108/dsh-routing-suite) 作者 **yjh051108** | 官方 API，`thinking.enabled + reasoning_effort=max`，21 点 × n=2 探针 |
-| **本项目真实上游验证**（we/let's vs let me 实测） | freebuff-proxy 维护者（本仓库），使用真实 Freebuff 账号 | 本机部署 freebuff-proxy → `codebuff.com` 上游，流式抓取 `reasoning_content` 词频统计 |
-| **合规/回归测试**（free-mode 门禁 + 路由改写） | freebuff-proxy 项目 `test/smoke.mjs`（自动化，mock 上游） | CI / `npm test`，覆盖 Buffy 门禁标记、`end_turn` 签名、reasoning 归一化、路由改写不变量 |
-
-> 说明：真实上游验证为有限样本（每条件 n=1~3 次请求，热 session 复用，admit 次数受每日
-> 免费额度限制），结果用于指示性对比，非严格统计实验；严格的行为学实验以 dsh-routing-suite
-> 的 P1–P30 为准（Pro 为测量主体）。
-
-### 思维链实测结果（本项目，真实上游）
-
-同一任务「从零开发一个待办事项网页应用」/「修复崩溃 bug」，同一账号热 session：
-
-| 模型 | 路由风格 | 任务 | we | let's | let me | 备注 |
-|---|---|---|---|---|---|---|
-| **v4-flash**（目标） | 关 | 构建 | 0 | 0 | 2~6 | 默认 let me 主导 |
-| **v4-flash** | **spec**（近距锚定） | 构建 | 4~6 | 3 | 0（多数轮次） | we/let's 集体链出现；个别轮次切执行语域（方差） |
-| **v4-flash** | **spec** + **标准模式客户端**（35K 完整系统提示） | 构建 | 11 | 2 | 16 | 链出现但被完整系统提示稀释（混合语域） |
-| **v4-flash** | react | 构建 | 0 | 0 | 2~6 | let me 执行链 |
-| **v4-flash** | auto（命中 spec） | 修复 | 3 | 0 | 0 | 集体链 |
-| v4-pro（对照） | 关 | 构建 | 0 | 0 | 6 | 模型自带 doer 风格 |
-| v4-pro（对照） | spec | 修复 | 7~12 | 2~4 | 0 | we/let's 集体链稳定 |
-| v4-pro（对照） | react | 构建 | 0 | 0 | 4~6 | let me 执行链 |
-
-结论：**钉死 `spec` 即把 we/let's 集体思维链路由到 v4-flash**（与 `react` 形成同模型
-同任务下的语域翻转）；`auto` 让修复类任务自动命中该链。v4-flash 上必须走近距锚定，
-远距（system 内）锚定会反噬——这也是本实现按模型自适应锚定位置的原因。
-
-### 客户端模式怎么选（实测指引）
-
-| 客户端预设 | 是否走代理 | 效果 |
-|---|---|---|
-| 官方 **minimal**（极简模式） | 可直连，无需代理 | **纯 we/let's 链**（训练分布自带，实测 we=44/let's=18）；代价是工具面极小（约 2 个工具），代理能力受限 |
-| 官方 **standard**（标准模式） | **推荐走代理**（路由开） | 功能完整（全工具/子代理/工作流）+ 代理兜底注入路由：we/let's 链**出现**（we=11）但被完整系统提示稀释为混合语域；配合「免费模型分散」多账号并行，吞吐更高 |
-| 自定义路由预设（如 router-standard） | **不要**与代理路由同时开 | 两层路由互相打架（实测客户端 weak 引导 × 代理 spec 锚定 → 模型走中性语域） |
-
-> 想要**最纯的 we/let's 链**：客户端选 minimal。想要**完整能力 + 代理的稳定性/并行**：
-> 客户端选 standard，代理开极简路由（spec），接受混合语域；或客户端 minimal + 代理
-> 双保险（minimal 自带链，代理兜底注入）。
 
 ---
 
@@ -355,8 +311,8 @@ Freebuff 免费层按 **模型 × 每日** 限次（上游返回 `rateLimitsByMo
 客户端中途断开（关页面/取消请求/超时放弃）时，上游流若还挂着，账号 chat 锁会被一直
 占用，后续所有请求排队超时——**已修复**：代理同时监听底层 socket 关闭（`req 'close'`
 是"请求体读完"事件，不可用作断开信号），断开瞬间中止上游读取并释放账号锁，下一个请求
-立即可用。实测断开后 3 秒内恢复服务（修复前要等上游 120s 超时）。配合「平摊账号数」多账号
-调度，单个账号被占死也不会拖垮其它账号。
+立即可用。实测断开后 3 秒内恢复服务（修复前要等上游 120s 超时）。配合粘性调度的有界排队 +
+  换号兜底，单个账号被占死也不会拖垮其它账号。
 
 ### 前端一键「全部断开重连」（轻量兜底）
 
@@ -535,7 +491,10 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 | 监听地址 | `server.host` / `port`（`FREEBUFF_PROXY_HOST` / `FREEBUFF_PROXY_PORT` 覆盖） |
 | 管理员 | `ADMIN_USERNAME` / `ADMIN_PASSWORD`（或 `users.default_admin_*`） |
 | 并发上限 | `limits.max_concurrent_requests` |
-| 每账号并发（SSE 流数） | `limits.account_max_concurrency`（默认 1，控制台「负载均衡设置」实时调整） |
+| 每账号并发（SSE 流数，溢出阈值） | `limits.account_max_concurrency`（默认 2，控制台「账号调度」实时调整） |
+| 上游请求抖动（打散机器式节奏） | `limits.request_jitter_ms`（默认 200ms，0 = 关闭） |
+| 空闲自动释放（早退退款，Freebucks） | 控制台「额度保护」→ `/data/settings.json`（`session.idle_release_sec` 默认 300s，0 = 关闭） |
+| 单请求新会话预算（Freebucks 计费单位） | 控制台「额度保护」（`limits.max_new_sessions_per_request` 默认 2，0 = 不限） |
 | 会话过期提前切换（付费模型） | `session.re_admit_lead_sec`（默认 60s） |
 | 会话过期提前切换（免费模型，不足 5 分钟不调度） | `session.free_model_re_admit_lead_sec`（默认 300s） |
 | 上游流 idle 超时（幽灵连接治理） | `limits.stream_idle_timeout_sec`（默认 60s，最小 30s） |
@@ -549,6 +508,9 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 
 ## 限制（官方免费层现实）
 
+- 2026-09 起免费层改为 **Freebucks** 计量：每条 session 是按小时计价的 1 小时计费行，
+  admit 扣费、提前 DELETE 退款，每日池太平洋午夜重置（每账号每天约 25 Freebucks，
+  具体以上游 `freebucks` 返回为准）。代理的空闲释放 / 新会话预算就是为了让这份额度用得更久。
 - Luna 等 premium：大约每天 6×1 小时 session（共享 premium 池）。
 - Flash：CLI full 访问下次数较松，仍有 spend / IP / 容量限制。
 - 同账号由另一个客户端重新 admit 可能触发 `superseded`；同一 `instanceId` 内的并发 chat 流可正常共用。多账号多 IP 场景在「代理设置」配多个代理即可，系统按账号稳定分配出口（见代理支持）。

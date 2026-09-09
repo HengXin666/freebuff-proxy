@@ -63,19 +63,21 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 
 - 前端展示上游 `rateLimitsByModel`（每模型 `已用/上限/重置时间`）；额度仅在 admit/活跃 session 时由上游返回。
 - 提供**只读探测刷新**（`POST /api/accounts/probe`，只 GET、不创建 session、不占额度）；导入账号后自动探测。
-- 多账号池自动切号：`rate_limited / spend_limited / ip_capped / free_mode_rate_limited / banned` 整号冷却并换下一个；`model_unavailable` 只冷却该模型。上游报错（chat 429 限流 / 5xx / 403 账号级封禁 / startAgentRun 失败 / 网络超时）一律冷却当前账号并继续轮询下一个，**试完所有账号（预算=账号数+1，封顶 5 次）才把错误返回给用户**；4xx 客户端错误不换号。
+- 多账号池自动切号：`rate_limited / spend_limited / ip_capped / free_mode_rate_limited / banned` 整号冷却并换下一个；`model_unavailable` 只冷却该模型。上游报错（chat 429 限流 / 5xx / 403 账号级封禁 / startAgentRun 失败 / 网络超时）冷却当前账号并继续轮询下一个；4xx 客户端错误不换号。
+- **换号有成本（Freebucks 按 session-hour 计费）**：单个下游请求最多新建 `limits.max_new_sessions_per_request`（默认 2）条会话；复用热 session 与被上游拒绝的 admit 不占预算；换号前先把失败账号的会话早退 DELETE 拿退款；非账号级瞬时故障（网络抖动）先同账号重试一次，不新建会话。
 - **`free_mode_capacity_deferred`（"Free mode is briefly at capacity"）不冷却**：是免费模式瞬时容量排队，上游自己说 "will be retried automatically"，实测同 session 立即重试即恢复（flash 尤常见）。优先复用当前热 session 重试，绝不为此无谓新建 session 或把账号钉死。
 - gate 错误（session_expired/superseded/waiting_room 等）：先同账号 re-admit 一次（不冷却），连续两次仍失败才升级为换号冷却。
 - **session 轮询 GET 跳过在途请求**：上游同一个号同一时间只能一个客户端在线，轮询若撞上正在进行的 chat 会干扰/顶掉活跃会话，因此有请求在途时本轮刷新跳过。
-- **热 session 优先调度**：Freebuff 会话是**无状态**的（每次请求由客户端带全量历史），
-  **不做 conversation_id 粘性/分组/记忆**；但创建 session 会消耗按时长结算的次数，因此选号必须优先复用
-  同模型活跃 session。实测同一个 `instanceId` 支持多个并发 chat 流（两路同时 `200` 并完整 `[DONE]`），
-  并发不需要主动铺到多账号。冷启动的“选号 + admit”必须串行化，同一账号的并发请求只创建一个 session。
-  **并发上限即“满了换号”的阈值**：单账号在途流数达到 `accountMaxConcurrency` 时，该账号在选号排序中
-  排到末尾，新请求优先去有空闲槽位的账号（无论分散开关与否）——**绝不把并发全部钉死在一个账号上
-  无限排队**；只有所有可用账号都满员时才排队（有界等待，超时 `account_busy`）。
-- 没有同模型热 session 时：优先无活跃 session 的账号；仅当所有可用账号都被其他模型占用时才替换旧模型。
-  同一层级内用轮询打破平局；限流/封禁/网络或上游故障仍冷却当前账号并切下一个。
+- **粘性优先调度（drain, not rotate）**：Freebuff 会话是**无状态**的（每次请求由客户端带全量历史），
+  **不做 conversation_id 粘性/分组/记忆**。选号排序 = 同模型热 session > 已用过的账号（最近用过的优先）
+  > **从未用过的账号（排最后，只有已用账号都不可用/满员排队超时才启用）**；上游把"轮换健康账号"
+  直接当账号农场特征，Freebucks 又是 admit 一次扣一次，所以**绝不主动把并发平摊到多个账号**。
+  冷启动的“选号 + admit”必须串行化，同一账号的并发请求只创建一个 session。
+  **并发上限是"溢出"阈值而非"换号"阈值**：单账号在途流数达到 `accountMaxConcurrency`（默认 2）时，
+  新请求先在该账号上有界排队（超时 `account_busy` 后再换下一个账号），**不为了并发去启用新账号**。
+- 没有同模型热 session 时：优先冷账号（无活跃 session）而不是替换别的模型的热 session（避免同一账号
+  反复 release/admit）；同一层级内已用账号 > 未用账号、最近用过的优先、轮询打破平局；
+  限流/封禁/网络或上游故障仍冷却当前账号并切下一个。
 - **Flash / MiMo 纳入每日配额**：`deepseek/deepseek-v4-flash`、`mimo/mimo-v2.5`
   不再硬编码为不限量；前端和 API 始终以上游 `rateLimitsByModel` 的实时 `recentCount / limit / resetAt` 为准。
 
@@ -84,7 +86,8 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 - 创建 session 才扣额度 → **同模型活跃 session 始终优先复用**，避免重复 admit 占额度。
 - **无会话记忆/分组**：`conversation_id` 不决定账号；同模型请求由热 session 优先策略统一调度。
 - 同一个 `instanceId` 支持并发 chat；后台 session GET 在有请求在途时仍必须跳过，避免客户端身份/轮询干扰活跃会话。
-- 新模型优先使用空闲账号；没有空闲账号而必须复用同一账号时，先释放旧 session。gate 错误（session_expired/superseded/waiting room 等）自动 re-admit **一次**。
+- 新模型优先使用空闲（冷）账号；没有空闲账号而必须复用同一账号时，先释放旧 session。gate 错误（session_expired/superseded/waiting room 等）自动 re-admit **一次**。
+- **空闲自动释放**：会话在途归零后空闲超过 `session.idle_release_sec`（默认 300s，控制台「额度保护」可调）就早退 `DELETE` 拿 Freebucks 退款；DELETE 必须带 `x-freebuff-instance-id`（否则上游 400 `instance_required`，删不掉也退不了款）。有请求排队等待该会话时不得释放。
 
 ## Web 控制台
 

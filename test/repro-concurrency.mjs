@@ -1,14 +1,17 @@
 /**
- * 排验脚本：每账号并发上限 vs 多账号分配（复现/验证"满了还在同一账号堆并发"）
+ * 排验脚本：粘性调度（drain, not rotate）vs 每账号并发上限
+ *
+ * 2026-09 改版后的调度原则：请求集中到尽可能少的账号上，用尽才换号；从未用过的
+ * 账号排最后。上游把"轮换健康账号"当账号农场特征，Freebucks 又按 session-hour
+ * 计费（换号 = 多买一条计费会话），所以"全钉一个账号"现在是**预期行为**。
  *
  * 用法:
- *   node test/repro-concurrency.mjs spread 2 3 8        # 免费分散开(默认)，2 账号，上限 3，8 并发
- *   node test/repro-concurrency.mjs nospread 2 3 8      # 免费分散关（热 session 复用）
- *   node test/repro-concurrency.mjs spread 2 3 8 broken # 账号 B admit 一直失败（被冷却）
- *   node test/repro-concurrency.mjs nospread 2 3 8 seq  # 顺序请求（一个个来）：验证先共用 1 账号、满了才开新的
- *   node test/repro-concurrency.mjs nospread 2 3 8 mix  # 先 3 并发占满 A，再顺序来：验证满员即换号
+ *   node test/repro-concurrency.mjs sticky 2 3 8        # 2 账号、上限 3、8 并发 → 全在 A 上排队
+ *   node test/repro-concurrency.mjs sticky 2 3 8 broken # 账号 B admit 一直失败（被冷却）
+ *   node test/repro-concurrency.mjs sticky 2 3 8 seq    # 顺序请求（一个个来）→ 复用同一热 session
+ *   node test/repro-concurrency.mjs sticky 2 3 8 mix    # 先 3 并发占满 A，再顺序来
  *
- * 输出: 账号分配 / 响应头账号序列 / 每账号流峰值 / 是否复现"全钉单账号"
+ * 输出: 账号分配 / 响应头账号序列 / 每账号流峰值 / 是否粘性优先
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -21,8 +24,7 @@ import { saveAccountUser } from '../src/auth-store.js'
 
 configureLogger({ level: 'error' })
 
-const [,, modeArg = 'spread', accountsArg = '2', capArg = '3', reqsArg = '8', extraArg = '' ] = process.argv
-const SPREAD = modeArg !== 'nospread'
+const [,, modeArg = 'sticky', accountsArg = '2', capArg = '3', reqsArg = '8', extraArg = '' ] = process.argv
 const ACCOUNTS = Number(accountsArg)
 const CAP = Number(capArg)
 const REQS = Number(reqsArg)
@@ -130,7 +132,6 @@ config.limits.maxConcurrentRequests = 64
 
 const runtimes = new AccountRuntimes(config, {
   getAccountConcurrency: () => CAP,
-  getSpreadFreeModels: () => SPREAD,
 })
 const server = await startServer({
   config,
@@ -197,7 +198,7 @@ for (const r of results) {
   byAccount[r.account] = (byAccount[r.account] || 0) + 1
 }
 
-console.log(`\n=== 场景: spread=${SPREAD ? '开(默认)' : '关'} 账号数=${ACCOUNTS} 每账号并发上限=${CAP} 请求数=${REQS}${BROKEN_B ? ' B账号损坏(admit失败)' : ''} ===`)
+console.log(`\n=== 场景: 粘性调度 账号数=${ACCOUNTS} 每账号并发上限=${CAP} 请求数=${REQS}${BROKEN_B ? ' B账号损坏(admit失败)' : ''} ===`)
 console.log('账号分配:', byAccount)
 console.log('响应头账号序列:', results.map((r) => r.account))
 console.log('每账号流峰值(mock 观测):', Object.fromEntries([...peakByToken.entries()].map(([k, v]) => [k, v])))
@@ -208,24 +209,22 @@ if (results.some((r) => r.status !== 200)) {
   console.log('非 200 明细:', results.filter((r) => r.status !== 200).map((r) => ({ status: r.status, account: r.account, body: r.body, elapsed: r.elapsed })))
 }
 
-// 判定
+// 判定：粘性优先是预期行为——只要没超过单账号并发上限、且没有故障换号，
+// 请求集中在一个账号上就是对的（换号 = 多买一条 Freebucks 计费会话）。
 const accountCount = Object.keys(byAccount).length
 const overCap = [...peakByToken.entries()].filter(([, v]) => v > CAP)
-// 顺序请求天然不会把账号打满（一个结束下一个才开始），"全钉单账号"不适用；
-// 混合/并发模式才检查"满员是否换号"
-const stuck =
-  !SEQ && accountCount === 1 && REQS > ACCOUNTS * CAP && CAP > 1
+const spilled = accountCount > 1
 
 console.log(`\n--- 结论 ---`)
 console.log(`用了 ${accountCount}/${ACCOUNTS} 个账号; 单账号流峰值是否超上限: ${overCap.length ? JSON.stringify(overCap) : '否'}`)
-if (SEQ) {
-  console.log(accountCount === 1
-    ? `✓ 顺序请求全部复用第 1 个账号的热 session（共 admit ${sessionPosts} 次）——符合"先共用、满了才开新"`
-    : `✓ 顺序请求分散到 ${accountCount} 个账号`)
-} else if (stuck) {
-  console.log('⚠ 现象复现：请求全部钉在一个账号（符合用户描述）')
+if (overCap.length) {
+  console.log('⚠ 单账号并发超过上限（调度异常）')
+} else if (BROKEN_B && spilled) {
+  console.log(`✓ 账号被冷却后换号（用了 ${accountCount} 个账号，共 admit ${sessionPosts} 次）`)
+} else if (accountCount === 1) {
+  console.log(`✓ 粘性优先：请求集中在一个账号上（共 admit ${sessionPosts} 次），未用过的账号保持未启用`)
 } else {
-  console.log('✓ 未出现全钉单账号；请求按空闲槽位分散')
+  console.log(`✓ 换号了 ${accountCount} 个账号（并发上限/故障溢出），共 admit ${sessionPosts} 次`)
 }
 
 globalThis.fetch = originalFetch

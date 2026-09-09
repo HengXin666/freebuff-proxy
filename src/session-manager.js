@@ -12,9 +12,23 @@ export class SessionManager {
    * @param {ReturnType<import('./upstream/client.js').createUpstreamClient>} opts.upstream
    * @param {import('./config.js').ProxyConfig} opts.config
    */
-  constructor({ upstream, config }) {
+  constructor({ upstream, config, getSessionSettings, hasPendingUser }) {
     this.upstream = upstream
     this.config = config
+    /**
+     * 「有人正排队要用这个账号」的判定（账号级 chat 锁在途/排队）。
+     * 空闲释放要跳过这种情况：选号阶段就 admit、随后在等 chat 锁的请求还没
+     * 走到 beginRequest（在途计数仍为 0），若此刻把会话删掉，请求会撞上
+     * 已失效会话，白白多买一条计费会话。
+     */
+    this._hasPendingUser =
+      typeof hasPendingUser === 'function' ? hasPendingUser : () => false
+    /**
+     * 控制台「额度保护」设置（settings.json）实时覆盖 config.yaml：
+     * idleReleaseSec（空闲自动释放秒数）。返回 null 时用 config 默认值。
+     */
+    this._getSessionSettings =
+      typeof getSessionSettings === 'function' ? getSessionSettings : () => null
     /** @type {null | {
      *   status: string,
      *   instanceId?: string,
@@ -46,14 +60,42 @@ export class SessionManager {
     this.lastProbe = null
     /** 等待在途请求归零的监听器（会话平滑切换/优雅释放时用）。 */
     this._idleWaiters = []
+    /**
+     * Freebucks 计量块（上游每次 session 响应都带）：余额 / 每日池 / 每模型
+     * session 单价。用于「余额买不起就别 admit」以及控制台展示。
+     * @type {null | {
+     *   balance: number,
+     *   daily: { limit: number, spent: number, remaining: number, resetAt: string | null },
+     *   wallet: { balance: number, monthlyBonus: number, nextBonusAt: string | null },
+     *   prices: Record<string, number>,
+     *   quotaExempt: boolean,
+     *   planId: string | null,
+     *   monthly: { remainingUsd: number, resetAt: string | null } | null,
+     *   updatedAt: string
+     * }}
+     */
+    this.freebucks = null
+    /** 最近一次早退 DELETE 的退款回执（控制台展示/排查用）。 */
+    this.lastRefund = null
+    /** 空闲自动释放定时器（在途归零后开始计时）。 */
+    this._idleTimer = null
+    /** 正在早退 DELETE（空闲释放/换号释放）：期间不得被选号复用。 */
+    this._releasing = false
+    /**
+     * 成功新建的上游会话计数（每次 POST /session 成功 +1）。
+     * 下游请求的「新会话预算」据此扣减：被上游拒绝的 admit（rate_limited 等）
+     * 不消耗额度，只有真正扣了 Freebucks 的会话才算。
+     */
+    this.admitCount = 0
   }
 
-  /** 请求开始（在途计数 +1，轮询跳过）。 */
+  /** 请求开始（在途计数 +1，轮询跳过，取消空闲释放计时）。 */
   beginRequest() {
     this._inFlight += 1
+    this._clearIdleRelease()
   }
 
-  /** 请求结束（在途计数 -1），归零时唤醒等待方。 */
+  /** 请求结束（在途计数 -1），归零时唤醒等待方并开始空闲释放计时。 */
   endRequest() {
     const before = this._inFlight
     this._inFlight = Math.max(0, this._inFlight - 1)
@@ -61,6 +103,112 @@ export class SessionManager {
       const waiters = this._idleWaiters
       this._idleWaiters = []
       for (const wake of waiters) wake()
+      this._armIdleRelease()
+    }
+  }
+
+  /** 空闲自动释放时长（毫秒，0 = 关闭）。控制台设置优先于 config.yaml。 */
+  idleReleaseMs() {
+    const override = this._getSessionSettings?.()?.idleReleaseSec
+    const sec = Number.isFinite(override)
+      ? override
+      : this.config.session.idleReleaseSec
+    return Number.isFinite(sec) && sec > 0 ? sec * 1000 : 0
+  }
+
+  /**
+   * 空闲自动释放：在途归零后空闲超过 session.idleReleaseSec 就早退 DELETE。
+   *
+   * 上游 2026-09 起按 Freebucks 计费——session 是「1 小时计费行，admit 时
+   * 一次性扣费，提前结束（DELETE）退款」。旧行为把 session 一直留到过期，
+   * 哪怕只发了一条请求也照扣一小时（多账号时几个账号一起在后台白扣）。
+   * 这里在空闲后主动早退拿退款，是「多账号用更久」的核心。
+   */
+  _armIdleRelease() {
+    const ms = this.idleReleaseMs()
+    if (!ms || !this.hasLiveSlot()) {
+      this._clearIdleRelease()
+      return
+    }
+    // 已有计时就不重置：后台轮询（GET /session）每 pollIntervalSec 一次，
+    // 若每次都顺延，空闲释放永远触发不了。
+    if (this._idleTimer) return
+    this._idleTimer = setTimeout(() => {
+      this._idleTimer = null
+      if (this._inFlight > 0 || !this.hasLiveSlot()) return
+      if (this._hasPendingUser()) {
+        // 有请求正排队等这条会话：别删，等它用完后重新计时。
+        this._armIdleRelease()
+        return
+      }
+      logger.info('releasing idle freebuff session (early end refunds Freebucks)', {
+        instanceId: this.session?.instanceId,
+        model: this.session?.model,
+        idleSec: Math.round(ms / 1000),
+      })
+      this.release().catch((err) => {
+        logger.warn('idle session release failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+    }, ms)
+    if (this._idleTimer.unref) this._idleTimer.unref()
+  }
+
+  _clearIdleRelease() {
+    if (this._idleTimer) {
+      clearTimeout(this._idleTimer)
+      this._idleTimer = null
+    }
+  }
+
+  /**
+   * 该模型在这个账号上的 Freebucks 账目：
+   *   { known, price, balance, affordable, quotaExempt, resetAt }
+   * known=false 表示还没有拿到过 freebucks 块（老上游/尚未探测）——此时不拦截。
+   * 无 price 的模型 = 不计费（unmetered），永远可买。
+   * @param {string} model
+   */
+  freebucksFor(model) {
+    const fb = this.freebucks
+    if (!fb) return { known: false, price: null, balance: null, affordable: true }
+    // 每日池重置时刻已过 → 本地数字自认过期（太平洋午夜刷新），不再据此
+    // 拦截选号：让一次真实 admit 用上游的最新余额重新校准，而不是拿冻结的
+    // 旧数字把账号一直排除在外。
+    const resetAt = fb.daily?.resetAt ? Date.parse(fb.daily.resetAt) : NaN
+    if (Number.isFinite(resetAt) && resetAt <= Date.now()) {
+      return {
+        known: false,
+        price: null,
+        balance: fb.balance,
+        affordable: true,
+        stale: true,
+      }
+    }
+    const price = typeof fb.prices?.[model] === 'number' ? fb.prices[model] : null
+    if (price == null) {
+      return {
+        known: true,
+        price: null,
+        balance: fb.balance,
+        affordable: true,
+        unmetered: true,
+        resetAt: fb.daily?.resetAt || null,
+      }
+    }
+    const monthlySpent =
+      fb.monthly != null && Number(fb.monthly.remainingUsd) <= 0
+    const affordable =
+      fb.quotaExempt === true ||
+      (Number(fb.balance) >= price && !monthlySpent)
+    return {
+      known: true,
+      price,
+      balance: fb.balance,
+      affordable,
+      unmetered: false,
+      quotaExempt: fb.quotaExempt === true,
+      resetAt: fb.daily?.resetAt || null,
     }
   }
 
@@ -113,7 +261,15 @@ export class SessionManager {
 
   getSnapshot() {
     const s = this.session
-    if (!s) return { status: 'none', quota: this.quota, lastProbe: this.lastProbe }
+    if (!s) {
+      return {
+        status: 'none',
+        quota: this.quota,
+        freebucks: this.freebucks,
+        lastRefund: this.lastRefund,
+        lastProbe: this.lastProbe,
+      }
+    }
     const remainingMs =
       s.expiresAt != null
         ? Math.max(0, Date.parse(s.expiresAt) - Date.now())
@@ -123,6 +279,8 @@ export class SessionManager {
       remainingMs,
       live: this.hasLiveSlot(s),
       quota: this.quota,
+      freebucks: this.freebucks,
+      lastRefund: this.lastRefund,
       lastProbe: this.lastProbe,
     }
   }
@@ -171,6 +329,8 @@ export class SessionManager {
   }
 
   isUsableForModel(model, session = this.session) {
+    // 正在早退释放（空闲/换号）的会话不再被选号复用，避免 DELETE 与 chat 抢同一条会话。
+    if (this._releasing) return false
     if (!this.hasLiveSlot(session)) return false
     if (!session?.model || !session.instanceId) return false
     if (session.status === 'ended') {
@@ -294,6 +454,7 @@ export class SessionManager {
     const body = await this.upstream.freebuffSession('POST', { model })
 
     if (body?.status === 'active' && body.instanceId) {
+      this.admitCount += 1
       this._apply(body)
       this._armPoll()
       logger.info('freebuff session active', {
@@ -314,6 +475,7 @@ export class SessionManager {
       await this._releaseUnlocked()
       const again = await this.upstream.freebuffSession('POST', { model })
       if (again?.status === 'active' && again.instanceId) {
+        this.admitCount += 1
         this._apply(again)
         this._armPoll()
         return this.session
@@ -366,6 +528,11 @@ export class SessionManager {
     }
     const quota = extractQuota(body)
     if (quota) this.quota = quota
+    const freebucks = extractFreebucks(body)
+    if (freebucks) this.freebucks = freebucks
+    // admit 可能发生在没有任何在途请求时（选号阶段就 admit、随后才拿 chat
+    // 锁）：这里兜底起空闲计时，否则会话会一直挂到过期。
+    if (this._inFlight === 0) this._armIdleRelease()
   }
 
   async refresh() {
@@ -424,20 +591,70 @@ export class SessionManager {
 
   async _releaseUnlocked() {
     this._clearPoll()
+    this._clearIdleRelease()
     if (!this.hasLiveSlot()) {
       this.session = { status: 'none' }
       return
     }
+    const instanceId = this.session?.instanceId
+    const model = this.session?.model
+    this._releasing = true
     try {
-      await this.upstream.freebuffSession('DELETE')
+      // 必须带 instance id：上游 DELETE 没有 x-freebuff-instance-id 会 400
+      // instance_required，会话既删不掉也拿不到退款（issue #7 的元凶之一）。
+      let body = await this.upstream.freebuffSession('DELETE', { instanceId })
+      // 结算未完成（freebucksRefundPending）：用同一个 instance 重放 DELETE
+      // 拿回执。有界重放一次，失败只记日志，绝不阻塞调用方。
+      if (body?.freebucksRefundPending === true) {
+        await sleep(1_500)
+        body = await this.upstream.freebuffSession('DELETE', { instanceId })
+      }
+      const refund =
+        typeof body?.freebucksRefund === 'number' ? body.freebucksRefund : null
+      if (refund != null || body?.freebucks) {
+        this.lastRefund = {
+          instanceId,
+          model,
+          refund,
+          at: new Date().toISOString(),
+        }
+      }
+      const freebucks = extractFreebucks(body)
+      if (freebucks) this.freebucks = freebucks
+      else if (refund != null && this.freebucks) {
+        // 上游只回回执、不回 freebucks 块时，本地按退款回填余额，
+        // 让控制台和调度立刻看到「退款已到账」。
+        this.freebucks = {
+          ...this.freebucks,
+          balance: round2(Number(this.freebucks.balance || 0) + refund),
+          daily: this.freebucks.daily
+            ? {
+                ...this.freebucks.daily,
+                spent: round2(
+                  Math.max(0, Number(this.freebucks.daily.spent || 0) - refund),
+                ),
+                remaining: round2(
+                  Number(this.freebucks.daily.remaining || 0) + refund,
+                ),
+              }
+            : this.freebucks.daily,
+          updatedAt: new Date().toISOString(),
+        }
+      }
       logger.info('released freebuff session', {
-        instanceId: this.session?.instanceId,
-        model: this.session?.model,
+        instanceId,
+        model,
+        refund,
+        balance: this.freebucks?.balance ?? null,
       })
     } catch (err) {
       logger.warn('session DELETE failed', {
+        instanceId,
         error: err instanceof Error ? err.message : String(err),
+        code: err?.code,
       })
+    } finally {
+      this._releasing = false
     }
     this.session = { status: 'none' }
   }
@@ -474,6 +691,7 @@ export class SessionManager {
 
   async shutdown() {
     this._clearPoll()
+    this._clearIdleRelease()
     if (this.config.session.releaseOnShutdown) {
       await this.release()
     }
@@ -505,3 +723,77 @@ function extractQuota(body) {
     updatedAt: new Date().toISOString(),
   }
 }
+
+/**
+ * Pull the Freebucks meter out of a Freebuff session payload (2026-09 计费改版).
+ *
+ * 上游把「计费货币」放在每个 session 响应的 freebucks 字段里：
+ *   { balance, daily:{limit,spent,remaining,resetAt}, wallet:{...},
+ *     prices:{ modelId: price }, quotaExempt, planId, monthly, peak, priceChanges }
+ * session 按小时计价、admit 时一次性扣费、提前 DELETE 退款，所以本地必须知道
+ * 「每个模型多少钱」和「这个账号还买不买得起」，否则会白白 admit 一堆计费会话。
+ * 老上游/未登录状态没有该字段 → 返回 null，调度退回旧行为（不拦截）。
+ * @param {any} body
+ */
+function extractFreebucks(body) {
+  if (!body || typeof body !== 'object') return null
+  const fb = body.freebucks
+  if (!fb || typeof fb !== 'object') return null
+  const daily = fb.daily && typeof fb.daily === 'object' ? fb.daily : {}
+  const wallet = fb.wallet && typeof fb.wallet === 'object' ? fb.wallet : {}
+  /** @type {Record<string, number>} */
+  const prices = {}
+  if (fb.prices && typeof fb.prices === 'object') {
+    for (const [id, price] of Object.entries(fb.prices)) {
+      const n = Number(price)
+      if (Number.isFinite(n)) prices[id] = n
+    }
+  }
+  const monthly =
+    fb.monthly && typeof fb.monthly === 'object'
+      ? {
+          limitUsd: num(fb.monthly.limitUsd),
+          spentUsd: num(fb.monthly.spentUsd),
+          remainingUsd: num(fb.monthly.remainingUsd),
+          resetAt: fb.monthly.resetAt ?? null,
+        }
+      : null
+  return {
+    balance: num(fb.balance),
+    daily: {
+      limit: num(daily.limit),
+      spent: num(daily.spent),
+      remaining: num(daily.remaining),
+      resetAt: daily.resetAt ?? null,
+    },
+    wallet: {
+      balance: num(wallet.balance),
+      monthlyBonus: num(wallet.monthlyBonus),
+      nextBonusAt: wallet.nextBonusAt ?? null,
+    },
+    prices,
+    quotaExempt: fb.quotaExempt === true,
+    planId: typeof fb.planId === 'string' ? fb.planId : null,
+    monthly,
+    peak: fb.peak && typeof fb.peak === 'object' ? fb.peak : null,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+function num(v) {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+function round2(n) {
+  return Math.round(n * 100) / 100
+}
+
+/** 有界等待（毫秒）。 */
+function sleep(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    if (timer.unref) timer.unref()
+  })
+}
+

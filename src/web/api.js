@@ -757,14 +757,17 @@ export function createWebApi(deps) {
       sendJson(res, 200, {
         freeToolSignatureEnabled:
           settingsStore?.get().freeToolSignatureEnabled !== false,
-        accountMaxConcurrency: settingsStore?.get().accountMaxConcurrency ?? 1,
-        spreadAccounts: settingsStore?.get().spreadAccounts ?? 3,
-        minimalRoutingEnabled: settingsStore?.get().minimalRoutingEnabled === true,
-        minimalRoutingMode: settingsStore?.get().minimalRoutingMode ?? 'auto',
-        minimalRoutingStyle:
-          settingsStore?.get().minimalRoutingStyle ?? 'standard',
+        accountMaxConcurrency: settingsStore?.get().accountMaxConcurrency ?? 2,
         blockPremiumModels:
           settingsStore?.get().blockPremiumModels === true,
+        // 额度保护：空闲自动释放秒数 + 单请求新会话预算（Freebucks 计费单位）。
+        // 未在控制台保存过时回落 config.yaml 的默认值。
+        idleReleaseSec:
+          settingsStore?.get().idleReleaseSec ?? config.session.idleReleaseSec ?? 300,
+        maxNewSessionsPerRequest:
+          settingsStore?.get().maxNewSessionsPerRequest ??
+          config.limits.maxNewSessionsPerRequest ??
+          2,
       })
       return true
     }
@@ -808,46 +811,6 @@ export function createWebApi(deps) {
         }
         patch.accountMaxConcurrency = body.accountMaxConcurrency
       }
-      if (body.spreadAccounts !== undefined) {
-        if (
-          !Number.isInteger(body.spreadAccounts) ||
-          body.spreadAccounts < 1 ||
-          body.spreadAccounts > 16
-        ) {
-          sendJson(res, 400, {
-            error: 'spreadAccounts 必须是 1..16 的整数',
-          })
-          return true
-        }
-        patch.spreadAccounts = body.spreadAccounts
-      }
-      if (body.minimalRoutingEnabled !== undefined) {
-        if (typeof body.minimalRoutingEnabled !== 'boolean') {
-          sendJson(res, 400, {
-            error: 'minimalRoutingEnabled 必须是布尔值',
-          })
-          return true
-        }
-        patch.minimalRoutingEnabled = body.minimalRoutingEnabled
-      }
-      if (body.minimalRoutingMode !== undefined) {
-        if (!['auto', 'spec', 'react', 'weak'].includes(body.minimalRoutingMode)) {
-          sendJson(res, 400, {
-            error: 'minimalRoutingMode 必须是 auto/spec/react/weak 之一',
-          })
-          return true
-        }
-        patch.minimalRoutingMode = body.minimalRoutingMode
-      }
-      if (body.minimalRoutingStyle !== undefined) {
-        if (!['standard', 'minimal'].includes(body.minimalRoutingStyle)) {
-          sendJson(res, 400, {
-            error: 'minimalRoutingStyle 必须是 standard/minimal 之一',
-          })
-          return true
-        }
-        patch.minimalRoutingStyle = body.minimalRoutingStyle
-      }
       if (body.blockPremiumModels !== undefined) {
         if (typeof body.blockPremiumModels !== 'boolean') {
           sendJson(res, 400, {
@@ -856,6 +819,32 @@ export function createWebApi(deps) {
           return true
         }
         patch.blockPremiumModels = body.blockPremiumModels
+      }
+      if (body.idleReleaseSec !== undefined) {
+        if (
+          !Number.isInteger(body.idleReleaseSec) ||
+          body.idleReleaseSec < 0 ||
+          body.idleReleaseSec > 86_400
+        ) {
+          sendJson(res, 400, {
+            error: 'idleReleaseSec 必须是 0..86400 的整数（0 = 关闭空闲释放）',
+          })
+          return true
+        }
+        patch.idleReleaseSec = body.idleReleaseSec
+      }
+      if (body.maxNewSessionsPerRequest !== undefined) {
+        if (
+          !Number.isInteger(body.maxNewSessionsPerRequest) ||
+          body.maxNewSessionsPerRequest < 0 ||
+          body.maxNewSessionsPerRequest > 16
+        ) {
+          sendJson(res, 400, {
+            error: 'maxNewSessionsPerRequest 必须是 0..16 的整数（0 = 不限制）',
+          })
+          return true
+        }
+        patch.maxNewSessionsPerRequest = body.maxNewSessionsPerRequest
       }
       if (!Object.keys(patch).length) {
         sendJson(res, 400, {

@@ -444,7 +444,7 @@ function buildAccountsTable(accounts) {
   const tbody = el('tbody', {}, accounts.map((a, i) => buildAccountRow(a, i)))
   return el('div', { class: 'table-wrap', style: 'margin-top:12px' }, [
     el('table', {}, [
-      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发', '额度（今日）', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
+      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发', '额度（今日）', 'Freebucks', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
       tbody,
     ]),
   ])
@@ -489,6 +489,7 @@ function buildAccountRow(a, i) {
     el('td', { class: 'mono', style: 'font-size:12px' }, sess),
     el('td', { class: 'mono' }, `${a.inFlight || 0}/${a.concurrency || 1}`),
     el('td', {}, fmtQuota(a.quota)),
+    el('td', {}, fmtFreebucks(a.freebucks, a.session?.model, a.lastRefund)),
     el('td', { class: 'mono' }, `${a.requests || 0} 次`),
     el('td', {}, cd ? el('span', { class: 'badge warn' }, a.cooldownCode || 'cooldown') : el('span', { class: 'muted' }, '—')),
     el('td', {}, ops),
@@ -659,117 +660,15 @@ async function renderProxySettings(view) {
     ]),
   ]))
 
-  const routingEnabled = settings.minimalRoutingEnabled === true
-  const routingToggleAttrs = {
-    id: 'minimal-routing',
-    type: 'checkbox',
-    class: 'switch-input',
-    onchange: saveMinimalRoutingSetting,
-  }
-  if (routingEnabled) routingToggleAttrs.checked = ''
-  if (state.me.role !== 'admin') routingToggleAttrs.disabled = ''
-  view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
-    el('div', {}, [
-      el('h3', { style: 'margin:0 0 2px' }, '思维路由（路由模式）'),
-      el('span', { class: 'muted' }, '代理侧注入 persona / 首轮核心工具面 / 近距离引导，保证客户端侧路由注入经反向代理链不被丢弃；一键开关，性能不佳可随时回退'),
-    ]),
-    el('label', { class: 'switch', for: 'minimal-routing' }, [
-      el('input', routingToggleAttrs),
-      el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
-      el('span', { class: 'switch-status' }, routingEnabled ? '已开启' : '已关闭'),
-    ]),
-  ]))
-
-  const routingStyle = settings.minimalRoutingStyle ?? 'standard'
-  const styleOptions = [
-    ['standard', 'standard · 标准模式（flash 恒 weak + 深度引导静态并入，推荐）'],
-    ['minimal', 'minimal · 极简模式（按任务分类 spec/react/weak）'],
-  ]
-  view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
-    el('div', {}, [
-      el('h3', { style: 'margin:0 0 2px' }, '路由实现风格'),
-      el('span', { class: 'muted' }, 'standard：flash 恒走 weak 内路由 + 深度思考引导静态并入 persona；minimal：旧的按任务分类行为。保存立即生效'),
-    ]),
-    el('div', { class: 'row', style: 'margin-top:8px' }, [
-      el('select', {
-        id: 'minimal-routing-style',
-        style: 'min-width:260px',
-        ...(state.me.role === 'admin' ? {} : { disabled: '' }),
-      }, styleOptions.map(([v, label]) => {
-        const attrs = { value: v }
-        if (v === routingStyle) attrs.selected = ''
-        return el('option', attrs, label)
-      })),
-      state.me.role === 'admin'
-        ? el('button', { class: 'primary', onclick: saveMinimalRoutingStyle }, '保存并生效')
-        : null,
-    ]),
-    el('div', { class: 'muted', style: 'margin-top:8px' }, [
-      `当前生效：${(styleOptions.find(([v]) => v === routingStyle) || [routingStyle, routingStyle])[1]}`,
-      state.me.role !== 'admin' ? '（管理员可调）' : '',
-    ]),
-  ]))
-
-  const routingMode = settings.minimalRoutingMode ?? 'auto'
-  const modeOptions = [
-    ['auto', 'auto · 按任务自动分类'],
-    ['spec', 'spec · 计划-集体（we/let\'s 链）'],
-    ['react', 'react · 执行者（let me 链）'],
-    ['weak', 'weak · 内部路由（模型自分类）'],
-  ]
-  const modeLabel = (mode) => (modeOptions.find(([v]) => v === mode) || [mode, mode])[1]
-  view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
-    el('div', {}, [
-      el('h3', { style: 'margin:0 0 2px' }, '路由风格（思维链）'),
-      el('span', { class: 'muted' }, '钉死路由要产出的思维链风格；spec 模式会附加 we/let\'s 集体语域锚定，立即生效'),
-    ]),
-    el('div', { class: 'row', style: 'margin-top:8px' }, [
-      el('select', {
-        id: 'minimal-routing-mode',
-        style: 'min-width:260px',
-        ...(state.me.role === 'admin' ? {} : { disabled: '' }),
-      }, modeOptions.map(([v, label]) => {
-        const attrs = { value: v }
-        if (v === routingMode) attrs.selected = ''
-        return el('option', attrs, label)
-      })),
-      state.me.role === 'admin'
-        ? el('button', { class: 'primary', onclick: saveMinimalRoutingMode }, '保存并生效')
-        : null,
-    ]),
-    el('div', { class: 'muted', style: 'margin-top:8px' }, [
-      `当前生效：${modeLabel(routingMode)}`,
-      state.me.role !== 'admin' ? '（管理员可调）' : '',
-    ]),
-  ]))
-
-  const concurrency = settings.accountMaxConcurrency ?? 1
-  const spreadAccounts = settings.spreadAccounts ?? 3
+  const concurrency = settings.accountMaxConcurrency ?? 2
   view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
       el('div', {}, [
-        el('h3', { style: 'margin:0 0 2px' }, '负载均衡设置'),
-        el('span', { class: 'muted' }, '先账号间负载均衡，再账号内负载均衡：并发请求平摊到最多「平摊账号数」个账号，每个账号内最多「每账号并发」个会话。账号并发没满时新请求可直接开新账号消费会话，满员时必须换新账号'),
+        el('h3', { style: 'margin:0 0 2px' }, '账号调度（粘性优先）'),
+        el('span', { class: 'muted' }, '请求集中到尽可能少的账号上：同模型热 session 优先复用 → 继续用最近用过的账号 → 从未用过的账号排最后（只有已用账号都不可用、或满员排队超时才启用）。上游把「轮换健康账号」当作账号农场特征，Freebucks 又按 session-hour 计费——换号 = 多买一条计费会话。'),
       ]),
     ]),
     el('div', { class: 'row', style: 'margin-top:12px;gap:24px;flex-wrap:wrap' }, [
-      el('div', {}, [
-        el('label', { style: 'margin:0 0 4px' }, '平摊账号数（并发最多用几个账号）'),
-        el('div', { class: 'row' }, [
-          el('input', {
-            id: 'spread-accounts',
-            type: 'number',
-            min: 1,
-            max: 16,
-            style: 'width:70px',
-            value: spreadAccounts,
-            ...(state.me.role === 'admin' ? {} : { disabled: '' }),
-          }),
-          state.me.role === 'admin'
-            ? el('button', { class: 'primary', onclick: saveLoadBalanceSettings }, '保存并生效')
-            : null,
-        ]),
-      ]),
       el('div', {}, [
         el('label', { style: 'margin:0 0 4px' }, '每账号并发（单账号同时几路流）'),
         el('div', { class: 'row' }, [
@@ -782,12 +681,60 @@ async function renderProxySettings(view) {
             value: concurrency,
             ...(state.me.role === 'admin' ? {} : { disabled: '' }),
           }),
+          state.me.role === 'admin'
+            ? el('button', { class: 'primary', onclick: saveLoadBalanceSettings }, '保存并生效')
+            : null,
         ]),
       ]),
     ]),
-    state.me.role !== 'admin'
-      ? el('div', { class: 'muted', style: 'margin-top:8px' }, `当前：平摊 ${spreadAccounts} 个账号 · 每账号 ${concurrency} 路并发（管理员可调）`)
-      : null,
+    el('div', { class: 'muted', style: 'margin-top:8px' }, `当前：每账号 ${concurrency} 路并发；并发请求先挤同一账号，超过才溢出到下一个账号（已用过的优先）${state.me.role !== 'admin' ? '（管理员可调）' : ''}`),
+  ]))
+
+  const idleReleaseSec = settings.idleReleaseSec ?? 300
+  const maxNewSessions = settings.maxNewSessionsPerRequest ?? 2
+  view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
+    el('div', { class: 'row spread' }, [
+      el('div', {}, [
+        el('h3', { style: 'margin:0 0 2px' }, '额度保护（Freebucks 计费）'),
+        el('span', { class: 'muted' }, '上游 2026-09 改版：每条 session 是 1 小时计费行，admit 时一次性扣费、提前结束（DELETE）按未用时长退款。会话空挂后台 = 白扣一小时额度，所以空闲要及时早退；报错时也不要挨个账号去 admit。'),
+      ]),
+    ]),
+    el('div', { class: 'row', style: 'margin-top:12px;gap:24px;flex-wrap:wrap' }, [
+      el('div', {}, [
+        el('label', { style: 'margin:0 0 4px' }, '空闲自动释放（秒，0 = 关闭）'),
+        el('div', { class: 'row' }, [
+          el('input', {
+            id: 'idle-release-sec',
+            type: 'number',
+            min: 0,
+            max: 86400,
+            style: 'width:90px',
+            value: idleReleaseSec,
+            ...(state.me.role === 'admin' ? {} : { disabled: '' }),
+          }),
+        ]),
+      ]),
+      el('div', {}, [
+        el('label', { style: 'margin:0 0 4px' }, '单请求新会话上限（个）'),
+        el('div', { class: 'row' }, [
+          el('input', {
+            id: 'max-new-sessions',
+            type: 'number',
+            min: 0,
+            max: 16,
+            style: 'width:90px',
+            value: maxNewSessions,
+            ...(state.me.role === 'admin' ? {} : { disabled: '' }),
+          }),
+          state.me.role === 'admin'
+            ? el('button', { class: 'primary', onclick: saveQuotaProtectionSettings }, '保存并生效')
+            : null,
+        ]),
+      ]),
+    ]),
+    el('div', { class: 'muted', style: 'margin-top:8px' }, idleReleaseSec > 0
+      ? `当前：会话空闲 ${idleReleaseSec}s 后早退退款 · 一个请求最多新建 ${maxNewSessions || '不限'} 个上游会话`
+      : `当前：空闲不释放（旧行为，账号会一直挂到过期）· 一个请求最多新建 ${maxNewSessions || '不限'} 个上游会话`),
   ]))
 
   const card = el('div', { id: 'proxy-card', class: 'card', style: 'margin-top:12px' }, [
@@ -873,29 +820,6 @@ async function saveBlockPremiumSetting(event) {
   }
 }
 
-async function saveMinimalRoutingSetting(event) {
-  const input = event.currentTarget
-  const enabled = input.checked
-  input.disabled = true
-  try {
-    await api('/api/settings', {
-      method: 'POST',
-      body: JSON.stringify({ minimalRoutingEnabled: enabled }),
-    })
-    toast(enabled ? '极简路由已开启（下个请求生效）' : '极简路由已关闭')
-    try {
-      const s = await api('/api/settings')
-      const actual = s.minimalRoutingEnabled === true
-      input.checked = actual
-      updateSwitchLabel(input)
-    } catch { /* 忽略回读失败 */ }
-  } catch (err) {
-    input.checked = !enabled
-    toast(err.message, true)
-  }
-  input.disabled = false
-}
-
 /** 同步 switch 旁边的「已开启/已关闭」文字标签，保持 DOM 与状态一致 */
 function updateSwitchLabel(input) {
   const track = input.closest('.switch')
@@ -904,68 +828,45 @@ function updateSwitchLabel(input) {
   if (statusEl) statusEl.textContent = input.checked ? '已开启' : '已关闭'
 }
 
-async function saveMinimalRoutingMode() {
-  const select = $('#minimal-routing-mode')
-  if (!select) return
-  try {
-    const r = await api('/api/settings', {
-      method: 'POST',
-      body: JSON.stringify({ minimalRoutingMode: select.value }),
-    })
-    toast(`路由风格已设为 ${r.minimalRoutingMode}，下个请求生效`)
-    updateSettingsStatusTexts()
-  } catch (err) {
-    toast(err.message, true)
-  }
-}
-
-async function saveMinimalRoutingStyle() {
-  const select = $('#minimal-routing-style')
-  if (!select) return
-  try {
-    const r = await api('/api/settings', {
-      method: 'POST',
-      body: JSON.stringify({ minimalRoutingStyle: select.value }),
-    })
-    toast(`路由实现风格已设为 ${r.minimalRoutingStyle}，下个请求生效`)
-    updateSettingsStatusTexts()
-  } catch (err) {
-    toast(err.message, true)
-  }
-}
-
-/** 更新设置卡片里的「当前生效」状态文字（保存后局部刷新，不重建页面） */
-function updateSettingsStatusTexts() {
-  const mode = $('#minimal-routing-mode')
-  const style = $('#minimal-routing-style')
-  if (mode) {
-    const label = (mode.options[mode.selectedIndex] || {}).text || mode.value
-    const node = [...document.querySelectorAll('.card .muted')].find((n) => n.textContent.includes('当前生效'))
-    if (node) node.textContent = `当前生效：${label}`
-  }
-  if (style) {
-    const label = (style.options[style.selectedIndex] || {}).text || style.value
-    const nodes = [...document.querySelectorAll('.card .muted')].filter((n) => n.textContent.includes('当前生效'))
-    const last = nodes[nodes.length - 1]
-    if (last) last.textContent = `当前生效：${label}`
-  }
-}
-
 async function saveLoadBalanceSettings() {
   const acc = $('#account-concurrency')
-  const spread = $('#spread-accounts')
-  if (!acc || !spread) return
+  if (!acc) return
   try {
-    const v = Math.max(1, Math.min(16, parseInt(acc.value, 10) || 1))
-    const s = Math.max(1, Math.min(16, parseInt(spread.value, 10) || 1))
+    const v = Math.max(1, Math.min(16, parseInt(acc.value, 10) || 2))
     await api('/api/settings', {
       method: 'POST',
-      body: JSON.stringify({ accountMaxConcurrency: v, spreadAccounts: s }),
+      body: JSON.stringify({ accountMaxConcurrency: v }),
     })
-    toast(`负载均衡已更新：平摊 ${s} 个账号 · 每账号 ${v} 路并发`)
+    toast(`账号调度已更新：每账号 ${v} 路并发（先挤同一账号，超过才溢出）`)
     // 非 admin 提示文字局部更新（admin 输入框本身已是最新值）
-    const hint = [...document.querySelectorAll('.card .muted')].find((n) => n.textContent.includes('当前：平摊'))
-    if (hint) hint.textContent = `当前：平摊 ${s} 个账号 · 每账号 ${v} 路并发（管理员可调）`
+    const hint = [...document.querySelectorAll('.card .muted')].find((n) => n.textContent.includes('路并发；并发请求先挤同一账号'))
+    if (hint) hint.textContent = `当前：每账号 ${v} 路并发；并发请求先挤同一账号，超过才溢出到下一个账号（已用过的优先）（管理员可调）`
+  } catch (err) {
+    toast(err.message, true)
+  }
+}
+
+/** 保存「额度保护」设置：空闲自动释放秒数 + 单请求新会话预算（立即生效） */
+async function saveQuotaProtectionSettings() {
+  const idle = $('#idle-release-sec')
+  const budget = $('#max-new-sessions')
+  if (!idle || !budget) return
+  try {
+    const v = Math.max(0, Math.min(86400, parseInt(idle.value, 10) || 0))
+    const b = Math.max(0, Math.min(16, parseInt(budget.value, 10) || 0))
+    await api('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({ idleReleaseSec: v, maxNewSessionsPerRequest: b }),
+    })
+    toast(v > 0
+      ? `额度保护已更新：空闲 ${v}s 后早退退款 · 单请求最多 ${b || '不限'} 个新会话`
+      : `已关闭空闲释放（旧行为）· 单请求最多 ${b || '不限'} 个新会话`)
+    const hint = [...document.querySelectorAll('.card .muted')].find((n) => n.textContent.includes('空闲不释放') || n.textContent.includes('后早退退款'))
+    if (hint) {
+      hint.textContent = v > 0
+        ? `当前：会话空闲 ${v}s 后早退退款 · 一个请求最多新建 ${b || '不限'} 个上游会话`
+        : `当前：空闲不释放（旧行为，账号会一直挂到过期）· 一个请求最多新建 ${b || '不限'} 个上游会话`
+    }
   } catch (err) {
     toast(err.message, true)
   }
@@ -1458,6 +1359,40 @@ const POOL_LABELS = {
 function poolLabel(pool) {
   if (!pool) return '—'
   return POOL_LABELS[pool] || pool
+}
+
+/**
+ * Freebucks 计量展示（上游 2026-09 改版）：余额 / 每日池 + 当前模型单价。
+ * session 按小时计费、admit 扣费、提前 DELETE 退款，所以「余额」比「今日已用
+ * 几次会话」更能说明这个号还能用多久。
+ */
+function fmtFreebucks(fb, currentModel, lastRefund) {
+  if (!fb) return el('span', { class: 'muted' }, '—')
+  const price = currentModel && fb.prices ? fb.prices[currentModel] : null
+  const reset = fb.daily?.resetAt ? new Date(fb.daily.resetAt) : null
+  const tip = [
+    `余额 ${fmtNum(fb.balance)} Freebucks`,
+    fb.daily ? `每日池 ${fmtNum(fb.daily.remaining)}/${fmtNum(fb.daily.limit)}（重置 ${reset ? reset.toLocaleString() : '太平洋午夜'}）` : null,
+    fb.wallet && fb.wallet.balance ? `钱包 ${fmtNum(fb.wallet.balance)}` : null,
+    fb.quotaExempt ? '服务端配额豁免' : null,
+    price != null ? `当前模型 ${currentModel} 单价 ${fmtNum(price)}/小时` : null,
+    lastRefund && lastRefund.refund != null ? `上次早退退款 ${fmtNum(lastRefund.refund)}` : null,
+  ].filter(Boolean).join('\n')
+  const low = price != null && !fb.quotaExempt && Number(fb.balance) < price
+  return el('div', { class: 'mono', style: 'font-size:12px', title: tip }, [
+    el('span', { class: low ? 'badge err' : 'badge ok' }, `${fmtNum(fb.balance)} FB`),
+    price != null ? el('span', { class: 'muted' }, ` · ${fmtNum(price)}/h`) : null,
+    fb.daily
+      ? el('div', { class: 'muted', style: 'font-size:11px' },
+          `今日 ${fmtNum(fb.daily.remaining)}/${fmtNum(fb.daily.limit)}`)
+      : null,
+  ])
+}
+
+function fmtNum(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return '0'
+  return String(Math.round(v * 100) / 100)
 }
 
 /** 额度徽章颜色：用尽=红，余量≤2=黄，其余=绿 */

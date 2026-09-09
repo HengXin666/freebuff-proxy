@@ -119,8 +119,8 @@ async function main() {
   const ctx = buildAppContext(config, {
     // 账号并发上限来自控制台设置（/data/settings.json，默认 1:1），实时生效
     getAccountConcurrency: () => settingsStore.get().accountMaxConcurrency,
-    // 平摊请求的账号数（控制台「负载均衡设置」可调，默认 3）：并发最多铺开 N 个账号
-    getSpreadAccounts: () => settingsStore.get().spreadAccounts,
+    // 额度保护（控制台可调）：空闲自动释放秒数 / 单请求新会话预算
+    getSessionSettings: () => settingsStore.get(),
     // 自定义模型列表（前端「模型管理」，覆盖内置目录），实时生效
     getCustomModels: () => modelStore.list(),
   })

@@ -42,17 +42,25 @@ session:
   # 付费模型（premium）适用：付费会话每次 admit 都计费，尽量用到接近过期
   re_admit_lead_sec: 60
   # 免费模型（pool 非 premium）的提前切换阈值（秒）：会话剩余不足该值时
-  # 不再调度到该会话上，提前 re-admit 换全新会话（默认 300s = 5 分钟）。
-  # 免费会话按次/按小时结算，过期中途被掐断会白占额度且响应截断
-  free_model_re_admit_lead_sec: 300
+  # 不再调度到该会话上，提前 re-admit 换全新会话（默认 60s = 1 分钟）。
+  # 2026-09 Freebucks 计费：每次 admit 都是一条 1 小时计费行（早退才退款），
+  # 提前 re-admit = 多买一条计费行，所以只留最小切换余量
+  free_model_re_admit_lead_sec: 60
   poll_interval_sec: 30
   admit_timeout_ms: 30000
+  # 空闲自动释放（秒，控制台「额度保护」可调，保存立即生效）：
+  # 会话在途请求归零后空闲超过该时长就早退 DELETE，让上游按未用时长退款
+  # （freebucksRefund）。上游按 session-hour 计费，会话空挂后台 = 白扣一小时。
+  # 0 = 关闭（旧行为：留到过期，整小时照扣）
+  idle_release_sec: 300
 
 limits:
   max_concurrent_requests: 32
-  # 每个账号同一时间最多转发的 SSE 响应流数（账号并发，默认 1:1）。
-  # 建议在控制台「负载均衡设置」里调整，保存立即生效、无需重启
-  account_max_concurrency: 1
+  # 每个账号同一时间最多转发的 SSE 响应流数（账号并发，默认 2）。
+  # 粘性调度下它是"溢出"阈值：并发请求先挤同一账号（换号 = 多买一条 Freebucks
+  # 计费会话），达到上限后才溢出到下一个账号（已用过的账号优先，未用过的排最后）。
+  # 建议在控制台「账号调度」里调整，保存立即生效、无需重启
+  account_max_concurrency: 2
   upstream_timeout_sec: 600
   # 上游流式响应 body idle 超时（秒）：上游发了响应头后长时间不再吐数据
   # （幽灵连接）→ 主动掐断/换号，避免连接永远挂着。默认 60s——网络不稳定
@@ -64,6 +72,15 @@ limits:
   # 流被掐断（幽灵连接 idle 超时）后账号的短暂冷却（秒）：刚被掐断的账号
   # 说明上游/网络对它不稳定，短期内让新请求优先去别的账号。0 = 不冷却。
   stall_cooldown_sec: 30
+  # 一个下游请求最多新建几个上游会话（Freebucks 计费单位，控制台「额度保护」可调）：
+  # 上游 admit 一次扣一次 Freebucks，旧行为报错时把「账号数+1」个账号挨个 admit
+  # 一遍，几个账号一起在后台白扣一小时（issue #7）。复用热 session 不消耗预算。
+  # 默认 2 = 首个账号 + 一次换号兜底；0 = 不限制（调试用）
+  max_new_sessions_per_request: 2
+  # 上游 chat 调用前的随机抖动上限（毫秒）：每次请求前等 [0, N) 随机时长，
+  # 打散机器式等间隔节奏（上游风控按请求节奏指纹自动化；参考项目 SAFE_MODE
+  # 默认 200ms）。0 = 关闭（最低延迟）
+  request_jitter_ms: 200
 
 logging:
   level: info

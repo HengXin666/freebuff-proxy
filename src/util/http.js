@@ -89,6 +89,7 @@ export function filterRequestHeaders(headers) {
     'cf-ipcountry',
     'cf-ray',
     'cf-visitor',
+    'cf-worker',
     'true-client-ip',
     'x-originating-ip',
     'x-remote-ip',
@@ -108,6 +109,10 @@ export function filterRequestHeaders(headers) {
     const key = k.toLowerCase()
     if (skip.has(key)) continue
     if (key.startsWith('x-freebuff-proxy-')) continue
+    // x-freebuff-* 由代理自己按官方 CLI 形态设置（session POST 带 model、
+    // GET/DELETE 带 instance id、chat 两者都不带）。下游客户端若自带这些头，
+    // 透传上游就是"代理形态"指纹（参考项目 ADR-0012 反封控契约）。
+    if (key.startsWith('x-freebuff-')) continue
     out[key] = Array.isArray(v) ? v.join(',') : String(v)
   }
   return out
