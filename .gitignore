@@ -15,9 +15,14 @@ credentials/active
 # OpenAPI 账号导入文件同样含 authToken，禁止入库
 accounts-import.json
 
-# 环境配置
+# 环境配置（本地运行配置，不入库；Docker 场景固定读 /data/config.yaml）
 config.toml
 config.yaml
+# 本地开发用的 compose 覆盖（源码热挂载等），只属于本机
+# 注意：不要用 docker-compose.override.yml —— Docker Compose 会自动加载它，
+# 那份覆盖只在本机存在，别的机器 git clone 后 compose 行为会不一致；
+# 需要叠加时就手动 docker compose -f docker-compose.yml -f xx.local.yml
+*.local.yml
 .env
 .env.*
 !.env.example
