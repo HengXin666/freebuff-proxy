@@ -21,6 +21,11 @@ RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 
 COPY . .
 
+# 构建上下文里若有权限过窄的文件（如本地 umask 造成的 600），降权到 node 后
+# 会读不到源码（issue #9 里 catalog 同步因此被静默禁用）。统一放宽为可读：
+# 不改变属主、只保证 node 能读，且不可写（仍由 root 拥有）。
+RUN chmod -R a+rX /app && chmod 0755 /app/docker-entrypoint.sh
+
 # 不设 USER：entrypoint 以 root 初始化 /data 属主后自动降权到 node(1000)
 # USER node
 VOLUME ["/data"]

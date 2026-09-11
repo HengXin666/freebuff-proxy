@@ -89,14 +89,23 @@ export async function fetchCatalogFromUpstream(opts = {}) {
 
 /**
  * 原子写 catalog 缓存（先写临时文件再 rename，避免半截文件被读到）。
+ *
+ * 目录不可写（Docker 里把缓存写进了只读安装目录，见 issue #9）不是致命错误：
+ * 保留内存态、返回 false 让调用方换一句日志，绝不打断同步循环或启动。
  * @param {string} filePath
  * @param {object} catalog
+ * @returns {{ ok: true } | { ok: false, error: string }}
  */
 export function writeCatalogCache(filePath, catalog) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true })
-  const tmp = `${filePath}.tmp-${process.pid}`
-  fs.writeFileSync(tmp, JSON.stringify(catalog, null, 2))
-  fs.renameSync(tmp, filePath)
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true })
+    const tmp = `${filePath}.tmp-${process.pid}`
+    fs.writeFileSync(tmp, JSON.stringify(catalog, null, 2))
+    fs.renameSync(tmp, filePath)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
 }
 
 /**
@@ -140,7 +149,14 @@ export function startCatalogSync(cachePath, opts = {}) {
     inFlight = (async () => {
       try {
         const catalog = await fetchCatalogFromUpstream(opts)
-        writeCatalogCache(cachePath, catalog)
+        const wrote = writeCatalogCache(cachePath, catalog)
+        if (!wrote.ok) {
+          // 拉到新 catalog 但落盘失败：内存态已是新的，缓存保留旧值。
+          // 必须与"拉取失败"分开报——否则用户看到 refresh failed 会去查网络，
+          // 实际是目录权限（issue #9）。
+          log(`catalog cache not writable, using in-memory catalog: ${wrote.error}`)
+          return { ok: false, error: `cache write failed: ${wrote.error}`, models: catalog.models.length }
+        }
         log(`refreshed: ${catalog.models.length} models -> ${cachePath}`)
         return { ok: true, models: catalog.models.length }
       } catch (err) {

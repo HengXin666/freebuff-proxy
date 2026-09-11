@@ -47,8 +47,10 @@ docker compose up -d
 启动后：
 
 ```bash
-# 查看首次启动的管理员密码（若未在 .env 设置 ADMIN_PASSWORD）
-docker compose logs freebuff-proxy | grep -A4 "首次启动"
+# 查看首次启动的管理员密码（仅当 .env 里 ADMIN_PASSWORD 为空/未设置时才随机生成）
+docker compose logs freebuff-proxy | grep -B2 -A6 "首次启动"
+# 注意：`docker compose logs -f` 不会回放启动瞬间的历史日志，
+# 拿不到密码时用上面的命令（不带 -f）整段翻。
 ```
 
 浏览器打开 `http://<宿主机IP>:<PORT，默认8787>/`，用管理员账号登录，在「总览 → + 添加账号」里完成 Freebuff 登录回调（见下文），即可开始使用。
@@ -93,7 +95,11 @@ data/
 ├── credentials/           # Freebuff 账号凭据（每账号一个 <账号ID>.json，见下）
 ├── users.json             # Web 控制台用户（密码 scrypt 哈希）
 ├── web-sessions.json      # Web 登录会话
-└── login-flows.json       # 浏览器登录回调流程（重启不丢）
+├── login-flows.json       # 浏览器登录回调流程（重启不丢）
+├── catalog-cache.json     # 上游模型目录缓存（首启写入，每 6h 自动刷新）
+├── custom-models.json     # 前端「模型管理」的自定义模型
+├── proxies.json           # 前端「代理设置」的全局代理池
+└── settings.json          # 前端可调的运行参数（并发/额度保护等）
 ```
 
 - 首次启动自动把 `config.example.yaml` 复制为 `/data/config.yaml`，无需手动创建。
@@ -123,7 +129,9 @@ data/
 ### 登录
 
 - 首次部署自动创建管理员（`ADMIN_USERNAME`，默认 `admin`）。
-- 设置了 `ADMIN_PASSWORD` 则用固定密码；**未设置则随机生成，仅首次启动打印在 `docker compose logs` 里**（强烈建议登录后改密并写入 `.env`）。
+- 设置了 `ADMIN_PASSWORD` 则用固定密码；**未设置（或 `.env` 里写成空的 `ADMIN_PASSWORD=`）则随机生成，仅在首次启动那一次打印在日志里**（强烈建议登录后改密并把密码写进 `.env`）。
+- **忘记密码了怎么找回**：启动日志里有 `首次启动：已创建管理员账号` 区块（用不带 `-f` 的 `docker compose logs freebuff-proxy` 翻）；已经找不到的话，在 `.env` 写一个新的 `ADMIN_PASSWORD=xxx` 再 `docker compose up -d`，启动时会用它重置 `admin` 的密码（日志会打印 `default admin password rotated from env/config`）。密码短于 6 位会被拒绝并告警，现有密码不受影响。
+- 日志里 `default admin ensured (password from env)` 表示**这次没有新建管理员**（已存在），不是"密码就是 env 里那个"——密码来源看同一条日志的 `passwordSource` 字段（`env` / `config` / `generated`）。
 - 普通用户由管理员在「用户管理」中创建，登录后可查看自己的 API Key 并测试对话。
 
 ### 添加 Freebuff 账号（浏览器回调，不在容器内打开浏览器）

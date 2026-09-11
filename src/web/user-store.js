@@ -174,7 +174,7 @@ export class UserStore {
 
   /**
    * Bootstrap first admin when none exists.
-   * @returns {{created: boolean, username: string, password?: string}}
+   * @returns {{created: boolean, username: string, password?: string, rotated?: boolean, error?: string}}
    */
   ensureDefaultAdmin(username, password) {
     const name = String(username || 'admin').trim().toLowerCase()
@@ -183,9 +183,14 @@ export class UserStore {
       if (password && this.getByUsername(name)) {
         try {
           this.setPassword(name, password)
-          return { created: false, username: name }
-        } catch {
-          // ignore invalid password
+          return { created: false, username: name, rotated: true }
+        } catch (err) {
+          // 密码不合法（<6 位）：不能静默当作"已同步"，否则日志会撒谎
+          return {
+            created: false,
+            username: name,
+            error: err instanceof Error ? err.message : String(err),
+          }
         }
       }
       return { created: false, username: name }

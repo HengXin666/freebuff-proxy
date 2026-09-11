@@ -14,6 +14,12 @@ import {
   buildModelsListResponse,
   agentIdForModel,
   agentFallbackForModel,
+  CATALOG_CACHE_FILENAME,
+  DEFAULT_CATALOG_CACHE_PATH,
+  catalogCachePath,
+  configureCatalogCache,
+  applyCatalogCache,
+  mergeCatalogWithBuiltin,
 } from '../src/model.js'
 import { saveAccountUser, listAccounts, readAccountUser } from '../src/auth-store.js'
 import {
@@ -1332,6 +1338,109 @@ for (const model of verifiedSpecialModels) {
   assert.equal(pool.isCoolingDown('u1', 'any'), true)
   const cd = pool.cooldowns.get('u1')
   assert.ok(cd.until - Date.now() > 60_000) // banned floors to 1 day
+}
+
+// --- unit: catalog 缓存必须落在 dataDir（issue #9：写死 /app/data → EACCES）---
+{
+  const { writeCatalogCache, readCatalogCache, startCatalogSync } = await import(
+    '../src/catalog/runtime-sync.mjs'
+  )
+  // 路径由 dataDir 决定，而不是源码目录旁的 data
+  assert.equal(catalogCachePath('/data'), path.join('/data', CATALOG_CACHE_FILENAME))
+  assert.equal(catalogCachePath('/srv/x'), path.join('/srv/x', 'catalog-cache.json'))
+  assert.ok(DEFAULT_CATALOG_CACHE_PATH.endsWith(path.join('data', CATALOG_CACHE_FILENAME)))
+
+  // 切到 dataDir 后能读回同一份缓存（读路径 = 写路径）
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-catalog-'))
+  const before = applyCatalogCache(cacheDir)
+  assert.equal(before.path, catalogCachePath(cacheDir))
+  assert.ok(before.models.length > 0, '切换到 dataDir 后应能读回合并后的 catalog')
+  assert.ok(
+    before.models.some((m) => m.id === 'deepseek/deepseek-v4-flash'),
+    '切入 dataDir 后应能读到真实 catalog（含 flash）',
+  )
+  // 内置 catalog 兜底写一份（server 启动时的 seed 行为）
+  assert.deepEqual(
+    writeCatalogCache(before.path, {
+      version: 1,
+      models: before.models,
+      source: 'builtin',
+    }),
+    { ok: true },
+  )
+  assert.equal(readCatalogCache(before.path)?.models.length, before.models.length)
+
+  // 目录不可写（旧版 Docker 的 /app/data）→ 只报错不抛，同步循环继续跑
+  const badDir = path.join(cacheDir, 'file-not-a-dir')
+  fs.writeFileSync(badDir, 'x')
+  const fail = writeCatalogCache(path.join(badDir, 'catalog-cache.json'), { models: [] })
+  assert.equal(fail.ok, false)
+  assert.match(fail.error, /ENOTDIR|EEXIST|EACCES|EPERM|ENOENT/)
+
+  // 拉取成功但落盘失败 → 日志必须区别于"拉取失败"（issue #9 的误导来源）
+  const logs = []
+  const sync = startCatalogSync(path.join(badDir, 'catalog-cache.json'), {
+    log: (m) => logs.push(m),
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      text: async () => 'export const X_MODEL_ID = \'a/b\'\nexport const Y_MODEL_ID = \'c/d\'\n'.repeat(5),
+    }),
+  })
+  await sync.done
+  assert.ok(
+    logs.some((m) => m.includes('catalog cache not writable')),
+    '落盘失败必须报 cache not writable，而不是 refresh failed',
+  )
+  assert.ok(!logs.some((m) => m.includes('refresh failed')), '不得把权限问题报成拉取失败')
+  sync.stop()
+  fs.rmSync(cacheDir, { recursive: true, force: true })
+
+  // 合并规则：内置元信息优先，agent 映射跟随缓存
+  const merged = mergeCatalogWithBuiltin(
+    [{ id: 'm', displayName: '内置名', pool: 'premium', agentId: 'base2-x' }],
+    [
+      { id: 'm', displayName: '缓存名', pool: 'daily', agentId: 'base2-new' },
+      { id: 'new', displayName: '新模型' },
+    ],
+  )
+  assert.equal(merged[0].displayName, '内置名')
+  assert.equal(merged[0].pool, 'premium')
+  assert.equal(merged[0].agentId, 'base2-new')
+  assert.equal(merged[1].id, 'new')
+  assert.deepEqual(mergeCatalogWithBuiltin([{ id: 'm' }], null), [{ id: 'm' }])
+}
+
+// --- unit: 管理员 bootstrap 报告真实结果（issue #9：日志撒谎导致"无法登录"）---
+{
+  const { UserStore } = await import('../src/web/user-store.js')
+  const adminsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-admin-'))
+  const store = new UserStore(path.join(adminsDir, 'users.json'))
+
+  // 1) 首次启动 + 无密码 → 随机生成，必须把密码交回调用方打印
+  const first = store.ensureDefaultAdmin('admin', null)
+  assert.equal(first.created, true)
+  assert.equal(first.username, 'admin')
+  assert.ok(first.password && first.password.length >= 6)
+
+  // 2) 已有管理员 + env 给了合法密码 → 轮换（rotated=true，供日志如实上报）
+  const rotated = store.ensureDefaultAdmin('admin', 'newpass123')
+  assert.equal(rotated.created, false)
+  assert.equal(rotated.rotated, true)
+  assert.ok(store.verifyPassword('admin', 'newpass123'))
+
+  // 3) env 密码不合法（<6 位）→ 不能静默当成功，必须回传 error 让人看到
+  const rejected = store.ensureDefaultAdmin('admin', 'abc')
+  assert.equal(rejected.rotated, undefined)
+  assert.match(String(rejected.error), /密码/)
+  assert.ok(store.verifyPassword('admin', 'newpass123'), '被拒绝的密码不得改动现有密码')
+
+  // 4) 已有管理员且没给密码 → 既不创建也不轮换（密码只在首次启动打印一次）
+  const again = store.ensureDefaultAdmin('admin', null)
+  assert.equal(again.created, false)
+  assert.equal(again.rotated, undefined)
+  assert.equal(again.password, undefined)
+  fs.rmSync(adminsDir, { recursive: true, force: true })
 }
 
 // --- unit: user store + web sessions ---

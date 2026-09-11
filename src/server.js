@@ -29,9 +29,31 @@ export function startServer(deps) {
 
   // 运行时 catalog 自动同步（对齐 trefeon Registry.Refresh：启动立即一次 + 每 6h，
   // 失败保留旧缓存）。不阻塞启动；失败静默回落内置 catalog。
+  //
+  // 缓存路径必须落在 dataDir（Docker 挂载卷 /data）：旧版写死源码目录旁的
+  // <repo>/data，容器里就是只读的 /app/data → mkdir EACCES，同步永远失败
+  // （issue #9）。这里先把路径切到 <dataDir>/ 并重读缓存，再启动同步循环。
   try {
     import('./model.js')
-      .then((m) => {
+      .then(async (m) => {
+        // 缓存缺失（首次启动 / 挂载卷为空）时先落一份内置 catalog：写不进就
+        // 只告警，绝不影响启动与代理可用性。
+        try {
+          const cache = m.applyCatalogCache?.(config.server.dataDir)
+          if (cache?.path && cache.models?.length) {
+            const { writeCatalogCache } = await import('./catalog/runtime-sync.mjs')
+            writeCatalogCache(cache.path, {
+              version: 1,
+              syncedAt: new Date().toISOString(),
+              source: 'builtin:src/catalog/freebuff-catalog.json',
+              models: cache.models,
+            })
+          }
+        } catch (err) {
+          logger.warn('catalog cache seed skipped', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
         m.startCatalogSync?.({
           log: (msg) => logger.info(msg),
           // catalog 拉 GitHub 源也走配置的代理（含全局池），避免旁路直连。

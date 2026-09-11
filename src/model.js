@@ -21,18 +21,70 @@ const CATALOG_PATH = path.join(
   'freebuff-catalog.json',
 )
 
+/** 运行时 catalog 缓存文件名（写在 dataDir 下）。 */
+export const CATALOG_CACHE_FILENAME = 'catalog-cache.json'
+
 /**
- * 运行时 catalog 缓存（src/catalog/runtime-sync.mjs 写入）。
- * 对齐 trefeon/freebuff-proxy Registry.Refresh：启动后每 6h 从上游源码拉取
- * model→agent 映射写到这里；model.js 优先读它（存在则用之），否则回落内置 catalog。
- * 缓存损坏/不存在时静默回落，绝不阻塞启动。
+ * 运行时 catalog 缓存的**默认**路径（仓库根 ./data/catalog-cache.json）。
+ * 仅作裸机默认值；Docker 等 dataDir 可配置的场景必须显式传 dataDir
+ * （见 catalogCachePath / configureCatalogCache），否则会写到只读的
+ * 安装目录（旧行为写死 /app/data，容器里降权后 EACCES，见 issue #9）。
  */
-export const CATALOG_CACHE_PATH = path.join(
+export const DEFAULT_CATALOG_CACHE_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
   'data',
-  'catalog-cache.json',
+  CATALOG_CACHE_FILENAME,
 )
+
+/**
+ * dataDir → 缓存文件路径。
+ * @param {string} dataDir
+ * @returns {string}
+ */
+export function catalogCachePath(dataDir) {
+  return path.join(dataDir, CATALOG_CACHE_FILENAME)
+}
+
+/**
+ * 运行时缓存的生效路径。模块加载时按默认值算一次（首次读缓存用），
+ * server 启动时由 configureCatalogCache(dataDir) 改写到 <dataDir>/。
+ * @type {string}
+ */
+let catalogCachePathInUse = DEFAULT_CATALOG_CACHE_PATH
+
+/**
+ * server 启动时把缓存路径切到 <dataDir>/catalog-cache.json（并在空目录上
+ * 预创建）。必须在 startCatalogSync 之前调用：读（loadCatalog 已在模块加载时
+ * 执行，故 server 场景下用 applyCatalogCache）与写必须指向同一目录。
+ * @param {string} dataDir
+ * @returns {string} 生效的缓存路径
+ */
+export function configureCatalogCache(dataDir) {
+  if (!dataDir) return catalogCachePathInUse
+  catalogCachePathInUse = catalogCachePath(dataDir)
+  try {
+    fs.mkdirSync(dataDir, { recursive: true })
+  } catch (err) {
+    console.warn(
+      `[model] dataDir not writable (${catalogCachePathInUse}): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    )
+  }
+  return catalogCachePathInUse
+}
+
+/**
+ * 切换缓存目录并**重新读取**合并后的 catalog（供 server 启动时用，替代只读一次的
+ * 模块加载期加载）。返回生效路径与模型列表：调用方可在缓存文件缺失时用它兜底
+ * 写一份（保证 /v1/models 与上游源码解析结果一致）。
+ * @param {string} dataDir
+ * @returns {{ path: string, models: any[] }}
+ */
+export function applyCatalogCache(dataDir) {
+  return { path: configureCatalogCache(dataDir), models: loadCatalog() }
+}
 
 /**
  * 读取内置 catalog（解析失败时回退空列表，不阻塞启动）。
@@ -63,16 +115,27 @@ function loadBuiltinCatalog() {
  *     但 agent 映射（agentId/fallbackAgentId）用缓存的（跟随上游最新状态）；
  *   - 缓存里新增的模型（内置没有）→ 直接采用缓存条目；
  *   - 缓存不存在/损坏/为空 → 纯内置 catalog（基线行为，与改动前一致）。
+ *   - 缓存属于 dataDir（Docker 里是挂载卷 /data），容器重建不丢；不可写时
+ *     仅告警并保留内存态（见 runtime-sync 的 writeCatalogCache）。
  */
 function loadCatalog() {
-  const builtin = loadBuiltinCatalog()
   let cached = null
   try {
-    const raw = JSON.parse(fs.readFileSync(CATALOG_CACHE_PATH, 'utf8'))
+    const raw = JSON.parse(fs.readFileSync(catalogCachePathInUse, 'utf8'))
     if (Array.isArray(raw?.models) && raw.models.length > 0) cached = raw.models
   } catch {
     // 缓存不存在/损坏 → 纯内置 catalog
   }
+  return mergeCatalogWithBuiltin(loadBuiltinCatalog(), cached)
+}
+
+/**
+ * 把运行时缓存合并进内置 catalog（拆成纯函数便于测试，见 test/smoke.mjs）。
+ * @param {any[]} builtin
+ * @param {any[] | null} cached
+ * @returns {any[]}
+ */
+export function mergeCatalogWithBuiltin(builtin, cached) {
   if (!cached) return builtin
 
   const builtinById = new Map(builtin.map((m) => [m.id, m]))
@@ -450,7 +513,7 @@ export function isPremiumModel(modelId, customModels) {
 
 /**
  * 启动运行时 catalog 自动同步（对齐 trefeon refreshLoop：启动立即一次 + 每 intervalMs 一次）。
- * 拉上游源码解析 model→agent，原子写 CATALOG_CACHE_PATH；失败保留旧缓存。
+ * 拉上游源码解析 model→agent，原子写生效缓存路径；失败保留旧缓存。
  * 供 server 启动时调用；懒 import runtime-sync，避免 model.js 顶部引入网络依赖。
  *
  * @param {{ intervalMs?: number, log?: (msg: string) => void }} [opts]
@@ -472,7 +535,7 @@ export function startCatalogSync(opts = {}) {
   // 先同步拉起模块再启动循环（首启即刷）。
   import('./catalog/runtime-sync.mjs')
     .then((m) => {
-      inner.current = m.startCatalogSync(CATALOG_CACHE_PATH, {
+      inner.current = m.startCatalogSync(catalogCachePathInUse, {
         intervalMs: opts.intervalMs,
         log: opts.log,
         fetchImpl: opts.fetchImpl,
