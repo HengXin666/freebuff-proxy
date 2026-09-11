@@ -933,7 +933,7 @@ async function runProxyTest(proxy) {
           `出口 IP: ${res.ip || '?'}`,
           res.country ? `（${res.country}）` : '',
           ` · 延迟 ${res.latencyMs}ms`,
-          ` · codebuff 状态 ${res.codebuffStatus ?? '?'}`,
+          ` · 上游状态 ${res.codebuffStatus ?? '?'}`,
         ].join('')))
       } else {
         lines.push(el('div', { class: 'muted', style: 'color:var(--red)' }, `失败: ${res.error || '连接失败'}（${res.latencyMs}ms）`))

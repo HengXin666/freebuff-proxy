@@ -1,9 +1,12 @@
+<div align="center">
+
 # freebuff-proxy
 
-**把 Freebuff / Codebuff 的免费额度，变成一个 OpenAI 兼容的 API 端点。**
+**把 Freebuff 的免费额度，变成一个 OpenAI 兼容的 API 端点。**
 
 [![Release](https://img.shields.io/github/v/release/HengXin666/freebuff-proxy?label=release&color=2496ED)](https://github.com/HengXin666/freebuff-proxy/releases)
 [![CI](https://github.com/HengXin666/freebuff-proxy/actions/workflows/docker-image.yml/badge.svg)](https://github.com/HengXin666/freebuff-proxy/actions/workflows/docker-image.yml)
+[![License](https://img.shields.io/github/license/HengXin666/freebuff-proxy?color=green)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white)](https://github.com/HengXin666/freebuff-proxy/pkgs/container/freebuff-proxy)
 [![Last commit](https://img.shields.io/github/last-commit/HengXin666/freebuff-proxy)](https://github.com/HengXin666/freebuff-proxy/commits/main)
@@ -11,9 +14,15 @@
 
 **超轻量** · **一键 Docker 部署** · **一切管理都在前端页面**
 
+</div>
+
 下游 Agent 只需要标准的 `base_url + api_key + model`，本服务负责 Freebuff 身份凭证（多账号池）、免费 session 准入、注入 `cost_mode=free` 与 `freebuff_instance_id`，并把**流式 / 非流式响应原样透传**。
 
+> 本项目使用 Freebuff 官方接口，与 Freebuff 官方无隶属关系。计费与额度**最终以上游实时返回为准**。
+
 ---
+
+<div align="center">
 
 ## 截图
 
@@ -42,7 +51,51 @@
 
 ![用户管理](docs/images/03-users.webp)
 
+</div>
+
 > 截图来自真实运行的控制台（已对邮箱与 API Key 打码）。
+
+---
+
+## 计费与定价（Freebucks）
+
+上游按 **Freebucks（FB）** 计费：每个模型有**单价**（N FB/小时），session 从 admit 起
+**按实际占用时长结算**——admit 预占整小时，提前 DELETE 退未用时长；每日池在**太平洋午夜**重置。
+
+**官方没有一份可引用的静态价格表**：定价由上游放在每次 session 响应的 `freebucks.prices`
+里（模型 → FB/小时），这份「按模型」的价目在公开网页上并不提供。所以本服务**不写死价格**，
+而是直接读上游实时值——命令行等价于控制台的额度列：
+
+```bash
+npm run pricing           # 人类可读的实时价目表
+npm run pricing -- --json # 机器可读（脚本 / CI 直接消费）
+```
+
+输出会按单价排序，并把**今日池 / 当前余额折算成各模型还能跑多久**：
+
+```text
+Freebuff 实时定价表（Freebucks）
+
+  计费货币   Freebucks（FB）
+  今日池     25 FB（已用 0，剩余 25）
+  重置时间   2026-09-12 15:00（本地时区） 14 小时后重置
+
+  模型                                  FB/小时         今日池可跑        当前余额可跑
+  -------------------------------  --------  ------------  ------------
+  google/gemini-3.8-flash                50         30 分钟       30 分钟
+  deepseek/deepseek-v4-flash             25          1 小时         1 小时
+  openai/gpt-5.6-luna                    20     1 小时 15 分    1 小时 15 分
+  mimo/mimo-v2.5                         10      2 小时 30 分      2 小时 30 分
+  z-ai/glm-5.3-flash                      5          5 小时          5 小时
+  upstage/solar-pro4                     免费             —             —
+```
+
+> 上表是**某次真实输出**的样式示意，数字随上游实时变化，请以你自己跑出来的为准。
+> 该命令走 GET 探测，**不创建 session、不消耗额度**。
+
+Web 控制台「总览」的**额度（今日 · FB/h）**列展示的就是这份单价（免费模型标「免费」，
+今日池见底标「池空」），悬停可看单价、今日池折算可用时长、重置时刻。
+细节见 **[多账号池与调度](docs/scheduling.md)**。
 
 ---
 
@@ -166,5 +219,5 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 ## 说明
 
 - **发布与更新日志**：[Releases](https://github.com/HengXin666/freebuff-proxy/releases)
-- 本项目使用 Freebuff / Codebuff 的官方接口，仅用于个人便利；请自行遵守其服务条款。
-- 仓库当前**未声明开源许可证**（`LICENSE` 文件缺失），因此未添加 License 徽章。
+- 本项目使用 [MIT License](./LICENSE)。
+- 本项目使用 Freebuff 官方接口，仅用于个人便利；请自行遵守其服务条款，并自行承担账号风险。

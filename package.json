@@ -18,7 +18,8 @@
     "doctor": "node bin/doctor.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node test/smoke.mjs",
-    "web": "node bin/serve.js"
+    "web": "node bin/serve.js",
+    "pricing": "node bin/pricing.js"
   },
   "dependencies": {
     "undici": "^8.10.0",
@@ -27,5 +28,6 @@
   "devDependencies": {
     "@types/node": "^24.2.0",
     "typescript": "^5.9.2"
-  }
+  },
+  "license": "MIT"
 }

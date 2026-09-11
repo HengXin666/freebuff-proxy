@@ -64,7 +64,7 @@ curl http://127.0.0.1:8787/v1/freebuff/accounts/import \
   -d @accounts.json   # [{"email":...,"authToken":...}, ...]
 ```
 
-- `authToken` 即 Freebuff/Codebuff 登录令牌（Web 会话 `__Secure-next-auth.session-token` 值或 CLI 登录返回的 token，二者对 `codebuff.com` API 均有效，`/api/v1/me` 实测 200）。
+- `authToken` 即 Freebuff 登录令牌（Web 会话 `__Secure-next-auth.session-token` 值，或 CLI 登录返回的 token，二者对上游 API 均有效，`/api/v1/me` 实测 200）。
 - 带 `id` 可避免 GitHub/Google 同邮箱账号互相覆盖（按 `id` 存文件）；不带则按邮箱。
 - 导入后自动 `invalidate` 旧缓存 + 只读探测刷新（不占额度）。
 - 响应 `{ok, imported:[{key,email,id}], failures, total}`。
