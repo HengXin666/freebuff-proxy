@@ -1,19 +1,16 @@
 <div align="center">
-
-# freebuff-proxy
-
-**把 Freebuff 的免费额度，变成一个 OpenAI 兼容的 API 端点。**
-
-[![Release](https://img.shields.io/github/v/release/HengXin666/freebuff-proxy?label=release&color=2496ED)](https://github.com/HengXin666/freebuff-proxy/releases)
-[![CI](https://github.com/HengXin666/freebuff-proxy/actions/workflows/docker-image.yml/badge.svg)](https://github.com/HengXin666/freebuff-proxy/actions/workflows/docker-image.yml)
-[![License](https://img.shields.io/github/license/HengXin666/freebuff-proxy?color=green)](./LICENSE)
-[![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)](https://nodejs.org)
-[![Docker](https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white)](https://github.com/HengXin666/freebuff-proxy/pkgs/container/freebuff-proxy)
-[![Last commit](https://img.shields.io/github/last-commit/HengXin666/freebuff-proxy)](https://github.com/HengXin666/freebuff-proxy/commits/main)
-[![Repo size](https://img.shields.io/github/repo-size/HengXin666/freebuff-proxy)](https://github.com/HengXin666/freebuff-proxy)
-
-**超轻量** · **一键 Docker 部署** · **一切管理都在前端页面**
-
+<h1>freebuff-proxy</h1>
+<p><strong>把 Freebuff 的免费额度，变成一个 OpenAI 兼容的 API 端点。</strong></p>
+<p>
+<a href="https://github.com/HengXin666/freebuff-proxy/releases"><img src="https://img.shields.io/github/v/release/HengXin666/freebuff-proxy?label=release&color=2496ED" alt="Release"></a>
+<a href="https://github.com/HengXin666/freebuff-proxy/actions/workflows/docker-image.yml"><img src="https://github.com/HengXin666/freebuff-proxy/actions/workflows/docker-image.yml/badge.svg" alt="CI"></a>
+<a href="./LICENSE"><img src="https://img.shields.io/github/license/HengXin666/freebuff-proxy?color=green" alt="License"></a>
+<a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white" alt="Node"></a>
+<a href="https://github.com/HengXin666/freebuff-proxy/pkgs/container/freebuff-proxy"><img src="https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white" alt="Docker"></a>
+<a href="https://github.com/HengXin666/freebuff-proxy/commits/main"><img src="https://img.shields.io/github/last-commit/HengXin666/freebuff-proxy" alt="Last commit"></a>
+<a href="https://github.com/HengXin666/freebuff-proxy"><img src="https://img.shields.io/github/repo-size/HengXin666/freebuff-proxy" alt="Repo size"></a>
+</p>
+<p><strong>超轻量</strong> · <strong>一键 Docker 部署</strong> · <strong>一切管理都在前端页面</strong></p>
 </div>
 
 下游 Agent 只需要标准的 `base_url + api_key + model`，本服务负责 Freebuff 身份凭证（多账号池）、免费 session 准入、注入 `cost_mode=free` 与 `freebuff_instance_id`，并把**流式 / 非流式响应原样透传**。
@@ -22,13 +19,11 @@
 
 ---
 
-<div align="center">
-
 ## 截图
 
-![总览：账号池、额度（Freebucks）、并发与冷却](docs/images/01-overview.webp)
+<p align="center"><img src="docs/images/01-overview.webp" alt="总览：账号池、额度（Freebucks）、并发与冷却"></p>
 
-<table>
+<table align="center">
 <tr>
 <td width="50%">
 
@@ -49,9 +44,7 @@
 
 **用户管理** — 建用户、改角色、重置 Key（管理员）
 
-![用户管理](docs/images/03-users.webp)
-
-</div>
+<p align="center"><img src="docs/images/03-users.webp" alt="用户管理"></p>
 
 > 截图来自真实运行的控制台（已对邮箱与 API Key 打码）。
 
