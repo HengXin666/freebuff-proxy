@@ -164,14 +164,35 @@ function normalizeKeys(input) {
   return out
 }
 
+/** 深拷贝纯对象/数组（DEFAULTS 只含 JSON 可表达的值）。 */
+function clonePlain(value) {
+  if (Array.isArray(value)) return value.map(clonePlain)
+  if (isPlainObject(value)) {
+    const out = {}
+    for (const [k, v] of Object.entries(value)) out[k] = clonePlain(v)
+    return out
+  }
+  return value
+}
+
+/**
+ * 深合并：override 覆盖 base。
+ *
+ * **必须深拷贝 base**（历史 bug）：旧实现用 `{ ...base }` 浅拷贝，当 override 为
+ * 空（**没有 config.yaml** 时 fileConfig = {}）嵌套的 session/limits/web/upstream
+ * 就与全局 DEFAULTS **共享同一个对象引用**。任何一处 `config.session.xxx = y`
+ * 都会污染 DEFAULTS，污染进程内后续所有 loadConfig() 结果（测试套件之间互相串味，
+ * 表现为莫名其妙的 "fetch failed" / no_available_account）。有 config.yaml 时因为
+ * 递归到嵌套键恰好新建了对象，所以才"看起来正常"——这个 bug 因此潜伏了很久。
+ */
 function deepMerge(base, override) {
-  if (!isPlainObject(override)) return base
-  const out = { ...base }
+  if (!isPlainObject(override)) return clonePlain(base)
+  const out = clonePlain(base)
   for (const [key, value] of Object.entries(override)) {
-    if (isPlainObject(value) && isPlainObject(base[key])) {
-      out[key] = deepMerge(base[key], value)
+    if (isPlainObject(value) && isPlainObject(out[key])) {
+      out[key] = deepMerge(out[key], value)
     } else if (value !== undefined) {
-      out[key] = value
+      out[key] = clonePlain(value)
     }
   }
   return out

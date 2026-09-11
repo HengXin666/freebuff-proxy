@@ -411,6 +411,9 @@ export function createWebApi(deps) {
       try {
         const session = await probeUpstreamSession()
         const limits = session?.rateLimitsByModel || {}
+        // 模型单价（Freebucks/小时）：上游按会话实际占用时长结算，这正是控制台
+        // 在「额度」列要展示的口径——旧的「已用/上限 次数」已不符合计费方式。
+        const prices = session?.freebucks?.prices || {}
         // 上游探测返回上游真实存在的全部模型（不过滤 hidden）——
         // 「同步上游模型」要能看到并拉回上游的完整列表；
         // 用户是否隐藏由「模型管理」的 hidden 列表独立控制。
@@ -418,6 +421,7 @@ export function createWebApi(deps) {
           id,
           limit: info?.limit ?? null,
           recentCount: info?.recentCount ?? null,
+          freebucksPerHour: Number.isFinite(prices[id]) ? prices[id] : null,
           pool: info?.pool ?? null,
           poolLabel: info?.poolLabel ?? null,
           resetAt: info?.resetAt ?? null,
@@ -431,6 +435,7 @@ export function createWebApi(deps) {
         sendJson(res, 200, {
           models,
           accessTier: session?.accessTier ?? null,
+          freebucks: session?.freebucks || null,
           note: '只读探测，不创建 session',
         })
       } catch (err) {

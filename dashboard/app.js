@@ -444,7 +444,7 @@ function buildAccountsTable(accounts) {
   const tbody = el('tbody', {}, accounts.map((a, i) => buildAccountRow(a, i)))
   return el('div', { class: 'table-wrap', style: 'margin-top:12px' }, [
     el('table', {}, [
-      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发', '额度（今日）', 'Freebucks', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
+      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发', '额度（今日 · FB/h）', 'Freebucks', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
       tbody,
     ]),
   ])
@@ -492,7 +492,7 @@ function buildAccountRow(a, i) {
     el('td', {}, statusBadge),
     el('td', { class: 'mono', style: 'font-size:12px' }, sess),
     el('td', { class: 'mono' }, `${a.inFlight || 0}/${a.concurrency || 1}`),
-    el('td', {}, fmtQuota(a.quota)),
+    el('td', {}, fmtQuota(a.quota, a.freebucks)),
     el('td', {}, fmtFreebucks(a.freebucks, a.session?.model, a.lastRefund)),
     el('td', { class: 'mono' }, `${a.requests || 0} 次`),
     el('td', {}, cd ? el('span', { class: 'badge warn' }, a.cooldownCode || 'cooldown') : el('span', { class: 'muted' }, '—')),
@@ -1030,7 +1030,7 @@ async function renderModelSettings(view) {
           el('th', {}, '模型 id'),
           el('th', {}, '显示名'),
           el('th', {}, '池'),
-          el('th', {}, '额度（今日）'),
+          el('th', {}, '额度（今日 · FB/h）'),
           el('th', {}, 'agent (base2)'),
           el('th', {}, '兜底 agent (base3)'),
           el('th', {}, '来源'),
@@ -1040,12 +1040,7 @@ async function renderModelSettings(view) {
           el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.id),
           el('td', {}, m.display_name || m.displayName || '—'),
           el('td', {}, el('span', { class: 'badge', class: poolBadgeClass(m.pool) }, poolLabel(m.pool))),
-          el('td', {}, m.limit != null
-            ? el('span', {
-                title: `重置 ${fmtReset(m.resetAt, m.resetTimeZone)}\n${fmtCountdown(m.resetAt)}`,
-                class: 'badge ' + quotaBadgeClass(m),
-              }, `${fmtNum(m.recentCount)}/${m.limit}`)
-            : el('span', { class: 'muted' }, '—')),
+          el('td', {}, fmtModelPrice(m)),
           el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.agentId || m.agent_id || '—'),
           el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.fallbackAgentId || m.fallback_agent_id || '—'),
           el('td', {}, m.source === 'upstream'
@@ -1453,22 +1448,62 @@ function quotaBadgeClass(m) {
  * 1 小时、提前释放按实际占用回填，所以 recentCount 是小数（如 0.4/6 = 用了 24
  * 分钟）。这里保留小数（最多两位），不再 ceil 成整数。
  */
-function fmtQuota(quota) {
-  if (!quota || !quota.byModel || !Object.keys(quota.byModel).length) {
-    return el('span', { class: 'muted', title: '尚无额度数据：账号首次 admit（发起对话/创建 session）后上游才会返回限额；可点行内「检测」查看' }, '—')
+function fmtQuota(quota, fb) {
+  const byModel = quota?.byModel || {}
+  if (!Object.keys(byModel).length) {
+    return el('span', { class: 'muted', title: '尚无额度数据：账号首次 admit（发起对话/创建 session）后上游才会返回；可点行内「检测」查看' }, '—')
   }
+  // 计费口径（2026-09）：上游按**会话实际占用时长**结算 Freebucks，每模型单价
+  // 由 freebucks.prices 给出（N FB/小时）。所以这里显示 FB，不再显示「次数」。
+  // 诚实边界：上游只提供**账号级** daily.spent，没有按模型的消耗明细——
+  // 因此每模型能展示的是「单价」+「今日池折算的可用时长」，不编造每模型已用量。
+  const prices = fb && fb.prices ? fb.prices : null
+  const poolLeft = fb && fb.daily ? Number(fb.daily.remaining) : null
   const chips = []
-  for (const [model, q] of Object.entries(quota.byModel)) {
+  for (const [model, q] of Object.entries(byModel)) {
     if (!q) continue
-    if (!Number.isFinite(q.limit)) continue
-    const used = Math.max(0, Number(q.recentCount) || 0)
-    const left = Math.max(0, q.limit - used)
-    const cls = left <= 0 ? 'err' : left <= 2 ? 'warn' : 'ok'
+    const price = prices ? prices[model] : null
+    const hasPrice = Number.isFinite(price)
+    // 可用时长：今日池余额 ÷ 单价
+    const minutes =
+      hasPrice && price > 0 && Number.isFinite(poolLeft)
+        ? (poolLeft / price) * 60
+        : null
+    // 颜色：池子见底=红；连 1 小时都买不起=黄；其余绿
+    const cls = poolLeft != null && poolLeft <= 0
+      ? 'err'
+      : (hasPrice && Number.isFinite(poolLeft) && poolLeft < price ? 'warn' : 'ok')
+    const tip = [
+      model,
+      hasPrice
+        ? `单价 ${fmtNum(price)} FB/小时（计入今日 Freebucks 池，按实际占用时长结算）`
+        : '上游未返回该模型单价（freebucks.prices 无此模型）',
+      minutes != null
+        ? `今日池余额 ${fmtNum(poolLeft)} FB → ≈ 可用 ${fmtDuration(minutes)}`
+        : null,
+      Number.isFinite(q.limit)
+        ? `上游另有请求额度 ${fmtNum(q.recentCount)}/${q.limit}（${q.poolLabel || 'Daily'}）`
+        : null,
+      q.resetAt ? `重置 ${fmtReset(q.resetAt, q.resetTimeZone)} · ${fmtCountdown(q.resetAt)}` : null,
+    ].filter(Boolean).join('\n')
+    const label = hasPrice
+      ? (price > 0 ? `${fmtNum(price)} FB/h` : '免费')
+      : '—'
+    // 池空时不要再输出「≈0 分钟」这种噪音；直接说明池子已空更清楚。
+    const exhausted = poolLeft != null && poolLeft <= 0 && hasPrice && price > 0
     chips.push(el('span', {
       class: `badge ${cls}`,
       style: 'margin:2px 4px 2px 0',
-      title: `${model}\n已用 ${fmtNum(used)}/${q.limit}（按占用时长结算，小数 = 不足一次）· 重置 ${fmtReset(q.resetAt, q.resetTimeZone)}\n${fmtCountdown(q.resetAt)}`,
-    }, `${shortModel(model)} ${fmtNum(used)}/${q.limit}`))
+      title: tip,
+    }, [
+      el('span', { class: 'muted' }, `${shortModel(model)} `),
+      label,
+      exhausted
+        ? el('span', { class: 'muted' }, ' · 池空')
+        : (minutes != null && minutes >= 1
+            ? el('span', { class: 'muted' }, ` · ≈${fmtDuration(minutes)}`)
+            : null),
+    ]))
   }
   const reset = quota.rateLimit?.resetAt || firstReset(quota.byModel)
   const resetTz = quota.rateLimit?.resetTimeZone || firstResetTz(quota.byModel)
@@ -1478,6 +1513,30 @@ function fmtQuota(quota) {
       `重置 ${fmtReset(reset, resetTz)} · ${fmtCountdown(reset)}`,
     ]) : null,
   ])
+}
+
+/**
+ * 模型管理表的「额度」列：显示 **Freebucks 单价**（FB/小时），不再显示次数。
+ * 上游按会话实际占用时长结算，单价才是决定"这个模型多贵"的量；旧的
+ * `已用/上限` 次数口径已不再对应用户实际关心的消耗。限额仍保留在悬停提示里。
+ */
+function fmtModelPrice(m) {
+  const price = m.freebucksPerHour
+  const hasPrice = Number.isFinite(price)
+  const tip = [
+    m.id,
+    hasPrice ? `单价 ${fmtNum(price)} FB/小时（按会话实际占用时长结算）` : '上游未返回该模型单价',
+    m.limit != null ? `上游请求额度 ${fmtNum(m.recentCount)}/${m.limit}（${poolLabel(m.pool)}）` : null,
+    m.resetAt ? `重置 ${fmtReset(m.resetAt, m.resetTimeZone)} · ${fmtCountdown(m.resetAt)}` : null,
+  ].filter(Boolean).join('\n')
+  if (!hasPrice) {
+    return m.limit != null
+      ? el('span', { class: 'badge ' + quotaBadgeClass(m), title: tip }, '—')
+      : el('span', { class: 'muted', title: tip }, '—')
+  }
+  const cls = price <= 0 ? 'ok' : (price >= 50 ? 'err' : price >= 25 ? 'warn' : 'ok')
+  return el('span', { class: `badge ${cls}`, title: tip },
+    price > 0 ? `${fmtNum(price)} FB/h` : '免费')
 }
 
 function firstReset(byModel) {
