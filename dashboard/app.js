@@ -572,7 +572,7 @@ async function probeAccount(a, btn) {
     const modelCount = Object.keys(limits).length
     if (r.ok) {
       const models = Object.entries(limits)
-        .map(([id, info]) => `${shortModel(id)} ${Math.ceil(Number(info?.recentCount) || 0)}/${info?.limit ?? '?'}`)
+        .map(([id, info]) => `${shortModel(id)} ${fmtNum(info?.recentCount)}/${info?.limit ?? '?'}`)
         .join(' · ')
       toast(`✅ ${a.email} 可用 · ${modelCount} 个模型${models ? '：' + models : ''}`)
       refreshAccountsCard()
@@ -665,7 +665,7 @@ async function renderProxySettings(view) {
     el('div', { class: 'row spread' }, [
       el('div', {}, [
         el('h3', { style: 'margin:0 0 2px' }, '账号调度（粘性优先）'),
-        el('span', { class: 'muted' }, '请求集中到尽可能少的账号上：同模型热 session 优先复用 → 继续用最近用过的账号 → 从未用过的账号排最后（只有已用账号都不可用、或满员排队超时才启用）。上游把「轮换健康账号」当作账号农场特征，Freebucks 又按 session-hour 计费——换号 = 多买一条计费会话。'),
+        el('span', { class: 'muted' }, '请求集中到尽可能少的账号上：同模型热 session 优先复用 → 继续用最近用过的账号 → 从未用过的账号排最后（只有已用账号都不可用、或满员排队超时才启用）。上游把「轮换健康账号」当作账号农场特征，Freebucks 又按会话占用时长计费——换号 = 新买一条计费行，所以能复用就复用。'),
       ]),
     ]),
     el('div', { class: 'row', style: 'margin-top:12px;gap:24px;flex-wrap:wrap' }, [
@@ -690,18 +690,18 @@ async function renderProxySettings(view) {
     el('div', { class: 'muted', style: 'margin-top:8px' }, `当前：每账号 ${concurrency} 路并发；并发请求先挤同一账号，超过才溢出到下一个账号（已用过的优先）${state.me.role !== 'admin' ? '（管理员可调）' : ''}`),
   ]))
 
-  const idleReleaseSec = settings.idleReleaseSec ?? 300
+  const idleReleaseSec = settings.idleReleaseSec ?? 60
   const maxNewSessions = settings.maxNewSessionsPerRequest ?? 2
   view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
       el('div', {}, [
         el('h3', { style: 'margin:0 0 2px' }, '额度保护（Freebucks 计费）'),
-        el('span', { class: 'muted' }, '上游 2026-09 改版：每条 session 是 1 小时计费行，admit 时一次性扣费、提前结束（DELETE）按未用时长退款。会话空挂后台 = 白扣一小时额度，所以空闲要及时早退；报错时也不要挨个账号去 admit。'),
+        el('span', { class: 'muted' }, '上游 2026-09 改版：按 Freebucks 计量 —— 每个模型有单价（N/h），session 从 admit 起按时长计费、提前结束（DELETE）把未用时长退回。所以会话空挂后台 = 白扣时长，空闲要及时早退；报错时也不要挨个账号去 admit（换号 = 新买一条计费行）。'),
       ]),
     ]),
     el('div', { class: 'row', style: 'margin-top:12px;gap:24px;flex-wrap:wrap' }, [
       el('div', {}, [
-        el('label', { style: 'margin:0 0 4px' }, '空闲自动释放（秒，0 = 关闭）'),
+        el('label', { style: 'margin:0 0 4px' }, '空闲自动释放（秒，0 = 关闭；最小 5）'),
         el('div', { class: 'row' }, [
           el('input', {
             id: 'idle-release-sec',
@@ -733,7 +733,7 @@ async function renderProxySettings(view) {
       ]),
     ]),
     el('div', { class: 'muted', style: 'margin-top:8px' }, idleReleaseSec > 0
-      ? `当前：会话空闲 ${idleReleaseSec}s 后早退退款 · 一个请求最多新建 ${maxNewSessions || '不限'} 个上游会话`
+      ? `当前：会话空闲 ${idleReleaseSec}s 后早退退款（按未用时长退 Freebucks）· 一个请求最多新建 ${maxNewSessions || '不限'} 个上游会话`
       : `当前：空闲不释放（旧行为，账号会一直挂到过期）· 一个请求最多新建 ${maxNewSessions || '不限'} 个上游会话`),
   ]))
 
@@ -1036,7 +1036,7 @@ async function renderModelSettings(view) {
             ? el('span', {
                 title: `重置 ${fmtReset(m.resetAt, m.resetTimeZone)}\n${fmtCountdown(m.resetAt)}`,
                 class: 'badge ' + quotaBadgeClass(m),
-              }, `${Math.ceil(Number(m.recentCount) || 0)}/${m.limit}`)
+              }, `${fmtNum(m.recentCount)}/${m.limit}`)
             : el('span', { class: 'muted' }, '—')),
           el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.agentId || m.agent_id || '—'),
           el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.fallbackAgentId || m.fallback_agent_id || '—'),
@@ -1362,31 +1362,62 @@ function poolLabel(pool) {
 }
 
 /**
- * Freebucks 计量展示（上游 2026-09 改版）：余额 / 每日池 + 当前模型单价。
- * session 按小时计费、admit 扣费、提前 DELETE 退款，所以「余额」比「今日已用
- * 几次会话」更能说明这个号还能用多久。
+ * Freebucks 计量展示（上游 2026-09 改版）。
+ *
+ * **口径 = 时长**：上游按「模型单价（Freebucks/小时）× 会话实际占用时长」结算，
+ * admit 时按整小时预占、提前 DELETE 按未用时长退款。所以这里不再说"今天用了几次
+ * 会话"，而是直接回答「这个号还能用多久」：
+ *   余额 N FB · 单价 N/h · ≈可用 M 分钟 · 今日 剩余/上限
+ * 金额单位是 Freebucks，时长单位是分钟（<1 分钟显示秒）。
  */
 function fmtFreebucks(fb, currentModel, lastRefund) {
   if (!fb) return el('span', { class: 'muted' }, '—')
   const price = currentModel && fb.prices ? fb.prices[currentModel] : null
   const reset = fb.daily?.resetAt ? new Date(fb.daily.resetAt) : null
+  /** 余额（或今日池余额）按单价折算的可用时长。 */
+  const minutes = (amount) =>
+    price != null && price > 0 ? (Number(amount) / price) * 60 : null
+  const balanceMin = minutes(fb.balance)
+  const dailyMin = fb.daily ? minutes(fb.daily.remaining) : null
   const tip = [
     `余额 ${fmtNum(fb.balance)} Freebucks`,
-    fb.daily ? `每日池 ${fmtNum(fb.daily.remaining)}/${fmtNum(fb.daily.limit)}（重置 ${reset ? reset.toLocaleString() : '太平洋午夜'}）` : null,
+    balanceMin != null ? `≈ 可用 ${fmtDuration(balanceMin)}（${currentModel} 单价 ${fmtNum(price)}/h）` : null,
+    fb.daily
+      ? `每日池 剩余 ${fmtNum(fb.daily.remaining)}/${fmtNum(fb.daily.limit)} Freebucks` +
+        (dailyMin != null ? ` ≈ ${fmtDuration(dailyMin)}` : '') +
+        `（重置 ${reset ? reset.toLocaleString() : '太平洋午夜'}）`
+      : null,
+    `计费方式：按实际占用时长结算（admit 预占整小时，提前 DELETE 退未用时长）`,
     fb.wallet && fb.wallet.balance ? `钱包 ${fmtNum(fb.wallet.balance)}` : null,
     fb.quotaExempt ? '服务端配额豁免' : null,
-    price != null ? `当前模型 ${currentModel} 单价 ${fmtNum(price)}/小时` : null,
-    lastRefund && lastRefund.refund != null ? `上次早退退款 ${fmtNum(lastRefund.refund)}` : null,
+    lastRefund && lastRefund.refund != null
+      ? `上次早退退款 ${fmtNum(lastRefund.refund)} Freebucks`
+      : null,
   ].filter(Boolean).join('\n')
   const low = price != null && !fb.quotaExempt && Number(fb.balance) < price
   return el('div', { class: 'mono', style: 'font-size:12px', title: tip }, [
     el('span', { class: low ? 'badge err' : 'badge ok' }, `${fmtNum(fb.balance)} FB`),
     price != null ? el('span', { class: 'muted' }, ` · ${fmtNum(price)}/h`) : null,
+    balanceMin != null
+      ? el('span', { class: 'muted' }, ` · ≈${fmtDuration(balanceMin)}`)
+      : null,
     fb.daily
       ? el('div', { class: 'muted', style: 'font-size:11px' },
-          `今日 ${fmtNum(fb.daily.remaining)}/${fmtNum(fb.daily.limit)}`)
+          `今日剩余 ${fmtNum(fb.daily.remaining)}/${fmtNum(fb.daily.limit)} FB` +
+          (dailyMin != null ? `（≈${fmtDuration(dailyMin)}）` : ''))
       : null,
   ])
+}
+
+/** 把分钟数渲染成人读时长：<1 分钟给秒，否则给「X 分」「X 小时 Y 分」。 */
+function fmtDuration(minutes) {
+  const m = Number(minutes)
+  if (!Number.isFinite(m) || m <= 0) return '0 分钟'
+  if (m < 1) return `${Math.max(1, Math.round(m * 60))} 秒`
+  if (m < 60) return `${Math.round(m)} 分钟`
+  const h = Math.floor(m / 60)
+  const rest = Math.round(m - h * 60)
+  return rest ? `${h} 小时 ${rest} 分` : `${h} 小时`
 }
 
 function fmtNum(n) {
@@ -1395,16 +1426,25 @@ function fmtNum(n) {
   return String(Math.round(v * 100) / 100)
 }
 
-/** 额度徽章颜色：用尽=红，余量≤2=黄，其余=绿 */
+/**
+ * 额度徽章颜色：用尽=红，余量≤2=黄，其余=绿。
+ * 注意 recentCount 在按时长结算时是**小数**（admit 预占、提前释放按实际占用
+ * 结算），所以这里保留小数、不用 ceil 抹平——否则 0.1 次会被显示成"已用 1 次"。
+ */
 function quotaBadgeClass(m) {
-  const used = Math.ceil(Number(m.recentCount) || 0)
+  const used = Math.max(0, Number(m.recentCount) || 0)
   const limit = Number(m.limit)
   if (!Number.isFinite(limit) || limit <= 0) return ''
   const left = limit - used
   return left <= 0 ? 'err' : left <= 2 ? 'warn' : 'ok'
 }
 
-/** 每个模型的每日免费 session 额度：已用/上限，以及重置时间 */
+/**
+ * 每个模型的每日额度：已用/上限 + 重置时间。
+ * **口径是「占用的时长」不是「几次」**：上游按 session 时长结算，admit 先预占
+ * 1 小时、提前释放按实际占用回填，所以 recentCount 是小数（如 0.4/6 = 用了 24
+ * 分钟）。这里保留小数（最多两位），不再 ceil 成整数。
+ */
 function fmtQuota(quota) {
   if (!quota || !quota.byModel || !Object.keys(quota.byModel).length) {
     return el('span', { class: 'muted', title: '尚无额度数据：账号首次 admit（发起对话/创建 session）后上游才会返回限额；可点行内「检测」查看' }, '—')
@@ -1413,14 +1453,14 @@ function fmtQuota(quota) {
   for (const [model, q] of Object.entries(quota.byModel)) {
     if (!q) continue
     if (!Number.isFinite(q.limit)) continue
-    const used = Math.ceil(Number(q.recentCount) || 0)
+    const used = Math.max(0, Number(q.recentCount) || 0)
     const left = Math.max(0, q.limit - used)
     const cls = left <= 0 ? 'err' : left <= 2 ? 'warn' : 'ok'
     chips.push(el('span', {
       class: `badge ${cls}`,
       style: 'margin:2px 4px 2px 0',
-      title: `${model}\n已用 ${used}/${q.limit} 次/日 · 重置 ${fmtReset(q.resetAt, q.resetTimeZone)}\n${fmtCountdown(q.resetAt)}`,
-    }, `${shortModel(model)} ${used}/${q.limit}`))
+      title: `${model}\n已用 ${fmtNum(used)}/${q.limit}（按占用时长结算，小数 = 不足一次）· 重置 ${fmtReset(q.resetAt, q.resetTimeZone)}\n${fmtCountdown(q.resetAt)}`,
+    }, `${shortModel(model)} ${fmtNum(used)}/${q.limit}`))
   }
   const reset = quota.rateLimit?.resetAt || firstReset(quota.byModel)
   const resetTz = quota.rateLimit?.resetTimeZone || firstResetTz(quota.byModel)

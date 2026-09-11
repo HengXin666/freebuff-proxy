@@ -6,6 +6,7 @@ import net from 'node:net'
 import http from 'node:http'
 import { loadConfig } from '../src/config.js'
 import { AccountRuntimes } from '../src/app-context.js'
+import { SessionHandleStore } from '../src/session-handles.js'
 import { startServer } from '../src/server.js'
 import { configureLogger } from '../src/util/log.js'
 import {
@@ -61,6 +62,8 @@ let mockFreebucks = null
 let mockRefund = 1.5
 /** DELETE 收到过的 x-freebuff-instance-id（回归：不带会被上游 400）。 */
 let deleteInstanceIds = []
+/** 还需要失败几次 DELETE（验证"失败不丢句柄"）。0 = 全部成功。 */
+let deleteFailuresLeft = 0
 /** 模拟上游 DELETE 缺 instance id 时返回 400 instance_required。 */
 let requireDeleteInstance = true
 /** hold_once 模式：被挂起的流式响应控制器（等 releaseHoldStreams 放行） */
@@ -155,6 +158,10 @@ globalThis.fetch = async (url, init = {}) => {
   }
   if (u.includes('/api/v1/freebuff/session') && method === 'DELETE') {
     sessionDeletes++
+    if (deleteFailuresLeft > 0) {
+      deleteFailuresLeft--
+      return jsonRes({ error: 'internal_error' }, 500)
+    }
     const instanceId =
       headers['x-freebuff-instance-id'] ||
       headers['X-Freebuff-Instance-Id'] ||
@@ -1902,7 +1909,8 @@ for (const model of verifiedSpecialModels) {
       headers: { cookie },
     })
     const def = await getDefault.json()
-    assert.equal(def.idleReleaseSec, 300, '未保存过时应回落 config.yaml 默认值')
+    // 2026-09：默认从 300s 下调到 60s（上游按占用时长结算，空挂即扣时长）
+    assert.equal(def.idleReleaseSec, 60, '未保存过时应回落 config.yaml 默认值')
     assert.equal(def.maxNewSessionsPerRequest, 2)
 
     for (const bad of [-1, 'x', null, 999999]) {
@@ -1913,6 +1921,15 @@ for (const model of verifiedSpecialModels) {
       })
       assert.equal(res.status, 400, `idleReleaseSec=${bad} should be rejected`)
     }
+
+    // 下限放宽到 5s：1..4 吸附到 5s（避免把每个回合切成一条新会话）
+    const tiny = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ idleReleaseSec: 1 }),
+    })
+    assert.equal(tiny.status, 200)
+    assert.equal((await tiny.json()).idleReleaseSec, 5, '1s 应被夹到最小生效值 5s')
 
     const save = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
       method: 'POST',
@@ -3857,9 +3874,9 @@ server.close()
 
 // ── Freebucks 计量改版（issue #7）：空闲早退退款 / 余额拦截 / 新会话预算 ──
 //
-// 上游 2026-09 起：session = 1 小时计费行，admit 时一次性扣 Freebucks，
-// 提前 DELETE 按未用时长退款。旧代理把 session 留到过期、报错时把每个账号
-// 都 admit 一遍，几个账号一起在后台白扣一小时额度——下面三条回归正是针对它。
+// 上游 2026-09 起：session 从 admit 起按「单价(N/h) × 占用时长」计费，
+// admit 预占整小时、提前 DELETE 按未用时长退款。旧代理把 session 留到过期、
+// 报错时把每个账号都 admit 一遍，几个账号一起在后台白扣时长——下面回归针对它。
 {
   const fbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-fb-'))
   saveAccountUser(fbDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
@@ -3996,12 +4013,12 @@ server.close()
     assert.equal(
       sessionPosts,
       postsBefore,
-      '余额不足不得再 admit 新会话（白扣一小时）',
+      '余额不足不得再 admit 新会话（白扣占用时长）',
     )
   }
 
   // (3) 单请求新会话预算：chat 一直 500（账号级故障 → 换号），3 个账号最多
-  //     新建 2 个计费会话，不会把每个账号都买一条 1 小时计费行。
+  //     新建 2 个计费会话，不会把每个账号都买一条计费会话。
   mockFreebucks = null
   // 清掉 (2) 里缓存的"余额 0.5"（否则这一步会被余额拦截，测不到预算）
   for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
@@ -4068,6 +4085,101 @@ server.close()
       '排队请求应复用同一账号的会话，不得换号',
     )
     assert.equal(sessionPosts, 1, '排队请求应复用同一会话，不得新建')
+  }
+
+
+  // (5) DELETE 失败**不得丢弃 instanceId**（issue：取消失败 = 会话再也删不掉、
+  //     白扣满一小时）。失败后句柄保留并退避重试，第二次成功才清空会话。
+  sessionPosts = 0
+  sessionDeletes = 0
+  deleteFailuresLeft = 1
+  mockMode = 'ok'
+  {
+    const key = 'a'
+    const sm = fbRuntimes.get(key).sessions
+    await sm.ensureSession('deepseek/deepseek-v4-flash')
+    assert.ok(sm.getSnapshot().instanceId, 'admit 后应有 instanceId')
+    const ok = await sm.release()
+    assert.equal(ok, false, '首次 DELETE 失败应返回 false（不谎报成功）')
+    assert.equal(sm.getSnapshot().instanceId, sm.session.instanceId, '句柄必须保留')
+    assert.equal(sm._releasePending, true, '应标记待重试')
+    // 退避重试（第一次 delay=0，立即重试）后应成功并清空
+    await waitFor('释放失败后自动重试成功', () => sm.getSnapshot().status === 'none', 3_000)
+    assert.equal(sm._releasePending, false, '成功后清除待重试标记')
+    assert.equal(sm.getSnapshot().status, 'none', '成功后句柄应清空')
+  }
+
+  // (6) 严格释放（「断开全部连接」/「重启服务」用）：等到真的删掉才返回 ok。
+  sessionPosts = 0
+  sessionDeletes = 0
+  deleteFailuresLeft = 0
+  {
+    const r = await fbRuntimes.releaseAllStrict()
+    assert.equal(r.ok, true, `严格释放应全部成功：${JSON.stringify(r.failed)}`)
+    assert.ok(r.released >= 1, '至少释放一条会话')
+  }
+  {
+    // 上游一直删不掉 → 如实返回失败明细，绝不谎报"已全部断开"
+    const sm = fbRuntimes.get('a').sessions
+    await sm.ensureSession('deepseek/deepseek-v4-flash')
+    deleteFailuresLeft = 99
+    const r = await fbRuntimes.releaseAllStrict()
+    assert.equal(r.ok, false, '删不掉时必须 ok=false')
+    assert.ok(r.failed.length >= 1, '必须带上失败明细')
+    assert.ok(r.failed[0].instanceId, '失败明细要带 instanceId（供排查/扫尾）')
+    assert.ok(sm.getSnapshot().instanceId, '失败后句柄仍保留')
+    deleteFailuresLeft = 0
+    await sm.release()
+  }
+
+  // (7) 会话句柄落盘 sessions.json（重启/换容器后仍能寻址 DELETE 退款）：
+  //     admit 写入、释放清空、遗留句柄进 orphans 由启动扫尾清理。
+  {
+    const idx = path.join(path.dirname(fbDir), 'sessions.json')
+    const storeFile = fbRuntimes.handleStore.file
+    assert.ok(
+      storeFile.startsWith(path.dirname(fbDir)),
+      `句柄索引应与凭据目录同级，got ${storeFile}`,
+    )
+    sessionPosts = 0
+    sessionDeletes = 0
+    deleteFailuresLeft = 0
+    const sm = fbRuntimes.get('b').sessions
+    await sm.ensureSession('deepseek/deepseek-v4-flash')
+    const onDisk = JSON.parse(fs.readFileSync(storeFile, 'utf8'))
+    assert.ok(
+      onDisk.sessions.some((s) => s.key === 'b' && s.instanceId),
+      'admit 后句柄应落盘',
+    )
+    // 模拟"进程被杀"：内存句柄丢弃，文件里仍有记录 → 下次启动扫尾应删掉它
+    const store = new SessionHandleStore(storeFile)
+    assert.ok(store.listOrphans().length >= 1, '上次运行遗留的句柄应视为待清理')
+    // 账号已删除 / 凭据解析不到时：不得谎报清理成功，句柄要保留在文件里
+    const skipped = await store.cleanupOrphans(() => null)
+    assert.equal(skipped.cleaned, 0, '解析不到账号时不得谎报已清理')
+    assert.ok(skipped.skipped >= 1, '解析不到的句柄应计入 skipped 并保留')
+    assert.ok(store.listOrphans().length >= 1, '跳过的句柄必须保留')
+    // 用真实 upstream 解析器再跑一次：应清掉所有遗留句柄
+    await store.cleanupOrphans((key) => fbRuntimes.byKey.get(key)?.upstream)
+    assert.equal(store.listOrphans().length, 0, '启动扫尾后不应残留待清理句柄')
+    sm.getSnapshot()
+    if (sm.hasLiveSlot()) await sm.release()
+  }
+
+  // (8) 最终失败也必须早退释放会话（不再等空闲释放 / 挂到过期白扣时长）
+  mockFreebucks = null
+  for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
+  mockMode = 'err_500_all'
+  sessionPosts = 0
+  sessionDeletes = 0
+  completionAttempts = 0
+  {
+    const res = await fbChat({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'final-fail' }],
+    })
+    assert.equal(res.status, 429, await res.clone().text())
+    await waitFor('最终失败后会话被早退释放', () => sessionDeletes >= 1, 3_000)
   }
 
   mockMode = 'ok'

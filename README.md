@@ -171,11 +171,12 @@ data/
 - **chat/completions 阶段上游报错自动换号**：429 限流（如 `free_mode_rate_limited`）、5xx、
   403 账号级封禁都会按上游 `Retry-After` 冷却当前账号并**换号重试**（最多试到账号数，封顶 5 次），
   而不是把错误直接甩给下游；4xx 客户端错误（400/401/404/422）不换号。
-- **换号不再"每个账号都买一条计费会话"**（2026-09 Freebucks 改版）：上游按 session-hour 计费，
-  因此单个下游请求最多新建 `limits.max_new_sessions_per_request`（默认 2）条会话——复用热
-  session 和被上游拒绝的 admit 都不占预算；换号前失败账号的会话会立即早退 DELETE 拿退款，
-  网络类瞬时故障先在同一账号上重试一次（复用热 session，不新建）。详见下方
-  「额度保护（Freebucks 计费，控制台可调）」。
+- **换号不再"每个账号都买一条计费会话"**（2026-09 Freebucks 改版）：上游按模型单价（N/h）
+  × **会话实际占用时长**结算（admit 预占整小时、提前 DELETE 退未用时长），因此单个下游
+  请求最多新建 `limits.max_new_sessions_per_request`（默认 2）条会话——复用热 session 和
+  被上游拒绝的 admit 都不占预算；换号前失败账号的会话会立即早退 DELETE 拿退款，网络类瞬时
+  故障先在同一账号上重试一次（复用热 session，不新建）。**请求彻底失败时也会早退释放**，
+  不让会话空挂计时。详见下方「额度保护（Freebucks 计费，控制台可调）」。
 - 冷却信息（状态、剩余时间、原因）在控制台「总览」实时可见，可手动「解除冷却」。
 
 ### 热 session 优先调度
@@ -189,7 +190,7 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
   上游把"轮换健康账号"直接当账号农场特征（参考项目 ADR-0012: *cycling healthy keys looks
   like account farming*），而 Freebucks 又是 admit 一次扣一次——所以代理**绝不主动把并发
   平摊到多个账号**：宁可把请求集中在一个账号上，用尽（限流/额度耗尽/冷却）才换下一个；
-- **最少新建 session**：创建 session 就是一条 1 小时计费行，因此同模型活跃 session 始终优先复用；
+- **最少新建 session**：创建 session 就从 admit 起按时长计费，因此同模型活跃 session 始终优先复用；
   `conversation_id` / `thread_id` / `user` / `client_id` 不参与选号；
 - **每账号并发上限是"溢出"阈值**：默认 **2**（可在控制台「账号调度」调整 1..16）。单账号在途流数
   达到上限后，新请求先在该账号上**有界排队**（热会话等 `stream_idle_timeout_sec + 15s`、
@@ -200,7 +201,7 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
   提前量按计费方式分层：
   - **免费模型**：`session.free_model_re_admit_lead_sec`（默认 60s = **1 分钟**）——
     会话剩余不足 1 分钟即**不再调度到该会话**，提前 re-admit 换新会话（2026-09 Freebucks
-    计费下每次 admit 都是一条 1 小时计费行，提前 re-admit = 多买一条，所以只留最小余量）；
+    按占用时长结算，提前 re-admit 只是把剩余时长换成新计费行，所以只留最小切换余量）；
   - **付费模型**：`session.re_admit_lead_sec`（默认 60s）——付费会话每次 admit 都计费，
     尽量用到接近过期再切换。
   **切换是平滑的**：旧会话若正被在途 SSE 流使用，会先等在途流结束后才释放重建，
@@ -225,10 +226,11 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
 
 上游 2026-09 起把免费额度改成 **Freebucks** 计量，两种计费方式并存：
 
-- **Freebucks 计量模型**（上游 `freebucks.prices` 里有价格的模型）：每条 session 是
-  **按小时计价的 1 小时计费行**，admit 时一次性扣掉该模型的单价，**提前 DELETE 按未用
-  时长退款**（响应里的 `freebucksRefund`）；每日池在**太平洋午夜**重置。
-  `freebucks.balance`（可花费余额）/ `daily.remaining`（今日池剩余）决定"还能买几条"。
+- **Freebucks 计量模型**（上游 `freebucks.prices` 里有价格的模型）：每个模型有单价
+  （N Freebucks/小时），session 从 admit 起**按实际占用时长结算**——admit 时按整小时
+  预占该模型单价，**提前 DELETE 按未用时长退回**（响应里的 `freebucksRefund`）；每日池在
+  **太平洋午夜**重置。`freebucks.balance`（可花费余额）/ `daily.remaining`（今日池剩余）
+  除以单价就是"还能用多久"（控制台直接折算成分钟）。
 - **未计量模型**（`prices` 里没有该模型）：仍按 **模型 × 每日** 限次
   （上游 `rateLimitsByModel`，如 `limit: 6 / recentCount: 已用 / resetAt: 重置时间`）。
 
@@ -238,8 +240,9 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
 
 - 控制台「总览」每个账号有两列额度：
   **额度（今日）** = 未计量模型的 `已用/上限` 与重置时间（`已用满` 红色、`≤2` 黄色、
-  正常绿色）；**Freebucks** = 余额 / 当前模型单价（`N/h`）/ 今日池 `剩余/上限`，
-  悬停可看钱包余额与最近一次早退退款金额。
+  正常绿色，且 `recentCount` 按时长结算**是小数**，控制台保留两位不四舍五入）；
+  **Freebucks** = 余额 `N FB` / 当前模型单价 `N/h` / **折算可用时长**（如 ≈`30 分钟`）
+  / 今日池 `剩余/上限`，悬停可看钱包余额、计费方式与最近一次早退退款金额。
 - 两个来源都在 **admit 时自动抓取**（上游仅在 session 响应里返回）；活跃 session 每 30s
   轮询刷新，session 结束后保留最后一次缓存值直到下次 admit。
 - 想主动刷新余额：账号行的「检测」按钮或 `POST /api/accounts/probe` 做**只读探测**
@@ -259,16 +262,16 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
  "quotaExempt":false}
 ```
 
-"账号空挂后台" = 白扣一整小时额度（issue #7），所以代理做了四件事：
+"账号空挂后台" = 白扣占用时长（issue #7），所以代理做了五件事：
 
-- **空闲自动释放（默认 300s）**：会话在途请求归零后开始计时，空闲超过该时长立即早退
-  `DELETE`——必须带 `x-freebuff-instance-id`，否则上游 400 `instance_required`，
+- **空闲自动释放（默认 60s，可调 5s..24h）**：会话在途请求归零后开始计时，空闲超过该时长
+  立即早退 `DELETE`——必须带 `x-freebuff-instance-id`，否则上游 400 `instance_required`，
   会话既删不掉也拿不到退款。交互式对话的停顿能复用同一会话，长时间没人用就立刻退款。
   `0` = 关闭（旧行为：留到过期，整小时照扣）。后台轮询不会顺延这个计时。
 - **单请求新会话预算（默认 2）**：一个下游请求最多新建 2 条计费会话（首个账号 + 一次
   换号兜底）；复用热 session 不消耗预算，被上游拒绝的 admit（`rate_limited` 等）也不消耗
   （只有真的新建了会话才扣）。旧行为在报错时把"账号数 +1"个账号挨个 admit 一遍，
-  几个账号一起在后台白扣一小时。
+  几个账号一起在后台白扣时长。
 - **余额买不起就不 admit**：`balance < prices[模型]` 且非 `quotaExempt` 的账号直接跳过
   选号（上游反正会 429 `freebucksShortfall`）；每日池 `resetAt` 已过则视为本地数字过期，
   放行一次真实 admit 用上游最新余额重新校准。
@@ -501,10 +504,11 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 | 并发上限 | `limits.max_concurrent_requests` |
 | 每账号并发（SSE 流数，溢出阈值） | `limits.account_max_concurrency`（默认 2，控制台「账号调度」实时调整） |
 | 上游请求抖动（打散机器式节奏） | `limits.request_jitter_ms`（默认 200ms，0 = 关闭） |
-| 空闲自动释放（早退退款，Freebucks） | 控制台「额度保护」→ `/data/settings.json`（`session.idle_release_sec` 默认 300s，0 = 关闭） |
+| 空闲自动释放（早退退款，Freebucks） | 控制台「额度保护」→ `/data/settings.json`（`session.idle_release_sec` 默认 60s，可调 5s..24h，0 = 关闭） |
 | 单请求新会话预算（Freebucks 计费单位） | 控制台「额度保护」（`limits.max_new_sessions_per_request` 默认 2，0 = 不限） |
+| 会话句柄落盘（重启/换容器后可退款） | `/data/sessions.json`（自动维护，无需手工编辑） |
 | 会话过期提前切换（付费模型） | `session.re_admit_lead_sec`（默认 60s） |
-| 会话过期提前切换（免费模型，不足 5 分钟不调度） | `session.free_model_re_admit_lead_sec`（默认 300s） |
+| 会话过期提前切换（免费模型，不足该时长不调度） | `session.free_model_re_admit_lead_sec`（默认 60s） |
 | 上游流 idle 超时（幽灵连接治理） | `limits.stream_idle_timeout_sec`（默认 60s，最小 30s） |
 | 流掐断后账号短暂冷却 | `limits.stall_cooldown_sec`（默认 30s，0=关闭） |
 | 账号级串行化排队上限 | `limits.account_chat_wait_ms`（默认 120000ms） |
@@ -516,9 +520,11 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 
 ## 限制（官方免费层现实）
 
-- 2026-09 起免费层改为 **Freebucks** 计量：每条 session 是按小时计价的 1 小时计费行，
-  admit 扣费、提前 DELETE 退款，每日池太平洋午夜重置（每账号每天约 25 Freebucks，
-  具体以上游 `freebucks` 返回为准）。代理的空闲释放 / 新会话预算就是为了让这份额度用得更久。
+- 2026-09 起免费层改为 **Freebucks** 计量：每个模型有单价（N Freebucks/小时），
+  session 按**实际占用时长**结算——admit 预占整小时、提前 DELETE 退未用时长，
+  每日池太平洋午夜重置（每账号每天约 25 Freebucks ≈ Flash 的 1 小时，
+  具体以上游 `freebucks` 返回为准）。代理的空闲释放 / 新会话预算 / 失败即释放
+  就是为了让这份额度用得更久。
 - Luna 等 premium：大约每天 6×1 小时 session（共享 premium 池）。
 - Flash：CLI full 访问下次数较松，仍有 spend / IP / 容量限制。
 - 同账号由另一个客户端重新 admit 可能触发 `superseded`；同一 `instanceId` 内的并发 chat 流可正常共用。多账号多 IP 场景在「代理设置」配多个代理即可，系统按账号稳定分配出口（见代理支持）。

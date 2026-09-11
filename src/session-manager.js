@@ -11,10 +11,26 @@ export class SessionManager {
    * @param {object} opts
    * @param {ReturnType<import('./upstream/client.js').createUpstreamClient>} opts.upstream
    * @param {import('./config.js').ProxyConfig} opts.config
+   * @param {string} [opts.accountKey] 账号标识（sessions.json 持久化的 owner key）
+   * @param {(entry: {key: string, instanceId: string, model: string, admittedAt?: string | null, expiresAt?: string|null}) => void} [opts.onSessionChange]
+   *   会话句柄变化通知（admit/释放）——由上层落盘到 /data/sessions.json，
+   *   保证进程退出/换容器后仍能寻址并 DELETE 掉活着的会话。
    */
-  constructor({ upstream, config, getSessionSettings, hasPendingUser }) {
+  constructor({
+    upstream,
+    config,
+    getSessionSettings,
+    hasPendingUser,
+    accountKey = null,
+    onSessionChange = null,
+  }) {
     this.upstream = upstream
     this.config = config
+    /** 账号标识（sessions.json 里的 owner key）。 */
+    this.accountKey = accountKey
+    /** 句柄变更回调（落盘 /data/sessions.json）。 */
+    this._onSessionChange =
+      typeof onSessionChange === 'function' ? onSessionChange : null
     /**
      * 「有人正排队要用这个账号」的判定（账号级 chat 锁在途/排队）。
      * 空闲释放要跳过这种情况：选号阶段就 admit、随后在等 chat 锁的请求还没
@@ -87,6 +103,16 @@ export class SessionManager {
      * 不消耗额度，只有真正扣了 Freebucks 的会话才算。
      */
     this.admitCount = 0
+    /**
+     * 释放失败待重试：DELETE 失败时**绝不能丢弃 instanceId**——丢了这条会话
+     * 就永远删不掉（连退款也拿不到），只能让上游白扣满一小时。
+     * true = session 里仍留着 instanceId，等待下一次释放机会重试。
+     */
+    this._releasePending = false
+    /** 释放重试定时器。 */
+    this._releaseRetryTimer = null
+    /** 已连续重试次数（成功后清零）。 */
+    this._releaseRetries = 0
   }
 
   /** 请求开始（在途计数 +1，轮询跳过，取消空闲释放计时）。 */
@@ -119,10 +145,10 @@ export class SessionManager {
   /**
    * 空闲自动释放：在途归零后空闲超过 session.idleReleaseSec 就早退 DELETE。
    *
-   * 上游 2026-09 起按 Freebucks 计费——session 是「1 小时计费行，admit 时
-   * 一次性扣费，提前结束（DELETE）退款」。旧行为把 session 一直留到过期，
-   * 哪怕只发了一条请求也照扣一小时（多账号时几个账号一起在后台白扣）。
-   * 这里在空闲后主动早退拿退款，是「多账号用更久」的核心。
+   * 上游 2026-09 起按 Freebucks 计费——session 从 admit 起按「模型单价(N/h) ×
+   * 实际占用时长」结算，admit 预占整小时、提前结束（DELETE）退还未用时长。
+   * 旧行为把 session 一直留到过期，哪怕只发了一条请求也照扣整段时长（多账号时
+   * 几个账号一起在后台白扣）。这里在空闲后主动早退拿退款，是「额度用更久」的核心。
    */
   _armIdleRelease() {
     const ms = this.idleReleaseMs()
@@ -300,7 +326,7 @@ export class SessionManager {
    * 按模型计费方式分层：
    * - 免费模型（daily/referral/limited_offer/helper）：剩余不足
    *   `session.free_model_re_admit_lead_sec`（默认 300s = 5 分钟）即不再调度——
-   *   免费会话按次结算，过期中途被掐断会白占额度且响应截断，提前换最平滑；
+   *   免费会话按占用时长结算，过期中途被掐断会白占额度且响应截断，提前换最平滑；
    * - 付费模型（premium）：每次 admit 都是计费会话，尽量用到接近过期
    *   （沿用 `session.re_admit_lead_sec`，默认 60s），避免频繁新建付费会话。
    * @param {string} model
@@ -516,6 +542,25 @@ export class SessionManager {
       this.session = { status: 'none' }
       return
     }
+    const prev = this.session
+    // 旧的 handle 还没删掉（DELETE 一直失败）而现在要换成新会话：不能就这么
+    // 覆盖丢掉 instanceId——把它作为「待清理」交给上层落盘持久化，之后仍会
+    // 继续尝试 DELETE（否则它就成了无法寻址的孤儿，白扣整段占用时长）。
+    if (
+      this._releasePending &&
+      this.hasLiveSlot(prev) &&
+      prev.instanceId !== body.instanceId
+    ) {
+      this._emitSessionEvent({
+        type: 'orphan',
+        key: this.accountKey,
+        instanceId: prev.instanceId,
+        model: prev.model ?? null,
+        admittedAt: prev.admittedAt ?? null,
+        expiresAt: prev.expiresAt ?? null,
+      })
+      this._releasePending = false
+    }
     this.session = {
       status: body.status,
       instanceId: body.instanceId,
@@ -533,6 +578,8 @@ export class SessionManager {
     // admit 可能发生在没有任何在途请求时（选号阶段就 admit、随后才拿 chat
     // 锁）：这里兜底起空闲计时，否则会话会一直挂到过期。
     if (this._inFlight === 0) this._armIdleRelease()
+    // 句柄落盘：进程退出/换容器后仍能凭 instanceId 去 DELETE 退款。
+    this._notifySessionChange()
   }
 
   async refresh() {
@@ -576,6 +623,7 @@ export class SessionManager {
     }
   }
 
+  /** 释放会话（早退 DELETE → 退款）。返回 true = 上游已确认结束。 */
   async release() {
     return this.withLock(() => this._releaseUnlocked())
   }
@@ -589,16 +637,31 @@ export class SessionManager {
     return this.withLock(() => this._releaseUnlocked())
   }
 
-  async _releaseUnlocked() {
+  /**
+   * 释放会话（早退 DELETE 拿 Freebucks 退款）。
+   *
+   * **失败时绝不丢弃 instanceId**：这条会话已经在上游计费，删不掉就等于让它
+   * 白扣满一小时，而且句柄没了就永远无法再删。所以失败时保留 session（连同
+   * instanceId）并置 _releasePending，由 _scheduleReleaseRetry 退避重试；即使
+   * 重试耗尽也把句柄留在 sessions.json 里，交给下一次释放机会 / 下次进程启动
+   * 的扫尾继续删。
+   *
+   * @returns {Promise<boolean>} true = 上游已确认结束（或本来就无会话）
+   */
+  async _releaseUnlocked({ retry = true } = {}) {
     this._clearPoll()
     this._clearIdleRelease()
     if (!this.hasLiveSlot()) {
       this.session = { status: 'none' }
-      return
+      this._releasePending = false
+      this._notifySessionChange()
+      return true
     }
     const instanceId = this.session?.instanceId
     const model = this.session?.model
     this._releasing = true
+    /** @type {boolean} */
+    let released = false
     try {
       // 必须带 instance id：上游 DELETE 没有 x-freebuff-instance-id 会 400
       // instance_required，会话既删不掉也拿不到退款（issue #7 的元凶之一）。
@@ -647,16 +710,102 @@ export class SessionManager {
         refund,
         balance: this.freebucks?.balance ?? null,
       })
+      released = true
     } catch (err) {
-      logger.warn('session DELETE failed', {
+      // 关键：**保留 handle**（不动 this.session）。丢弃 instanceId 会让这条
+      // 已在上游计费的会话既删不掉也退不了款，只能白扣满一小时。
+      this._releasePending = true
+      logger.warn('session DELETE failed; keeping handle for retry', {
         instanceId,
+        model,
         error: err instanceof Error ? err.message : String(err),
         code: err?.code,
+        attempt: this._releaseRetries,
       })
+      if (retry) this._scheduleReleaseRetry()
+      return false
     } finally {
       this._releasing = false
     }
-    this.session = { status: 'none' }
+    if (released) {
+      this.session = { status: 'none' }
+      this._releasePending = false
+      this._releaseRetries = 0
+      this._clearReleaseRetry()
+      this._notifySessionChange()
+    }
+    return released
+  }
+
+  /**
+   * 释放失败后的退避重试：0s → 5s → 15s → 60s（最多 4 次）。
+   * 重试仍失败也**不丢句柄**——session 原样留着，等下一次释放机会（空闲计时 /
+   * 换号 / 「断开全部连接」/ 重启前严格释放）或下次进程启动的扫尾继续删。
+   */
+  _scheduleReleaseRetry() {
+    if (this._releaseRetryTimer) return
+    const delays = [0, 5_000, 15_000, 60_000]
+    if (this._releaseRetries >= delays.length) return
+    const delay = delays[this._releaseRetries]
+    this._releaseRetries += 1
+    this._releaseRetryTimer = setTimeout(() => {
+      this._releaseRetryTimer = null
+      if (!this.hasLiveSlot()) {
+        this._clearReleaseRetry()
+        return
+      }
+      this.release().catch((err) => {
+        logger.warn('session release retry failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+    }, delay)
+    if (this._releaseRetryTimer.unref) this._releaseRetryTimer.unref()
+  }
+
+  _clearReleaseRetry() {
+    if (this._releaseRetryTimer) {
+      clearTimeout(this._releaseRetryTimer)
+      this._releaseRetryTimer = null
+    }
+  }
+
+  /**
+   * 通知上层把会话句柄落盘（/data/sessions.json）。进程退出/换容器后仍能
+   * 凭 instanceId 去 DELETE 退款，而不是留下无法寻址的孤儿会话。
+   */
+  _notifySessionChange() {
+    const s = this.session
+    if (!this.hasLiveSlot(s)) {
+      this._emitSessionEvent({ type: 'clear', key: this.accountKey })
+      return
+    }
+    this._emitSessionEvent({
+      type: 'track',
+      key: this.accountKey,
+      instanceId: s.instanceId,
+      model: s.model,
+      admittedAt: s.admittedAt ?? null,
+      expiresAt: s.expiresAt ?? null,
+    })
+  }
+
+  /** 上报会话事件（track / orphan）——上层据此维护会话句柄索引。 */
+  _emitSessionEvent(entry) {
+    if (this._onSessionChange) {
+      try {
+        this._onSessionChange(entry)
+      } catch (err) {
+        logger.warn('session event callback failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+  }
+
+  /** 带 handle 的严格释放：失败时返回 false（调用方据此重试/上报，不谎报成功）。 */
+  async releaseIfLive() {
+    return this.withLock(() => this._releaseUnlocked({ retry: false }))
   }
 
   /**
@@ -689,9 +838,53 @@ export class SessionManager {
     }
   }
 
+  /** 该账号当前仍活着的上游 instance id（含一次也没删掉的句柄）。 */
+  knownInstances() {
+    const s = this.session
+    if (!this.hasLiveSlot(s)) return []
+    return [s.instanceId]
+  }
+
+  /**
+   * 严格释放（用于「断开全部连接」/「重启服务」/进程退出）：
+   * 逐次 DELETE 直到上游确认结束，或退避重试耗尽；返回结果明细，
+   * **绝不谎报成功**——失败时句柄仍留在 sessions.json 里，下次启动扫尾。
+   * @returns {Promise<{ok: boolean, instanceId?: string, attempts: number, error?: string}>}
+   */
+  async releaseStrict() {
+    const delays = [0, 400, 1_500, 5_000]
+    let attempts = 0
+    let lastError = null
+    for (const delay of delays) {
+      if (!this.hasLiveSlot()) {
+        return { ok: true, attempts }
+      }
+      if (delay > 0) await sleep(delay)
+      attempts += 1
+      try {
+        const ok = await this.withLock(() =>
+          this._releaseUnlocked({ retry: false }),
+        )
+        if (ok) return { ok: true, attempts }
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err)
+      }
+      const inst = this.session?.instanceId
+      if (!this.hasLiveSlot()) return { ok: true, attempts }
+      lastError = lastError || `session ${inst} still live after DELETE`
+    }
+    return {
+      ok: false,
+      instanceId: this.session?.instanceId,
+      attempts,
+      error: lastError || 'release failed',
+    }
+  }
+
   async shutdown() {
     this._clearPoll()
     this._clearIdleRelease()
+    this._clearReleaseRetry()
     if (this.config.session.releaseOnShutdown) {
       await this.release()
     }
@@ -730,7 +923,7 @@ function extractQuota(body) {
  * 上游把「计费货币」放在每个 session 响应的 freebucks 字段里：
  *   { balance, daily:{limit,spent,remaining,resetAt}, wallet:{...},
  *     prices:{ modelId: price }, quotaExempt, planId, monthly, peak, priceChanges }
- * session 按小时计价、admit 时一次性扣费、提前 DELETE 退款，所以本地必须知道
+ * session 按模型单价（N/h）× 占用时长计价、提前 DELETE 退未用时长，所以本地必须知道
  * 「每个模型多少钱」和「这个账号还买不买得起」，否则会白白 admit 一堆计费会话。
  * 老上游/未登录状态没有该字段 → 返回 null，调度退回旧行为（不拦截）。
  * @param {any} body

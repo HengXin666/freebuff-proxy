@@ -158,11 +158,16 @@ export function createWebApi(deps) {
         by: user.username,
       })
       const accounts = await runtimes.reconnectAll()
+      const failed = accounts.filter((a) => !a.ok)
+      // 严格释放：有任何一条没删掉就如实告诉用户（并已留在 sessions.json
+      // 等下次启动扫尾重试），绝不谎报"已全部断开"。
       sendJson(res, 200, {
-        ok: true,
-        message:
-          '已断开全部 session，下次请求将自动重建；正在传输的连接可能被中断',
+        ok: failed.length === 0,
+        message: failed.length
+          ? `已释放 ${accounts.length - failed.length}/${accounts.length} 条会话，${failed.length} 条取消失败（已记录句柄，服务下次启动会自动重试退款）`
+          : '已断开全部 session，下次请求将自动重建；正在传输的连接可能被中断',
         accounts,
+        failed,
       })
       return true
     }
@@ -180,7 +185,31 @@ export function createWebApi(deps) {
       logger.info('system restart requested via web console', {
         by: user.username,
       })
-      sendJson(res, 200, { ok: true, message: '服务正在重启，约几秒后恢复' })
+      // 重启前先**严格释放所有上游会话**（拿 Freebucks 退款）：进程一退出
+      // 内存里的 instanceId 就没了，不放就等于让每条活会话白扣满占用时长。
+      // 释放失败也不阻塞重启——句柄已落盘 sessions.json，新进程启动扫尾。
+      let release = { ok: true, released: 0, failed: [] }
+      try {
+        release = await runtimes.releaseAllStrict({ waitInFlightMs: 3_000 })
+      } catch (err) {
+        logger.warn('pre-restart session release failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+        release = {
+          ok: false,
+          released: 0,
+          failed: [
+            { key: '*', error: err instanceof Error ? err.message : String(err) },
+          ],
+        }
+      }
+      sendJson(res, 200, {
+        ok: true,
+        message: release.failed.length
+          ? `已释放 ${release.released} 条会话（${release.failed.length} 条待新进程启动后重试退款）；服务正在重启，约几秒后恢复`
+          : '会话已全部释放退款，服务正在重启，约几秒后恢复',
+        release,
+      })
       // 先让响应完整落地到客户端，再触发自重启
       setTimeout(() => {
         try {
@@ -763,7 +792,7 @@ export function createWebApi(deps) {
         // 额度保护：空闲自动释放秒数 + 单请求新会话预算（Freebucks 计费单位）。
         // 未在控制台保存过时回落 config.yaml 的默认值。
         idleReleaseSec:
-          settingsStore?.get().idleReleaseSec ?? config.session.idleReleaseSec ?? 300,
+          settingsStore?.get().idleReleaseSec ?? config.session.idleReleaseSec ?? 60,
         maxNewSessionsPerRequest:
           settingsStore?.get().maxNewSessionsPerRequest ??
           config.limits.maxNewSessionsPerRequest ??
@@ -827,10 +856,12 @@ export function createWebApi(deps) {
           body.idleReleaseSec > 86_400
         ) {
           sendJson(res, 400, {
-            error: 'idleReleaseSec 必须是 0..86400 的整数（0 = 关闭空闲释放）',
+            error:
+              'idleReleaseSec 必须是 0 或 5..86400 的整数（0 = 关闭空闲释放）',
           })
           return true
         }
+        // 1..4 视为误配（会把每个回合都切成一条新会话）：吸附到最小生效值 5s。
         patch.idleReleaseSec = body.idleReleaseSec
       }
       if (body.maxNewSessionsPerRequest !== undefined) {

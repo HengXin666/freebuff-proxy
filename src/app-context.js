@@ -1,3 +1,4 @@
+import path from 'node:path'
 import {
   resolveCredentialsDir,
   listAccounts,
@@ -7,6 +8,7 @@ import {
 } from './auth-store.js'
 import { createUpstreamClient } from './upstream/client.js'
 import { SessionManager } from './session-manager.js'
+import { SessionHandleStore } from './session-handles.js'
 import { UpstreamError, isSessionRecoverableGate } from './upstream/client.js'
 import { logger } from './util/log.js'
 
@@ -172,6 +174,12 @@ export class AccountRuntimes {
   constructor(config, opts = {}) {
     this.config = config
     this.dir = resolveCredentialsDir(config)
+    /**
+     * 上游会话句柄的持久化索引（/data/sessions.json）：admit/释放都落盘，
+     * 进程退出/换容器后仍能凭 instanceId 去 DELETE 退款；释放失败的句柄也
+     * 留在这里等下次清理（绝不丢 = 绝不留下无法寻址的计费孤儿）。
+     */
+    this.handleStore = new SessionHandleStore(resolveSessionIndexPath(config))
     this._getAccountConcurrency =
       typeof opts.getAccountConcurrency === 'function'
         ? opts.getAccountConcurrency
@@ -293,6 +301,9 @@ export class AccountRuntimes {
     const sessions = new SessionManager({
       upstream,
       config: this.config,
+      accountKey,
+      // 句柄变更落盘（track/clear/orphan）——见 SessionHandleStore。
+      onSessionChange: (ev) => this.handleStore.handleEvent(ev),
       getSessionSettings: this._getSessionSettings,
       // 该账号还有在途/排队的 chat 时，空闲释放让路（见 SessionManager._armIdleRelease）
       hasPendingUser: () => {
@@ -452,7 +463,7 @@ export class AccountRuntimes {
    * （限流 / 额度耗尽 / 冷却 / 满员排队超时）才换下一个；**从未用过的账号
    * 排最后**，只有已用账号都不可用时才启用。上游把"轮换健康账号"直接当作
    * 账号农场特征（ADR-0012: cycling healthy keys looks like account farming），
-   * 而 Freebucks 按 session-hour 计费，换号 = 多买一条计费会话。
+   * 而 Freebucks 按会话占用时长计费，换号 = 新买一条计费行。
    *
    * 排序维度（从前到后）：
    *   1. tier（会话状态）：同模型热 session（复用零成本）> 冷账号 > 活跃 session
@@ -672,8 +683,8 @@ export class AccountRuntimes {
           })
           continue
         }
-        // 新会话预算：上游按 session-hour 计费，一个失败的下游请求不该把
-        // 多个账号各买一条 1 小时计费行（issue #7）。被上游拒绝的 admit
+        // 新会话预算：上游按会话占用时长计费，一个失败的下游请求不该把
+        // 多个账号各买一条计费会话（issue #7）。被上游拒绝的 admit
         // （rate_limited 等）不占额度，所以只在这里做「还有没有预算」的预检，
         // 真正扣减在 admit 成功之后。
         if (opts.sessionBudget && opts.sessionBudget.remaining <= 0) {
@@ -834,7 +845,7 @@ export class AccountRuntimes {
 
   /**
    * 释放某账号的上游会话（早退 DELETE → Freebucks 退款）。
-   * 换号/冷却时调用：失败账号的会话没人再用，留着只会白扣一小时额度；
+   * 换号/冷却时调用：失败账号的会话没人再用，留着只会白扣占用时长；
    * 有在途流时等它结束再释放（releaseWhenIdle），绝不掐断正在传输的 SSE。
    * @param {string} key
    */
@@ -916,11 +927,22 @@ export class AccountRuntimes {
       keys.map(async (key) => {
         const rt = this.byKey.get(key)
         try {
-          if (rt) await rt.sessions.release()
+          // 严格释放：等到上游确认结束或退避重试耗尽，失败带上原因——绝不
+          // "报成功但其实没删掉"（删不掉 = 白白多扣一小时，见 issue #7）。
+          const rel = rt
+            ? await rt.sessions.releaseStrict()
+            : { ok: true, attempts: 0 }
           // 信号量重置：清空在途计数并放行排队等待者（等待者会在 chat
           // 流程重新检查 session 并 re-admit，不会卡死）
           this.chatLocks.get(key)?.reset()
-          return { key, email: rt?.email, ok: true }
+          return {
+            key,
+            email: rt?.email,
+            ok: rel.ok !== false,
+            instanceId: rel.instanceId,
+            attempts: rel.attempts,
+            error: rel.error,
+          }
         } catch (err) {
           return {
             key,
@@ -959,11 +981,110 @@ export class AccountRuntimes {
     })
   }
 
-  async shutdown() {
+  /**
+   * 启动扫尾：把上次进程遗留 / 本次释放失败的会话句柄逐个 DELETE 拿退款。
+   * 失败的保留在 sessions.json 里等下次启动继续——绝不静默丢弃。
+   * @returns {Promise<{cleaned: number, failed: number, skipped: number}>}
+   */
+  async cleanupOrphanSessions() {
+    const resolve = (key) => {
+      try {
+        return this.get(key)?.upstream || null
+      } catch {
+        return null
+      }
+    }
+    return this.handleStore.cleanupOrphans(resolve)
+  }
+
+  /**
+   * 严格释放全部账号（「断开全部连接」/「重启服务」/进程退出用）：
+   * 与 fire-and-forget 的 releaseSession 不同，这里**等到每条会话都确认结束
+   * 或重试耗尽**才返回，并给出逐账号明细——绝不"报成功其实没删掉"。
+   * 失败的句柄仍留在 sessions.json，由下次启动扫尾继续清理。
+   * @param {{waitInFlightMs?: number}} [opts]
+   * @returns {Promise<{ok: boolean, released: number, failed: Array<{key: string, instanceId?: string, error?: string}>}>}
+   */
+  async releaseAllStrict(opts = {}) {
+    const waitMs = Number.isFinite(opts.waitInFlightMs)
+      ? opts.waitInFlightMs
+      : 0
+    const runtimes = [...this.byKey.values()]
+    const results = await Promise.all(
+      runtimes.map(async (rt) => {
+        if (waitMs > 0) {
+          // 等在途 SSE 结束（有界）：不掐断正在传输的流，超时就继续释放。
+          await rt.sessions._waitForIdle(waitMs)
+        }
+        try {
+          const r = await rt.sessions.releaseStrict()
+          return { key: rt.key, email: rt.email, ...r }
+        } catch (err) {
+          return {
+            key: rt.key,
+            email: rt.email,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          }
+        }
+      }),
+    )
+    const failed = results
+      .filter((r) => !r.ok)
+      .map((r) => ({
+        key: r.key,
+        email: r.email,
+        instanceId: r.instanceId,
+        error: r.error || 'release failed',
+      }))
+    const released = results.filter((r) => r.ok).length
+    if (failed.length) {
+      logger.warn('strict release finished with failures (handles kept for retry)', {
+        failed: failed.length,
+        released,
+      })
+    }
+    return { ok: failed.length === 0, released, failed }
+  }
+
+  async shutdown({ strict = false } = {}) {
+    /** @type {{ok: boolean, released: number, failed: any[]}} */
+    let rel = { ok: true, released: 0, failed: [] }
+    if (strict) {
+      // 进程退出：等到真的删掉或重试耗尽（句柄已落盘，失败也能下次扫尾）。
+      try {
+        rel = await this.releaseAllStrict()
+      } catch (err) {
+        logger.warn('strict session release on shutdown failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+        // 退回逐账号 shutdown（各自尽力 DELETE 一次）
+        const tasks = [...this.byKey.values()].map((rt) => rt.sessions.shutdown())
+        await Promise.allSettled(tasks)
+        this.byKey.clear()
+        return rel
+      }
+    }
     const tasks = [...this.byKey.values()].map((rt) => rt.sessions.shutdown())
     await Promise.allSettled(tasks)
     this.byKey.clear()
+    return rel
   }
+}
+
+/**
+ * 会话句柄索引（sessions.json）落盘位置。
+ *
+ * 必须和**凭据目录**放一起：同一个 dataDir 可能被两个服务共用（本仓库的
+ * `data/` 与上层 rotator 的 `../data/`），句柄索引跟着凭据走才不会各自
+ * 持有一份互相看不见的孤儿；也保证"删容器不丢数据"的 /data 约定成立。
+ * @param {import('./config.js').ProxyConfig} config
+ */
+function resolveSessionIndexPath(config) {
+  const credDir = resolveCredentialsDir(config)
+  const parent = path.dirname(credDir)
+  const base = path.basename(credDir) === 'credentials' ? parent : credDir
+  return path.join(base, 'sessions.json')
 }
 
 /**

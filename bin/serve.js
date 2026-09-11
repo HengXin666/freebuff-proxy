@@ -154,6 +154,20 @@ async function main() {
     // 自定义模型列表（前端「模型管理」，覆盖内置目录），实时生效
     getCustomModels: () => modelStore.list(),
   })
+  // 启动扫尾：把上次进程遗留 / 上次释放失败的上游会话句柄 DELETE 掉拿退款。
+  // 进程退出时内存里的 instanceId 就没了，不扫的话这些会话就是"无法寻址的
+  // 计费孤儿"，只能让上游白扣满一小时（Freebucks 按 session 时长结算）。
+  try {
+    const sweep = await ctx.runtimes.cleanupOrphanSessions()
+    if (sweep.cleaned || sweep.failed || sweep.skipped) {
+      logger.info('leftover session sweep on startup', sweep)
+    }
+  } catch (err) {
+    logger.warn('leftover session sweep failed (continuing)', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
   if (ctx.authEmail) {
     logger.info('upstream auth ready', {
       account: ctx.authEmail,
@@ -184,7 +198,15 @@ async function main() {
     logger.info('shutting down', { signal })
     loginFlows.shutdown()
     try {
-      await ctx.runtimes.shutdown()
+      // strict：等到每条上游会话真的 DELETE 掉（或退避重试耗尽）再退出。
+      // 退出即失去内存里的 instanceId，不严格释放 = 白扣满一小时；失败的
+      // 句柄已落盘 sessions.json，下次启动扫尾继续删。
+      const rel = await ctx.runtimes.shutdown({ strict: true })
+      if (rel && rel.failed && rel.failed.length) {
+        logger.warn('sessions still live at shutdown (handles persisted)', {
+          failed: rel.failed.length,
+        })
+      }
     } catch (err) {
       logger.warn('session shutdown error', {
         error: err instanceof Error ? err.message : String(err),

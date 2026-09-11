@@ -6,7 +6,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   // 每个账号同一时间可并发的 SSE 响应流数（账号内并发），默认 2。
   // 账号调度是"粘性优先"（drain, not rotate）：并发请求先挤同一账号，超过该值
   // 才溢出到下一个账号；从不主动平摊到新账号（上游把轮换健康账号当农场特征，
-  // 且 Freebucks 按 session-hour 计费，换号 = 多买一条计费会话）。
+  // 且 Freebucks 按会话占用时长计费，换号 = 新买一条计费行）。
   accountMaxConcurrency: 2,
   // 一键屏蔽收费模型（pool=premium，如 gpt-5.6-luna / kimi-k3-eco / 各 -max）。
   // 免费反代用户用不了收费模型，放着在列表里既占位又容易误触风控——开/关由
@@ -123,10 +123,16 @@ function clampConcurrency(n) {
   return Math.min(16, Math.max(1, n))
 }
 
-/** 空闲释放：0（关闭）或 30s..24h。太短的间隔会把会话切成碎片、反复 admit。 */
+/**
+ * 空闲释放：0（关闭）或 5s..24h。
+ * 上游按 session 实际占用时长结算（N Freebucks/小时，提前 DELETE 退未用时长），
+ * 所以默认压到 60s、下限放宽到 5s——空闲会话多挂一秒就多扣一秒。
+ * 低于 ~5s 等于把每个回合都切成一条新会话（admit 往返变多、额度按条计费的
+ * 订阅档位会吃亏），所以不放到 1s。
+ */
 function clampIdleReleaseSec(n) {
   if (n <= 0) return 0
-  return Math.min(86_400, Math.max(30, n))
+  return Math.min(86_400, Math.max(5, n))
 }
 
 /** 单请求新会话预算：0（不限制）或 1..16。 */

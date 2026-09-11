@@ -43,16 +43,17 @@ session:
   re_admit_lead_sec: 60
   # 免费模型（pool 非 premium）的提前切换阈值（秒）：会话剩余不足该值时
   # 不再调度到该会话上，提前 re-admit 换全新会话（默认 60s = 1 分钟）。
-  # 2026-09 Freebucks 计费：每次 admit 都是一条 1 小时计费行（早退才退款），
-  # 提前 re-admit = 多买一条计费行，所以只留最小切换余量
+  # 2026-09 Freebucks 计费：按模型单价（N/h）× 实际占用时长结算，admit 时按
+  # 整小时预占、提前 DELETE 退还未用时长；尽量少换、能复用就复用。
   free_model_re_admit_lead_sec: 60
   poll_interval_sec: 30
   admit_timeout_ms: 30000
   # 空闲自动释放（秒，控制台「额度保护」可调，保存立即生效）：
   # 会话在途请求归零后空闲超过该时长就早退 DELETE，让上游按未用时长退款
-  # （freebucksRefund）。上游按 session-hour 计费，会话空挂后台 = 白扣一小时。
+  # （freebucksRefund）。上游按「实际占用时长」结算（模型单价 N/h），会话空挂
+  # 后台 = 白扣时长。默认 60s（控制台可调 5s..24h）；
   # 0 = 关闭（旧行为：留到过期，整小时照扣）
-  idle_release_sec: 300
+  idle_release_sec: 60
 
 limits:
   max_concurrent_requests: 32
@@ -74,7 +75,7 @@ limits:
   stall_cooldown_sec: 30
   # 一个下游请求最多新建几个上游会话（Freebucks 计费单位，控制台「额度保护」可调）：
   # 上游 admit 一次扣一次 Freebucks，旧行为报错时把「账号数+1」个账号挨个 admit
-  # 一遍，几个账号一起在后台白扣一小时（issue #7）。复用热 session 不消耗预算。
+  # 一遍，几个账号一起在后台白扣时长（issue #7）。复用热 session 不消耗预算。
   # 默认 2 = 首个账号 + 一次换号兜底；0 = 不限制（调试用）
   max_new_sessions_per_request: 2
   # 上游 chat 调用前的随机抖动上限（毫秒）：每次请求前等 [0, N) 随机时长，

@@ -580,8 +580,8 @@ export function createProxyHandler(ctx) {
     const skipKeys = new Set()
     /**
      * 本次下游请求允许新建的上游会话数（Freebucks 计费单位）。
-     * 上游按 session-hour 计费、admit 一次扣一次，旧行为在报错时把「账号数+1」
-     * 个账号挨个 admit 一遍，几个账号一起在后台白扣一小时（issue #7）。
+     * 上游按会话占用时长计费、admit 预占一次，旧行为在报错时把「账号数+1」
+     * 个账号挨个 admit 一遍，几个账号一起在后台白扣时长（issue #7）。
      * 复用已有热 session 不消耗预算。
      */
     const budgetSetting = settingsStore?.get?.()?.maxNewSessionsPerRequest
@@ -908,6 +908,29 @@ export function createProxyHandler(ctx) {
 
           // 最后一次尝试也失败：把当前账号标记冷却（gate 瞬时问题 noCooldown 除外），
           // 避免下一个请求立刻又撞上同一个故障账号。
+          //
+          // 同时**必须把该账号的会话早退 DELETE 掉拿退款**：请求已经不会再用
+          // 这条会话了，留着只能等空闲释放（默认 60s）甚至挂到过期——上游按
+          // session 时长计费，这就是白扣。释放失败也不丢句柄（SessionManager
+          // 会保留 instanceId 并重试，sessions.json 里还有一份）。
+          if (lastKey) {
+            const st = result.status
+            const clientError =
+              typeof st === 'number' &&
+              st >= 400 &&
+              st < 500 &&
+              st !== 429 &&
+              result.noCooldown !== true
+            if (!clientError || result.gateCode === 'stream_idle_timeout') {
+              logger.info('final attempt failed; releasing session early for refund', {
+                key: lastKey,
+                model: upstreamModel,
+                gateCode: result.gateCode,
+                status: st,
+              })
+              runtimes.releaseSession(lastKey)
+            }
+          }
           if (result.switchAccount && !result.noCooldown) {
             runtimes.markCooldown(
               lastKey,
@@ -985,6 +1008,17 @@ export function createProxyHandler(ctx) {
               if (willSwitch && lastKey) runtimes.releaseSession(lastKey)
               continue
             }
+            // 最后一次尝试也失败（无重试机会）：会话不会再被用，立刻早退
+            // DELETE 退款，而不是等空闲释放/挂到过期白扣时长。
+            if (lastKey) {
+              logger.info('final upstream error; releasing session early for refund', {
+                key: lastKey,
+                model: upstreamModel,
+                code: err.code,
+                status: err.status,
+              })
+              runtimes.releaseSession(lastKey)
+            }
             mapAndSendError(res, err)
             return
           }
@@ -1017,6 +1051,16 @@ export function createProxyHandler(ctx) {
             error: err instanceof Error ? err.message : String(err),
             stack: err instanceof Error ? err.stack : undefined,
           })
+          // 网络类错误、重试已耗尽：会话不会再被本次请求使用，立刻 DELETE
+          // 退款（失败也会保留句柄重试），别让它挂到过期白扣时长。
+          if (lastKey) {
+            logger.info('final network error; releasing session early for refund', {
+              key: lastKey,
+              model: upstreamModel,
+              error: err instanceof Error ? err.message : String(err),
+            })
+            runtimes.releaseSession(lastKey)
+          }
           if (!res.headersSent) {
             sendJson(res, 500, {
               error: {
