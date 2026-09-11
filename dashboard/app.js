@@ -1823,7 +1823,10 @@ async function renderUsers(view) {
       el('thead', {}, el('tr', {}, ['用户名', '角色', 'API Key', '操作'].map((t) => el('th', {}, t)))),
       el('tbody', {}, state.users.map((u, i) => {
         return el('tr', { class: 'row-in', style: `animation-delay:${i * 40}ms` }, [
-          el('td', {}, `${u.username} ${u.username === state.me.username ? el('span', { class: 'muted' }, '(我)') : ''}`),
+          el('td', {}, [
+            u.username,
+            u.username === state.me.username ? el('span', { class: 'muted', style: 'margin-left:4px' }, '(我)') : null,
+          ]),
           el('td', {}, u.role === 'admin' ? el('span', { class: 'badge admin' }, 'admin') : el('span', { class: 'badge' }, 'user')),
           el('td', {}, el('div', { class: 'row' }, [
             el('code', { class: 'mono muted', style: 'font-size:12px' }, maskKey(u.apiKey)),

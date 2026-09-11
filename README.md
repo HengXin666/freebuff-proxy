@@ -1,34 +1,52 @@
 # freebuff-proxy
 
-> 发布与更新日志：[Releases](https://github.com/HengXin666/freebuff-proxy/releases)
+**把 Freebuff / Codebuff 的免费额度，变成一个 OpenAI 兼容的 API 端点。**
 
-OpenAI 兼容的 **Freebuff / Codebuff 免费额度反向代理**，支持 **多账号自动切号 + 热 session 优先调度**、**Web 控制台**（用户管理 + 浏览器登录回调）、**上游代理**，并附带 **一键 Docker Compose 部署** 与 **GitHub Actions 镜像构建**。
+[![Release](https://img.shields.io/github/v/release/HengXin666/freebuff-proxy?label=release&color=2496ED)](https://github.com/HengXin666/freebuff-proxy/releases)
+[![CI](https://github.com/HengXin666/freebuff-proxy/actions/workflows/docker-image.yml/badge.svg)](https://github.com/HengXin666/freebuff-proxy/actions/workflows/docker-image.yml)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![Docker](https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white)](https://github.com/HengXin666/freebuff-proxy/pkgs/container/freebuff-proxy)
+[![Last commit](https://img.shields.io/github/last-commit/HengXin666/freebuff-proxy)](https://github.com/HengXin666/freebuff-proxy/commits/main)
+[![Repo size](https://img.shields.io/github/repo-size/HengXin666/freebuff-proxy)](https://github.com/HengXin666/freebuff-proxy)
 
-下游 Agent 只需要标准的 `base_url + api_key + model`，本服务负责：
+**超轻量** · **一键 Docker 部署** · **一切管理都在前端页面**
 
-1. Freebuff / Codebuff **身份凭证**（多账号池）
-2. **免费 session 准入**（`/api/v1/freebuff/session`）
-3. 在请求中注入 `cost_mode=free` 与 `freebuff_instance_id`
-4. **流式 / 非流式响应原样透传**
-
----
-
-## 目录
-
-- [一键部署（Docker Compose）](#一键部署docker-compose)
-- [数据与持久化（/data 挂载）](#数据与持久化data-挂载)
-- [GitHub Actions 自动构建镜像](#github-actions-自动构建镜像)
-- [Web 控制台：登录 / 用户管理 / 添加账号回调](#web-控制台登录--用户管理--添加账号回调)
-- [多账号池与热 session 优先调度](#多账号池与热-session-优先调度)
-- [代理支持](#代理支持)
-- [下游 Agent 接入](#下游-agent-接入)
-- [命令 / 本地开发](#命令--本地开发)
-- [配置参考](#配置参考)
-- [限制](#限制官方免费层现实)
+下游 Agent 只需要标准的 `base_url + api_key + model`，本服务负责 Freebuff 身份凭证（多账号池）、免费 session 准入、注入 `cost_mode=free` 与 `freebuff_instance_id`，并把**流式 / 非流式响应原样透传**。
 
 ---
 
-## 一键部署（Docker Compose）
+## 截图
+
+![总览：账号池、额度（Freebucks）、并发与冷却](docs/images/01-overview.webp)
+
+<table>
+<tr>
+<td width="50%">
+
+**测试对话** — 经 `/v1/chat/completions` 真实转发（流式）
+
+![测试对话](docs/images/02-playground.webp)
+
+</td>
+<td width="50%">
+
+**我的** — 你的 API Key 与接入示例
+
+![我的](docs/images/04-me.webp)
+
+</td>
+</tr>
+</table>
+
+**用户管理** — 建用户、改角色、重置 Key（管理员）
+
+![用户管理](docs/images/03-users.webp)
+
+> 截图来自真实运行的控制台（已对邮箱与 API Key 打码）。
+
+---
+
+## 快速开始
 
 镜像非常轻量：`node:22-alpine` + 仅 2 个 JS 运行时依赖（`undici` / `yaml`），整体约几十 MB。
 
@@ -53,7 +71,7 @@ docker compose logs freebuff-proxy | grep -B2 -A6 "首次启动"
 # 拿不到密码时用上面的命令（不带 -f）整段翻。
 ```
 
-浏览器打开 `http://<宿主机IP>:<PORT，默认8787>/`，用管理员账号登录，在「总览 → + 添加账号」里完成 Freebuff 登录回调（见下文），即可开始使用。
+浏览器打开 `http://<宿主机IP>:<PORT，默认8787>/`，用管理员账号登录，在「总览 → + 添加账号」里完成 Freebuff 登录回调（[详见 Web 控制台](docs/web-console.md)），即可开始使用。
 
 > 网络为 host 模式（Docker 官方方案）：容器与宿主机共享网络栈，应用直接监听宿主 `0.0.0.0:<PORT>`，
 > 无需 docker 端口映射（host 模式下 `ports` 会被忽略）；`PORT` 可在 `.env` 调整。
@@ -72,7 +90,7 @@ docker compose down          # 停止（数据保留在 ./data）
 
 ### 想本地构建？（可选，开发调试用）
 
-默认使用 GHCR 预构建镜像（发版 `v*` tag 时自动推送，`latest` + 版本号 tag，如 `1.0.0`，semver 去 `v` 前缀）。
+默认使用 GHCR 预构建镜像（发版 `v*` tag 时自动推送，`latest` + 版本号 tag，如 `1.11.4`，semver 去 `v` 前缀）。
 想自己构建的话，把 compose 里的 `image: ghcr.io/hengxin666/freebuff-proxy:latest` 换成 `build: .`：
 
 ```yaml
@@ -83,308 +101,24 @@ build: .
 docker compose up -d --build
 ```
 
----
-
-## 数据与持久化（/data 挂载）
-
-所有状态都落在宿主机 `./data`（容器内 `/data`），**删除容器 / 升级镜像都不丢数据**：
-
-```text
-data/
-├── config.yaml            # 首次启动自动生成，可直接编辑（重启生效）
-├── credentials/           # Freebuff 账号凭据（每账号一个 <账号ID>.json，见下）
-├── users.json             # Web 控制台用户（密码 scrypt 哈希）
-├── web-sessions.json      # Web 登录会话
-├── login-flows.json       # 浏览器登录回调流程（重启不丢）
-├── catalog-cache.json     # 上游模型目录缓存（首启写入，每 6h 自动刷新）
-├── custom-models.json     # 前端「模型管理」的自定义模型
-├── proxies.json           # 前端「代理设置」的全局代理池
-└── settings.json          # 前端可调的运行参数（并发/额度保护等）
-```
-
-- 首次启动自动把 `config.example.yaml` 复制为 `/data/config.yaml`，无需手动创建。
-- `docker-entrypoint.sh` 以 root 初始化 `/data` 属主后自动降权到 `node`(1000) 运行。
-- 凭据、用户、会话均以 `0600` 权限写入，**建议对 `./data` 做好备份与访问控制**。
+首次启动会自动把 `config.example.yaml` 复制为 `/data/config.yaml`，无需手动创建。数据目录结构与构建细节见 **[部署与运维](docs/deployment.md)**。
 
 ---
 
-## GitHub Actions 自动构建镜像
+## 文档
 
-`.github/workflows/docker-image.yml`：
+主页只保留上手所需的内容，深入细节都在 `docs/`：
 
-- **push 到 `main` / `master`**：跑测试（`npm test` + `npm run typecheck`）→ Docker Buildx 构建 → 推送 `ghcr.io/<repo>:latest`、`:sha-<hash>`、`:<branch>` 等 tag。
-- **打 `v*` tag**：额外推送 `:<version>`、`:<major>.<minor>` 语义化 tag。
-- **pull_request**：只跑测试，不推送（防止 PR 污染镜像）。
-- **手动触发**：Actions 页面 → Run workflow。
-- **可选 Docker Hub**：在仓库 Secrets 配置 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 后会自动同时推送 Docker Hub。
-
-构建使用 `docker/build-push-action` 的 GHA 缓存（`cache-from/to: type=gha`），后续构建秒级缓存。
-
----
-
-## Web 控制台：登录 / 用户管理 / 添加账号回调
-
-控制台是零依赖原生 JS 单页应用，内置在镜像中（`/`），无需额外部署。
-
-### 登录
-
-- 首次部署自动创建管理员（`ADMIN_USERNAME`，默认 `admin`）。
-- 设置了 `ADMIN_PASSWORD` 则用固定密码；**未设置（或 `.env` 里写成空的 `ADMIN_PASSWORD=`）则随机生成，仅在首次启动那一次打印在日志里**（强烈建议登录后改密并把密码写进 `.env`）。
-- **忘记密码了怎么找回**：启动日志里有 `首次启动：已创建管理员账号` 区块（用不带 `-f` 的 `docker compose logs freebuff-proxy` 翻）；已经找不到的话，在 `.env` 写一个新的 `ADMIN_PASSWORD=xxx` 再 `docker compose up -d`，启动时会用它重置 `admin` 的密码（日志会打印 `default admin password rotated from env/config`）。密码短于 6 位会被拒绝并告警，现有密码不受影响。
-- 日志里 `default admin ensured (password from env)` 表示**这次没有新建管理员**（已存在），不是"密码就是 env 里那个"——密码来源看同一条日志的 `passwordSource` 字段（`env` / `config` / `generated`）。
-- 普通用户由管理员在「用户管理」中创建，登录后可查看自己的 API Key 并测试对话。
-
-### 添加 Freebuff 账号（浏览器回调，不在容器内打开浏览器）
-
-容器内**不会**尝试打开浏览器。流程：
-
-1. 管理员在「总览 → + 添加账号」发起登录；
-2. 服务端向 Freebuff 申请 CLI 登录链接并返回；
-3. **在你自己电脑的浏览器**打开该链接完成登录授权（页面会持续轮询显示状态）；
-4. 服务端收到回调后把凭据保存到 `/data/credentials/<账号ID>.json`，控制台自动刷新。
-
-> 账号以 **Freebuff 用户 `id` 唯一标识**（老数据无 `id` 时回落邮箱）。即使 GitHub 和 Google
-> 登录使用**同一个邮箱**，Freebuff 也会返回不同的 `id`，两个账号会并存互不覆盖（历史上按邮箱
-> 存文件会导致互相覆盖）。旧版 `<email>.json` 文件会在首次读取时自动迁移为 `<id>.json`。
->
-> 也支持「导入账号」：从旧环境导出的 `{"email":"...","authToken":"..."}` JSON 可直接
-> 粘贴导入（如同时导入了同邮箱的 GitHub/Google 两个账号，请带上各自的 `"id"` 以免互相覆盖）。
->
-> 已登录用户（含普通用户）可在总览账号池点「凭证」查看某账号的完整凭据 JSON，
-> 支持一键复制或下载（`<email>-credential.json`），格式与「导入账号」兼容，方便迁移/备份。
-
-### 用户管理（管理员）
-
-- 创建 / 删除用户，设置角色（`admin` / `user`）。
-- 每个用户独立 `sk-fb-...` API Key，可复制 / 重置。
-- 修改密码。
-- 下游 Agent 用**某个用户的 API Key** 接入（Bearer token），流量统一走**热 session 优先**调度。
-
----
-
-## 多账号池与热 session 优先调度
-
-### 账号池自动切号
-
-- 在 `/data/credentials/` 放入多个账号（通过控制台逐个添加或导入）。
-- 每次请求按可用性选号：`rate_limited` / `spend_limited` / `ip_capped` / `free_mode_rate_limited` / `banned` 整号冷却并自动换下一个；`model_unavailable` 只冷却该账号上的该模型。
-- **chat/completions 阶段上游报错自动换号**：429 限流（如 `free_mode_rate_limited`）、5xx、
-  403 账号级封禁都会按上游 `Retry-After` 冷却当前账号并**换号重试**（最多试到账号数，封顶 5 次），
-  而不是把错误直接甩给下游；4xx 客户端错误（400/401/404/422）不换号。
-- **换号不再"每个账号都买一条计费会话"**（2026-09 Freebucks 改版）：上游按模型单价（N/h）
-  × **会话实际占用时长**结算（admit 预占整小时、提前 DELETE 退未用时长），因此单个下游
-  请求最多新建 `limits.max_new_sessions_per_request`（默认 2）条会话——复用热 session 和
-  被上游拒绝的 admit 都不占预算；换号前失败账号的会话会立即早退 DELETE 拿退款，网络类瞬时
-  故障先在同一账号上重试一次（复用热 session，不新建）。**请求彻底失败时也会早退释放**，
-  不让会话空挂计时。详见下方「额度保护（Freebucks 计费，控制台可调）」。
-- 冷却信息（状态、剩余时间、原因）在控制台「总览」实时可见，可手动「解除冷却」。
-
-### 热 session 优先调度
-
-Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全量消息历史**（客户端自己携带），
-不存在"服务端记住某个 conversation"的概念；但 admit 会占用按时长结算的免费次数，因此代理按
-**最少新建 session**的目标调度：
-
-- **粘性优先（drain, not rotate）**：选号顺序 = 同模型热 session → 已用过的账号（最近用过的
-  优先）→ **从未用过的账号（排最后，只有已用账号都不可用、或满员排队超时才启用）**。
-  上游把"轮换健康账号"直接当账号农场特征（参考项目 ADR-0012: *cycling healthy keys looks
-  like account farming*），而 Freebucks 又是 admit 一次扣一次——所以代理**绝不主动把并发
-  平摊到多个账号**：宁可把请求集中在一个账号上，用尽（限流/额度耗尽/冷却）才换下一个；
-- **最少新建 session**：创建 session 就从 admit 起按时长计费，因此同模型活跃 session 始终优先复用；
-  `conversation_id` / `thread_id` / `user` / `client_id` 不参与选号；
-- **每账号并发上限是"溢出"阈值**：默认 **2**（可在控制台「账号调度」调整 1..16）。单账号在途流数
-  达到上限后，新请求先在该账号上**有界排队**（热会话等 `stream_idle_timeout_sec + 15s`、
-  冷账号等 `limits.account_chat_wait_ms`，超时返回 `account_busy` 并换下一个账号），
-  **不为了并发去启用从未用过的账号**。总览里每个账号显示 `并发(在途/上限)` 实时监控；
-- **会话临近过期提前切换（按模型分层）**：剩余时间低于提前量阈值的会话不再承接新请求，
-  re-admit 换全新会话——避免请求发到马上过期的会话上、中途卡住（响应明显变慢/挂起）。
-  提前量按计费方式分层：
-  - **免费模型**：`session.free_model_re_admit_lead_sec`（默认 60s = **1 分钟**）——
-    会话剩余不足 1 分钟即**不再调度到该会话**，提前 re-admit 换新会话（2026-09 Freebucks
-    按占用时长结算，提前 re-admit 只是把剩余时长换成新计费行，所以只留最小切换余量）；
-  - **付费模型**：`session.re_admit_lead_sec`（默认 60s）——付费会话每次 admit 都计费，
-    尽量用到接近过期再切换。
-  **切换是平滑的**：旧会话若正被在途 SSE 流使用，会先等在途流结束后才释放重建，
-  绝不把正在传输的连接掐断；流式 idle 超时按会话剩余时间收敛，过期后上游若不再吐数据
-  会更快被掐断；会话切换等待在途请求也有上界（`2×stream_idle_timeout_sec + 60s`），
-  在途流因网络波动长时间不结束时放弃该账号换下一个，避免新请求无限干等；
-- **代理切换不断流**：前端「代理设置」保存全局代理池/账号出口变更后**立即生效**——
-  新请求走新出口；旧 runtime 的 session 在后台等所有在途 SSE 结束后再优雅释放，正在
-  传输的流不受影响。排队等锁期间发生切换的请求会自动无冷却重新选号（走新出口），
-  不会撞上已失效的旧会话；
-- 冷启动的选号与 admit 已原子化（`_acquireMutex` 串行化选号 + admit）：同一账号的并发请求只 admit 一次、共享该账号 session；
-- 没有同模型热 session 时，优先选择**没有活跃 session 的账号**，而不是替换别的模型的热 session
-  （同一账号上反复 release/admit 每次都要新买一条计费会话）；
-- 多个同层级账号只在平局时轮询（已用过的账号之间按"最近用过的优先"保持粘性）；**冷却中的账号跳过**；
-- 上游报错（gate 错误如 `session_expired` / `superseded`）自动同号 re-admit 重试一次；
-  429 限流 / 5xx / 403 账号级封禁则冷却当前账号并换下一个账号重试，4xx 客户端错误（400/401/404/422）不换号。
-  换号次数受"单请求新会话预算"约束（见「额度保护」）。
-
-控制台「总览」顶部显示各账号实际请求占比、活跃 session 与冷却状态。
-
-### 查看额度（Freebucks + rateLimitsByModel）
-
-上游 2026-09 起把免费额度改成 **Freebucks** 计量，两种计费方式并存：
-
-- **Freebucks 计量模型**（上游 `freebucks.prices` 里有价格的模型）：每个模型有单价
-  （N Freebucks/小时），session 从 admit 起**按实际占用时长结算**——admit 时按整小时
-  预占该模型单价，**提前 DELETE 按未用时长退回**（响应里的 `freebucksRefund`）；每日池在
-  **太平洋午夜**重置。`freebucks.balance`（可花费余额）/ `daily.remaining`（今日池剩余）
-  除以单价就是"还能用多久"（控制台直接折算成分钟）。
-- **未计量模型**（`prices` 里没有该模型）：仍按 **模型 × 每日** 限次
-  （上游 `rateLimitsByModel`，如 `limit: 6 / recentCount: 已用 / resetAt: 重置时间`）。
-
-> ⚠️ 2026-08-09 实时探测：`deepseek/deepseek-v4-flash` 与
-> `mimo/mimo-v2.5` 已重新出现在上游 `rateLimitsByModel` 中（当时为 6 次/天）。
-> 代理不对它们做不限量豁免，始终以上游实时返回的限额为准。
-
-- 控制台「总览」每个账号有两列额度：
-  **额度（今日）** = 未计量模型的 `已用/上限` 与重置时间（`已用满` 红色、`≤2` 黄色、
-  正常绿色，且 `recentCount` 按时长结算**是小数**，控制台保留两位不四舍五入）；
-  **Freebucks** = 余额 `N FB` / 当前模型单价 `N/h` / **折算可用时长**（如 ≈`30 分钟`）
-  / 今日池 `剩余/上限`，悬停可看钱包余额、计费方式与最近一次早退退款金额。
-- 两个来源都在 **admit 时自动抓取**（上游仅在 session 响应里返回）；活跃 session 每 30s
-  轮询刷新，session 结束后保留最后一次缓存值直到下次 admit。
-- 想主动刷新余额：账号行的「检测」按钮或 `POST /api/accounts/probe` 做**只读探测**
-  （GET session，不创建会话、不扣额度）。
-- `rateLimitsByModel.recentCount` 可能是小数：admit 时先预占 1 小时额度，提前释放后按
-  实际占用时长结算。因此**复用热 session + 空闲早退**比平均铺开账号更省额度。
-- 同样可通过 `GET /v1/freebuff/status` 或 `GET /v1/freebuff/accounts` 拿到每个账号的
-  `quota` 与 `freebucks`。
-
-### 额度保护（Freebucks 计费，控制台可调）
-
-`freebucks` 块是额度的唯一真源：
-
-```json
-{"balance":25,"daily":{"limit":25,"spent":0,"remaining":25,"resetAt":"..."},
- "wallet":{"balance":0,"monthlyBonus":0},"prices":{"deepseek/deepseek-v4-flash":2},
- "quotaExempt":false}
-```
-
-"账号空挂后台" = 白扣占用时长（issue #7），所以代理做了五件事：
-
-- **空闲自动释放（默认 60s，可调 5s..24h）**：会话在途请求归零后开始计时，空闲超过该时长
-  立即早退 `DELETE`——必须带 `x-freebuff-instance-id`，否则上游 400 `instance_required`，
-  会话既删不掉也拿不到退款。交互式对话的停顿能复用同一会话，长时间没人用就立刻退款。
-  `0` = 关闭（旧行为：留到过期，整小时照扣）。后台轮询不会顺延这个计时。
-- **单请求新会话预算（默认 2）**：一个下游请求最多新建 2 条计费会话（首个账号 + 一次
-  换号兜底）；复用热 session 不消耗预算，被上游拒绝的 admit（`rate_limited` 等）也不消耗
-  （只有真的新建了会话才扣）。旧行为在报错时把"账号数 +1"个账号挨个 admit 一遍，
-  几个账号一起在后台白扣时长。
-- **余额买不起就不 admit**：`balance < prices[模型]` 且非 `quotaExempt` 的账号直接跳过
-  选号（上游反正会 429 `freebucksShortfall`）；每日池 `resetAt` 已过则视为本地数字过期，
-  放行一次真实 admit 用上游最新余额重新校准。
-- **换号即释放**：账号级故障换号前，先把失败账号的会话早退 DELETE 拿退款，不让它继续
-  在后台计时。
-
-两项都可在控制台「**额度保护**」卡片实时调整（持久化 `/data/settings.json`，无需重启）。
-
-### 工具签名兼容
-
-控制台「总览 → 免费额度策略」提供「工具签名兼容」开关，默认开启。开启时，代理会在非空
-`tools` 列表末尾补充 Freebuff 官方工具名 `end_turn`，避免工具请求被识别为外来工具集；关闭时
-原样转发客户端工具列表。切换后立即生效并持久化到 `/data/settings.json`，无需重启。
-
----
-
-## 幽灵连接治理与重启兜底
-
-### 上游卡死自动掐断（不再有幽灵连接）
-
-上游流式响应偶尔会出现"发了一半不再吐数据、也不断开连接"的卡死状态（幽灵连接），
-会让该连接永远挂着并拖住后续请求。代理现在对上游响应体做了 **idle 超时兜底**：
-
-- 收到响应头后，只要超过 `limits.stream_idle_timeout_sec`（默认 60 秒）没有新数据块，
-  立即取消上游读取并**断开下游连接**，让客户端感知截断后自行重试——而不是无限期挂着；
-  （网络不稳定的上游 1 分钟不吐数据就该切换；慢思考模型思考期可能 >30s 才出首包，
-  如遇误伤可调大，最小生效 30s）
-- **下游背压也受同一 idle 超时约束**：客户端"活着但不再读"（网络波动/卡顿，TCP 窗口满、
-  不关连接也不消费）时，等待 drain 同样在 `stream_idle_timeout_sec` 后被掐断释放账号锁，
-  不会因为客户端不读而永久占死连接；
-- **chat 响应头等待收紧到 idle 同量级**（默认 60s，带 30s 下限）：上游/代理网络波动
-  （TCP 黑洞、代理连接成功但永不响应）时，不再等 `upstream_timeout_sec`（600s）才释放
-  账号锁——锁被占死期间所有新请求都会超时，必须尽快释放；
-- **代理池单代理挂起自动回落**：全局代理池中"连接成功但永不响应"的代理会在 ~20s 内被
-  视为失败并自动落到池内下一个，而不是干等到全局超时；
-- 被掐断的账号会**短暂冷却**（`limits.stall_cooldown_sec`，默认 30s）：该账号刚被掐断过
-  一条卡死链路，说明上游/网络对它不稳定，短期内让新请求优先去别的账号（可设 0 关闭，
-  关闭后下一请求仍可复用同一 session）；账号级串行化保证同一个账号不会同时被多个卡死
-  请求叠加占用；
-- **任何等待都有上界，绝不无限挂起**：账号 chat 锁排队（含预算耗尽的兜底等待）超时
-  返回明确错误；同一个请求连续撞上"账号全忙"时只完整等待一次，之后换号只给短窗
-  （5s），不会在满员账号上反复长等把并发全部钉死；会话切换等在途请求也有上界，超时
-  放弃该账号换下一个；
-- 后台控制面请求（session / agent-runs 等）的 body 读取同样带超时兜底，杜绝任何路径挂死。
-
-### 客户端断开立即释放账号锁（不再占死全部请求）
-
-客户端中途断开（关页面/取消请求/超时放弃）时，上游流若还挂着，账号 chat 锁会被一直
-占用，后续所有请求排队超时——**已修复**：代理同时监听底层 socket 关闭（`req 'close'`
-是"请求体读完"事件，不可用作断开信号），断开瞬间中止上游读取并释放账号锁，下一个请求
-立即可用。实测断开后 3 秒内恢复服务（修复前要等上游 120s 超时）。配合粘性调度的有界排队 +
-  换号兜底，单个账号被占死也不会拖垮其它账号。
-
-### 前端一键「全部断开重连」（轻量兜底）
-
-右上角管理员专属「**全部断开重连**」按钮（`POST /api/system/reconnect`）：**比重启更轻量**，
-进程不重启，仅释放全部账号的 session（上游 DELETE）并重置账号并发信号量（清空在途计数、
-放行排队等待者）。用于清理死任务/幽灵连接等异常状态：
-
-- 正在传输的 SSE 可能被中断，但**下一个请求会自动 re-admit 全新 session**，无需任何手动操作；
-- Web 登录态、账号、代理池等全部保持不变；
-- 权限：仅 admin 角色可调（非登录返回 401，非 admin 返回 403）。
-
-### 前端一键「重启服务」（终极兜底）
-
-右上角管理员专属「**重启服务**」按钮：服务端收到请求后 spawn 自重启子进程并优雅退出
-（释放 session、关闭监听），子进程等待端口释放后无缝接管；Docker 场景下容器主进程退出
-也会触发 `restart: unless-stopped` 整容器重建，双保险。
-
-- 重启会中断所有在途连接约几秒，期间前端自动轮询 `/healthz`，恢复后提示并刷新；
-- Web 登录态持久化在 `/data/web-sessions.json`，重启后无需重新登录；
-- 权限：仅 admin 角色可见/可调（`POST /api/system/restart`），非登录请求返回 401。
-
-## 代理支持
-
-服务器出网（请求 Freebuff / Codebuff）支持代理。**日常操作全部在控制台「代理设置」里完成**：
-一个文本框一行一个代理，保存立即生效并持久化到 `/data/proxies.json`，不用改任何配置文件。
-
-### 前端「代理设置」（唯一日常入口）
-
-控制台「总览 → 代理设置」：
-
-- 文本框里**一行一个代理**（`http://...` / `socks5://...`），点「保存并生效」立即生效、无需重启；
-- 持久化到 `/data/proxies.json`（数据全在 `/data`，删容器不丢），重启后自动加载；
-- 账号由系统**内部分配**到池内代理（稳定哈希：同一账号始终同一出口，保持 session IP 稳定，不会中途换 IP）；
-- 账号分布自动打散到各代理，天然负载均衡；某个代理**连接失败**时自动回落到池内下一个（写日志）；
-- **留空保存 = 清空全局池**（走环境变量 / 直连）。
-
-### 兜底配置（一般不用动）
-
-代理优先级：控制台全局池（`/data/proxies.json`）> `config.yaml` 的 `upstream.proxies` > 账号凭据文件
-`credentials/<账号ID>.json#proxy`（内部字段，仅脚本/手工维护，无 UI）> `upstream.proxy` > `HTTP(S)_PROXY` 环境变量 > 直连。
-
-`config.yaml` 里的 `upstream.proxies` / `upstream.proxy` 只作**兜底默认值**（控制台保存后会覆盖并优先），
-改完需要重启容器才生效——日常加/删代理请在控制台操作。
-
-### 测试代理是否生效
-
-控制台「总览 → 代理测试」：
-
-- 输入代理地址点「测试」（或点「测试已配置代理」测全部已配置项）；
-- 结果会显示：**出口 IP + 国家地区**（通过 Cloudflare trace 验证确实走了该代理）、延迟、以及 codebuff 可达状态；
-- 看到出口 IP/地区 ≠ 本机 IP，就说明代理生效了。
-
-> 也可以直接 curl 后端接口：`POST /api/proxy/test`，`{"proxy":"http://..."}` 测试指定代理，空 body 测试已配置代理。
-
-### 地址怎么填（host 网络模式默认）
-
-- **host 网络模式（默认）**下容器与宿主机共享网络栈，代理在这台机器上（VPS 本机）直接填
-  `http://127.0.0.1:2334`（Clash 只监听 127.0.0.1 也能通，无需开 Allow LAN）；
-- 代理在**另一台机器**时填真实 IP（`http://192.168.1.10:2334`），不要用 `host.docker.internal`。
-
-容器健康检查走 `NO_PROXY=127.0.0.1,localhost,172.16.0.0/12`，不受代理影响。
+| 文档 | 内容 |
+|------|------|
+| **[部署与运维](docs/deployment.md)** | `/data` 里各文件的作用、持久化与备份、GitHub Actions 自动构建镜像 |
+| **[Web 控制台](docs/web-console.md)** | 登录与忘记密码找回、添加 Freebuff 账号的浏览器回调、用户与 API Key 管理 |
+| **[多账号池与调度](docs/scheduling.md)** | 账号池自动切号、粘性优先（drain, not rotate）、Freebucks 额度口径与额度保护、工具签名兼容 |
+| **[连接治理与重启兜底](docs/connection-health.md)** | 上游卡死自动掐断（幽灵连接）、客户端断开即释放账号锁、全部断开重连、重启服务 |
+| **[代理支持](docs/proxy.md)** | 全局代理池、出口分配规则、代理优先级与连通性测试 |
+| **[下游 Agent 接入](docs/api.md)** | `chat/completions` 行为、全部路由表、开放 API 批量导入/删除账号 |
+| **[命令与本地开发](docs/development.md)** | npm 脚本、本地启动、CLI 登录、冒烟测试 |
+| **[配置参考](docs/configuration.md)** | 每一项配置的唯一来源总表 |
 
 ---
 
@@ -403,118 +137,15 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   }'
 ```
 
-### 行为说明
+主要路由（完整列表见 **[下游 Agent 接入](docs/api.md)**）：
 
-- **授权**：`server.api_keys`（超级 Key）或 Web 用户 API Key 均可；非 loopback 绑定且两者皆无时拒绝启动。
-- **模型列表**：`GET /v1/models` 返回 Freebuff 线上 model id（含 `pool` / `available` / `access_tiers` 等附加字段），例如：
-  - `deepseek/deepseek-v4-flash`（daily）
-  - `deepseek/deepseek-v4-pro`（premium）
-  - `openai/gpt-5.6-luna`（premium）
-  - `minimax/minimax-m3`（premium）
-  - `mimo/mimo-v2.5`（daily）
-- **Session**：`POST /v1/chat/completions` 自动按 model 复用或占用 1 小时 free session、注入
-  `codebuff_metadata.{cost_mode=free, freebuff_instance_id, run_id, client_id}`，其余字段原样透传；
-  同一个 session 支持并发 chat 流；
-  遇到 `session_expired` / `session_superseded` / waiting room 等 gate 自动 re-admit 一次（`limits.max_auto_retry_on_session_error`）。
-- **其它路由**：
-
-  | 路径 | 作用 |
-  |------|------|
-  | `GET /healthz` | 存活探针 |
-  | `GET /v1/models` | 可用模型目录 |
-  | `GET /v1/freebuff/status` | 当前账号与 session 快照 |
-  | `GET /v1/freebuff/accounts` | 账号列表与冷却状态 |
-  | `POST /v1/freebuff/accounts/import` | **开放 API 导入账号**（Bearer API Key，单/批量，导入后自动探测预热） |
-  | `DELETE /v1/freebuff/accounts` | **开放 API 删除账号**（按 email/id/key，空 body 清空全部） |
-  | `POST /v1/freebuff/session/end` | 释放全部 session |
-  | `POST /v1/chat/completions` | 主路径（session + 透传） |
-  | `* /v1/*`（非 chat） | 映射到上游 `/api/v1/*`，只注入 Freebuff 鉴权 |
-
-### 开放 API 账号导入（Open API）
-
-`/v1` 面新增账号管理端点，与下游 Agent 共用同一套 **Bearer API Key**（`server.api_keys` 超级 Key 或 Web 用户自己的 `sk-fb-...`），无需登录控制台即可脚本化运维账号池。
-
-**导入账号** `POST /v1/freebuff/accounts/import`：
-
-```bash
-# 单个账号
-curl http://127.0.0.1:8787/v1/freebuff/accounts/import \
-  -H "Authorization: Bearer sk-fb-xxxxxxxx" \
-  -H "Content-Type: application/json" \
-  -d '{"email":"you@example.com","authToken":"<freebuff CLI token>","id":"<freebuff 用户ID（可选）>","name":"<昵称（可选）>"}'
-
-# 批量导入（数组 或 {"accounts":[...]} 或 {"json":"..."}）
-curl http://127.0.0.1:8787/v1/freebuff/accounts/import \
-  -H "Authorization: Bearer sk-fb-xxxxxxxx" \
-  -H "Content-Type: application/json" \
-  -d @accounts.json   # [{"email":...,"authToken":...}, ...]
-```
-
-- `authToken` 即 Freebuff/Codebuff 登录令牌（Web 会话 `__Secure-next-auth.session-token` 值或 CLI 登录返回的 token，二者对 `codebuff.com` API 均有效，`/api/v1/me` 实测 200）。
-- 带 `id` 可避免 GitHub/Google 同邮箱账号互相覆盖（按 `id` 存文件）；不带则按邮箱。
-- 导入后自动 `invalidate` 旧缓存 + 只读探测刷新（不占额度）。
-- 响应 `{ok, imported:[{key,email,id}], failures, total}`。
-
-**删除账号** `DELETE /v1/freebuff/accounts`：
-
-```bash
-# 按 email / id / key 删除单个
-curl -X DELETE http://127.0.0.1:8787/v1/freebuff/accounts \
-  -H "Authorization: Bearer sk-fb-xxxxxxxx" -H "Content-Type: application/json" \
-  -d '{"email":"you@example.com"}'
-
-# 空 body = 清空所有账号（先释放 session 再删凭据）
-curl -X DELETE http://127.0.0.1:8787/v1/freebuff/accounts \
-  -H "Authorization: Bearer sk-fb-xxxxxxxx"
-```
-
-> 也兼容旧格式 `{"email":"...","authToken":"..."}`（Web 端粘贴导入）。
-
----
-
-## 命令 / 本地开发
-
-```bash
-npm install
-npm run doctor    # 检查配置 / 凭据 / 上游连通
-npm start         # 本地启动反代（默认 ./config.yaml，数据在 ./data）
-npm run login     # CLI 方式浏览器登录（同样不会在容器内打开浏览器）
-npm test          # 冒烟测试（mock 上游，不消耗真实额度）
-npm run typecheck
-```
-
-可选 `node bin/serve.js --config /path/to/config.yaml`。
-
----
-
-## 配置参考
-
-Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，完整示例见 [config.example.yaml](./config.example.yaml)）。
-
-| 项 | 唯一来源 |
-|----|----------|
-| Freebuff 登录态 | Web 控制台添加 / `npm run login` → `credentials/<账号ID>.json` |
-| Web 用户 / API Key | `/data/users.json`（控制台管理） |
-| Agent 门禁 | `server.api_keys`（可选；非 loopback 必填） |
-| 上游 API / 登录 URL | `upstream.api_base` / `login_base` |
-| 出网代理 | 控制台「代理设置」→ `/data/proxies.json`（账号级 `credentials/<账号ID>.json#proxy`、`upstream.proxy`、`HTTP(S)_PROXY` 仅兜底） |
-| 运行策略 | 控制台「免费额度策略」→ `/data/settings.json`（保存后立即生效） |
-| 监听地址 | `server.host` / `port`（`FREEBUFF_PROXY_HOST` / `FREEBUFF_PROXY_PORT` 覆盖） |
-| 管理员 | `ADMIN_USERNAME` / `ADMIN_PASSWORD`（或 `users.default_admin_*`） |
-| 并发上限 | `limits.max_concurrent_requests` |
-| 每账号并发（SSE 流数，溢出阈值） | `limits.account_max_concurrency`（默认 2，控制台「账号调度」实时调整） |
-| 上游请求抖动（打散机器式节奏） | `limits.request_jitter_ms`（默认 200ms，0 = 关闭） |
-| 空闲自动释放（早退退款，Freebucks） | 控制台「额度保护」→ `/data/settings.json`（`session.idle_release_sec` 默认 60s，可调 5s..24h，0 = 关闭） |
-| 单请求新会话预算（Freebucks 计费单位） | 控制台「额度保护」（`limits.max_new_sessions_per_request` 默认 2，0 = 不限） |
-| 会话句柄落盘（重启/换容器后可退款） | `/data/sessions.json`（自动维护，无需手工编辑） |
-| 会话过期提前切换（付费模型） | `session.re_admit_lead_sec`（默认 60s） |
-| 会话过期提前切换（免费模型，不足该时长不调度） | `session.free_model_re_admit_lead_sec`（默认 60s） |
-| 上游流 idle 超时（幽灵连接治理） | `limits.stream_idle_timeout_sec`（默认 60s，最小 30s） |
-| 流掐断后账号短暂冷却 | `limits.stall_cooldown_sec`（默认 30s，0=关闭） |
-| 账号级串行化排队上限 | `limits.account_chat_wait_ms`（默认 120000ms） |
-| Web 会话有效期 | `web.session_ttl_hours`（默认 168h） |
-| 配置文件路径 | 默认 `./config.yaml` 或 `FREEBUFF_PROXY_CONFIG` |
-| 数据目录 | 默认 `./data` 或 `FREEBUFF_PROXY_DATA_DIR`（Docker 固定 `/data`） |
+| 路径 | 作用 |
+|------|------|
+| `POST /v1/chat/completions` | 主路径（session + 透传） |
+| `GET /v1/models` | 可用模型目录 |
+| `GET /v1/freebuff/status` | 当前账号与 session 快照 |
+| `GET /v1/freebuff/accounts` | 账号列表与冷却状态 |
+| `GET /healthz` | 存活探针 |
 
 ---
 
@@ -522,11 +153,18 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 
 - 2026-09 起免费层改为 **Freebucks** 计量：每个模型有单价（N Freebucks/小时），
   session 按**实际占用时长**结算——admit 预占整小时、提前 DELETE 退未用时长，
-  每日池太平洋午夜重置（每账号每天约 25 Freebucks ≈ Flash 的 1 小时，
-  具体以上游 `freebucks` 返回为准）。代理的空闲释放 / 新会话预算 / 失败即释放
-  就是为了让这份额度用得更久。
+  每日池太平洋午夜重置（每账号每天约 25 Freebucks ≈ Flash 的 1 小时，具体以上游 `freebucks` 返回为准）。
+  代理的空闲释放 / 新会话预算 / 失败即释放，就是为了让这份额度用得更久。
 - Luna 等 premium：大约每天 6×1 小时 session（共享 premium 池）。
 - Flash：CLI full 访问下次数较松，仍有 spend / IP / 容量限制。
-- 同账号由另一个客户端重新 admit 可能触发 `superseded`；同一 `instanceId` 内的并发 chat 流可正常共用。多账号多 IP 场景在「代理设置」配多个代理即可，系统按账号稳定分配出口（见代理支持）。
+- 同账号由另一个客户端重新 admit 可能触发 `superseded`；同一 `instanceId` 内的并发 chat 流可正常共用。
 - 地区 / VPN / 封禁由上游决定。
 - 本项目**不**绕过风控，也**不**保证无限额度。
+
+---
+
+## 说明
+
+- **发布与更新日志**：[Releases](https://github.com/HengXin666/freebuff-proxy/releases)
+- 本项目使用 Freebuff / Codebuff 的官方接口，仅用于个人便利；请自行遵守其服务条款。
+- 仓库当前**未声明开源许可证**（`LICENSE` 文件缺失），因此未添加 License 徽章。

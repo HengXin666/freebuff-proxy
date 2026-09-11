@@ -1,0 +1,41 @@
+# Web 控制台
+
+> 本文是 [freebuff-proxy](../README.md) 的详细文档之一。登录/找回密码、添加 Freebuff 账号的浏览器回调流程、用户管理。
+> 快速上手 / 一键部署请看 [主页 README](../README.md)。
+## Web 控制台：登录 / 用户管理 / 添加账号回调
+
+控制台是零依赖原生 JS 单页应用，内置在镜像中（`/`），无需额外部署。
+
+### 登录
+
+- 首次部署自动创建管理员（`ADMIN_USERNAME`，默认 `admin`）。
+- 设置了 `ADMIN_PASSWORD` 则用固定密码；**未设置（或 `.env` 里写成空的 `ADMIN_PASSWORD=`）则随机生成，仅在首次启动那一次打印在日志里**（强烈建议登录后改密并把密码写进 `.env`）。
+- **忘记密码了怎么找回**：启动日志里有 `首次启动：已创建管理员账号` 区块（用不带 `-f` 的 `docker compose logs freebuff-proxy` 翻）；已经找不到的话，在 `.env` 写一个新的 `ADMIN_PASSWORD=xxx` 再 `docker compose up -d`，启动时会用它重置 `admin` 的密码（日志会打印 `default admin password rotated from env/config`）。密码短于 6 位会被拒绝并告警，现有密码不受影响。
+- 日志里 `default admin ensured (password from env)` 表示**这次没有新建管理员**（已存在），不是"密码就是 env 里那个"——密码来源看同一条日志的 `passwordSource` 字段（`env` / `config` / `generated`）。
+- 普通用户由管理员在「用户管理」中创建，登录后可查看自己的 API Key 并测试对话。
+
+### 添加 Freebuff 账号（浏览器回调，不在容器内打开浏览器）
+
+容器内**不会**尝试打开浏览器。流程：
+
+1. 管理员在「总览 → + 添加账号」发起登录；
+2. 服务端向 Freebuff 申请 CLI 登录链接并返回；
+3. **在你自己电脑的浏览器**打开该链接完成登录授权（页面会持续轮询显示状态）；
+4. 服务端收到回调后把凭据保存到 `/data/credentials/<账号ID>.json`，控制台自动刷新。
+
+> 账号以 **Freebuff 用户 `id` 唯一标识**（老数据无 `id` 时回落邮箱）。即使 GitHub 和 Google
+> 登录使用**同一个邮箱**，Freebuff 也会返回不同的 `id`，两个账号会并存互不覆盖（历史上按邮箱
+> 存文件会导致互相覆盖）。旧版 `<email>.json` 文件会在首次读取时自动迁移为 `<id>.json`。
+>
+> 也支持「导入账号」：从旧环境导出的 `{"email":"...","authToken":"..."}` JSON 可直接
+> 粘贴导入（如同时导入了同邮箱的 GitHub/Google 两个账号，请带上各自的 `"id"` 以免互相覆盖）。
+>
+> 已登录用户（含普通用户）可在总览账号池点「凭证」查看某账号的完整凭据 JSON，
+> 支持一键复制或下载（`<email>-credential.json`），格式与「导入账号」兼容，方便迁移/备份。
+
+### 用户管理（管理员）
+
+- 创建 / 删除用户，设置角色（`admin` / `user`）。
+- 每个用户独立 `sk-fb-...` API Key，可复制 / 重置。
+- 修改密码。
+- 下游 Agent 用**某个用户的 API Key** 接入（Bearer token），流量统一走**热 session 优先**调度。
