@@ -419,7 +419,7 @@ async function renderAccountsCard(data) {
       el('h3', { style: 'margin:0 0 2px' }, '账号池'),
       el('span', { class: 'muted' }, totalReq > 0 ? `负载均衡 · 共 ${totalReq} 次选号 · 热 session 优先复用` : '尚无请求记录'),
     ]),
-    el('button', { class: 'muted', onclick: refreshAccountsCard }, [icon('refresh', 13), '局部刷新']),
+    el('button', { class: 'muted', onclick: () => refreshAccountsCard({ silent: false }) }, [icon('refresh', 13), '局部刷新']),
   ])
   card.append(head)
 
@@ -469,8 +469,12 @@ function buildAccountRow(a, i) {
         [statusDot, probe.label])
     : el('span', { class: a.available ? 'badge ok' : 'badge err', style: 'display:inline-flex' },
         [statusDot, statusText])
+  const hasSession = Boolean(a.session?.live)
   const ops = el('div', { class: 'row', style: 'gap:6px' }, [
     el('button', { class: 'icon muted', title: '检测该账号（只读拉取状态/模型列表，不占额度）', onclick: (e) => probeAccount(a, e.currentTarget) }, icon('activity', 14)),
+    hasSession
+      ? el('button', { class: 'icon', title: '关闭这个上游会话（立即早退 DELETE，停止按占用时长计费；有回复在传输时会先等它结束）', onclick: (e) => closeAccountSession(a, e.currentTarget) }, icon('x', 14))
+      : null,
     state.me.role === 'admin'
       ? el('button', { class: 'icon muted', title: '解除冷却', onclick: () => clearCooldown(a.key) }, icon('zap', 14))
       : null,
@@ -521,8 +525,12 @@ function probeReason(code, message) {
   return { label: '探测失败', tip: msg }
 }
 
-/** 账号表局部刷新（不重建整个页面） */
-async function refreshAccountsCard() {
+/**
+ * 账号表局部刷新（不重建整个页面）。
+ * 默认**不弹 toast**：它常被操作成功后调用，一起弹会把"操作结果"顶掉
+ * （实测点「关闭会话」后用户只看到"账号状态已刷新"）。要提示就由调用方自己弹。
+ */
+async function refreshAccountsCard({ silent = true } = {}) {
   const wrap = $('.table-wrap', $('#app'))
   if (!wrap) return render()
   wrap.classList.add('refreshing')
@@ -534,7 +542,7 @@ async function refreshAccountsCard() {
     // 更新统计卡片
     const statGrid = $('.stat-grid', $('#app'))
     if (statGrid) statGrid.replaceWith(renderStatCards(data))
-    toast('账号状态已刷新')
+    if (!silent) toast('账号状态已刷新')
   } catch (err) {
     toast(err.message, true)
   }
@@ -575,7 +583,7 @@ async function probeAccount(a, btn) {
         .map(([id, info]) => `${shortModel(id)} ${fmtNum(info?.recentCount)}/${info?.limit ?? '?'}`)
         .join(' · ')
       toast(`✅ ${a.email} 可用 · ${modelCount} 个模型${models ? '：' + models : ''}`)
-      refreshAccountsCard()
+      await refreshAccountsCard()
     } else {
       const code = r.code || sess?.status || sess?.error || r.error || '未知'
       const reason = probeReason(code, r.error || r.message)
@@ -1554,6 +1562,36 @@ function colorFor(email) {
   let h = 0
   for (const ch of String(email)) h = (h * 31 + ch.charCodeAt(0)) % 360
   return `hsl(${h}, 60%, 50%)`
+}
+
+/**
+ * 主动关闭某账号的上游会话（操作列「✕」）：用户明确要结束这条会话。
+ * 上游按会话占用时长结算，早退 DELETE 就是"停止计费"；有回复在传输时后端
+ * 会先有界等待它结束（不硬掐断），超时仍在途则如实提示"已中断在途回复"。
+ */
+async function closeAccountSession(a, btn) {
+  const label = a.session?.model ? `会话（${shortModel(a.session.model)}）` : '会话'
+  const tip = `确认关闭 ${a.email} 的${label}？\n\n会立即向上游发起早退 DELETE 停止计费；\n若此刻有回复正在传输，会先等它结束（最多 10 秒），超时才中断。`
+  if (!confirm(tip)) return
+  const restore = withButtonLoading(btn)
+  try {
+    const r = await api(`/api/accounts/${encodeURIComponent(a.key)}/session`, {
+      method: 'POST',
+      body: JSON.stringify({ waitInFlightMs: 10000 }),
+    })
+    if (r.ok) {
+      const extra = r.refund != null ? `，退款 ${fmtNum(r.refund)} FB` : ''
+      const cut = r.interrupted ? '（在途回复被中断）' : ''
+      toast(`✅ 已关闭 ${a.email} 的会话${extra}${cut}`)
+    } else {
+      toast(`⚠️ 会话未关闭成功：${r.error || '上游拒绝'}（句柄已记录，服务重启时会自动重试退款）`, true)
+    }
+    refreshAccountsCard()
+  } catch (err) {
+    toast(err.message, true)
+  } finally {
+    restore()
+  }
 }
 
 async function clearCooldown(email) {

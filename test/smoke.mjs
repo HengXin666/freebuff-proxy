@@ -2003,6 +2003,56 @@ for (const model of verifiedSpecialModels) {
   assert.equal(ptj2.results[0].ok, false)
   assert.equal(ptj2.results[0].proxy, 'http://127.0.0.1:9')
   assert.ok(ptj2.results[0].error)
+  // 操作列「关闭会话」：用户主动结束该账号的上游计费会话。
+  // 三个关键语义：① 成功即无活跃会话 ② 上游删不掉时不得谎报成功、句柄必须保留
+  // （留给重启扫尾继续退款）③ 未知账号 404。
+  {
+    const sm = wruntimes.get('w').sessions
+    await sm.ensureSession('deepseek/deepseek-v4-flash')
+    assert.ok(sm.getSnapshot().instanceId, '关闭前应有活跃会话')
+
+    const res = await fetch(`http://127.0.0.1:${wport}/api/accounts/w/session`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: '{}',
+    })
+    assert.equal(res.status, 200, await res.clone().text())
+    const j = await res.json()
+    assert.equal(j.ok, true, `关闭会话应成功：${JSON.stringify(j)}`)
+    assert.equal(j.key, 'w')
+    assert.equal(j.interrupted, false, '无在途流时不应标记为中断')
+    assert.equal(sm.getSnapshot().status, 'none', '关闭后该账号应无活跃会话')
+
+    // 上游一直删不掉 → ok=false + 带原因，且句柄保留（不得静默丢弃）
+    await sm.ensureSession('deepseek/deepseek-v4-flash')
+    deleteFailuresLeft = 99
+    const bad = await fetch(`http://127.0.0.1:${wport}/api/accounts/w/session`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: '{}',
+    })
+    const bj = await bad.json()
+    assert.equal(bj.ok, false, '删不掉时必须 ok=false')
+    assert.ok(bj.error, '失败要带原因')
+    assert.ok(sm.getSnapshot().instanceId, '失败后句柄必须保留')
+    deleteFailuresLeft = 0
+    await sm.release()
+
+    // 未知账号 → 404（且不误伤其它账号）
+    const nf = await fetch(`http://127.0.0.1:${wport}/api/accounts/nope/session`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: '{}',
+    })
+    assert.equal(nf.status, 404, '未知账号应 404')
+
+    // 未登录 → 401
+    const anon = await fetch(`http://127.0.0.1:${wport}/api/accounts/w/session`, {
+      method: 'POST',
+    })
+    assert.equal(anon.status, 401, '未登录应 401')
+  }
+
   loginFlows.shutdown()
   await wruntimes.shutdown()
   wserver.close()
@@ -4165,6 +4215,7 @@ server.close()
     sm.getSnapshot()
     if (sm.hasLiveSlot()) await sm.release()
   }
+
 
   // (8) 最终失败也必须早退释放会话（不再等空闲释放 / 挂到过期白扣时长）
   mockFreebucks = null

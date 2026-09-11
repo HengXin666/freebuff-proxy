@@ -643,6 +643,68 @@ export function createWebApi(deps) {
       return true
     }
 
+    // 单账号「关闭会话」（前端操作列的按钮）：用户主动结束该账号的上游计费会话。
+    // 上游按会话占用时长结算，主动早退 DELETE 才是"停止计费"的唯一手段，
+    // 所以这里走严格释放（等到上游确认结束或退避重试耗尽），并如实返回结果；
+    // 删不掉的句柄会留在 sessions.json，由下次启动扫尾继续退款。
+    const closeSessionMatch = path.match(/^\/api\/accounts\/([^/]+)\/session$/)
+    if (closeSessionMatch && method === 'POST') {
+      const key = decodeURIComponent(closeSessionMatch[1])
+      const a = runtimes.list().find((x) => x.key === key)
+      if (!a) {
+        sendJson(res, 404, { error: '账号不存在' })
+        return true
+      }
+      let waitMs = 10_000
+      try {
+        const body = await readJson(req)
+        if (Number.isFinite(body?.waitInFlightMs)) {
+          waitMs = Math.max(0, Math.min(60_000, body.waitInFlightMs))
+        }
+      } catch {
+        // 无 body / 非法 JSON：用默认等待窗口
+      }
+      let result
+      try {
+        const rt = runtimes.get(key)
+        // 先等在途 SSE 自然结束（有界、不无限等），再释放——尽量不掐断正在
+        // 传输的回复；超时仍在途则如实标记 interrupted 并照常释放（用户明确
+        // 要求关闭这条会话，不能因为一条卡死链路就关不掉）。
+        // 释放成功后句柄会被清空，先留一份供前端/日志展示"关掉的是哪条会话"
+        const released = rt.sessions.getSnapshot()?.instanceId ?? null
+        await rt.sessions._waitForIdle(waitMs)
+        const interrupted = rt.sessions.inFlightCount() > 0
+        const rel = await rt.sessions.releaseStrict()
+        const refund = rt.sessions.getSnapshot()?.lastRefund?.refund ?? null
+        result = { ...rel, instanceId: rel.instanceId ?? released, interrupted, refund }
+      } catch (err) {
+        result = {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        }
+      }
+      logger.info('account session close requested via web console', {
+        by: user.username,
+        key,
+        email: a.email,
+        ok: result.ok !== false,
+        interrupted: result.interrupted === true,
+        refund: result.refund ?? null,
+      })
+      sendJson(res, 200, {
+        ok: result.ok !== false,
+        key,
+        email: a.email,
+        instanceId: result.instanceId ?? null,
+        attempts: result.attempts ?? 0,
+        interrupted: result.interrupted === true,
+        refund: result.refund ?? null,
+        error: result.error ?? null,
+        account: runtimes.list().find((x) => x.key === key),
+      })
+      return true
+    }
+
     const cooldownMatch = path.match(/^\/api\/accounts\/([^/]+)\/cooldown\/clear$/)
     if (cooldownMatch && method === 'POST') {
       if (user.role !== 'admin') {
