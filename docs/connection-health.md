@@ -31,6 +31,33 @@
   放弃该账号换下一个；
 - 后台控制面请求（session / agent-runs 等）的 body 读取同样带超时兜底，杜绝任何路径挂死。
 
+### 全局并发闸门绝不无界排队（"看着在跑却不接单"的根因）
+
+**已修复的严重故障**：进程 CPU、日志、控制台、`/healthz` 全部正常，但**一段时间内完全不
+接受任何对话**，只有重启才恢复。
+
+根因是全局请求闸门 `acquireRequestSlot` 的排队**没有任何超时**：超限请求被 push 进一个
+永不 reject 的 `_waitQueue`。而 `handleChatCompletions` 是"**先占槽位、再读请求体**"，
+`readRequestBody` 的 `for await (const chunk of req)` 也没有超时——只要客户端/SDK 声明了
+`Content-Length` 却中途停止发送（进程被杀、网络中断、连接半开），这个 await 就永不返回，
+槽位被**永久**吃掉。攒满 `max_concurrent_requests`（默认 32）个之后，后续所有请求都排进
+那个队列再也出不来，进程却毫无异常迹象。
+
+修复分三层，任何一层都能独立止损：
+
+1. **排队有界**：排满时最多等 `limits.slot_wait_ms`（默认 15s），超时以 429 `server_busy`
+   明确拒绝（客户端可重试），绝不把请求永久挂在队列里；
+2. **读体有超时**：`limits.body_read_timeout_ms`（默认 120s），从根上消除槽位泄漏；客户端
+   读体途中主动断开则安静收场（400 `client_aborted`），不再打 error 级日志；
+3. **释放幂等**：`makeSlotRelease()` 带 `released` 守卫（与 ChatMutex 同构），`finally`
+   与任何兜底路径重复调用都只归还一次，计数绝不会被多减。
+
+**可观测**：`GET /api/overview` 新增 `slots` = `{inFlight, queued, limit}`，控制台总览的
+「在途请求」卡片直接显示 `在途/上限`（排队时标注「排队 N」，打满变红）。以前这个状态完全
+不可观测，只能靠"体感不接单"发现；现在泄漏会立刻显示为 `inFlight` 长期贴着 `limit` 不降。
+回归测试见 `test/smoke.mjs` 的 `(STALL)` 用例（用真实 server + 真实半开 socket 复现，
+旧实现在该用例下会永久挂起）。
+
 ### 客户端断开立即释放账号锁（不再占死全部请求）
 
 客户端中途断开（关页面/取消请求/超时放弃）时，上游流若还挂着，账号 chat 锁会被一直

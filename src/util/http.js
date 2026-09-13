@@ -7,17 +7,69 @@ export function readBearer(req) {
   return m ? m[1].trim() : null
 }
 
-export async function readRequestBody(req, limitBytes = 32 * 1024 * 1024) {
+/**
+ * 读取请求体。
+ *
+ * **必须有超时**：客户端/SDK 声明了 Content-Length 却中途停止发送（进程被杀、
+ * 网络中断、连接半开）时，`for await (const chunk of req)` 会永远不返回。
+ * 这个 await 发生在全局请求闸门**已经占住槽位之后**，于是每来这样一个请求就
+ * 永久吃掉一个并发名额；攒满 maxConcurrentRequests 个之后，整个服务不再接单，
+ * 而进程 CPU/日志/控制台完全正常——只有重启才恢复。超时即放弃该请求（408），
+ * 让槽位归还。
+ * @param {import('node:http').IncomingMessage} req
+ * @param {number} [limitBytes]
+ * @param {number} [timeoutMs] <=0 表示不设超时（仅测试用）
+ */
+export async function readRequestBody(
+  req,
+  limitBytes = 32 * 1024 * 1024,
+  timeoutMs = 0,
+) {
   const chunks = []
   let total = 0
-  for await (const chunk of req) {
-    total += chunk.length
-    if (total > limitBytes) {
-      const err = new Error('Request body too large')
-      err.statusCode = 413
-      throw err
+  let timer = null
+  let timedOut = false
+  if (timeoutMs > 0) {
+    timer = setTimeout(() => {
+      timedOut = true
+      // 摧毁连接，让 for-await 立刻以 'aborted'/'error' 结束，而不是继续干等。
+      req.destroy(new Error('request body read timeout'))
+    }, timeoutMs)
+    if (timer.unref) timer.unref()
+  }
+  try {
+    for await (const chunk of req) {
+      total += chunk.length
+      if (total > limitBytes) {
+        const err = new Error('Request body too large')
+        err.statusCode = 413
+        throw err
+      }
+      chunks.push(chunk)
     }
-    chunks.push(chunk)
+  } catch (err) {
+    if (timedOut) {
+      const e = new Error('Request body read timeout')
+      e.statusCode = 408
+      e.code = 'body_read_timeout'
+      throw e
+    }
+    // 客户端在读 body 期间断开（SDK 取消/超时自杀）：不是服务端故障，
+    // 标记成 400 让上层安静收场——不要当成 unhandled error 打 error 级日志。
+    if (
+      err &&
+      (err.code === 'ECONNRESET' ||
+        err.code === 'ERR_STREAM_PREMATURE_CLOSE' ||
+        err.message === 'aborted')
+    ) {
+      const e = new Error('Client aborted while sending request body')
+      e.statusCode = 400
+      e.code = 'client_aborted'
+      throw e
+    }
+    throw err
+  } finally {
+    if (timer) clearTimeout(timer)
   }
   return Buffer.concat(chunks)
 }

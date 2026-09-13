@@ -17,6 +17,8 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 | 监听地址 | `server.host` / `port`（`FREEBUFF_PROXY_HOST` / `FREEBUFF_PROXY_PORT` 覆盖） |
 | 管理员 | `ADMIN_USERNAME` / `ADMIN_PASSWORD`（或 `users.default_admin_*`） |
 | 并发上限 | `limits.max_concurrent_requests` |
+| 并发闸门排队上限（排满即有界拒绝 429 `server_busy`） | `limits.slot_wait_ms`（默认 15000ms，<=0 立即拒绝） |
+| 读请求体超时（防并发槽位泄漏） | `limits.body_read_timeout_ms`（默认 120000ms） |
 | 每账号并发（SSE 流数，溢出阈值） | `limits.account_max_concurrency`（默认 2，控制台「账号调度」实时调整） |
 | 上游请求抖动（打散机器式节奏） | `limits.request_jitter_ms`（默认 200ms，0 = 关闭） |
 | 空闲自动释放（早退退款，Freebucks） | 控制台「额度保护」→ `/data/settings.json`（`session.idle_release_sec` 默认 60s，可调 5s..24h，0 = 关闭） |

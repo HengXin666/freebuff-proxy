@@ -82,6 +82,13 @@ export class SessionHandleStore {
         this.orphans.push({ ...normalize(ev), note: 'release failed; queued for cleanup' })
       }
       this.save()
+      return
+    }
+    // 结算终于落地（或上游确认该 instance 已终结）：把排队中的 orphan 摘掉。
+    // 少了这一步，orphan 会永远留在 sessions.json 里，每次进程启动都对着同一条
+    // 早已结算的 instance 重放 DELETE（我的 (7.5) 回归用例就是这么抓到的）。
+    if (ev.type === 'drop' && ev.instanceId) {
+      this.dropOrphan(ev.instanceId)
     }
   }
 
@@ -124,15 +131,29 @@ export class SessionHandleStore {
         let body = await upstream.freebuffSession('DELETE', {
           instanceId: o.instanceId,
         })
-        if (body?.freebucksRefundPending === true) {
-          await sleep(1_200)
+        // 2026-09 实测：上游对提前结束的会话会持续回 freebucksRefundPending
+        // （1.5s/7s/17s/37s/67s 五次重放全是 pending）。有界重放后仍挂起
+        // **不能丢弃句柄**——结算还没跑完，丢了这笔预扣就永远要不回来。
+        let pending = body?.freebucksRefundPending === true
+        for (let i = 0; pending && i < 2; i += 1) {
+          await sleep(i === 0 ? 1_200 : 4_000)
           body = await upstream.freebuffSession('DELETE', {
             instanceId: o.instanceId,
           })
+          pending = body?.freebucksRefundPending === true
+        }
+        if (pending) {
+          failed += 1
+          logger.warn('leftover session refund still pending; keeping handle', {
+            key: o.key,
+            instanceId: o.instanceId,
+            note: o.note,
+          })
+          continue
         }
         this.dropOrphan(o.instanceId)
         cleaned += 1
-        logger.info('cleaned up leftover freebuff session (refund requested)', {
+        logger.info('cleaned up leftover freebuff session (refund settled)', {
           key: o.key,
           instanceId: o.instanceId,
           refund: body?.freebucksRefund ?? null,

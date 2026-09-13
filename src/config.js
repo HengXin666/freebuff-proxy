@@ -11,7 +11,7 @@ import { parse as parseYaml } from 'yaml'
  * @property {{cookieSecure: boolean, sessionTtlHours: number}} web
  * @property {{defaultAdminUsername: string, defaultAdminPassword: string | null}} users
  * @property {{releaseOnShutdown: boolean, reAdmitOnExpire: boolean, reAdmitLeadSec: number, freeModelReAdmitLeadSec: number, pollIntervalSec: number, admitTimeoutMs: number, idleReleaseSec: number}} session
- * @property {{maxConcurrentRequests: number, accountMaxConcurrency: number, upstreamTimeoutSec: number, streamIdleTimeoutSec: number, accountChatWaitMs: number, maxAutoRetryOnSessionError: number, stallCooldownSec: number, maxNewSessionsPerRequest: number, requestJitterMs: number}} limits
+ * @property {{maxConcurrentRequests: number, slotWaitMs: number, bodyReadTimeoutMs: number, accountMaxConcurrency: number, upstreamTimeoutSec: number, streamIdleTimeoutSec: number, accountChatWaitMs: number, maxAutoRetryOnSessionError: number, stallCooldownSec: number, maxNewSessionsPerRequest: number, requestJitterMs: number}} limits
  * @property {{level: 'debug' | 'info' | 'warn' | 'error'}} logging
  */
 
@@ -69,6 +69,13 @@ const DEFAULTS = {
   },
   limits: {
     maxConcurrentRequests: 32,
+    // 全局请求闸门的排队上限（毫秒）：排满时最多等这么久，超时返回 429
+    // server_busy。旧实现无界排队 → 几个卡死的请求就能让整个服务永久不接单。
+    slotWaitMs: 15_000,
+    // 读请求体的上限（毫秒）：客户端声明 Content-Length 却不再发完（SDK 中断、
+    // 半开连接）时，readRequestBody 的 for-await 永不返回，请求会一直占着
+    // 全局槽位。超时即放弃该请求（408），从根上消除槽位泄漏。
+    bodyReadTimeoutMs: 120_000,
     // 每个账号同一时间最多可转发的 SSE 响应流数（账号并发）。默认 2：
     // 并发请求先挤在同一账号上（粘性优先，换号 = 多买一条 Freebucks 计费会话），
     // 超过该值才溢出到下一个账号。可在控制台「负载均衡」实时调整，立即生效。
@@ -122,6 +129,8 @@ const KEY_MAP = {
   poll_interval_sec: 'pollIntervalSec',
   admit_timeout_ms: 'admitTimeoutMs',
   max_concurrent_requests: 'maxConcurrentRequests',
+  slot_wait_ms: 'slotWaitMs',
+  body_read_timeout_ms: 'bodyReadTimeoutMs',
   account_max_concurrency: 'accountMaxConcurrency',
   upstream_timeout_sec: 'upstreamTimeoutSec',
   stream_idle_timeout_sec: 'streamIdleTimeoutSec',

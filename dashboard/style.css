@@ -207,6 +207,20 @@ h3 { font-size: 15px; font-weight: 600; }
 
 /* ---------- tables ---------- */
 .table-wrap { overflow-x: auto; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+/* 账号分区：默认只展开"正在调度"，其余折叠成一行标题。
+   summary 去掉浏览器默认三角，换成自己的 ▸/▾ 指示，避免各浏览器样式不一致。 */
+.acct-section { margin-top: 10px; }
+.acct-section > summary {
+  cursor: pointer; list-style: none; display: flex; align-items: center;
+  padding: 6px 8px; border-radius: var(--radius-sm);
+}
+.acct-section > summary::-webkit-details-marker { display: none; }
+.acct-section > summary::before {
+  content: '▸'; color: var(--muted); margin-right: 6px; font-size: 11px;
+}
+.acct-section[open] > summary::before { content: '▾'; }
+.acct-section > summary:hover { background: rgba(255, 255, 255, .04); }
+.acct-section > .table-wrap { margin-top: 6px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td {
   text-align: left;

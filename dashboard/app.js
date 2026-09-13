@@ -385,11 +385,20 @@ function renderStatCards(data) {
   const available = data.accounts.filter((a) => a.available).length
   const cooldown = data.accounts.filter((a) => a.cooldownUntil).length
   const inFlight = data.accounts.reduce((n, a) => n + (a.inFlight || 0), 0)
+  // 全局闸门占用：inFlight 贴着 limit 不动就是槽位泄漏（服务会"看着在跑
+  // 却不接单"）。排队数 >0 说明已经在限流。
+  const slots = data.slots || null
+  const gateValue = slots ? `${slots.inFlight}/${slots.limit}` : String(inFlight)
+  const gateFull = slots ? slots.inFlight >= slots.limit : false
   const cards = [
     { label: '账号总数', value: total, cls: '' },
     { label: '可用账号', value: available, cls: 'green' },
     { label: '冷却中', value: cooldown, cls: cooldown ? 'yellow' : 'green' },
-    { label: '在途请求', value: inFlight, cls: '' },
+    {
+      label: slots && slots.queued ? `在途请求（排队 ${slots.queued}）` : '在途请求',
+      value: gateValue,
+      cls: gateFull ? 'red' : '',
+    },
   ]
   return el('div', { class: 'stat-grid' }, cards.map((c, i) =>
     el('div', { class: 'stat', style: `animation-delay:${i * 60}ms` }, [
@@ -440,14 +449,72 @@ async function renderAccountsCard(data) {
   return card
 }
 
+/**
+ * 账号分区（用户口径）：按"这个号现在处于什么处境"分组，默认只展开"正在调度"，
+ * 其余折叠——避免一屏全是已经被打废的号，把真正在干活的号淹掉。
+ *
+ * 顺序即优先级：封禁 > 额度不足 > 警告 > 正在调度 > 从未使用。判定按"最坏优先"，
+ * 一个号只出现在一个分区里（否则"已封禁"还会同时出现在"额度不足"里，看着像有救）。
+ */
+const ACCOUNT_SECTIONS = [
+  { id: 'banned', label: '已被封禁', hint: '上游已封号，不会再被调度', tone: 'err' },
+  { id: 'exhausted', label: '额度不足', hint: 'Freebucks 买不起当前模型，等池子刷新或加号', tone: 'err' },
+  { id: 'warning', label: '出现警告', hint: '限流 / 风控 / 探测失败，但还没封号', tone: 'warn' },
+  { id: 'active', label: '正在调度', hint: '有活跃会话或已被选中过', tone: 'ok', open: true },
+  { id: 'fresh', label: '从未使用', hint: '还没被调度过（干净号，尽量别浪费）', tone: 'idle' },
+]
+
+/** 把一个账号归类到唯一分区（最坏优先）。 */
+function classifyAccount(a) {
+  const probe = a.lastProbe && a.lastProbe.ok === false ? a.lastProbe : null
+  const code = String(probe?.code || '').toLowerCase()
+  // 1) 封禁：探测明确 banned，或已记录过封禁时间
+  if (a.bannedAt || code.includes('banned')) return 'banned'
+  // 2) 额度不足：Freebucks 余额买不起当前模型（或今日池已空）
+  const fb = a.freebucks
+  if (fb) {
+    const price = fb.prices && a.session?.model ? fb.prices[a.session.model] : null
+    const short =
+      price != null && !fb.quotaExempt && Number(fb.balance) < Number(price)
+    const dailyGone =
+      fb.daily && Number(fb.daily.remaining) <= 0 && Number(fb.daily.limit) > 0
+    if (short || dailyGone) return 'exhausted'
+  }
+  // 3) 警告：探测失败（风控/限流/凭证）或正在冷却
+  if (probe || a.cooldownUntil) return 'warning'
+  // 4) 正在调度：有活跃/在途会话，或被选号过
+  if (a.session?.live || a.used || a.requests > 0 || a.inFlight > 0) return 'active'
+  // 5) 剩下的就是从未使用
+  return 'fresh'
+}
+
 function buildAccountsTable(accounts) {
-  const tbody = el('tbody', {}, accounts.map((a, i) => buildAccountRow(a, i)))
-  return el('div', { class: 'table-wrap', style: 'margin-top:12px' }, [
-    el('table', {}, [
-      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发', '额度（今日 · FB/h）', 'Freebucks', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
-      tbody,
-    ]),
-  ])
+  const groups = new Map(ACCOUNT_SECTIONS.map((s) => [s.id, []]))
+  for (const a of accounts) {
+    const id = classifyAccount(a)
+    ;(groups.get(id) || groups.get('fresh')).push(a)
+  }
+  const node = el('div', { style: 'margin-top:12px' })
+  for (const section of ACCOUNT_SECTIONS) {
+    const rows = groups.get(section.id) || []
+    if (!rows.length) continue
+    const table = el('div', { class: 'table-wrap' }, [
+      el('table', {}, [
+        el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发', '额度（今日 · FB/h）', 'Freebucks', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
+        el('tbody', {}, rows.map((a, i) => buildAccountRow(a, i))),
+      ]),
+    ])
+    const details = el('details', { class: 'acct-section', ...(section.open ? { open: 'open' } : {}) }, [
+      el('summary', {}, [
+        el('span', { class: `badge ${section.tone}` }, `${rows.length}`),
+        el('span', { style: 'margin-left:8px;font-weight:600' }, section.label),
+        el('span', { class: 'muted', style: 'margin-left:8px;font-size:12px' }, section.hint),
+      ]),
+      table,
+    ])
+    node.append(details)
+  }
+  return node
 }
 
 function buildAccountRow(a, i) {

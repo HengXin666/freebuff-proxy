@@ -16,6 +16,7 @@ import {
   writeJsonFile,
 } from '../auth-store.js'
 import { logger } from '../util/log.js'
+import { requestSlotStats } from '../proxy.js'
 
 const SESSION_COOKIE = 'fb_session'
 
@@ -264,6 +265,9 @@ export function createWebApi(deps) {
         },
         dataDir: config.server.dataDir,
         version: process.env.npm_package_version || '1.0.0',
+        // 全局请求闸门实时占用：inFlight 长期贴着 limit 不降 = 槽位泄漏，
+        // 这种"不接单"故障以前完全不可观测（只能靠体感发现并重启）。
+        slots: requestSlotStats(),
       })
       return true
     }
@@ -584,6 +588,9 @@ export function createWebApi(deps) {
         sendJson(res, 404, { error: '账号不存在' })
         return true
       }
+      // 账号没了，账本里的记录（请求数/冷却/退款流水）也一并清掉，
+      // 否则文件会随删号无限增长，控制台还会读出幽灵账号的历史。
+      runtimes.forgetAccount(key)
       sendJson(res, 200, { ok: true, key })
       return true
     }

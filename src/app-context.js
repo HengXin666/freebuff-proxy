@@ -1,14 +1,17 @@
 import path from 'node:path'
+import fs from 'node:fs'
 import {
   resolveCredentialsDir,
   listAccounts,
   readAccountUser,
   accountKeyOf,
+  accountCredentialsPath,
   freebuffAuthHeaders,
 } from './auth-store.js'
 import { createUpstreamClient } from './upstream/client.js'
 import { SessionManager } from './session-manager.js'
 import { SessionHandleStore } from './session-handles.js'
+import { AccountStateStore } from './account-state-store.js'
 import { UpstreamError, isSessionRecoverableGate } from './upstream/client.js'
 import { logger } from './util/log.js'
 
@@ -180,6 +183,13 @@ export class AccountRuntimes {
      * 留在这里等下次清理（绝不丢 = 绝不留下无法寻址的计费孤儿）。
      */
     this.handleStore = new SessionHandleStore(resolveSessionIndexPath(config))
+    /**
+     * 账号运行状态的持久化账本（/data/account-state.json）：加入/封禁时间、
+     * 请求数、最近使用、冷却、Freebucks 余额与单价、每日额度、最近探测结果。
+     * 这些原本只在内存里，一次重启就全丢——重启后控制台分不出"干净的未用号"
+     * 和"已经打废的号"，且 freebucks 归零会让"买不起就别 admit"的闸门失效。
+     */
+    this.accountState = new AccountStateStore(resolveAccountStatePath(config))
     this._getAccountConcurrency =
       typeof opts.getAccountConcurrency === 'function'
         ? opts.getAccountConcurrency
@@ -217,6 +227,10 @@ export class AccountRuntimes {
      * @type {Map<string, number>}
      */
     this._lastUsedAt = new Map()
+    // 必须在**所有**上述容器（cooldowns/stats/_lastUsedAt）初始化之后回灌，
+    // 否则账本里存着的计数/冷却没有地方放（早先放在构造函数开头，smoke 直接
+    // 以 "Cannot read properties of undefined" 抓到）。
+    this._restoreAccountState()
   }
 
   list() {
@@ -234,6 +248,19 @@ export class AccountRuntimes {
         cooldownUntil: cooling ? new Date(cd.until).toISOString() : null,
         cooldownCode: cooling ? cd.code : null,
         requests: this.stats.byKey.get(a.key) || 0,
+        // 账号生命周期（持久化账本）：加入时间 / 封禁时间。重启后仍在，
+        // 控制台据此区分"从未使用过 / 正在调度 / 额度不足 / 已被封禁"。
+        firstSeenAt:
+          this.accountState.account(a.key, this._importedAtHint(a.key))
+            ?.firstSeenAt || null,
+        bannedAt: this.accountState.account(a.key)?.bannedAt || null,
+        // 退款流水（最近 100 条）+ 累计对账：回答"退款到底成没成功、金额对不对"
+        refunds: this.accountState.refunds(a.key).slice(0, 20),
+        refundTotal: this.accountState.account(a.key)?.refundTotal ?? 0,
+        refundExpectedTotal:
+          this.accountState.account(a.key)?.refundExpectedTotal ?? 0,
+        refundPendingCount:
+          this.accountState.account(a.key)?.refundPendingCount ?? 0,
         // 是否被使用过（粘性调度：未用过的账号排最后启用）+ 最近使用时间
         used: this.everUsed(a.key),
         lastUsedAt: this._lastUsedAt.has(a.key)
@@ -304,6 +331,8 @@ export class AccountRuntimes {
       accountKey,
       // 句柄变更落盘（track/clear/orphan）——见 SessionHandleStore。
       onSessionChange: (ev) => this.handleStore.handleEvent(ev),
+      // 账号账目落盘（freebucks/quota/lastProbe）——见 AccountStateStore。
+      onStateChange: (snap) => this._persistAccountState(accountKey, snap),
       getSessionSettings: this._getSessionSettings,
       // 该账号还有在途/排队的 chat 时，空闲释放让路（见 SessionManager._armIdleRelease）
       hasPendingUser: () => {
@@ -325,7 +354,64 @@ export class AccountRuntimes {
       source: `credentials:${accountKey}`,
     }
     this.byKey.set(accountKey, runtime)
+    // 账本回灌（freebucks/quota/lastProbe/冷却）：必须在这里做，不能只在构造
+    // 函数里做——runtime 是**懒创建**的，构造函数执行时 byKey 还是空的。
+    // freebucks 尤其关键：它让"余额买不起就别 admit"的闸门在重启后依然生效。
+    this._hydrateRuntime(runtime)
+    this.accountState.patch(accountKey, { email: user.email })
     return runtime
+  }
+
+  /**
+   * 把账本里某账号的状态灌回它的 runtime（懒创建时调用）+ 内存冷却表。
+   * @param {{ key: string, sessions: import('./session-manager.js').SessionManager, email?: string }} runtime
+   */
+  _hydrateRuntime(runtime) {
+    const key = runtime?.key
+    const rec = key
+      ? this.accountState.account(key, this._importedAtHint(key))
+      : null
+    if (!rec || !runtime?.sessions) return
+    const s = runtime.sessions
+    if (rec.freebucks && typeof rec.freebucks === 'object') {
+      s.freebucks = rec.freebucks
+    }
+    if (rec.quota && typeof rec.quota === 'object') s.quota = rec.quota
+    if (rec.lastProbe && typeof rec.lastProbe === 'object') {
+      s.lastProbe = rec.lastProbe
+    }
+    const cds = rec.cooldowns
+    if (cds && typeof cds === 'object') {
+      const now = Date.now()
+      const prefix = `${key}\0`
+      for (const [k, cd] of Object.entries(cds)) {
+        // 必须精确匹配账号 key 或 `key\0model`：用 startsWith(key) 会让账号
+        // "ab" 的冷却灌进账号 "a"（前缀撞车，单字符 key 的测试测不出来）。
+        if (k !== key && !k.startsWith(prefix)) continue
+        const until = Number(cd?.until)
+        // 过期的冷却直接丢：重启不该把号永久锁死。
+        if (!Number.isFinite(until) || until <= now) continue
+        this.cooldowns.set(k, { until, code: cd.code ?? null, model: cd.model })
+      }
+    }
+  }
+
+  /**
+   * "这个号什么时候进来的"——取凭据文件的创建时间（birthtime，回退 mtime）。
+   * 为什么不直接用"账本第一次看到它"：老账号升级到本账本时会被记成今天刚
+   * 加入，控制台的"从未使用 / 老号"分区就全错了。
+   * @param {string} key
+   * @returns {string | null}
+   */
+  _importedAtHint(key) {
+    try {
+      const p = accountCredentialsPath(this.dir, key)
+      const st = fs.statSync(p)
+      const t = st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs
+      return Number.isFinite(t) && t > 0 ? new Date(t).toISOString() : null
+    } catch {
+      return null
+    }
   }
 
   /** 账号 key 列表（id 优先，历史账号为邮箱）。 */
@@ -409,6 +495,12 @@ export class AccountRuntimes {
 
     if (code === 'banned') {
       ms = Math.max(ms, BANNED_COOLDOWN_MS)
+      // 封禁是账号生命周期的终点：不只冷却，还要记下"什么时候开始被封的"
+      // （chat 阶段撞到 banned 与探测发现 banned 同等重要，控制台分区靠它）。
+      const rec = this.accountState.account(key, this._importedAtHint(key))
+      if (rec && !rec.bannedAt) {
+        this.accountState.patch(key, { bannedAt: new Date().toISOString() })
+      }
     }
 
     // model_unavailable / similar: only block that model on this account
@@ -421,6 +513,7 @@ export class AccountRuntimes {
       code,
       model: perModel ? model : undefined,
     })
+    this._persistCooldowns(key)
     logger.info('account cooling down; will try others', {
       key,
       code,
@@ -433,12 +526,31 @@ export class AccountRuntimes {
   clearCooldown(key, model = null) {
     this.cooldowns.delete(key)
     if (model) this.cooldowns.delete(this._cooldownKey(key, model))
+    this._persistCooldowns(key)
+  }
+
+  /**
+   * 更新"最后成功账号"（粘性调度核心输入）并落盘。
+   * 集中一处：原先有 4 个赋值点，只有 1 个写了账本，重启后粘性就跑了。
+   * @param {string} key
+   */
+  _setLastSuccessKey(key) {
+    if (!key) return
+    this._lastSuccessKey = key
+    this.accountState.state.lastSuccessKey = key
+    this.accountState.touch()
   }
 
   _recordSuccess(key) {
     this.stats.total += 1
     this.stats.byKey.set(key, (this.stats.byKey.get(key) || 0) + 1)
     this._lastUsedAt.set(key, Date.now())
+    // 请求计数/最近使用落盘：重启后「用过没有 / 最近什么时候用的」不该归零，
+    // 否则粘性调度会把已经打过废的账号当成全新账号重新启用一遍。
+    this.accountState.patch(key, {
+      requests: this.stats.byKey.get(key) || 0,
+      lastUsedAt: new Date(this._lastUsedAt.get(key)).toISOString(),
+    })
   }
 
   async _withAcquireLock(fn) {
@@ -662,8 +774,11 @@ export class AccountRuntimes {
 
       const reusable = rt.sessions.isUsableForModel(model)
       if (!reusable) {
-        // Freebucks 余额买不起该模型：不 admit（上游会 429 freebucksShortfall，
-        // 白跑一趟还可能留下计费行），直接跳过这个账号。
+        // 上游对"余额不够"的判定就两条——额度跑完 / 本次请求所需 Freebucks
+        // 高于剩余额度——命中任一条就可能直接封号，所以**只在真的要新买一条
+        // 计费会话时**才拦。注意不能提到 reusable 判断之外：活跃的同模型热
+        // session 在 admit 时就已经预扣了整小时，复用它不再产生费用，拦下来
+        // 反而等于把已经付过的钱丢掉、再去别的号上买一条新的。
         const fb = rt.sessions.freebucksFor?.(model)
         if (fb?.known && fb.affordable === false) {
           failures.push({
@@ -712,7 +827,7 @@ export class AccountRuntimes {
           opts.sessionBudget.remaining -= 1
         }
         this.clearCooldown(key, model)
-        this._lastSuccessKey = key
+        this._setLastSuccessKey(key)
         // 指针推进到"被选中账号"的下一位：冷却账号被跳过时依然保持公平轮询
         // （若只按 +1 推进，跳过冷却账号会让列表末尾的账号被选中两次）。
         this._rr = (keys.indexOf(key) + 1) % Math.max(keys.length, 1)
@@ -742,6 +857,24 @@ export class AccountRuntimes {
       }
     }
 
+    // 全部账号都是"余额买不起"时给出**独立错误码**：这跟"账号都在冷却/没号"
+    // 是完全不同的处境（前者等每日池刷新就好，后者要加号/等冷却），调用方与
+    // 控制台不该看到同一个笼统的 no_available_account。
+    const allExhausted =
+      failures.length > 0 &&
+      failures.every((f) => f.code === 'freebucks_exhausted')
+    if (allExhausted) {
+      const cheapest = failures.map((f) => f.message).join('; ')
+      throw new UpstreamError(
+        `No Freebuff account can afford model ${model} (Freebucks exhausted). ${cheapest}`,
+        {
+          status: 429,
+          code: 'freebucks_exhausted',
+          body: { model, failures },
+          retryAfterMs: this.earliestCooldownMs(),
+        },
+      )
+    }
     throw new UpstreamError(
       `No available Freebuff account for model ${model}. Tried ${failures.length} account(s).`,
       {
@@ -805,7 +938,7 @@ export class AccountRuntimes {
               (callerHoldsLock || !this.isChatBusy(opts.preferredKey))
             ) {
               this.clearCooldown(opts.preferredKey, model)
-              this._lastSuccessKey = opts.preferredKey
+              this._setLastSuccessKey(opts.preferredKey)
               return rt
             }
           } catch {
@@ -822,14 +955,32 @@ export class AccountRuntimes {
             rt.sessions.isUsableForModel(model)
           ) {
             this.clearCooldown(opts.preferredKey, model)
-            this._lastSuccessKey = opts.preferredKey
+            this._setLastSuccessKey(opts.preferredKey)
             return rt
           }
           // 同账号 gate 重试时，调用方（chat 流程）已持有该账号的串行化锁，
           // 不会与另一个在途 chat 冲突，可直接 forceReadmit。
+          //
+          // 但 forceReadmit 会**新买一条计费会话**（先 DELETE 再 admit），所以
+          // 必须先过额度闸门：余额买不起还去 admit，正好命中上游"请求所需
+          // Freebucks 高于余额 → 直接封号"的判定。买不起就冷却该号并交给下面的
+          // 全新选号去挑一个买得起的账号。
+          const fbGate = rt.sessions.freebucksFor?.(model)
+          if (fbGate?.known && fbGate.affordable === false) {
+            logger.info('skip re-admit: freebucks cannot afford model', {
+              key: opts.preferredKey,
+              model,
+              balance: fbGate.balance,
+              price: fbGate.price,
+            })
+            throw new UpstreamError(
+              `freebucks balance ${fbGate.balance} < price ${fbGate.price} for ${model}`,
+              { status: 429, code: 'freebucks_exhausted' },
+            )
+          }
           await rt.sessions.forceReadmit(model)
           this.clearCooldown(opts.preferredKey, model)
-          this._lastSuccessKey = opts.preferredKey
+          this._setLastSuccessKey(opts.preferredKey)
           return rt
         } catch (err) {
           const wrap =
@@ -1047,6 +1198,128 @@ export class AccountRuntimes {
     return { ok: failed.length === 0, released, failed }
   }
 
+  /**
+   * 把内存里的账号状态写进账本：
+   *   - _persistCooldowns(key)：某账号整组冷却（账号级 + 各模型级）
+   *   - _persistAccountState(key, snap)：freebucks / quota / lastProbe
+   * 都在热路径上调用，落盘本身由 AccountStateStore 去抖合并，不阻塞转发。
+   * @param {string} key
+   */
+  _persistCooldowns(key) {
+    if (!key) return
+    const prefix = `${key}\0`
+    const cooldowns = {}
+    for (const [k, cd] of this.cooldowns) {
+      if (k !== key && !k.startsWith(prefix)) continue
+      cooldowns[k] = { until: cd.until, code: cd.code ?? null }
+      if (cd.model) cooldowns[k].model = cd.model
+    }
+    this.accountState.patch(key, { cooldowns })
+  }
+
+  /**
+   * @param {string} key
+   * @param {{ freebucks?: any, quota?: any, lastProbe?: any }} snap
+   */
+  _persistAccountState(key, snap) {
+    if (!key || !snap) return
+    // 退款流水单独走账本（追加重试/金额对账用），不混进字段快照。
+    if (snap.refund) {
+      this.accountState.recordRefund(key, snap.refund)
+      return
+    }
+    const fields = {}
+    if (snap.freebucks !== undefined) fields.freebucks = snap.freebucks
+    if (snap.quota !== undefined) fields.quota = snap.quota
+    if (snap.lastProbe !== undefined) fields.lastProbe = snap.lastProbe
+    const user = this.byKey.get(key)?.user
+    if (user?.email) fields.email = user.email
+    // 封禁是账号生命周期的终点，值得额外记一笔（"什么时候开始被 ban 的"）。
+    if (fields.lastProbe?.ok === false && fields.lastProbe.code === 'banned') {
+      if (!this.accountState.account(key)?.bannedAt) {
+        fields.bannedAt = fields.lastProbe.at || new Date().toISOString()
+      }
+    }
+    this.accountState.patch(key, fields)
+  }
+
+  /**
+   * 启动时回灌账本：冷却、请求计数、最近使用、freebucks/quota/探测结果。
+   * 只回灌**尚未过期**的冷却（过期的直接丢弃，否则重启会把账号永久锁死）。
+   * 回灌 freebucks 尤其关键：它让"余额买不起就别 admit"这道闸门在重启后
+   * 依然生效，而不是失忆放行去撞已知余额不足的账号。
+   */
+  _restoreAccountState() {
+    const valid = new Set(this.allKeys())
+    const removed = this.accountState.prune(valid)
+    if (removed) {
+      logger.info('account-state: 清理已删除账号的记录', { removed })
+    }
+    for (const key of valid) {
+      const rec = this.accountState.account(key, this._importedAtHint(key))
+      if (!rec) continue
+      const requests = Number(rec.requests) || 0
+      if (requests > 0) {
+        this.stats.byKey.set(key, requests)
+        this.stats.total += requests
+      }
+      const usedAt = rec.lastUsedAt ? Date.parse(rec.lastUsedAt) : NaN
+      if (Number.isFinite(usedAt)) this._lastUsedAt.set(key, usedAt)
+      const cds = rec.cooldowns
+      if (cds && typeof cds === 'object') {
+        const now = Date.now()
+        const prefix = `${key}\0`
+        for (const [k, cd] of Object.entries(cds)) {
+          if (k !== key && !k.startsWith(prefix)) continue
+          const until = Number(cd?.until)
+          if (!Number.isFinite(until) || until <= now) continue
+          this.cooldowns.set(k, {
+            until,
+            code: cd.code ?? null,
+            model: cd.model,
+          })
+        }
+      }
+      // freebucks / quota / lastProbe 不在这里灌：runtime 是懒创建的，构造
+      // 函数执行时 byKey 还是空的。那部分见 _hydrateRuntime（get() 时调用）。
+    }
+    if (typeof this.accountState.state.lastSuccessKey === 'string') {
+      this._lastSuccessKey = this.accountState.state.lastSuccessKey
+    }
+  }
+
+  /**
+   * 忘记某账号（被删除时调用）：把它的账本记录一并清掉。
+   * 不清的话 account-state.json 会随着删号无限增长，而且下次 prune 之前
+   * 控制台仍会从账本里读出这些幽灵账号的"历史"。
+   * @param {string} key
+   */
+  forgetAccount(key) {
+    if (!key) return
+    const accounts = this.accountState.state.accounts
+    if (accounts[key]) {
+      delete accounts[key]
+    }
+    // 历史邮箱 key 同属一个账号时一并清掉（旧布局凭据）。
+    this.stats.byKey.delete(key)
+    this._lastUsedAt.delete(key)
+    if (this._lastSuccessKey === key) this._lastSuccessKey = null
+    for (const k of [...this.cooldowns.keys()]) {
+      if (k === key || k.startsWith(`${key}\0`)) this.cooldowns.delete(k)
+    }
+    this.accountState.prune(new Set(this.allKeys()))
+    this.accountState.flush()
+  }
+
+  /** 账本 + 句柄索引一起冲刷落盘（进程退出/重启前调用）。 */
+  flushState() {
+    try {
+      this.accountState.flush()
+    } catch {
+      // 落盘失败不影响退出流程
+    }
+  }
+
   async shutdown({ strict = false } = {}) {
     /** @type {{ok: boolean, released: number, failed: any[]}} */
     let rel = { ok: true, released: 0, failed: [] }
@@ -1067,6 +1340,7 @@ export class AccountRuntimes {
     }
     const tasks = [...this.byKey.values()].map((rt) => rt.sessions.shutdown())
     await Promise.allSettled(tasks)
+    this.flushState()
     this.byKey.clear()
     return rel
   }
@@ -1081,10 +1355,23 @@ export class AccountRuntimes {
  * @param {import('./config.js').ProxyConfig} config
  */
 function resolveSessionIndexPath(config) {
+  return path.join(accountStateDir(config), 'sessions.json')
+}
+
+/**
+ * 账号状态账本（account-state.json）落盘位置——与 sessions.json / 凭据同目录，
+ * 同样是"删容器不丢数据"的 /data 约定。
+ * @param {import('./config.js').ProxyConfig} config
+ */
+function resolveAccountStatePath(config) {
+  return path.join(accountStateDir(config), 'account-state.json')
+}
+
+/** 凭据目录的父目录（= /data）；凭据目录本身不叫 credentials 时就用它自己。 */
+function accountStateDir(config) {
   const credDir = resolveCredentialsDir(config)
   const parent = path.dirname(credDir)
-  const base = path.basename(credDir) === 'credentials' ? parent : credDir
-  return path.join(base, 'sessions.json')
+  return path.basename(credDir) === 'credentials' ? parent : credDir
 }
 
 /**

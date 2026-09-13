@@ -8,6 +8,7 @@ import { loadConfig } from '../src/config.js'
 import { AccountRuntimes } from '../src/app-context.js'
 import { SessionHandleStore } from '../src/session-handles.js'
 import { startServer } from '../src/server.js'
+import { requestSlotStats } from '../src/proxy.js'
 import { configureLogger } from '../src/util/log.js'
 import {
   requireModelId,
@@ -58,8 +59,15 @@ let sessionExpiryMs = 3600_000
  * @type {null | { balance: number, daily?: any, wallet?: any, prices?: Record<string, number>, quotaExempt?: boolean, planId?: string | null }}
  */
 let mockFreebucks = null
+
 /** 每次 DELETE 退还给调用方的 Freebucks（模拟"提前结束退款"）。 */
 let mockRefund = 1.5
+/**
+ * 上游"结算未完成"标志 (vendor af898dc freebucksRefundPending)。true 时 DELETE
+ * 回执只带 pending、**不带** freebucksRefund——2026-09 实测提前结束的会话会
+ * 持续挂起数分钟。用于验证"挂起 ≠ 退款 0"。
+ */
+let mockRefundPending = false
 /** DELETE 收到过的 x-freebuff-instance-id（回归：不带会被上游 400）。 */
 let deleteInstanceIds = []
 /** 还需要失败几次 DELETE（验证"失败不丢句柄"）。0 = 全部成功。 */
@@ -174,7 +182,8 @@ globalThis.fetch = async (url, init = {}) => {
     }
     return jsonRes({
       status: 'ended',
-      freebucksRefund: mockRefund,
+      ...(mockRefundPending ? { freebucksRefundPending: true } : {}),
+      ...(mockRefundPending ? {} : { freebucksRefund: mockRefund }),
       ...(mockFreebucks ? { freebucks: mockFreebucks } : {}),
     })
   }
@@ -4038,6 +4047,43 @@ server.close()
     // 账号列表把 Freebucks 暴露给控制台
     const row = fbRuntimes.list().find((x) => x.key === 'a')
     assert.equal(row.freebucks?.balance, 25, '账号列表应带 freebucks')
+
+    // (1.5) 退款流水必须落盘：只有 lastRefund 一个内存字段时，"退款是不是失败
+    //       了 / 金额对不对"根本无法审计（重启就丢）。流水要同时给出
+    //       refund（上游实退）与 expected（按实际占用应付），差额才可对账。
+    fbRuntimes.accountState.flush()
+    const rlog = fbRuntimes.accountState.refunds('a')
+    assert.ok(rlog.length >= 1, '退款流水应至少有一条')
+    assert.equal(rlog[0].refund, mockRefund, '流水应记上游实退金额')
+    assert.equal(rlog[0].instanceId, 'inst-1', '流水应记 instanceId')
+    assert.equal(rlog[0].model, 'deepseek/deepseek-v4-flash')
+    assert.equal(rlog[0].price, 2, '流水应记当时单价，便于换算 expected')
+    assert.ok(
+      typeof rlog[0].holdMs === 'number' && rlog[0].holdMs >= 0,
+      '流水应记实际占用时长',
+    )
+    assert.ok(
+      typeof rlog[0].expected === 'number',
+      `流水应给出应付金额（对账用），got ${JSON.stringify(rlog[0])}`,
+    )
+    assert.equal(
+      fbRuntimes.list().find((x) => x.key === 'a').refundTotal,
+      mockRefund,
+      '累计退款应出现在账号列表里',
+    )
+    // 账号生命周期字段必须能到前端（分区功能的数据来源）
+    const listRow = fbRuntimes.list().find((x) => x.key === 'a')
+    assert.ok(listRow.firstSeenAt, '列表应带 firstSeenAt（账号加入时间）')
+    assert.ok(
+      !Number.isNaN(Date.parse(listRow.firstSeenAt)),
+      'firstSeenAt 应是可解析的时间',
+    )
+    assert.ok(
+      Array.isArray(listRow.refunds) && listRow.refunds.length >= 1,
+      '列表应带退款流水',
+    )
+    // 注：/api/accounts 是 `{ object, data: runtimes.list() }` 的**直通**（web
+    // 会话鉴权，本块未搭该设施），所以上面 list() 的断言就等于端点契约。
   }
 
   // (2) 余额买不起该模型 → 不 admit（不发 POST），直接跳过该账号。
@@ -4089,16 +4135,197 @@ server.close()
     })
     assert.equal(res.status, 429, await res.clone().text())
     const j = await res.json()
-    assert.equal(j.error.code, 'no_available_account')
+    // 全部账号都是"余额买不起"→ 独立错误码，与"没号/都在冷却"区分开
+    // （前者等每日池刷新即可，后者要加号），控制台/调用方才分得清处境。
+    assert.equal(
+      j.error.code,
+      'freebucks_exhausted',
+      `全账号余额不足应报 freebucks_exhausted，got ${JSON.stringify(j.error)}`,
+    )
     assert.ok(
-      (j.error.details?.failures || []).some((f) => f.code === 'freebucks_exhausted'),
-      `应记录 freebucks_exhausted，got ${JSON.stringify(j.error.details)}`,
+      (j.error.details?.failures || []).length >= 3 &&
+        (j.error.details?.failures || []).every(
+          (f) => f.code === 'freebucks_exhausted',
+        ),
+      `每个账号都应记为 freebucks_exhausted，got ${JSON.stringify(j.error.details)}`,
     )
     assert.equal(
       sessionPosts,
       postsBefore,
       '余额不足不得再 admit 新会话（白扣占用时长）',
     )
+  }
+
+  // (2.2) 同号重试（forceReadmit）也必须过额度闸门：它会先 DELETE 再 admit，
+  //       等于**新买一条计费会话**。余额买不起还去 admit，正好命中上游
+  //       "所需 Freebucks > 余额 → 直接封号"的判定——这是最现实的一条封号路径。
+  {
+    const model = 'deepseek/deepseek-v4-flash'
+    const fbLow = {
+      balance: 0.5,
+      daily: { limit: 25, spent: 24.5, remaining: 0.5, resetAt: futureReset },
+      wallet: { balance: 0, monthlyBonus: 0, nextBonusAt: null },
+      prices: { [model]: 2 },
+      quotaExempt: false,
+      planId: null,
+      monthly: null,
+      peak: null,
+      updatedAt: new Date().toISOString(),
+    }
+    for (const key of ['a', 'b', 'c']) {
+      fbRuntimes.get(key).sessions.freebucks = { ...fbLow }
+    }
+    // 同号 gate 重试路径：给一个 session 可恢复的 gate code，走 forceReadmit 分支
+    const postsBefore = sessionPosts
+    let threw = null
+    try {
+      await fbRuntimes.reacquireAfterGate(model, {
+        preferredKey: 'a',
+        gateCode: 'session_expired',
+      })
+    } catch (err) {
+      threw = err
+    }
+    assert.ok(threw, '余额不足时同号重试必须失败，而不是硬买一条新会话')
+    assert.equal(
+      threw.code,
+      'freebucks_exhausted',
+      `应报 freebucks_exhausted，got ${threw.code}: ${threw.message}`,
+    )
+    assert.equal(
+      sessionPosts,
+      postsBefore,
+      '余额不足不得经 forceReadmit 再 admit 新会话（白扣 + 触发封号判定）',
+    )
+    fbRuntimes.clearCooldown('a', model)
+  }
+
+  // (2.5) 重启后额度闸门不得失忆：账号账本（account-state.json）落盘 →
+  //       新进程起来后仍知道"这个号余额买不起"，不会拿重启当重置去撞已知
+  //       余额不足的账号（那正是封禁的触发条件）。
+  {
+    const model = 'deepseek/deepseek-v4-flash'
+    // 把 a 标成"余额 0.5 < 单价 2"，走完整落盘路径（不是直接改内存）。
+    const smA = fbRuntimes.get('a').sessions
+    smA.freebucks = {
+      balance: 0.5,
+      daily: { limit: 25, spent: 24.5, remaining: 0.5, resetAt: futureReset },
+      wallet: { balance: 0, monthlyBonus: 0, nextBonusAt: null },
+      prices: { [model]: 2 },
+      quotaExempt: false,
+      planId: null,
+      monthly: null,
+      peak: null,
+      updatedAt: new Date().toISOString(),
+    }
+    fbRuntimes._persistAccountState('a', { freebucks: smA.freebucks })
+    fbRuntimes.accountState.flush()
+
+    const stateFile = fbRuntimes.accountState.file
+    const onDisk = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
+    assert.ok(
+      onDisk.accounts?.a?.freebucks,
+      'freebucks 必须落盘（否则重启后闸门失忆）',
+    )
+    assert.equal(onDisk.accounts.a.freebucks.balance, 0.5)
+    assert.ok(onDisk.accounts?.a?.firstSeenAt, '账号加入时间必须落盘')
+    assert.equal(
+      typeof onDisk.accounts?.a?.requests,
+      'number',
+      '请求计数必须落盘',
+    )
+
+    // 模拟"进程重启"：同一 dataDir 上重新构造一套 runtime。
+    const restarted = new AccountRuntimes(fbConfig)
+    const rtA = restarted.get('a')
+    assert.equal(
+      rtA.sessions.freebucks?.balance,
+      0.5,
+      '重启后必须从账本回灌 freebucks',
+    )
+    const fbAfter = rtA.sessions.freebucksFor(model)
+    assert.equal(fbAfter.known, true, '重启后额度应仍是"已知"（不得 fail-open）')
+    assert.equal(
+      fbAfter.affordable,
+      false,
+      '重启后仍必须判定为买不起（fail-open 就等于拿重启当额度重置）',
+    )
+    await restarted.shutdown()
+  }
+
+  // (2.6) 账本回灌的前缀撞车：账号 key "acc" 与 "acc2" 是不同账号，冷却/记录
+  //       绝不能因为 startsWith 就互相串台（单字符 key 的用例测不出来）。
+  {
+    const pDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-prefix-'))
+    try {
+      saveAccountUser(pDir, { id: 'acc', email: 'acc@x.com', authToken: 't1' })
+      saveAccountUser(pDir, { id: 'acc2', email: 'acc2@x.com', authToken: 't2' })
+      const pCfg = loadConfig()
+      pCfg.upstream.credentialsDir = pDir
+      pCfg.session.pollIntervalSec = 3600
+      const p1 = new AccountRuntimes(pCfg)
+      p1.get('acc')
+      p1.get('acc2')
+      // 只冷却 acc2（账号级 + 模型级各一条），走真实 markCooldown 路径
+      p1.markCooldown('acc2', { code: 'rate_limited' })
+      p1.markCooldown('acc2', { code: 'model_unavailable' }, 'some/model')
+      // 关键：触发一次针对 **acc** 的归集（clearCooldown 也会写账本）。
+      // 没有这一步，startsWith('acc') 的撞车永远不会真正发生——acc 从不被写，
+      // 于是 bug 潜伏而测试恒绿（第一版就是这么写空的）。
+      p1.clearCooldown('acc')
+      p1.accountState.flush()
+
+      // 归集必须精确：acc2 的冷却绝不能写进 acc 的记录（startsWith("acc")
+      // 会把 "acc2" 一起匹配进来——单字符 key 的用例测不出这种前缀撞车）。
+      const accRec = p1.accountState.account('acc')
+      assert.ok(
+        !accRec.cooldowns || Object.keys(accRec.cooldowns).length === 0,
+        `acc 的记录不得含任何冷却，got ${JSON.stringify(accRec.cooldowns)}`,
+      )
+      const acc2Rec = p1.accountState.account('acc2')
+      assert.ok(
+        acc2Rec.cooldowns?.acc2,
+        'acc2 的账号级冷却应记在 acc2 自己名下',
+      )
+      assert.ok(
+        acc2Rec.cooldowns?.['acc2\0some/model'],
+        'acc2 的模型级冷却应记在 acc2 自己名下',
+      )
+
+      // 回灌同样要精确
+      const p2 = new AccountRuntimes(pCfg)
+      p2.get('acc')
+      p2.get('acc2')
+      assert.equal(
+        p2.isCoolingDown('acc'),
+        false,
+        'acc 不得继承 acc2 的冷却（前缀撞车）',
+      )
+      assert.equal(p2.isCoolingDown('acc2'), true, 'acc2 的账号级冷却应回灌')
+      assert.equal(
+        p2.isCoolingDown('acc2', 'some/model'),
+        true,
+        'acc2 的模型级冷却应回灌',
+      )
+      await p2.shutdown()
+      // 封禁时间要落盘：chat 阶段撞到 banned 与探测发现 banned 同等重要，
+      // 控制台"已被封禁"分区靠它（否则重启后这个号会被当成干净号）。
+      const p3 = new AccountRuntimes(pCfg)
+      p3.get('acc')
+      p3.markCooldown('acc', { code: 'banned' })
+      p3.accountState.flush()
+      assert.ok(
+        p3.accountState.account('acc').bannedAt,
+        'banned 冷却必须记下 bannedAt',
+      )
+      const p4 = new AccountRuntimes(pCfg)
+      const accRow = p4.list().find((x) => x.key === 'acc')
+      assert.ok(accRow.bannedAt, '重启后 bannedAt 仍应在账号列表里')
+      await p3.shutdown()
+      await p4.shutdown()
+    } finally {
+      fs.rmSync(pDir, { recursive: true, force: true })
+    }
   }
 
   // (3) 单请求新会话预算：chat 一直 500（账号级故障 → 换号），3 个账号最多
@@ -4251,6 +4478,84 @@ server.close()
   }
 
 
+  // (7.5) 结算挂起 ≠ 退款 0：上游回 freebucksRefundPending 时必须**保留句柄**
+  //       并继续重放，绝不能在 1.5s 后就把 instanceId 丢掉、把 pending 读成
+  //       "退款 0"。这是 2026-09 实测到的真 bug（旧代码只重放一次就 drop，
+  //       而实测上游 1.5s/7s/17s/37s/67s 全是 pending）。
+  {
+    const sm = fbRuntimes.get('b').sessions
+    const storeFile = fbRuntimes.handleStore.file
+    mockMode = 'ok'
+    mockFreebucks = null
+    deleteFailuresLeft = 0
+    sessionDeletes = 0
+    deleteInstanceIds = []
+    // 上游持续挂起：DELETE 只回 pending、不给金额
+    mockRefundPending = true
+    try {
+      await sm.ensureSession('deepseek/deepseek-v4-flash')
+      const live = sm.getSnapshot()
+      assert.ok(live.instanceId, 'admit 后应有 instanceId')
+      const instanceId = live.instanceId
+
+      await sm.release()
+
+      // 必须重放（>1 次）而不是试一次就放弃
+      assert.ok(
+        sessionDeletes >= 2,
+        '挂起时必须继续重放 DELETE，实际只发了 ' + sessionDeletes + ' 次',
+      )
+      // 重放必须始终带同一个 instanceId（丢了就再也退不了款）
+      for (const id of deleteInstanceIds) {
+        assert.equal(id, instanceId, '重放必须带同一个 instanceId')
+      }
+      // 关键回归：句柄**绝不能丢**——丢了这笔预扣就永远要不回来
+      const onDisk = JSON.parse(fs.readFileSync(storeFile, 'utf8'))
+      const kept =
+        onDisk.orphans.some((o) => o.instanceId === instanceId) ||
+        onDisk.sessions.some((x) => x.instanceId === instanceId)
+      assert.ok(kept, '结算挂起时 instanceId 必须保留在句柄存储里')
+      // 绝不能把 pending 记成"退款 0"
+      const snap = sm.getSnapshot()
+      assert.notEqual(
+        snap.lastRefund?.refund,
+        0,
+        'pending 不得被读成退款 0（那是把没结算完错读成退了 0 元）',
+      )
+
+      // —— 摘除走的是启动扫尾 cleanupOrphans（此刻已无 live session，
+      //    release() 不会再发 DELETE）。先验证**仍挂起时扫尾也不摘**：
+      const swept = await fbRuntimes.handleStore.cleanupOrphans(
+        (key) => fbRuntimes.byKey.get(key)?.upstream,
+      )
+      assert.equal(swept.cleaned, 0, '仍挂起时扫尾不得宣称已清理')
+      assert.ok(swept.failed >= 1, '仍挂起时应计入 failed 并保留句柄')
+      const mid = JSON.parse(fs.readFileSync(storeFile, 'utf8'))
+      assert.ok(
+        mid.orphans.some((o) => o.instanceId === instanceId),
+        '仍挂起时扫尾后句柄必须还在',
+      )
+
+      // 现在让上游结算完成（终态、无金额 = 退款 0），扫尾应真正摘掉句柄
+      mockRefundPending = false
+      const swept2 = await fbRuntimes.handleStore.cleanupOrphans(
+        (key) => fbRuntimes.byKey.get(key)?.upstream,
+      )
+      assert.equal(swept2.cleaned, 1, '结算到终态后扫尾应清理掉这条句柄')
+      const after = JSON.parse(fs.readFileSync(storeFile, 'utf8'))
+      const stillThere =
+        after.orphans.some((o) => o.instanceId === instanceId) ||
+        after.sessions.some((x) => x.instanceId === instanceId)
+      assert.ok(
+        !stillThere,
+        '拿到终态回执后句柄必须清掉（否则重启扫尾会无限重放）',
+      )
+    } finally {
+      mockRefundPending = false
+      if (sm.hasLiveSlot()) await sm.release()
+    }
+  }
+
   // (8) 最终失败也必须早退释放会话（不再等空闲释放 / 挂到过期白扣时长）
   mockFreebucks = null
   for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
@@ -4272,6 +4577,107 @@ server.close()
   await fbRuntimes.shutdown()
   fbServer.close()
   fs.rmSync(fbDir, { recursive: true, force: true })
+}
+
+// ===========================================================================
+// (STALL) 全局请求闸门绝不允许无界排队
+//
+// 线上故障：进程一切正常（CPU/日志/控制台都对）却"一段时间完全不接单"，
+// 只有重启才恢复。根因是旧 acquireRequestSlot 把超限请求 push 进一个**没有任何
+// 超时**的 _waitQueue：只要有几个请求"占着槽位却永久挂起"（客户端声明了
+// Content-Length 却不再发完请求体 → readRequestBody 的 for-await 永不返回），
+// 槽位被永久吃掉，后续所有请求排进队列再也出不来。
+//
+// 本用例用真实 server + 真实半开 socket 复现该场景，断言：
+//   1. 排满时后续请求**有界**返回 429 server_busy（而不是永久挂起）；
+//   2. 半开请求被 bodyReadTimeoutMs 掐掉后，槽位与队列都回到 0。
+// 旧实现下第 1 条会永久挂起 → 用例超时失败（真实红灯）。
+{
+  const stallDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-stall-'))
+  saveAccountUser(stallDir, {
+    id: 'stall1',
+    email: 'stall@example.com',
+    authToken: 'token-stall-1',
+  })
+  const stCfg = loadConfig()
+  stCfg.server.host = '127.0.0.1'
+  stCfg.server.port = 0
+  stCfg.server.apiKeys = ['sk-test']
+  stCfg.upstream.credentialsDir = stallDir
+  stCfg.session.pollIntervalSec = 3600
+  stCfg.limits.maxConcurrentRequests = 2
+  stCfg.limits.slotWaitMs = 800
+  stCfg.limits.bodyReadTimeoutMs = 2_500
+
+  const stRuntimes = new AccountRuntimes(stCfg)
+  const stServer = await startServer({ config: stCfg, runtimes: stRuntimes })
+  const stPort = stServer.address().port
+
+  // 半开 chat 请求：声明很大的 Content-Length，只发一个字节就再也不发。
+  const halfOpen = []
+  for (let i = 0; i < 2; i += 1) {
+    const sock = net.connect(stPort, '127.0.0.1')
+    sock.on('error', () => {})
+    await new Promise((r) => sock.on('connect', r))
+    sock.write(
+      'POST /v1/chat/completions HTTP/1.1\r\n' +
+        'Host: 127.0.0.1\r\n' +
+        'Authorization: Bearer sk-test\r\n' +
+        'Content-Type: application/json\r\n' +
+        'Content-Length: 999999\r\n\r\n',
+    )
+    sock.write('{"model":"deepseek/deepseek-v4-flash"')
+    halfOpen.push(sock)
+  }
+  // 让两个请求都真正进入"占着槽位读 body"的状态
+  await waitFor('两个半开请求占满全局槽位', () => {
+    const s = requestSlotStats()
+    return s.inFlight >= 2
+  }, 3_000)
+
+  const occupied = requestSlotStats()
+  assert.equal(occupied.inFlight, 2, '两个半开请求应占满全部 2 个槽位')
+
+  // 此刻来一个**完全正常**的请求：必须被有界拒绝，绝不永久排队。
+  const t0 = Date.now()
+  // 用本用例自己的 server（共享 chat() 的 server 在更早已经 close 了）
+  const busy = await fetch(`http://127.0.0.1:${stPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'x' }],
+    }),
+  })
+  const waited = Date.now() - t0
+  assert.equal(
+    busy.status,
+    429,
+    '闸门排满时必须有界拒绝（429 server_busy），而不是永久挂起',
+  )
+  const busyBody = await busy.json()
+  assert.equal(busyBody.error.code, 'server_busy', '拒绝码必须是 server_busy')
+  assert.ok(
+    waited < 2_000,
+    `排队必须是有界的：实测等待 ${waited}ms，应 < 2000ms（slotWaitMs=800）`,
+  )
+
+  // 半开请求被 bodyReadTimeoutMs 掐掉后，槽位与队列必须归零（无泄漏）。
+  for (const sock of halfOpen) sock.destroy()
+  await waitFor('半开请求超时后槽位全部归还', () => {
+    const s = requestSlotStats()
+    return s.inFlight === 0 && s.queued === 0
+  }, 8_000)
+  const after = requestSlotStats()
+  assert.equal(after.inFlight, 0, '读 body 超时后必须归还槽位（不得泄漏）')
+  assert.equal(after.queued, 0, '队列必须清空')
+
+  await stRuntimes.shutdown()
+  stServer.close()
+  fs.rmSync(stallDir, { recursive: true, force: true })
 }
 
 globalThis.fetch = originalFetch

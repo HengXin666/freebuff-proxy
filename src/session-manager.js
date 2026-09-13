@@ -23,6 +23,7 @@ export class SessionManager {
     hasPendingUser,
     accountKey = null,
     onSessionChange = null,
+    onStateChange = null,
   }) {
     this.upstream = upstream
     this.config = config
@@ -31,6 +32,14 @@ export class SessionManager {
     /** 句柄变更回调（落盘 /data/sessions.json）。 */
     this._onSessionChange =
       typeof onSessionChange === 'function' ? onSessionChange : null
+    /**
+     * 「账号账目变了」回调（freebucks / quota / lastProbe）——由上层落盘到
+     * /data/account-state.json。这些数字原先是纯内存的：重启后余额归零会让
+     * "买不起就别 admit" 的闸门失忆，于是重启后的第一个请求就会去撞一个
+     * 已知余额不足的账号（正是要避免的封禁触发条件）。
+     */
+    this._onStateChange =
+      typeof onStateChange === 'function' ? onStateChange : null
     /**
      * 「有人正排队要用这个账号」的判定（账号级 chat 锁在途/排队）。
      * 空闲释放要跳过这种情况：选号阶段就 admit、随后在等 chat 锁的请求还没
@@ -575,6 +584,7 @@ export class SessionManager {
     if (quota) this.quota = quota
     const freebucks = extractFreebucks(body)
     if (freebucks) this.freebucks = freebucks
+    if (quota || freebucks) this._notifyStateChange()
     // admit 可能发生在没有任何在途请求时（选号阶段就 admit、随后才拿 chat
     // 锁）：这里兜底起空闲计时，否则会话会一直挂到过期。
     if (this._inFlight === 0) this._armIdleRelease()
@@ -621,6 +631,7 @@ export class SessionManager {
         message: patch.message ?? null,
       }
     }
+    this._notifyStateChange()
   }
 
   /** 释放会话（早退 DELETE → 退款）。返回 true = 上游已确认结束。 */
@@ -662,25 +673,84 @@ export class SessionManager {
     this._releasing = true
     /** @type {boolean} */
     let released = false
+    // 退款**结算**是否已到终态。注意 released=true 只表示"上游确认会话已结束"，
+    // 挂起（freebucksRefundPending）时同样是 true —— 所以不能用 released 来判断
+    // 该不该摘掉 orphan（摘早了这笔预扣就永远要不回来）。
+    let refundSettled = false
     try {
       // 必须带 instance id：上游 DELETE 没有 x-freebuff-instance-id 会 400
       // instance_required，会话既删不掉也拿不到退款（issue #7 的元凶之一）。
       let body = await this.upstream.freebuffSession('DELETE', { instanceId })
       // 结算未完成（freebucksRefundPending）：用同一个 instance 重放 DELETE
-      // 拿回执。有界重放一次，失败只记日志，绝不阻塞调用方。
-      if (body?.freebucksRefundPending === true) {
-        await sleep(1_500)
+      // 拿回执。**有界重放**，失败只记日志，绝不阻塞调用方。
+      //
+      // 2026-09 实测：上游对"提前结束"的会话会持续回 freebucksRefundPending，
+      // 1.5s / 7s / 17s / 37s / 67s 五次重放全部仍为 pending。所以这里**既不
+      // 能让挂起的回执冒充"退款 0"**（那是把"没结算完"错读成"退了 0 元"），
+      // 也不能无限重放。重放两次后仍 pending 就保留句柄，交给下一次释放 /
+      // 下次启动扫尾继续试。
+      let refundPending = body?.freebucksRefundPending === true
+      for (let i = 0; refundPending && i < 2; i += 1) {
+        await sleep(i === 0 ? 1_500 : 4_000)
         body = await this.upstream.freebuffSession('DELETE', { instanceId })
+        refundPending = body?.freebucksRefundPending === true
       }
+      const settled = !refundPending && body?.status === 'ended'
       const refund =
         typeof body?.freebucksRefund === 'number' ? body.freebucksRefund : null
-      if (refund != null || body?.freebucks) {
-        this.lastRefund = {
+      if (settled) {
+        // 只有拿到**终态**回执才算结算完成。没有金额 = 退款 0（vendor
+        // af898dc 口径：ended 且不带 freebucksRefund 字段就是 0）。
+        refundSettled = true
+        // expected：按"实际占用时长"应付的退款（单价 × 未用满的小时数）。
+        // 上游把结算挂在整点/5 的倍数上，expected 与 refund 的差就是需要解释的
+        // 那部分——这正是"退款怎么都不是 5 的倍数"该被对账掉的地方。
+        const price =
+          typeof this.freebucks?.prices?.[model] === 'number'
+            ? this.freebucks.prices[model]
+            : null
+        const admittedAt = this.session?.admittedAt
+          ? Date.parse(this.session.admittedAt)
+          : NaN
+        const holdMs =
+          Number.isFinite(admittedAt) && admittedAt > 0
+            ? Math.max(0, Date.now() - admittedAt)
+            : null
+        const expected =
+          price != null && holdMs != null
+            ? Math.max(0, round2(price * (1 - holdMs / 3_600_000)))
+            : null
+        const entry = {
           instanceId,
           model,
           refund,
+          expected,
+          price,
+          holdMs,
           at: new Date().toISOString(),
         }
+        this.lastRefund = entry
+        this._emitRefund(entry)
+      } else {
+        // 仍挂起：句柄必须留着（否则这笔预扣永远无法再结算），也**不能**上报成
+        // 退款 0 —— 报 pending=true，让账本归到"待结算"而不是"疑似退款失败"。
+        logger.warn('session refund still pending after replay', {
+          instanceId,
+          model,
+          attempts: 3,
+        })
+        // 上游已确认会话 ended —— **这条 session 不能继续占着**，否则该账号
+        // 永远无法 admit 新会话（等于把整号废掉）。把句柄登记为 orphan：
+        // 额度占用解除，但 instanceId 落盘保留，交给启动扫尾 / 后续重放去
+        // 把挂起的结算要回来（handle store 已实现这套持久化）。
+        this._emitSessionEvent({
+          type: 'orphan',
+          key: this.accountKey,
+          instanceId,
+          model,
+          admittedAt: this.session?.admittedAt ?? null,
+          expiresAt: this.session?.expiresAt ?? null,
+        })
       }
       const freebucks = extractFreebucks(body)
       if (freebucks) this.freebucks = freebucks
@@ -704,6 +774,7 @@ export class SessionManager {
           updatedAt: new Date().toISOString(),
         }
       }
+      this._notifyStateChange()
       logger.info('released freebuff session', {
         instanceId,
         model,
@@ -728,6 +799,15 @@ export class SessionManager {
       this._releasing = false
     }
     if (released) {
+      // 只有**结算到终态**才摘 orphan。若仍挂起就保留它，交给下次启动扫尾继续
+      // 重放——那时钱还没回来，摘掉就再也要不回来了。
+      if (refundSettled) {
+        this._emitSessionEvent({
+          type: 'drop',
+          key: this.accountKey,
+          instanceId,
+        })
+      }
       this.session = { status: 'none' }
       this._releasePending = false
       this._releaseRetries = 0
@@ -800,6 +880,34 @@ export class SessionManager {
           error: err instanceof Error ? err.message : String(err),
         })
       }
+    }
+  }
+
+  /** 上报一笔已结算的退款（上层记进账号账本的退款流水）。 */
+  _emitRefund(entry) {
+    if (!this._onStateChange) return
+    try {
+      this._onStateChange({ refund: entry })
+    } catch (err) {
+      logger.warn('refund callback failed', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  /** 上报账号账目变化（freebucks / quota / lastProbe）——上层据此落盘。 */
+  _notifyStateChange() {
+    if (!this._onStateChange) return
+    try {
+      this._onStateChange({
+        freebucks: this.freebucks,
+        quota: this.quota,
+        lastProbe: this.lastProbe,
+      })
+    } catch (err) {
+      logger.warn('state change callback failed', {
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 
@@ -989,4 +1097,3 @@ function sleep(ms) {
     if (timer.unref) timer.unref()
   })
 }
-

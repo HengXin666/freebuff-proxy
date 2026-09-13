@@ -458,7 +458,18 @@ export function createProxyHandler(ctx) {
   }
 
   async function handleChatCompletions(req, res) {
-    const releaseSlot = await acquireRequestSlot(config.limits.maxConcurrentRequests)
+    // 有界排队：闸门排满时最多等 slotWaitMs，超时以 429 server_busy 拒绝
+    // （客户端可重试），绝不无界排队把整个服务静默钉死。
+    let releaseSlot
+    try {
+      releaseSlot = await acquireRequestSlot(
+        config.limits.maxConcurrentRequests,
+        slotWaitMs(),
+      )
+    } catch (err) {
+      mapAndSendError(res, err)
+      return
+    }
     try {
       await handleChatCompletionsInner(req, res)
     } finally {
@@ -469,7 +480,7 @@ export function createProxyHandler(ctx) {
   async function handleChatCompletionsInner(req, res) {
     let rawBuf
     try {
-      rawBuf = await readRequestBody(req)
+      rawBuf = await readRequestBody(req, undefined, bodyReadTimeoutMs())
     } catch (err) {
       if (err && err.statusCode === 413) {
         sendJson(res, 413, {
@@ -477,6 +488,20 @@ export function createProxyHandler(ctx) {
             message: 'Request body too large',
             type: 'invalid_request_error',
             code: 'body_too_large',
+          },
+        })
+        return
+      }
+      // 客户端在读 body 途中断开：连接已经没了，安静收场即可。
+      if (err && err.code === 'client_aborted') return
+      // 408 body_read_timeout：客户端声明了体积却没发完。绝不能让它继续
+      // 占着全局槽位——明确拒绝并归还名额。
+      if (err && err.statusCode === 408) {
+        sendJson(res, 408, {
+          error: {
+            message: 'Timed out reading request body',
+            type: 'invalid_request_error',
+            code: 'body_read_timeout',
           },
         })
         return
@@ -1170,6 +1195,23 @@ export function createProxyHandler(ctx) {
     return Math.min(cap, bound)
   }
 
+  /**
+   * 全局请求闸门的排队上限（毫秒）。有界即可：这是"同一进程内等一个并发
+   * 名额"的预算，不是上游等待。给足 15s 让突发流量自然消化，超时就明确
+   * 拒绝，绝不像旧实现那样把请求永久挂在队列里。可用
+   * limits.slotWaitMs 调整（<=0 表示一旦排满立即拒绝）。
+   */
+  function slotWaitMs() {
+    const v = config.limits.slotWaitMs
+    return Number.isFinite(v) && v > 0 ? v : 0
+  }
+
+  /** 读请求体的上限（毫秒）。<=0 关闭（不建议）。 */
+  function bodyReadTimeoutMs() {
+    const v = config.limits.bodyReadTimeoutMs
+    return Number.isFinite(v) && v > 0 ? v : 0
+  }
+
   async function forwardCompletions({
     req,
     res,
@@ -1501,33 +1543,90 @@ function apiKeyMatches(token, keys) {
   return false
 }
 
-/** Simple in-process semaphore for chat completions. */
+/** 在途 chat 请求数（占用中的槽位）。 */
 let _inFlight = 0
-/** @type {Array<() => void>} */
+/** 最近一次生效的槽位上限（仅用于可观测性展示）。 */
+let _slotLimit = 32
+/** @type {Array<{resolve: (fn: () => void) => void, timer: any}>} */
 const _waitQueue = []
 
 /**
+ * 全局 chat 请求并发闸门（进程内信号量）。
+ *
+ * **绝不允许无界排队**：旧实现把超限请求 push 进一个**没有任何超时**的
+ * _waitQueue，此后永不 reject。只要有几个请求在"占着槽位却永久挂起"
+ * （最典型：客户端/SDK 声明了 Content-Length 却不再发完请求体，readRequestBody
+ * 的 for await (const chunk of req) 就永远不返回），槽位就被永久吃掉，
+ * 后续**所有**请求都排进那个队列再也出不来——进程 CPU/日志/控制台一切正常，
+ * 但完全不接单，只有重启才恢复（已用真实 server 复现，见 test/smoke.mjs）。
+ *
+ * 现在的语义：
+ *   - 有空位 → 立即占用；
+ *   - 排满 → **有界等待**（slotWaitMs），超时抛 429 server_busy 让客户端稍后
+ *     重试（客户端可重试远好于整个服务静默停摆）；
+ *   - 释放函数**幂等**（与 ChatMutex._makeRelease 一致）：finally 与任何
+ *     兜底路径重复调用都只归还一次，绝不让计数被多减。
  * @param {number} max
+ * @param {number} [waitMs] 排队上限；<=0 表示不等待、直接拒绝
  * @returns {Promise<() => void>}
  */
-function acquireRequestSlot(max) {
+function acquireRequestSlot(max, waitMs = 0) {
   const limit = Number.isFinite(max) && max > 0 ? max : 32
+  _slotLimit = limit
   if (_inFlight < limit) {
     _inFlight++
-    return Promise.resolve(releaseRequestSlot)
+    return Promise.resolve(makeSlotRelease())
   }
-  return new Promise((resolve) => {
-    _waitQueue.push(() => {
-      _inFlight++
-      resolve(releaseRequestSlot)
-    })
+  if (!(waitMs > 0)) {
+    throw new UpstreamError(
+      "server is at max concurrent requests (" + limit + "); try again later",
+      { status: 429, code: "server_busy" },
+    )
+  }
+  return new Promise((resolve, reject) => {
+    const entry = { resolve, timer: null }
+    entry.timer = setTimeout(() => {
+      const i = _waitQueue.indexOf(entry)
+      if (i >= 0) _waitQueue.splice(i, 1)
+      reject(
+        new UpstreamError(
+          "server is at max concurrent requests (" + limit +
+            "); timed out waiting for a slot",
+          { status: 429, code: "server_busy" },
+        ),
+      )
+    }, waitMs)
+    if (entry.timer.unref) entry.timer.unref()
+    _waitQueue.push(entry)
   })
+}
+
+/** 幂等释放句柄：重复调用只归还一次槽位（与 ChatMutex._makeRelease 同构）。 */
+function makeSlotRelease() {
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    releaseRequestSlot()
+  }
 }
 
 function releaseRequestSlot() {
   _inFlight = Math.max(0, _inFlight - 1)
   const next = _waitQueue.shift()
-  if (next) next()
+  if (next) {
+    if (next.timer) clearTimeout(next.timer)
+    _inFlight++
+    next.resolve(makeSlotRelease())
+  }
+}
+
+/**
+ * 当前在途/排队的 chat 请求数：暴露到控制台，槽位泄漏时能立刻看出来
+ * （旧实现完全不可观测，泄漏后只能靠"不接单"这个体感发现）。
+ */
+export function requestSlotStats() {
+  return { inFlight: _inFlight, queued: _waitQueue.length, limit: _slotLimit }
 }
 
 /**
