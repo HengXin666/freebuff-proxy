@@ -1866,6 +1866,47 @@ for (const model of verifiedSpecialModels) {
   })
   assert.equal(lr.status, 200)
   const cookie = lr.headers.get('set-cookie').split(';')[0]
+  // (AUTH-ENDPOINTS) 已登录后逐个真实打一遍控制台只读接口。
+  //
+  // 真实事故：`src/web/api.js` 的 handle() 里 `const path = url.pathname` 把
+  // `import path from 'node:path'` 遮蔽，`/api/system/data-status` 里的
+  // `path.basename()` 抛 "is not a function" → 该接口 100% 500，v1.12.0 起
+  // 一路带到线上（v1.13.0/v1.13.1/v1.13.2 全带），只跑 /healthz 的流水线发现不了。
+  //
+  // 这类故障只在"运行时真的调到那一行"才炸，纯静态自检兜不住，
+  // 所以这里必须**真的发请求**，并且断言 200 —— 顺带覆盖每次新增的接口。
+  {
+    const readOnlyEndpoints = [
+      '/api/me',
+      '/api/overview',
+      '/api/accounts',
+      '/api/models',
+      '/api/proxy',
+      '/api/settings',
+      '/api/users',
+      '/api/system/data-status',
+    ]
+    for (const ep of readOnlyEndpoints) {
+      const r = await fetch(`http://127.0.0.1:${wport}${ep}`, { headers: { cookie } })
+      assert.equal(r.status, 200, `GET ${ep} 必须 200（实际 ${r.status}）`)
+      const ct = r.headers.get('content-type') || ''
+      assert.ok(ct.includes('application/json'), `GET ${ep} 必须返回 JSON`)
+    }
+    // data-status 额外校验结构：它是「数据文件自检」，坏掉时用户要靠它定位问题
+    const dsRes = await fetch(`http://127.0.0.1:${wport}/api/system/data-status`, {
+      headers: { cookie },
+    })
+    const ds = await dsRes.json()
+    assert.ok(Array.isArray(ds.files), 'data-status 必须返回 files 数组')
+    assert.ok(typeof ds.ok === 'boolean', 'data-status 必须返回 ok 布尔')
+    // 每个文件项的 name 就是被遮蔽那行的产物（path.basename）——它必须真的有值
+    for (const f of ds.files) {
+      assert.ok(
+        typeof f.name === 'string' && f.name.length > 0,
+        'data-status 的每个文件项必须有 name（path.basename 的产物）',
+      )
+    }
+  }
   const pr = await fetch(`http://127.0.0.1:${wport}/api/accounts/probe`, {
     method: 'POST',
     headers: { cookie },

@@ -17,6 +17,7 @@ import {
 } from '../auth-store.js'
 import { logger } from '../util/log.js'
 import { requestSlotStats } from '../proxy.js'
+import path from 'node:path'
 import { dataFileAudit } from '../util/json-store.js'
 
 const SESSION_COOKIE = 'fb_session'
@@ -111,12 +112,16 @@ export function createWebApi(deps) {
    */
   async function handle(req, res, url) {
     const method = (req.method || 'GET').toUpperCase()
-    const path = url.pathname
+    // ⚠️ 变量名必须是 route：若叫 path，会遮蔽顶部的 node:path 模块，
+    // 使本文件 data-status 自检里的 path.basename() 抛 "is not a function"，
+    // 该接口 100% 返回 500（真实故障，v1.12.0 引入）。
+    // 路由字符串与文件系统路径语义完全不同，不要再用 path 当路由变量名。
+    const route = url.pathname
 
     // Freebuff upstream API surface (/api/v1/*) is never exposed.
-    if (path.startsWith('/api/v1/')) {
+    if (route.startsWith('/api/v1/')) {
       sendJson(res, 404, {
-        error: `No route for ${method} ${path}`,
+        error: `No route for ${method} ${route}`,
         type: 'invalid_request_error',
         code: 'not_found',
       })
@@ -124,7 +129,7 @@ export function createWebApi(deps) {
     }
 
     // --- public: login ---
-    if (method === 'POST' && path === '/api/auth/login') {
+    if (method === 'POST' && route === '/api/auth/login') {
       let body
       try {
         body = await readJson(req)
@@ -156,7 +161,7 @@ export function createWebApi(deps) {
     const user = requireUser(req, res)
     if (!user) return true
 
-    if (method === 'POST' && path === '/api/system/reconnect') {
+    if (method === 'POST' && route === '/api/system/reconnect') {
       // 前端「全部断开重连」：比重启更轻量。释放所有账号 session、清理死任务，
       // 下一个请求自动 admit 全新 session；进程不重启。
       if (user.role !== 'admin') {
@@ -181,7 +186,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    if (method === 'GET' && path === '/api/system/data-status') {
+    if (method === 'GET' && route === '/api/system/data-status') {
       // 数据文件自检：把 data/ 下每个 JSON 的装载状态（ok/missing/invalid）
       // 连同**处置建议**返回。起因是真实故障——镜像升级后起不来、日志里只有
       // 一行 warn，用户靠"删几个 json"试错；这里让控制台能一眼看到是哪个文件
@@ -208,7 +213,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    if (method === 'POST' && path === '/api/system/restart') {
+    if (method === 'POST' && route === '/api/system/restart') {
       // 前端「重启服务」：admin 专属，彻底解决幽灵连接等进程级问题。
       if (user.role !== 'admin') {
         sendJson(res, 403, { error: '需要管理员权限' })
@@ -259,7 +264,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    if (method === 'POST' && path === '/api/auth/logout') {
+    if (method === 'POST' && route === '/api/auth/logout') {
       const cookies = parseCookies(req.headers.cookie)
       if (cookies[SESSION_COOKIE]) webSessions.destroy(cookies[SESSION_COOKIE])
       res.setHeader(
@@ -274,13 +279,13 @@ export function createWebApi(deps) {
       return true
     }
 
-    if (method === 'GET' && path === '/api/me') {
+    if (method === 'GET' && route === '/api/me') {
       const apiKey = userStore.getByUsername(user.username)?.apiKey
       sendJson(res, 200, { user: { ...sanitize(user), apiKey } })
       return true
     }
 
-    if (method === 'GET' && path === '/api/overview') {
+    if (method === 'GET' && route === '/api/overview') {
       let models = []
       try {
         models = buildModelsListResponse({
@@ -307,7 +312,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    if (method === 'GET' && path === '/api/models') {
+    if (method === 'GET' && route === '/api/models') {
       let accessTier = null
       let extraIds = []
       const session = await probeUpstreamSession()
@@ -333,7 +338,7 @@ export function createWebApi(deps) {
     }
 
     // 前端「模型管理」：读取/保存自定义模型列表（覆盖/扩展内置 catalog，全局生效）。
-    if (method === 'GET' && path === '/api/models/custom') {
+    if (method === 'GET' && route === '/api/models/custom') {
       sendJson(res, 200, {
         models: modelStore ? modelStore.list() : [],
         hidden: modelStore ? modelStore.hidden() : [],
@@ -346,7 +351,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    if (method === 'POST' && path === '/api/models/custom') {
+    if (method === 'POST' && route === '/api/models/custom') {
       if (user.role !== 'admin') {
         sendJson(res, 403, { error: '需要管理员权限' })
         return true
@@ -375,7 +380,7 @@ export function createWebApi(deps) {
     }
 
     // 前端「模型管理」删除模型：把 id 加入 hidden（含内置目录的），彻底从列表/调度隐藏。
-    if (method === 'POST' && path === '/api/models/custom/hide') {
+    if (method === 'POST' && route === '/api/models/custom/hide') {
       if (user.role !== 'admin') {
         sendJson(res, 403, { error: '需要管理员权限' })
         return true
@@ -397,7 +402,7 @@ export function createWebApi(deps) {
     }
 
     // 前端「模型管理」彻底移除一个自定义模型（不加入 hidden，回退 catalog）。
-    if (method === 'POST' && path === '/api/models/custom/remove') {
+    if (method === 'POST' && route === '/api/models/custom/remove') {
       if (user.role !== 'admin') {
         sendJson(res, 403, { error: '需要管理员权限' })
         return true
@@ -419,7 +424,7 @@ export function createWebApi(deps) {
     }
 
     // 前端「模型管理」恢复被隐藏的模型。
-    if (method === 'POST' && path === '/api/models/custom/unhide') {
+    if (method === 'POST' && route === '/api/models/custom/unhide') {
       if (user.role !== 'admin') {
         sendJson(res, 403, { error: '需要管理员权限' })
         return true
@@ -441,7 +446,7 @@ export function createWebApi(deps) {
     }
 
     // 上游模型探测：读上游 rateLimitsByModel 目录（走 60s 缓存，不创建 session、不占额度）。
-    if (method === 'GET' && path === '/api/models/upstream') {
+    if (method === 'GET' && route === '/api/models/upstream') {
       const accounts = runtimes.list()
       if (!accounts.length) {
         sendJson(res, 200, { models: [], note: '没有账号，无法探测上游' })
@@ -488,16 +493,16 @@ export function createWebApi(deps) {
     }
 
     // ---- accounts (any logged-in user can view; manage = admin) ----
-    if (method === 'GET' && path === '/api/accounts') {
+    if (method === 'GET' && route === '/api/accounts') {
       sendJson(res, 200, { object: 'list', data: runtimes.list() })
       return true
     }
 
-    if (path.startsWith('/api/accounts/login')) {
-      return handleLoginFlows(method, path, req, res, user)
+    if (route.startsWith('/api/accounts/login')) {
+      return handleLoginFlows(method, route, req, res, user)
     }
 
-    if (method === 'POST' && path === '/api/accounts/import') {
+    if (method === 'POST' && route === '/api/accounts/import') {
       if (user.role !== 'admin') {
         sendJson(res, 403, { error: '需要管理员权限' })
         return true
@@ -547,7 +552,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    const acctMatch = path.match(/^\/api\/accounts\/([^/]+)$/)
+    const acctMatch = route.match(/^\/api\/accounts\/([^/]+)$/)
     if (acctMatch && method === 'PATCH') {
       if (user.role !== 'admin') {
         sendJson(res, 403, { error: '需要管理员权限' })
@@ -584,7 +589,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    const credentialMatch = path.match(/^\/api\/accounts\/([^/]+)\/credential$/)
+    const credentialMatch = route.match(/^\/api\/accounts\/([^/]+)\/credential$/)
     if (credentialMatch && method === 'GET') {
       // 查看某个账号的凭据（与账号列表同权限：任意已登录用户可读）。
       // 凭据直接读磁盘文件（runtime 里不带 authToken 之外的敏感字段），
@@ -632,7 +637,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    if (method === 'POST' && path === '/api/accounts/probe') {
+    if (method === 'POST' && route === '/api/accounts/probe') {
       // 只读探测：对每个账号 GET session，刷新 session/额度缓存。
       // 不创建 session、不占免费额度；fresh 账号若上游无使用记录则额度仍为空。
       const results = []
@@ -659,7 +664,7 @@ export function createWebApi(deps) {
     // 单账号只读检测（前端每个账号行的「检测」按钮）：
     // GET session 刷新该账号状态与额度缓存，返回 可用/不可用+原因（封禁/限流/凭证失效…）。
     // 不创建 session、不占额度。
-    const singleProbeMatch = path.match(/^\/api\/accounts\/([^/]+)\/probe$/)
+    const singleProbeMatch = route.match(/^\/api\/accounts\/([^/]+)\/probe$/)
     if (singleProbeMatch && method === 'POST') {
       const key = decodeURIComponent(singleProbeMatch[1])
       const a = runtimes.list().find((x) => x.key === key)
@@ -696,7 +701,7 @@ export function createWebApi(deps) {
     // 上游按会话占用时长结算，主动早退 DELETE 才是"停止计费"的唯一手段，
     // 所以这里走严格释放（等到上游确认结束或退避重试耗尽），并如实返回结果；
     // 删不掉的句柄会留在 sessions.json，由下次启动扫尾继续退款。
-    const closeSessionMatch = path.match(/^\/api\/accounts\/([^/]+)\/session$/)
+    const closeSessionMatch = route.match(/^\/api\/accounts\/([^/]+)\/session$/)
     if (closeSessionMatch && method === 'POST') {
       const key = decodeURIComponent(closeSessionMatch[1])
       const a = runtimes.list().find((x) => x.key === key)
@@ -754,7 +759,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    const cooldownMatch = path.match(/^\/api\/accounts\/([^/]+)\/cooldown\/clear$/)
+    const cooldownMatch = route.match(/^\/api\/accounts\/([^/]+)\/cooldown\/clear$/)
     if (cooldownMatch && method === 'POST') {
       if (user.role !== 'admin') {
         sendJson(res, 403, { error: '需要管理员权限' })
@@ -767,7 +772,7 @@ export function createWebApi(deps) {
     }
 
     // ---- user management (admin) ----
-    if (path === '/api/users' && method === 'GET') {
+    if (route === '/api/users' && method === 'GET') {
       if (user.role !== 'admin') {
         sendJson(res, 403, { error: '需要管理员权限' })
         return true
@@ -776,7 +781,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    if (path === '/api/users' && method === 'POST') {
+    if (route === '/api/users' && method === 'POST') {
       if (user.role !== 'admin') {
         sendJson(res, 403, { error: '需要管理员权限' })
         return true
@@ -803,7 +808,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    const userMatch = path.match(/^\/api\/users\/([^/]+)(?:\/([^/]+))?$/)
+    const userMatch = route.match(/^\/api\/users\/([^/]+)(?:\/([^/]+))?$/)
     if (userMatch && user.role === 'admin') {
       const username = decodeURIComponent(userMatch[1])
       const action = userMatch[2]
@@ -871,7 +876,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    if (path === '/api/config' && method === 'GET' && user.role === 'admin') {
+    if (route === '/api/config' && method === 'GET' && user.role === 'admin') {
       sendJson(res, 200, {
         config: {
           server: {
@@ -893,7 +898,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    if (method === 'GET' && path === '/api/settings') {
+    if (method === 'GET' && route === '/api/settings') {
       sendJson(res, 200, {
         freeToolSignatureEnabled:
           settingsStore?.get().freeToolSignatureEnabled !== false,
@@ -921,7 +926,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    if (method === 'POST' && path === '/api/settings') {
+    if (method === 'POST' && route === '/api/settings') {
       if (user.role !== 'admin') {
         sendJson(res, 403, { error: '需要管理员权限' })
         return true
@@ -1047,7 +1052,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    if (method === 'GET' && path === '/api/proxy') {
+    if (method === 'GET' && route === '/api/proxy') {
       const configured = proxyStore ? proxyStore.list() : config.upstream.proxies || []
       sendJson(res, 200, {
         proxies: configured,
@@ -1068,7 +1073,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    if (method === 'POST' && path === '/api/proxy') {
+    if (method === 'POST' && route === '/api/proxy') {
       if (user.role !== 'admin') {
         sendJson(res, 403, { error: '需要管理员权限' })
         return true
@@ -1099,7 +1104,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    if (method === 'POST' && path === '/api/proxy/test') {
+    if (method === 'POST' && route === '/api/proxy/test') {
       // 代理连通性测试：走该代理访问 Cloudflare trace 拿出口 IP/地区，再探测 codebuff。
       // 只读、无副作用；body.proxy 为空时测试当前生效的代理配置。
       let body = {}
@@ -1138,7 +1143,7 @@ export function createWebApi(deps) {
       return true
     }
 
-    sendJson(res, 404, { error: `未知接口 ${method} ${path}` })
+    sendJson(res, 404, { error: `未知接口 ${method} ${route}` })
     return true
   }
 
