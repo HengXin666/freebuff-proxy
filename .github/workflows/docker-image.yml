@@ -82,29 +82,39 @@ jobs:
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
-      # 版本注入：把流水线解析出的版本号硬编码进镜像内 dashboard/version.json。
-      # 镜像里显示的版本由这里决定（tag→1.10.0；分支/PR→dev+sha），
-      # 与本地无关；package.json 版本只是本地开发/门禁参考。
-      # 注意：docker/metadata-action 的 `version` 输出只在**语义化 tag** 构建时才有值，
-      # 主分支 push 时（同时会推 latest 镜像）`outputs.version` 为空，若直接回退 'dev'
-      # 会导致 latest 镜像永远显示 dev。因此 tag 用 metadata 版本，分支/默认分支构建
-      # 回退到 package.json 版本（发版时已由 npm version 同步 bump，是唯一版本真源），
-      # 保证 `latest` 也带上真实版本号而不是 dev。
+      # 版本注入：把版本号硬编码进镜像内 dashboard/version.json（镜像里显示什么由这里决定）。
+      #
+      # **不要用 steps.meta.outputs.version 判断**：tags 里的 `type=ref,event=branch`
+      # 会让 metadata-action 把 version 解析成**分支名**（main/master）。它非空，所以
+      # 「为空才回退 package.json」的写法永远不会触发 → latest 镜像显示 version="main"
+      # （v1.11.7 线上实测就是这个）。改成按 ref 类型分支判断：
+      #   语义化 tag（refs/tags/vX.Y.Z）→ 用 tag 版本（去掉前缀 v）；
+      #   分支/PR push → 用 package.json 版本（npm version 已 bump，是唯一版本真源）。
       - name: Inject version into frontend (hardcoded by pipeline)
         run: |
-          # metadata-action 的 version 输出：语义化 tag 才有值（如 1.10.3）；
-          # 主分支 push（同时推 latest）时为空。空则回退到 package.json 版本
-          # （发版时已由 npm version 同步 bump，是唯一版本真源），保证 latest
-          # 也带真实版本号，而不是永远显示 dev。
-          VERSION="${{ steps.meta.outputs.version }}"
-          if [ -z "$VERSION" ]; then
+          REF_TYPE="${{ github.ref_type }}"
+          if [ "$REF_TYPE" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
             VERSION="$(node -p "require('./package.json').version")"
           fi
+          VERSION="${VERSION#v}"
           SHA="${{ github.sha }}"
           node scripts/inject-version.mjs --version "${VERSION}" --repo "https://github.com/${{ github.repository }}"
           # 额外把 commit sha 也带上，便于追版本来源
           node -e "const fs=require('fs');const p='dashboard/version.json';const j=JSON.parse(fs.readFileSync(p));j.commit='${SHA}';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
           cat dashboard/version.json
+          # 守卫：版本号必须是 x.y.z 数字形式。绝不允许分支名（main/master）之类
+          # 混进镜像——线上曾因此显示 version="main"（v1.11.7 实测），前端无法判版本。
+          node -e "
+            const fs=require('fs')
+            const v=JSON.parse(fs.readFileSync('dashboard/version.json','utf8')).version
+            if(!/^[0-9]+\\.[0-9]+\\.[0-9]+/.test(v)){
+              console.error('版本号非法: '+JSON.stringify(v)+' —— 不能是分支名/dev，必须是 x.y.z')
+              process.exit(1)
+            }
+            console.log('版本号校验通过: '+v)
+          "
 
       - name: Build and push (GHCR)
         uses: docker/build-push-action@v6
