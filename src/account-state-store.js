@@ -108,13 +108,21 @@ export class AccountStateStore {
     let rec = this.state.accounts[key]
     if (!rec) {
       const hint = importedAtHint ? Date.parse(importedAtHint) : NaN
+      const firstSeenAt = Number.isFinite(hint)
+        ? new Date(hint).toISOString()
+        : new Date().toISOString()
       rec = {
-        firstSeenAt: Number.isFinite(hint)
-          ? new Date(hint).toISOString()
-          : new Date().toISOString(),
+        firstSeenAt,
+        // importedAt = 明确的"导入时间"。老账号没有这个字段，回落 firstSeenAt
+        // （同一时刻的近似值），保证前端永远有一个可展示的值。
+        importedAt: firstSeenAt,
         bannedAt: null,
         requests: 0,
         lastUsedAt: null,
+        // 累计调度时长（毫秒）：会话在途归零时累加。0 = 从未被调度过。
+        scheduledMs: 0,
+        schedulingSince: null,
+        lastScheduledAt: null,
       }
       this.state.accounts[key] = rec
       this._schedule()
@@ -125,7 +133,29 @@ export class AccountStateStore {
         this._schedule()
       }
     }
+    // 老账号升级：补齐 importedAt（用 firstSeenAt 近似），只补一次。
+    if (rec && !rec.importedAt && rec.firstSeenAt) {
+      rec.importedAt = rec.firstSeenAt
+      this._schedule()
+    }
     return rec
+  }
+
+  /**
+   * 累加一次"调度时长"（毫秒）。会话在途归零时调用。
+   * 与 `requests` 的区别：requests 是"被选中几次"，scheduledMs 是"真正占用了
+   * 多久"——长对话 1 次可能顶短批量几百次，两个指标都要看。
+   * @param {string} key
+   * @param {number} ms
+   */
+  recordScheduling(key, ms) {
+    if (!key || !Number.isFinite(ms) || ms <= 0) return
+    const rec = this.account(key)
+    if (!rec) return
+    rec.scheduledMs = Math.round(Number(rec.scheduledMs || 0) + ms)
+    rec.lastScheduledAt = new Date().toISOString()
+    rec.schedulingSince = null
+    this._schedule()
   }
 
   /** 合并写入一个账号记录（值为 undefined 的字段不动）。 */
@@ -201,6 +231,26 @@ export class AccountStateStore {
     if (entry.pending === true) {
       rec.refundPendingCount = Number(rec.refundPendingCount || 0) + 1
     }
+    this._schedule()
+  }
+
+  /**
+   * 记一笔"凭证被写入"（网页导入 / 浏览器登录回调 / 开放 API 导入）。
+   *
+   * 与导入时间的区别：`importedAt` 是"这个号什么时候进来的"（第一次），
+   * `credentialUpdatedAt` 是"token 最后一次被换掉是什么时候"——同一个号可能被
+   * 反复重新登录/更新凭证，前者不该被覆盖。
+   * @param {string} key
+   * @param {string} [at] ISO 时间（缺省 = 现在）
+   */
+  recordCredentialUpdate(key, at = null) {
+    if (!key) return
+    const rec = this.account(key)
+    if (!rec) return
+    const iso = at || new Date().toISOString()
+    rec.credentialUpdatedAt = iso
+    // 首次写入凭证时，导入时间就是现在（老账号已由 firstSeenAt 兜底，不覆盖）。
+    if (!rec.importedAt) rec.importedAt = iso
     this._schedule()
   }
 

@@ -122,11 +122,27 @@ export class SessionManager {
     this._releaseRetryTimer = null
     /** 已连续重试次数（成功后清零）。 */
     this._releaseRetries = 0
+    /**
+     * 本账号**本轮连续调度**的开始时刻（第一条在途请求开始时写入，归零时清空）。
+     * 与 `scheduledMs`（累计调度时长，跨轮累加）一起落盘，控制台即可显示
+     * "累计调度 3h20m / 本轮运行 12m"。
+     *
+     * 为什么必须落盘：这是"这个号到底被用了多久"的唯一口径——账号池里
+     * 哪些号在干活、哪些号从没被启用过，光看 `requests`（次数）是看不出来的
+     * （长对话 1 次 = 几十分钟，短批量 300 次可能只有几分钟）。
+     * @type {number | null} epoch ms
+     */
+    this._schedulingSince = null
   }
 
   /** 请求开始（在途计数 +1，轮询跳过，取消空闲释放计时）。 */
   beginRequest() {
     this._inFlight += 1
+    // 本轮调度起算点：只在 0 → 1 时写，同一轮内的并发请求共享同一个起点。
+    if (this._inFlight === 1) {
+      this._schedulingSince = Date.now()
+      this._notifyScheduleChange()
+    }
     this._clearIdleRelease()
   }
 
@@ -135,10 +151,65 @@ export class SessionManager {
     const before = this._inFlight
     this._inFlight = Math.max(0, this._inFlight - 1)
     if (before > 0 && this._inFlight === 0) {
+      // 本轮调度结束：把时长结算掉（跨轮累加），并清空起算点。
+      this._settleScheduling()
       const waiters = this._idleWaiters
       this._idleWaiters = []
       for (const wake of waiters) wake()
       this._armIdleRelease()
+    }
+  }
+
+  /**
+   * 本轮调度时长（毫秒）。有在途请求时 = now - 起算点；否则 0。
+   * 控制台用它显示"本轮已运行 …"（实时增长）。
+   */
+  currentSchedulingMs() {
+    if (this._inFlight <= 0 || this._schedulingSince == null) return 0
+    return Math.max(0, Date.now() - this._schedulingSince)
+  }
+
+  /** 结算本轮调度：上报时长给上层累加落盘，然后清空起算点。 */
+  _settleScheduling() {
+    const since = this._schedulingSince
+    if (since == null) return
+    const ms = Math.max(0, Date.now() - since)
+    this._schedulingSince = null
+    if (ms > 0) this._emitScheduling(ms)
+    else this._notifyScheduleChange()
+  }
+
+  /**
+   * 上报一次"本轮调度结束"（时长毫秒）。上层按账号累加进账本
+   * （AccountStateStore），去抖落盘，不阻塞转发。
+   */
+  _emitScheduling(ms) {
+    if (this._onStateChange) {
+      try {
+        this._onStateChange({ schedulingMs: ms })
+      } catch (err) {
+        logger.warn('scheduling report callback failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+  }
+
+  /**
+   * 上报"本账号本轮调度正在运行"（起算点变化 / 本轮结束）。
+   * 只用于把 `schedulingSince` 持久化，好让控制台在重启后仍能区分
+   * "这个号刚才还在干活"和"从来没动过"。
+   */
+  _notifyScheduleChange() {
+    if (!this._onStateChange) return
+    try {
+      this._onStateChange({
+        schedulingSince: this._schedulingSince
+          ? new Date(this._schedulingSince).toISOString()
+          : null,
+      })
+    } catch {
+      // 可观测性失败不影响转发
     }
   }
 
@@ -487,24 +558,20 @@ export class SessionManager {
         await this._releaseUnlocked()
       }
 
-      // Try GET first in case another path left a row
-      if (!this.hasLiveSlot()) {
-        try {
-          const got = await this.upstream.freebuffSession('GET')
-          this._apply(got)
-          if (this.isUsableForModel(model)) return this.session
-          if (
-            this.hasLiveSlot() &&
-            this.session?.model &&
-            this.session.model !== model
-          ) {
-            await this._releaseUnlocked()
-          }
-        } catch (err) {
-          logger.warn('session GET failed before admit', {
-            error: err instanceof Error ? err.message : String(err),
-          })
-        }
+      // 冷路径：本地已知"没有活跃会话"，直接 admit。
+      //
+      // 这里原本还要先 GET 一次（"in case another path left a row"）。但上游
+      // **同一个账号同一时间只能有一个客户端在线**：本进程的会话状态由
+      // session-manager 单点持有（admit/释放/轮询都经 withLock 串行化），
+      // refresh() 与本方法同用一把锁，不存在"别人偷偷建了会话而我不知道"。
+      // 那次 GET 只在**本进程之外**有人用同一个号时才有意义，代价却是每条
+      // 冷请求都多一个完整 RTT（实测 +580ms 首字节，见
+      // test/repro-firstbyte.mjs）。真正的兜底已经在上游：模型不符时 admit 会
+      // 返回 model_locked，_admitUnlocked 内部会释放并重试一次。
+      //
+      // 换模型时仍需先释放旧会话（上游一次只服务一个模型），这段逻辑保留。
+      if (this.hasLiveSlot() && !this.isUsableForModel(model)) {
+        await this._releaseUnlocked()
       }
 
       return this._admitUnlocked(model)

@@ -203,6 +203,8 @@ async function main() {
   const ctx = buildAppContext(config, {
     // 账号并发上限来自控制台设置（/data/settings.json，默认 1:1），实时生效
     getAccountConcurrency: () => settingsStore.get().accountMaxConcurrency,
+    // 账号调度模式（控制台可调）：'sticky'（默认，最少换号）| 'spread'（并发优先）
+    getSchedulingMode: () => settingsStore.get().accountSchedulingMode,
     // 额度保护（控制台可调）：空闲自动释放秒数 / 单请求新会话预算
     getSessionSettings: () => settingsStore.get(),
     // 自定义模型列表（前端「模型管理」，覆盖内置目录），实时生效
@@ -245,6 +247,8 @@ async function main() {
     file: path.join(dataDir, 'login-flows.json'),
     credentialsDir: ctx.runtimes.dir,
     config,
+    // 浏览器登录回调也是写凭据的入口：记「凭证更新时间」到账号账本。
+    onCredentialSaved: (key) => ctx.runtimes.markCredentialUpdated(key),
   })
   // catalog 运行时缓存是**懒加载**的（第一次用到模型才读）。这里先按 dataDir
   // 切路径并读一次，一是保证 /v1/models 与内置目录一致（原来由 startServer 里的

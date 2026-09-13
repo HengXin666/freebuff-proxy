@@ -348,6 +348,8 @@ export function createProxyHandler(ctx) {
       }
       try {
         const saved = saveAccountUser(runtimes.dir, u)
+        // 凭证更新时间落盘（前端「更新」列的数据源）。
+        runtimes.markCredentialUpdated(saved.key)
         await runtimes.invalidate(saved.key).catch(() => {})
         // 只读探测预热：导入后立即刷新 session/额度缓存（不占额度）
         try {
@@ -554,16 +556,30 @@ export function createProxyHandler(ctx) {
     // 避免把"APP 里没有的模型"探测请求盲发上游（上游会标记异常行为，是免费
     // 反代被封号的主要诱因）。未知模型不拦截免费用户（保守：catalog 更新有
     // 滞后，硬拒绝会误伤合法新模型），只对上游明确说"没有"的模型硬拒绝。
-    // 校验前先预热一次上游会话探测（60s 缓存，只读 GET、不占额度；失败静默
-    // 降级为 catalog+自定义白名单），让上游真实存在的模型能通过校验。
-    await probeUpstreamSessionCached().catch(() => {})
-    const allowed = isModelAllowed(upstreamModel, {
+    //
+    // 顺序很重要（性能）：**先**用本地三张表（catalog / 前端自定义 / 隐藏）
+    // 判定——它们覆盖绝大多数请求，命中时完全不需要为了白名单等一次上游往返
+    // （实测 580ms，见 test/repro-firstbyte.mjs）。只有"本地三张表都不认识"
+    // 的模型才值得去问上游一次（60s 缓存、只读 GET、不占额度），此时才预热。
+    const modelAllowOpts = {
       customModels: customModels(),
       hiddenModels: hiddenModels(),
-      sessionModelIds: upstreamSessionModelIds(),
-      sessionModel: upstreamSessionModel(),
       blockPremium: blockPremiumModels(),
-    })
+    }
+    let allowed = isModelAllowed(upstreamModel, modelAllowOpts)
+    if (allowed) {
+      // 命中本地表：后台预热会话缓存（/v1/models 与后续未知模型校验要用），
+      // 但**不阻塞**本次请求。
+      void probeUpstreamSessionCached().catch(() => {})
+    } else {
+      // 本地不认识：问一次上游（60s 缓存），再按上游是否见过决定放行/拒绝。
+      await probeUpstreamSessionCached().catch(() => {})
+      allowed = isModelAllowed(upstreamModel, {
+        ...modelAllowOpts,
+        sessionModelIds: upstreamSessionModelIds(),
+        sessionModel: upstreamSessionModel(),
+      })
+    }
     if (!allowed) {
       logger.warn('model not allowed; rejecting before upstream', {
         model: upstreamModel,
@@ -636,6 +652,12 @@ export function createProxyHandler(ctx) {
     /** 当前持有的账号 chat 锁释放函数。 */
     let releaseChat = null
     /**
+     * 选号阶段占用的「槽位预留」释放函数（见 AccountRuntimes.reserveSlot）。
+     * spread（并发优先）排序靠它看见"刚被选中、正在拿锁"的请求——否则 N 个并发
+     * 请求会同时看到空账号、全部选中同一个号。拿到 chat 锁后立即交还。
+     */
+    let releaseReserved = null
+    /**
      * 客户端断开信号（整个请求共用；finally 里 cleanup）。账号锁等待是
      * "首字节前静默等待"里最长的一段（热 75s / 冷 120s），客户端早就断了却
      * 还在闷等，且拿到锁后会继续跑完上游流程——死请求钉死账号并发。
@@ -661,6 +683,12 @@ export function createProxyHandler(ctx) {
         heldRt.sessions.endRequest()
         heldRt = null
       }
+      // 预留槽位（选号时占用）必须**无论如何**交还：它是 spread 排序看见
+      // "这个账号马上要满了"的唯一依据，泄漏一次就会让账号被误判为满员。
+      if (releaseReserved) {
+        releaseReserved()
+        releaseReserved = null
+      }
     }
 
     /**
@@ -671,6 +699,15 @@ export function createProxyHandler(ctx) {
      * - 冷账号/换模型：只等固定窗口，超时即换下一个账号。
      */
     function chatWaitMs(rt) {
+      // spread 模式：并发优先——账号满员就是"该换号了"，只给一个短窗
+      // （accountOverflowWaitMs，默认 15s）就溢出到下一个账号，绝不把并发
+      // 钉死在一个账号上干等。sticky（默认）保留大等待：宁可排队也不换号，
+      // 因为换号 = 新买一条 Freebucks 计费会话。
+      if (runtimes.schedulingMode() === 'spread') {
+        const overflow = settingsStore?.get?.()?.accountOverflowWaitMs
+        const ms = Number.isFinite(overflow) ? overflow : 15_000
+        return Math.max(0, Math.min(ms, 60_000))
+      }
       if (rt.sessions.isUsableForModel(upstreamModel)) {
         return ((config.limits.streamIdleTimeoutSec || 120) * 1000) + 15_000
       }
@@ -708,6 +745,16 @@ export function createProxyHandler(ctx) {
           pendingRetryAfterMs = null
           pendingSwitchAccount = false
           pendingNoCooldown = false
+          // 本轮选号占用的槽位预留：换号时必须先交还上一个账号的预留
+          // （它已经不在本次请求的候选里了），再接管新账号的预留。
+          if (releaseReserved) {
+            releaseReserved()
+            releaseReserved = null
+          }
+          releaseReserved =
+            typeof rt.releaseReservedSlot === 'function'
+              ? rt.releaseReservedSlot
+              : null
           if (lastKey && rt.key !== lastKey) {
             // 已经换到不同账号 → 重置同账号重试计数，并释放上一账号的串行化锁
             sameAccountRetries = 0
@@ -818,6 +865,12 @@ export function createProxyHandler(ctx) {
             heldRt = rt
             // 在途标记：锁内唯一请求；轮询 GET 会跳过该账号，避免干扰活跃会话。
             heldRt.sessions.beginRequest()
+            // 已经拿到真实槽位 —— 预留完成使命，立刻交还（此后由
+            // chatLock.inFlight 承担"这个账号有多满"的事实来源）。
+            if (releaseReserved) {
+              releaseReserved()
+              releaseReserved = null
+            }
           }
 
           let result

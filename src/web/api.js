@@ -521,6 +521,8 @@ export function createWebApi(deps) {
         return true
       }
       const saved = saveAccountUser(runtimes.dir, u)
+      // 凭证更新时间落盘（前端「更新」列的数据源）。
+      runtimes.markCredentialUpdated(saved.key)
       // Drop any cached runtime so the fresh token is picked up
       try {
         await runtimes.invalidate(saved.key)
@@ -890,6 +892,13 @@ export function createWebApi(deps) {
         freeToolSignatureEnabled:
           settingsStore?.get().freeToolSignatureEnabled !== false,
         accountMaxConcurrency: settingsStore?.get().accountMaxConcurrency ?? 2,
+        // 账号调度模式（'sticky' 默认 / 'spread' 并发优先）+ 溢出排队上限。
+        accountSchedulingMode:
+          settingsStore?.get().accountSchedulingMode === 'spread'
+            ? 'spread'
+            : 'sticky',
+        accountOverflowWaitMs:
+          settingsStore?.get().accountOverflowWaitMs ?? 15_000,
         blockPremiumModels:
           settingsStore?.get().blockPremiumModels === true,
         // 额度保护：空闲自动释放秒数 + 单请求新会话预算（Freebucks 计费单位）。
@@ -942,6 +951,31 @@ export function createWebApi(deps) {
           return true
         }
         patch.accountMaxConcurrency = body.accountMaxConcurrency
+      }
+      if (body.accountSchedulingMode !== undefined) {
+        if (
+          body.accountSchedulingMode !== 'sticky' &&
+          body.accountSchedulingMode !== 'spread'
+        ) {
+          sendJson(res, 400, {
+            error: "accountSchedulingMode 必须是 'sticky' 或 'spread'",
+          })
+          return true
+        }
+        patch.accountSchedulingMode = body.accountSchedulingMode
+      }
+      if (body.accountOverflowWaitMs !== undefined) {
+        if (
+          !Number.isInteger(body.accountOverflowWaitMs) ||
+          body.accountOverflowWaitMs < 0 ||
+          body.accountOverflowWaitMs > 600_000
+        ) {
+          sendJson(res, 400, {
+            error: 'accountOverflowWaitMs 必须是 0..600000 的整数（毫秒）',
+          })
+          return true
+        }
+        patch.accountOverflowWaitMs = body.accountOverflowWaitMs
       }
       if (body.blockPremiumModels !== undefined) {
         if (typeof body.blockPremiumModels !== 'boolean') {

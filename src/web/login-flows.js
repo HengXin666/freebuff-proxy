@@ -27,10 +27,16 @@ export class LoginFlowManager {
   /**
    * @param {{file: string, credentialsDir: string, config: any}} opts
    */
-  constructor({ file, credentialsDir, config }) {
+  constructor({ file, credentialsDir, config, onCredentialSaved = null }) {
     this.file = file
     this.credentialsDir = credentialsDir
     this.config = config
+    /**
+     * 凭证落盘后的回调（记「凭证更新时间」到账号账本）。
+     * 用回调而不是直接持有 AccountRuntimes：登录流程只关心登录，账本是上层的事。
+     */
+    this._onCredentialSaved =
+      typeof onCredentialSaved === 'function' ? onCredentialSaved : null
     /** @type {Map<string, any>} */
     this.flows = new Map()
     /** 装载结果（'ok' | 'missing' | 'invalid'）：损坏 = 等待中的登录流程全丢
@@ -170,6 +176,12 @@ export class LoginFlowManager {
         })
         if (st?.user?.authToken) {
           const saved = saveAccountUser(this.credentialsDir, st.user)
+          // 记「凭证更新时间」：浏览器登录回调也是写凭据的入口之一。
+          try {
+            this._onCredentialSaved?.(saved.key)
+          } catch {
+            // 可观测性失败不影响登录完成
+          }
           flow.status = 'done'
           flow.user = { key: saved.key, id: saved.user.id || null, email: saved.user.email, name: saved.user.name }
           flow.error = null

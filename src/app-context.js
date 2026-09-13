@@ -167,10 +167,11 @@ class ChatMutex {
 export class AccountRuntimes {
   /**
    * @param {import('./config.js').ProxyConfig} config
-   * @param {{ getAccountConcurrency?: () => number, getSessionSettings?: () => { idleReleaseSec?: number, maxNewSessionsPerRequest?: number } | null, getCustomModels?: () => { id: string, pool?: string, agentId?: string, fallbackAgentId?: string, displayName?: string, multimodal?: boolean, note?: string }[] }} [opts]
+   * @param {{ getAccountConcurrency?: () => number, getSchedulingMode?: () => 'sticky' | 'spread', getSessionSettings?: () => { idleReleaseSec?: number, maxNewSessionsPerRequest?: number } | null, getCustomModels?: () => { id: string, pool?: string, agentId?: string, fallbackAgentId?: string, displayName?: string, multimodal?: boolean, note?: string }[] }} [opts]
    *   getAccountConcurrency: 每个账号的并发上限来源（控制台设置/配置），
-   *   默认取 config.limits.accountMaxConcurrency。账号调度是"粘性优先"：
-   *   并发请求先挤同一账号（上限即溢出阈值），不主动平摊到新账号。
+   *   默认取 config.limits.accountMaxConcurrency。
+   *   getSchedulingMode: 账号调度模式来源（控制台设置），默认 'sticky'。
+   *   sticky = 并发上限是**溢出**阈值（满员先排队）；spread = 并发优先（满员即换号）。
    *   getCustomModels: 前端「模型管理」的自定义模型列表（覆盖内置目录），
    *   影响 agent id 解析。
    */
@@ -194,6 +195,16 @@ export class AccountRuntimes {
       typeof opts.getAccountConcurrency === 'function'
         ? opts.getAccountConcurrency
         : () => this.config.limits.accountMaxConcurrency || 1
+    /**
+     * 账号调度模式来源（控制台「账号调度」实时生效）：'sticky'（默认）| 'spread'。
+     *   sticky = 并发上限是**溢出**阈值：满员先在原账号有界排队，超时才换号；
+     *   spread = 并发优先：空闲账号排前面，满员立即溢出（不为并发干等）。
+     * 缺省 / 非法值一律回落 sticky——**升级不改变既有行为**。
+     */
+    this._getSchedulingMode =
+      typeof opts.getSchedulingMode === 'function'
+        ? opts.getSchedulingMode
+        : () => 'sticky'
     this._getCustomModels =
       typeof opts.getCustomModels === 'function'
         ? opts.getCustomModels
@@ -227,6 +238,23 @@ export class AccountRuntimes {
      * @type {Map<string, number>}
      */
     this._lastUsedAt = new Map()
+    /**
+     * 「已选中、但还没拿到 chat 锁」的预留数（key → 计数）。
+     *
+     * 为什么必须有它：选号（candidateKeys）发生在**拿 chat 锁之前**，此刻
+     * `chatLock.inFlight` 还是 0。于是 N 个并发请求会**同时**看到"这个账号很空"，
+     * 全部选中同一个账号——spread（并发优先）模式形同虚设（smoke 的
+     * fb-proxy-spread 用例就是这么抓到的：4 路并发全挤在 A 上）。
+     * 预留数让"刚被选中、马上要占用一个槽位"的请求也能被其他请求看见。
+     * @type {Map<string, number>}
+     */
+    this._reserved = new Map()
+    /**
+     * 预留的兜底释放定时器：请求中途异常退出（选号后未走完 chat 流程）也不该
+     * 把账号永久标记为"满"。超时自动归还，绝不会泄漏成"账号永远满员"。
+     * @type {Map<string, NodeJS.Timeout>}
+     */
+    this._reserveTimers = new Map()
     // 必须在**所有**上述容器（cooldowns/stats/_lastUsedAt）初始化之后回灌，
     // 否则账本里存着的计数/冷却没有地方放（早先放在构造函数开头，smoke 直接
     // 以 "Cannot read properties of undefined" 抓到）。
@@ -241,6 +269,8 @@ export class AccountRuntimes {
       const rt = this.byKey.get(a.key)
       const snap = rt?.sessions?.getSnapshot?.()
       const chatLock = this.chatLocks.get(a.key)
+      // 账本记录（生命周期/时间轴）：account() 会按需创建并盖上导入时间。
+      const rec = this.accountState.account(a.key, this._importedAtHint(a.key))
       return {
         ...a,
         lastUsed: this._lastSuccessKey === a.key,
@@ -266,8 +296,21 @@ export class AccountRuntimes {
         lastUsedAt: this._lastUsedAt.has(a.key)
           ? new Date(this._lastUsedAt.get(a.key)).toISOString()
           : null,
-        // 负载均衡监控：当前在途 SSE 流数 / 账号并发上限
+        // ── 时间轴（全部持久化在 /data/account-state.json）──────────────
+        // importedAt：导入时间（老账号回落 firstSeenAt）；
+        // credentialUpdatedAt：凭证（token）最后一次被写入的时刻；
+        // scheduledMs / schedulingSince：累计调度时长 + 本轮起算点（实时）。
+        importedAt: rec?.importedAt || rec?.firstSeenAt || null,
+        credentialUpdatedAt: rec?.credentialUpdatedAt || null,
+        scheduledMs: Number(rec?.scheduledMs) || 0,
+        schedulingSince: rec?.schedulingSince || null,
+        lastScheduledAt: rec?.lastScheduledAt || null,
+        // 本轮实时调度时长：有在途流时 = now - 起算点（前端无需自己算时钟）
+        currentSchedulingMs: rt?.sessions?.currentSchedulingMs?.() || 0,
+        // 负载均衡监控：当前在途 SSE 流数 / 账号并发上限（+ 已预留未拿锁的）
         inFlight: chatLock?.inFlight || 0,
+        reserved: this.reservedCount(a.key),
+        effectiveLoad: (chatLock?.inFlight || 0) + this.reservedCount(a.key),
         concurrency: chatLock?.capacity || this._accountConcurrency(),
         effectiveProxy: rt?.effectiveProxy || null,
         // 最近一次探测（refresh GET / probe）结果：让控制台展示"为什么刷新失败"
@@ -425,6 +468,15 @@ export class AccountRuntimes {
     return Number.isFinite(n) && n >= 1 ? Math.min(16, Math.floor(n)) : 1
   }
 
+  /** 当前调度模式：'sticky'（默认）| 'spread'。非法值一律回落 sticky。 */
+  schedulingMode() {
+    try {
+      return this._getSchedulingMode?.() === 'spread' ? 'spread' : 'sticky'
+    } catch {
+      return 'sticky'
+    }
+  }
+
   /**
    * 丢弃一个 runtime 时的统一收尾：先优雅释放它的上游会话（要用它的
    * upstream 出网），**会话收尾后再关闭出网 agent**，否则 keep-alive
@@ -486,6 +538,56 @@ export class AccountRuntimes {
   /** 账号当前在途 chat 数（监控用）。 */
   chatInFlight(key) {
     return this.chatLocks.get(key)?.inFlight || 0
+  }
+
+  /** 预留的兜底存活时长：足够走完"选号 → 拿 chat 锁"，又不会让泄漏永久化。 */
+  static get RESERVE_TTL_MS() {
+    return 90_000
+  }
+
+  /** 被选中但还没拿到 chat 锁的请求数（spread 排序用）。 */
+  reservedCount(key) {
+    return this._reserved.get(key) || 0
+  }
+
+  /** 该账号当前"实际占用 + 已预留"的槽位估计（spread 排序的 load）。 */
+  effectiveLoad(key) {
+    return this.chatInFlight(key) + this.reservedCount(key)
+  }
+
+  /**
+   * 预留一个 chat 槽位意向（选号成功后由 chat 流程调用）。
+   * 返回幂等的释放函数：拿到 chat 锁后调用它把预留交还给真实在途计数。
+   * @param {string} key
+   * @returns {() => void}
+   */
+  reserveSlot(key) {
+    if (!key) return () => {}
+    this._reserved.set(key, (this._reserved.get(key) || 0) + 1)
+    // 兜底 TTL：请求异常退出/进程卡住也不会把账号永久标成满员。
+    if (!this._reserveTimers.has(key)) {
+      const t = setTimeout(() => {
+        this._reserveTimers.delete(key)
+        this._reserved.delete(key)
+      }, AccountRuntimes.RESERVE_TTL_MS)
+      if (t.unref) t.unref()
+      this._reserveTimers.set(key, t)
+    }
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const left = (this._reserved.get(key) || 0) - 1
+      if (left > 0) this._reserved.set(key, left)
+      else {
+        this._reserved.delete(key)
+        const t = this._reserveTimers.get(key)
+        if (t) {
+          clearTimeout(t)
+          this._reserveTimers.delete(key)
+        }
+      }
+    }
   }
 
   /**
@@ -656,7 +758,10 @@ export class AccountRuntimes {
       const live = sessions?.hasLiveSlot?.() === true
       const sameModel = snap?.model === model
       const chatLock = this.chatLocks.get(key)
+      // inFlight = 已拿到 chat 锁的真实在途；load 还要算上"刚被选中、正在拿锁"
+      // 的预留，否则 N 个并发请求会同时看到一个"空账号"而全部挤上去。
       const inFlight = chatLock?.inFlight || 0
+      const load = inFlight + this.reservedCount(key)
       const capacity = chatLock?.capacity || this._accountConcurrency()
       // Freebucks 余额买不起该模型（balance < prices[model]）→ 排到最后：
       // 调度不会为了它白开一条计费 session（上游反正也会 429）。
@@ -683,25 +788,42 @@ export class AccountRuntimes {
         tier,
         // 已用过的账号优先于从未用过的（同一 tier 内）——"最少换号"的核心
         used: used ? 0 : 1,
-        busy: inFlight >= capacity ? 1 : 0,
+        busy: load >= capacity ? 1 : 0,
         lastUsedAt: this._lastUsedAt.get(key) || 0,
-        load: inFlight,
+        load,
         exhausted: exhausted ? 1 : 0,
         unaffordable,
         rotation: i,
       })
     }
+    // ── 调度模式（控制台「账号调度」，默认 sticky）────────────────────
+    // sticky（drain, not rotate）：并发上限是**溢出**阈值——满员先原账号排队，
+    //   超时才换号；"从未用过的账号"排最后。最少换号 = 最少新建计费会话。
+    // spread（并发优先）：**有空闲槽位的账号提到最前**，满员立即溢出；
+    //   只有所有账号都满员时才排队。这样"设了并发 2 却只开 1 个号"不再发生。
+    //
+    // ⚠️ spread 下 busy 必须**排在 used 之前**：否则"已用但满员"的账号会一直
+    // 压住"空闲但从没用过"的账号，新号永远等不到——那正是用户抱怨的现象。
+    // spread 仍然保留 tier 优先（同模型热 session 复用零成本），只是把
+    // "有空闲槽位的冷账号"提前到"满员的已用账号"之前。
+    const spread = this.schedulingMode() === 'spread'
+    if (process.env.FB_DEBUG_SCHED) {
+      console.error("[sched] mode=" + (spread ? "spread" : "sticky"))
+    }
     candidates.sort(
       (a, b) =>
-        // 1) 同模型热 session > 冷账号 > 别的模型占着（避免模型交替时反复
-        //    release/admit 同一个账号）
-        a.tier - b.tier ||
+        // 1) 首要维度：sticky 看「能不能复用」(tier)，spread 看「有没有空位」(busy)。
+        //    spread 下 busy 必须排第一：否则「带着热 session 但已满员」的账号
+        //    会一直压住「空闲的冷账号」，新号永远轮不到——那正是用户抱怨的
+        //    「设了并发 2 却只开一个号」。热 session 复用的省钱收益在 spread
+        //    模式下**主动让位**给并发（这正是用户切这个模式的目的）。
+        (spread ? a.busy - b.busy || a.tier - b.tier : a.tier - b.tier) ||
         // 2) 同一梯队里：已用过的账号 > 从未用过的账号（不轻易碰新账号）
         a.used - b.used ||
-        // 3) 优先有空闲槽位的账号
-        a.busy - b.busy ||
-        // 粘性：优先继续用最近用过的那个账号
-        b.lastUsedAt - a.lastUsedAt ||
+        // 3) sticky：优先有空闲槽位，其次粘性（最近用过的优先）；
+        //    spread：随后按在途数平摊（同 busy 档内继续摊薄）
+        (spread ? 0 : a.busy - b.busy) ||
+        (spread ? a.load - b.load : b.lastUsedAt - a.lastUsedAt) ||
         a.load - b.load ||
         a.exhausted - b.exhausted ||
         // 余额买不起的账号排最后（复用它的热 session 仍然优先——不计费）
@@ -882,11 +1004,16 @@ export class AccountRuntimes {
         // （若只按 +1 推进，跳过冷却账号会让列表末尾的账号被选中两次）。
         this._rr = (keys.indexOf(key) + 1) % Math.max(keys.length, 1)
         this._recordSuccess(key)
+        // 预留一个槽位意向：选号发生在拿 chat 锁**之前**，"刚被选中、正在拿锁"
+        // 的请求必须被后续并发请求看见，否则 spread 模式会全部挤到同一个账号上。
+        // 调用方拿到 chat 锁（或请求失败）后必须调用 rt.releaseReservedSlot()。
+        rt.releaseReservedSlot = this.reserveSlot(key)
         logger.info('selected account for model', {
           key,
           email: rt.email,
           model,
           reusedSession,
+          reserved: this.reservedCount(key),
         })
         return rt
       } catch (err) {
@@ -1178,8 +1305,14 @@ export class AccountRuntimes {
   }
 
   /**
-   * 启动扫尾：把上次进程遗留 / 本次释放失败的会话句柄逐个 DELETE 拿退款。
-   * 失败的保留在 sessions.json 里等下次启动继续——绝不静默丢弃。
+   * 扫尾：把上次进程遗留 / 本次释放失败的会话句柄逐个 DELETE 拿退款。
+   * 失败的保留在 sessions.json 里等下次机会——绝不静默丢弃。
+   *
+   * ⚠️ **必须周期性调用，不能只在启动时调一次。** 上游对"提前结束"的会话会回
+   * `freebucksRefundPending: true`（结算未完成，"拿同一个 instanceId 再来取"）。
+   * 官方客户端在 pending 期间**每 3 秒无限重放**直到拿到终态；而本服务原先只在
+   * **启动时**扫一次，进程不重启就再也没人去取这些结算——这正是"退款总额永远是 0"
+   * 最可疑的工程原因（不是上游不退，是我们问得太早且没再问）。
    * @returns {Promise<{cleaned: number, failed: number, skipped: number}>}
    */
   async cleanupOrphanSessions() {
@@ -1192,6 +1325,7 @@ export class AccountRuntimes {
     }
     return this.handleStore.cleanupOrphans(resolve)
   }
+
 
   /**
    * 严格释放全部账号（「断开全部连接」/「重启服务」/进程退出用）：
@@ -1273,7 +1407,17 @@ export class AccountRuntimes {
       this.accountState.recordRefund(key, snap.refund)
       return
     }
+    // 调度时长单独累加（不能走 patch：patch 是覆盖语义，会把累计值抹掉）。
+    if (typeof snap.schedulingMs === 'number') {
+      this.accountState.recordScheduling(key, snap.schedulingMs)
+      return
+    }
     const fields = {}
+    // 本轮调度的起算点（可空 = 本轮已结束）：落盘后控制台能区分
+    // "刚才还在干活" / "从来没被调度过"。
+    if (snap.schedulingSince !== undefined) {
+      fields.schedulingSince = snap.schedulingSince
+    }
     if (snap.freebucks !== undefined) fields.freebucks = snap.freebucks
     if (snap.quota !== undefined) fields.quota = snap.quota
     if (snap.lastProbe !== undefined) fields.lastProbe = snap.lastProbe
@@ -1310,6 +1454,12 @@ export class AccountRuntimes {
       }
       const usedAt = rec.lastUsedAt ? Date.parse(rec.lastUsedAt) : NaN
       if (Number.isFinite(usedAt)) this._lastUsedAt.set(key, usedAt)
+      // 上一进程的"本轮调度起算点"必须清掉：那个进程已经死了，在途流也没了，
+      // 留着会让控制台显示一个假的"本轮已运行 3 天"。累计时长 scheduledMs 保留。
+      if (rec.schedulingSince) {
+        rec.schedulingSince = null
+        this.accountState.touch()
+      }
       const cds = rec.cooldowns
       if (cds && typeof cds === 'object') {
         const now = Date.now()
@@ -1354,6 +1504,17 @@ export class AccountRuntimes {
     }
     this.accountState.prune(new Set(this.allKeys()))
     this.accountState.flush()
+  }
+
+  /**
+   * 记一笔"凭证更新时间"（导入 / 重新登录 / 更新 token 后调用）。
+   * 所有写凭据的入口（网页导入、浏览器登录回调、开放 API 导入）都要调，
+   * 否则前端「更新」列对某些入口永远是空的。
+   * @param {string} key
+   */
+  markCredentialUpdated(key) {
+    if (!key) return
+    this.accountState.recordCredentialUpdate(key)
   }
 
   /** 账本 + 句柄索引一起冲刷落盘（进程退出/重启前调用）。 */
@@ -1425,7 +1586,7 @@ function accountStateDir(config) {
 
 /**
  * @param {import('./config.js').ProxyConfig} config
- * @param {{ getAccountConcurrency?: () => number, getSpreadFreeModels?: () => boolean, getCustomModels?: () => { id: string, pool?: string, agentId?: string, fallbackAgentId?: string, displayName?: string, multimodal?: boolean, note?: string }[] }} [opts] 透传给 AccountRuntimes
+ * @param {{ getAccountConcurrency?: () => number, getSchedulingMode?: () => 'sticky' | 'spread', getSessionSettings?: () => any, getCustomModels?: () => { id: string, pool?: string, agentId?: string, fallbackAgentId?: string, displayName?: string, multimodal?: boolean, note?: string }[] }} [opts] 透传给 AccountRuntimes
  */
 export function buildAppContext(config, opts = {}) {
   const runtimes = new AccountRuntimes(config, opts)

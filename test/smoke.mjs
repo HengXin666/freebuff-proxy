@@ -3374,6 +3374,180 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(capDir, { recursive: true, force: true })
 }
 
+// --- regression: 调度模式 spread（并发优先）→ 满员立刻换号，启用第二个账号 ---
+// 用户场景：设了「每账号并发 2」却看到 4 个在途全挤在一个账号上。spread 模式下
+// 排序把"有空闲槽位"提到最前，满员账号不再压住空闲账号；且 busy 必须排在
+// used **之前**（否则"已用但满员"会一直压住"空闲但从未用过"的号）。
+{
+  const sdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-spread-'))
+  saveAccountUser(sdDir, { id: 'sda', email: 'sda@example.com', authToken: 'token-sda' })
+  saveAccountUser(sdDir, { id: 'sdb', email: 'sdb@example.com', authToken: 'token-sdb' })
+  const sdConfig = loadConfig()
+  sdConfig.server.host = '127.0.0.1'
+  sdConfig.server.port = 0
+  sdConfig.server.apiKeys = ['sk-test']
+  sdConfig.upstream.credentialsDir = sdDir
+  sdConfig.session.pollIntervalSec = 3600
+  sdConfig.limits.maxConcurrentRequests = 12
+  let sdMode = 'spread'
+  const sdRuntimes = new AccountRuntimes(sdConfig, {
+    getAccountConcurrency: () => 2,
+    getSchedulingMode: () => sdMode,
+  })
+  const sdServer = await startServer({
+    config: sdConfig,
+    runtimes: sdRuntimes,
+    ...(() => {
+      const rt = sdRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const sdPort = sdServer.address().port
+
+  // 按账号分别统计并发峰值：断言的是"单账号不超过上限"，而不是全局并发
+  // （全局 4 路是预期的，两个账号各 2 路）。
+  const sdActiveByToken = new Map()
+  const sdPeakByToken = new Map()
+  const sdOrigFetch = globalThis.fetch
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url)
+    if (u.includes('127.0.0.1') || u.includes('localhost')) return sdOrigFetch(url, init)
+    if (u.includes('/api/v1/chat/completions')) {
+      const body = JSON.parse(init.body)
+      if (body.stream) {
+        const headers = init.headers || {}
+        const token =
+          (headers.Authorization || headers.authorization || 'unknown')
+            .replace('Bearer ', '')
+        let closed = false
+        const bump = (d) => {
+          const cur = Math.max(0, (sdActiveByToken.get(token) || 0) + d)
+          sdActiveByToken.set(token, cur)
+          if (cur > (sdPeakByToken.get(token) || 0)) sdPeakByToken.set(token, cur)
+        }
+        bump(1)
+        const stream = new ReadableStream({
+          start(controller) {
+            const enc = new TextEncoder()
+            async function emit(i) {
+              if (i >= 5 || closed) {
+                bump(-1)
+                if (!closed) controller.close()
+                return
+              }
+              controller.enqueue(enc.encode(`data: {"x":"${i}"}\n\n`))
+              await new Promise((r) => setTimeout(r, 100))
+              emit(i + 1)
+            }
+            emit(0)
+          },
+          cancel() {
+            closed = true
+            bump(-1)
+          },
+        })
+        return new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        })
+      }
+    }
+    return sdOrigFetch(url, init)
+  }
+
+  mockMode = 'ok'
+  sessionPosts = 0
+  completionAttempts = 0
+  // 4 个并发流、每账号上限 2 → spread 必须铺到**两个**账号上（各 2 路）
+  const sdReqs = Array.from({ length: 4 }, () =>
+    fetch(`http://127.0.0.1:${sdPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'deepseek/deepseek-v4-flash',
+        stream: true,
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    }),
+  )
+  const sdResponses = await Promise.all(sdReqs)
+  const sdAccounts = []
+  for (const r of sdResponses) {
+    assert.equal(r.status, 200, await r.clone().text())
+    sdAccounts.push(r.headers.get('x-freebuff-proxy-account'))
+  }
+  const sdByEmail = {}
+  for (const a of sdAccounts) sdByEmail[a] = (sdByEmail[a] || 0) + 1
+  // 核心断言：4 路并发 + 上限 2 → 两个账号各 2 路（不再全挤在一个号上）
+  assert.equal(Object.keys(sdByEmail).length, 2, `spread 应铺到 2 个账号, got ${JSON.stringify(sdByEmail)}`)
+  assert.equal(sdByEmail['sda@example.com'] || 0, 2, `sda 应 2 路, got ${JSON.stringify(sdByEmail)}`)
+  assert.equal(sdByEmail['sdb@example.com'] || 0, 2, `sdb 应 2 路, got ${JSON.stringify(sdByEmail)}`)
+  // 每个账号的峰值都必须 <= 上限 2（并发真的铺开了，但没超上限）
+  for (const [token, peak] of sdPeakByToken) {
+    assert.ok(peak <= 2, `账号 ${token} 并发峰值应 <=2, got ${peak}`)
+  }
+  assert.equal(sdPeakByToken.size, 2, '两个账号都应被真正用上')
+  // 两个账号各 admit 一次（每账号一条会话，不多买）
+  assert.equal(sessionPosts, 2, `两个账号各 admit 一次, got ${sessionPosts}`)
+
+  globalThis.fetch = sdOrigFetch
+  await sdRuntimes.shutdown()
+  sdServer.close()
+  fs.rmSync(sdDir, { recursive: true, force: true })
+}
+
+// --- regression: 账号时间轴持久化（导入/凭证更新/累计调度时长）---
+{
+  const tsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-timeline-'))
+  saveAccountUser(tsDir, { id: 'tsa', email: 'tsa@example.com', authToken: 'token-tsa' })
+  const tsConfig = loadConfig()
+  tsConfig.server.host = '127.0.0.1'
+  tsConfig.server.port = 0
+  tsConfig.server.apiKeys = ['sk-test']
+  tsConfig.upstream.credentialsDir = tsDir
+  tsConfig.session.pollIntervalSec = 3600
+  const tsRuntimes = new AccountRuntimes(tsConfig, { getAccountConcurrency: () => 1 })
+  // 导入时间：新账号应立刻有一个 importedAt（来自凭据文件创建时间）
+  const tsRow = tsRuntimes.list().find((a) => a.key === 'tsa')
+  assert.ok(tsRow, 'tsa 应在账号列表里')
+  assert.ok(tsRow.importedAt, `importedAt 不应为空, got ${tsRow.importedAt}`)
+  assert.equal(tsRow.scheduledMs, 0, '新账号累计调度时长应为 0')
+  // 凭证更新时间：只有真的写了凭据才记录（导入路径会调用 markCredentialUpdated）
+  assert.equal(tsRow.credentialUpdatedAt, null, '未调用前应为 null')
+  tsRuntimes.markCredentialUpdated('tsa')
+  const tsRow2 = tsRuntimes.list().find((a) => a.key === 'tsa')
+  assert.ok(tsRow2.credentialUpdatedAt, `markCredentialUpdated 后应非空`)
+  // 累计调度时长：模拟会话在途 1.2s 后归零
+  const tsSessions = tsRuntimes.get('tsa').sessions
+  tsSessions.beginRequest()
+  assert.ok(tsSessions.currentSchedulingMs() >= 0, '在途时应有本轮调度时长')
+  await new Promise((r) => setTimeout(r, 1200))
+  const runningMs = tsSessions.currentSchedulingMs()
+  assert.ok(runningMs >= 1000, `本轮运行时长应 >=1s, got ${runningMs}`)
+  tsSessions.endRequest()
+  tsRuntimes.flushState()
+  const tsRow3 = tsRuntimes.list().find((a) => a.key === 'tsa')
+  assert.ok(tsRow3.scheduledMs >= 1000, `累计调度时长应 >=1s, got ${tsRow3.scheduledMs}`)
+  assert.equal(tsRow3.currentSchedulingMs, 0, '本轮结束后实时时长应归零')
+  // 重启（同 dataDir 新建实例）后这些值必须还在 —— 持久化的意义就在这里
+  const tsRuntimes2 = new AccountRuntimes(tsConfig, { getAccountConcurrency: () => 1 })
+  const tsRow4 = tsRuntimes2.list().find((a) => a.key === 'tsa')
+  assert.ok(tsRow4.scheduledMs >= 1000, `重启后累计调度时长应保留, got ${tsRow4.scheduledMs}`)
+  assert.ok(tsRow4.importedAt, '重启后导入时间应保留')
+  assert.ok(tsRow4.credentialUpdatedAt, '重启后凭证更新时间应保留')
+  // 起算点必须被清掉（上一进程已死，否则会显示假的"本轮运行 3 天"）
+  assert.equal(tsRow4.schedulingSince, null, '重启后不应残留本轮起算点')
+  await tsRuntimes2.shutdown()
+  await tsRuntimes.shutdown()
+  fs.rmSync(tsDir, { recursive: true, force: true })
+}
+
 // --- 会话临近过期：提前 re-admit 平滑切换（不再把新请求发到马上过期的会话）---
 {
   const expDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-expire-'))

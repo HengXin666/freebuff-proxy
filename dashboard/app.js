@@ -615,7 +615,7 @@ function buildAccountsTable(accounts) {
     if (!rows.length) continue
     const table = el('div', { class: 'table-wrap' }, [
       el('table', {}, [
-        el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发', '额度（今日 · FB/h）', 'Freebucks', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
+        el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发', '时间（导入/更新/调度）', '额度（今日 · FB/h）', 'Freebucks', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
         el('tbody', {}, rows.map((a, i) => buildAccountRow(a, i))),
       ]),
     ])
@@ -674,6 +674,7 @@ function buildAccountRow(a, i) {
     el('td', {}, statusBadge),
     el('td', { class: 'mono', style: 'font-size:12px' }, sess),
     el('td', { class: 'mono' }, `${a.inFlight || 0}/${a.concurrency || 1}`),
+    accountTimeCell(a),
     el('td', {}, fmtQuota(a.quota, a.freebucks)),
     el('td', {}, fmtFreebucks(a.freebucks, a.session?.model, a.lastRefund)),
     el('td', { class: 'mono' }, `${a.requests || 0} 次`),
@@ -877,14 +878,29 @@ async function renderProxySettings(view) {
   ]))
 
   const concurrency = settings.accountMaxConcurrency ?? 2
+  const schedMode = settings.accountSchedulingMode === 'spread' ? 'spread' : 'sticky'
+  const overflowWaitMs = settings.accountOverflowWaitMs ?? 15000
   view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
       el('div', {}, [
-        el('h3', { style: 'margin:0 0 2px' }, '账号调度（粘性优先）'),
-        el('span', { class: 'muted' }, '请求集中到尽可能少的账号上：同模型热 session 优先复用 → 继续用最近用过的账号 → 从未用过的账号排最后（只有已用账号都不可用、或满员排队超时才启用）。上游把「轮换健康账号」当作账号农场特征，Freebucks 又按会话占用时长计费——换号 = 新买一条计费行，所以能复用就复用。'),
+        el('h3', { style: 'margin:0 0 2px' }, '账号调度'),
+        el('span', { class: 'muted' }, '粘性优先 = 请求集中到尽可能少的账号（换号 = 新买一条 Freebucks 计费行，能复用就复用）；并发优先 = 账号满员就换号，不再让请求在一个号上干等。两种模式都优先复用同模型热 session、都让从未用过的账号排最后。'),
       ]),
     ]),
     el('div', { class: 'row', style: 'margin-top:12px;gap:24px;flex-wrap:wrap' }, [
+      el('div', {}, [
+        el('label', { style: 'margin:0 0 4px' }, '调度模式'),
+        el('div', { class: 'row' }, [
+          el('select', {
+            id: 'scheduling-mode',
+            style: 'width:210px',
+            ...(state.me.role === 'admin' ? {} : { disabled: '' }),
+          }, [
+            el('option', { value: 'sticky', ...(schedMode === 'sticky' ? { selected: '' } : {}) }, '粘性优先（最少换号，默认）'),
+            el('option', { value: 'spread', ...(schedMode === 'spread' ? { selected: '' } : {}) }, '并发优先（满员即换号）'),
+          ]),
+        ]),
+      ]),
       el('div', {}, [
         el('label', { style: 'margin:0 0 4px' }, '每账号并发（单账号同时几路流）'),
         el('div', { class: 'row' }, [
@@ -897,13 +913,28 @@ async function renderProxySettings(view) {
             value: concurrency,
             ...(state.me.role === 'admin' ? {} : { disabled: '' }),
           }),
-          state.me.role === 'admin'
-            ? el('button', { class: 'primary', onclick: saveLoadBalanceSettings }, '保存并生效')
-            : null,
         ]),
       ]),
+      el('div', {}, [
+        el('label', { style: 'margin:0 0 4px' }, '溢出排队上限（毫秒，仅并发优先）'),
+        el('div', { class: 'row' }, [
+          el('input', {
+            id: 'overflow-wait-ms',
+            type: 'number',
+            min: 0,
+            max: 600000,
+            step: 1000,
+            style: 'width:110px',
+            value: overflowWaitMs,
+            ...(state.me.role === 'admin' ? {} : { disabled: '' }),
+          }),
+        ]),
+      ]),
+      state.me.role === 'admin'
+        ? el('div', { style: 'align-self:flex-end' }, el('button', { class: 'primary', onclick: saveLoadBalanceSettings }, '保存并生效'))
+        : null,
     ]),
-    el('div', { class: 'muted', style: 'margin-top:8px' }, `当前：每账号 ${concurrency} 路并发；并发请求先挤同一账号，超过才溢出到下一个账号（已用过的优先）${state.me.role !== 'admin' ? '（管理员可调）' : ''}`),
+    el('div', { class: 'muted', id: 'scheduling-hint', style: 'margin-top:8px' }, schedulingHint(schedMode, concurrency, overflowWaitMs) + (state.me.role !== 'admin' ? '（管理员可调）' : '')),
   ]))
 
   const idleReleaseSec = settings.idleReleaseSec ?? 60
@@ -1044,19 +1075,56 @@ function updateSwitchLabel(input) {
   if (statusEl) statusEl.textContent = input.checked ? '已开启' : '已关闭'
 }
 
+/**
+ * 调度模式说明文案（前端即时预览，保存后由服务端返回的实际值再刷新一次）。
+ * 这段文字是用户理解"为什么只开了一个号"的关键，措辞要直白。
+ */
+function schedulingHint(mode, concurrency, overflowWaitMs) {
+  const cap = `每账号 ${concurrency} 路并发`
+  if (mode === 'spread') {
+    return `当前：并发优先 · ${cap}。账号满员就立刻换到下一个有空闲槽位的账号（最多先等 ${overflowWaitMs} ms），不会再出现"设了并发 2 却只开 1 个号"。已用过的账号仍优先于从未用过的账号。`
+  }
+  return `当前：粘性优先 · ${cap}。并发请求先挤同一账号（超过上限就在该账号排队，超时才溢出到下一个），最少换号 = 最少新建计费会话。想让并发铺开多个账号，把模式改成「并发优先」。`
+}
+
 async function saveLoadBalanceSettings() {
   const acc = $('#account-concurrency')
   if (!acc) return
+  const modeEl = $('#scheduling-mode')
+  const waitEl = $('#overflow-wait-ms')
   try {
     const v = Math.max(1, Math.min(16, parseInt(acc.value, 10) || 2))
-    await api('/api/settings', {
+    const mode = modeEl && modeEl.value === 'spread' ? 'spread' : 'sticky'
+    const waitMs = Math.max(
+      0,
+      Math.min(600000, parseInt((waitEl && waitEl.value) || '15000', 10) || 0),
+    )
+    const res = await api('/api/settings', {
       method: 'POST',
-      body: JSON.stringify({ accountMaxConcurrency: v }),
+      body: JSON.stringify({
+        accountMaxConcurrency: v,
+        accountSchedulingMode: mode,
+        accountOverflowWaitMs: waitMs,
+      }),
     })
-    toast(`账号调度已更新：每账号 ${v} 路并发（先挤同一账号，超过才溢出）`)
-    // 非 admin 提示文字局部更新（admin 输入框本身已是最新值）
-    const hint = [...document.querySelectorAll('.card .muted')].find((n) => n.textContent.includes('路并发；并发请求先挤同一账号'))
-    if (hint) hint.textContent = `当前：每账号 ${v} 路并发；并发请求先挤同一账号，超过才溢出到下一个账号（已用过的优先）（管理员可调）`
+    // 用服务端回传的**实际生效值**刷新控件与文案（夹取/clamp 后的真值）
+    const realMode = res.accountSchedulingMode === 'spread' ? 'spread' : 'sticky'
+    const realWait = res.accountOverflowWaitMs ?? waitMs
+    const realConc = res.accountMaxConcurrency ?? v
+    acc.value = realConc
+    if (modeEl) modeEl.value = realMode
+    if (waitEl) waitEl.value = realWait
+    toast(
+      realMode === 'spread'
+        ? `调度已更新：并发优先 · 每账号 ${realConc} 路（满员即换号）`
+        : `调度已更新：粘性优先 · 每账号 ${realConc} 路（先排队，超时才换号）`,
+    )
+    const hint = $('#scheduling-hint')
+    if (hint) {
+      hint.textContent =
+        schedulingHint(realMode, realConc, realWait) +
+        (state.me.role !== 'admin' ? '（管理员可调）' : '')
+    }
   } catch (err) {
     toast(err.message, true)
   }
@@ -1159,6 +1227,62 @@ function fmtMs(ms) {
   if (ms == null) return '—'
   const m = Math.floor(ms / 60000)
   return `${m} 分钟`
+}
+
+/**
+ * 时长（毫秒）→ 人类可读：<1 分钟显示秒，<1 小时显示 m/s，否则 h/m。
+ * 调度时长经常只有几十秒（短批量），fmtMs 一律显示 "0 分钟" 会看不出差别。
+ */
+function fmtDurationMs(ms) {
+  const n = Number(ms)
+  if (!Number.isFinite(n) || n <= 0) return '0'
+  const s = Math.floor(n / 1000)
+  if (s < 60) return `${s} 秒`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m} 分 ${s % 60} 秒`
+  const h = Math.floor(m / 60)
+  return `${h} 时 ${m % 60} 分`
+}
+
+/** 时间戳 → 短格式（月-日 时:分），无值时 '—'。 */
+function fmtTime(iso) {
+  if (!iso) return '—'
+  const t = Date.parse(iso)
+  if (!Number.isFinite(t)) return '—'
+  const d = new Date(t)
+  const p = (x) => String(x).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/**
+ * 账号时间轴单元格：导入 / 更新 / 调度累计（+ 本轮实时）。
+ * 全部来自持久化账本（/data/account-state.json），重启/换容器都不丢。
+ * 悬停显示完整本地时间，避免列太宽。
+ */
+function accountTimeCell(a) {
+  const imported = fmtTime(a.importedAt)
+  const updated = a.credentialUpdatedAt ? fmtTime(a.credentialUpdatedAt) : null
+  const total = fmtDurationMs(a.scheduledMs)
+  const running =
+    a.currentSchedulingMs > 0
+      ? `本轮 ${fmtDurationMs(a.currentSchedulingMs)}`
+      : a.lastScheduledAt
+        ? `上次 ${fmtTime(a.lastScheduledAt)}`
+        : '未调度'
+  const title = [
+    `导入：${a.importedAt ? new Date(a.importedAt).toLocaleString() : '未知'}`,
+    `凭证更新：${a.credentialUpdatedAt ? new Date(a.credentialUpdatedAt).toLocaleString() : '从未更新'}`,
+    `累计调度：${fmtDurationMs(a.scheduledMs)}`,
+    a.schedulingSince
+      ? `本轮自：${new Date(a.schedulingSince).toLocaleString()}`
+      : null,
+  ].filter(Boolean).join('\n')
+  return el('td', { class: 'mono', style: 'font-size:11px;line-height:1.5', title }, [
+    el('div', {}, `导入 ${imported}`),
+    el('div', { class: 'muted' }, updated ? `更新 ${updated}` : '更新 —'),
+    el('div', { class: a.currentSchedulingMs > 0 ? '' : 'muted' }, `调度 ${total}`),
+    el('div', { class: 'muted', style: 'font-size:10px' }, running),
+  ])
 }
 
 /* ---------------- model settings ---------------- */
