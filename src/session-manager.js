@@ -100,7 +100,7 @@ export class SessionManager {
      * }}
      */
     this.freebucks = null
-    /** 最近一次早退 DELETE 的退款回执（控制台展示/排查用）。 */
+    /** 最近一次早退 DELETE 的回执（控制台展示/排查用；Freebucks 恒为 0）。 */
     this.lastRefund = null
     /** 空闲自动释放定时器（在途归零后开始计时）。 */
     this._idleTimer = null
@@ -114,7 +114,7 @@ export class SessionManager {
     this.admitCount = 0
     /**
      * 释放失败待重试：DELETE 失败时**绝不能丢弃 instanceId**——丢了这条会话
-     * 就永远删不掉（连退款也拿不到），只能让上游白扣满一小时。
+     * 就永远删不掉（连 session_units 也退不回来），只能白占一个上游会话槽位。
      * true = session 里仍留着 instanceId，等待下一次释放机会重试。
      */
     this._releasePending = false
@@ -225,10 +225,13 @@ export class SessionManager {
   /**
    * 空闲自动释放：在途归零后空闲超过 session.idleReleaseSec 就早退 DELETE。
    *
-   * 上游 2026-09 起按 Freebucks 计费——session 从 admit 起按「模型单价(N/h) ×
-   * 实际占用时长」结算，admit 预占整小时、提前结束（DELETE）退还未用时长。
-   * 旧行为把 session 一直留到过期，哪怕只发了一条请求也照扣整段时长（多账号时
-   * 几个账号一起在后台白扣）。这里在空闲后主动早退拿退款，是「额度用更久」的核心。
+   * ⚠️ 2026-09-13 实测（docs/account-scheduling-and-refund.md §3）：早退**不退款**。
+   * admit 一次 = 实付整小时单价，之后用 3 秒还是 59 分钟扣的一样多；DELETE 只退还
+   * session_units（每日模型额度），Freebucks 一分不退（freebucksRefund 恒为 0）。
+   *
+   * 所以这里释放的目的**不是省钱**，而是释放上游会话槽位（一个账号同时只有一条
+   * session，且 session 绑定模型），让换模型/换账号能拿到槽位。省钱只能靠**少 admit**，
+   * 因此默认空闲释放时长已上调到 600s，避免「释放 -> 再请求 -> 重买一小时」的抖动。
    */
   _armIdleRelease() {
     const ms = this.idleReleaseMs()
@@ -247,7 +250,7 @@ export class SessionManager {
         this._armIdleRelease()
         return
       }
-      logger.info('releasing idle freebuff session (early end refunds Freebucks)', {
+      logger.info('releasing idle freebuff session (frees the account slot; no refund)', {
         instanceId: this.session?.instanceId,
         model: this.session?.model,
         idleSec: Math.round(ms / 1000),
@@ -686,7 +689,7 @@ export class SessionManager {
     // admit 可能发生在没有任何在途请求时（选号阶段就 admit、随后才拿 chat
     // 锁）：这里兜底起空闲计时，否则会话会一直挂到过期。
     if (this._inFlight === 0) this._armIdleRelease()
-    // 句柄落盘：进程退出/换容器后仍能凭 instanceId 去 DELETE 退款。
+    // 句柄落盘：进程退出/换容器后仍能凭 instanceId 去 DELETE 释放上游会话槽位。
     this._notifySessionChange()
   }
 
@@ -732,7 +735,7 @@ export class SessionManager {
     this._notifyStateChange()
   }
 
-  /** 释放会话（早退 DELETE → 退款）。返回 true = 上游已确认结束。 */
+  /** 释放会话（早退 DELETE 只退还 session_units，Freebucks 不退）。返回 true = 上游已确认结束。 */
   async release() {
     return this.withLock(() => this._releaseUnlocked())
   }
@@ -747,7 +750,7 @@ export class SessionManager {
   }
 
   /**
-   * 释放会话（早退 DELETE 拿 Freebucks 退款）。
+   * 释放会话（早退 DELETE：退还 session_units，**Freebucks 不退**，见 §3）。
    *
    * **失败时绝不丢弃 instanceId**：这条会话已经在上游计费，删不掉就等于让它
    * 白扣满一小时，而且句柄没了就永远无法再删。所以失败时保留 session（连同
@@ -777,7 +780,7 @@ export class SessionManager {
     let refundSettled = false
     try {
       // 必须带 instance id：上游 DELETE 没有 x-freebuff-instance-id 会 400
-      // instance_required，会话既删不掉也拿不到退款（issue #7 的元凶之一）。
+      // instance_required，会话既删不掉也拿不到 session_units 退还（issue #7 的元凶之一）。
       let body = await this.upstream.freebuffSession('DELETE', { instanceId })
       // 结算未完成（freebucksRefundPending）：用同一个 instance 重放 DELETE
       // 拿回执。**有界重放**，失败只记日志，绝不阻塞调用方。
@@ -1129,7 +1132,7 @@ function extractQuota(body) {
  * 上游把「计费货币」放在每个 session 响应的 freebucks 字段里：
  *   { balance, daily:{limit,spent,remaining,resetAt}, wallet:{...},
  *     prices:{ modelId: price }, quotaExempt, planId, monthly, peak, priceChanges }
- * session 按模型单价（N/h）× 占用时长计价、提前 DELETE 退未用时长，所以本地必须知道
+ * admit 按整小时单价预扣、**提前 DELETE 不退**（2026-09-13 实测，见 §3），所以本地必须知道
  * 「每个模型多少钱」和「这个账号还买不买得起」，否则会白白 admit 一堆计费会话。
  * 老上游/未登录状态没有该字段 → 返回 null，调度退回旧行为（不拦截）。
  * @param {any} body

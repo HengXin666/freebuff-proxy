@@ -1969,8 +1969,12 @@ for (const model of verifiedSpecialModels) {
       headers: { cookie },
     })
     const def = await getDefault.json()
-    // 2026-09：默认从 300s 下调到 60s（上游按占用时长结算，空挂即扣时长）
-    assert.equal(def.idleReleaseSec, 60, '未保存过时应回落 config.yaml 默认值')
+    // 2026-09-13：默认 60s -> 600s（实测早退不退 Freebucks，频繁释放=反复买一小时）
+    assert.equal(def.idleReleaseSec, 600, '未保存过时应回落 config.yaml 默认值')
+    assert.ok(
+      def.idleReleaseSec >= 300,
+      '默认空闲释放不得低于 300s：早退不退 Freebucks，频繁释放 = 反复买一小时',
+    )
     assert.equal(def.maxNewSessionsPerRequest, 2)
 
     for (const bad of [-1, 'x', null, 999999]) {
@@ -5023,6 +5027,50 @@ server.close()
   assert.ok(
     /dailyGone/.test(dashSrc),
     '控制台必须保留 dailyGone（今日池跑完）判定',
+  )
+}
+
+// (REFUND-COPY) 退款结论（2026-09-13 结案）不得在控制台/配置里被写回旧说法
+//
+// 旧版文案说"早退 DELETE 退还未用时长"，实测是错的：早退只退 session_units，
+// Freebucks 一分不退（docs/account-scheduling-and-refund.md §3）。用户会按这个
+// 文案去调 idle_release_sec，所以文案错了会导致错误调参，必须钉死。
+{
+  const dashSrc = fs.readFileSync(
+    new URL('../dashboard/app.js', import.meta.url),
+    'utf8',
+  )
+  const cfgSrc = fs.readFileSync(
+    new URL('../src/config.js', import.meta.url),
+    'utf8',
+  )
+  const yamlSrc = fs.readFileSync(
+    new URL('../config.example.yaml', import.meta.url),
+    'utf8',
+  )
+  for (const [name, src] of [['dashboard/app.js', dashSrc], ['src/config.js', cfgSrc], ['config.example.yaml', yamlSrc]]) {
+    assert.ok(
+      !/提前\s*DELETE\s*退未用时长|早退退款|按未用时长退|退还未用时长/.test(src),
+      `${name} 不得再出现"早退退款"的说法（实测不退 Freebucks）`,
+    )
+  }
+  // 默认值必须远离 60s：短空闲释放 = 反复买新会话
+  assert.ok(
+    /idleReleaseSec:\s*600/.test(cfgSrc),
+    'config.js 的 idleReleaseSec 默认应为 600s',
+  )
+  assert.ok(
+    /idle_release_sec:\s*600/.test(yamlSrc),
+    'config.example.yaml 的 idle_release_sec 默认应为 600s',
+  )
+  // 控制台必须给出"推荐值"（按账号池实时算），而不是让用户猜
+  assert.ok(
+    /function idleReleaseAdvice/.test(dashSrc),
+    '控制台必须提供 idleReleaseAdvice（按账号池实时算推荐值）',
+  )
+  assert.ok(
+    /idle-release-advice/.test(dashSrc),
+    '控制台必须渲染推荐值区块',
   )
 }
 

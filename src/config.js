@@ -59,13 +59,16 @@ const DEFAULTS = {
     freeModelReAdmitLeadSec: 60,
     pollIntervalSec: 30,
     admitTimeoutMs: 30_000,
-    // 空闲自动释放（秒）：会话在途请求归零后，空闲超过该时长就早退 DELETE，
-    // 让上游按未用时长退款（freebucksRefund），避免账号空挂后台白扣时长。
-    // 0 = 关闭（旧行为：会话一直留到过期，整小时额度照扣）。
-    // 默认 60s（2026-09 起由 300s 下调）：上游按实际占用时长结算，会话多挂一秒
-    // 就多扣一秒；交互式对话的常规停顿仍在 60s 内，够复用同一会话。
+    // 空闲自动释放（秒）：会话在途请求归零后，空闲超过该时长就早退 DELETE。
+    // ⚠️ 2026-09-13 实测结论（docs/account-scheduling-and-refund.md §3）：
+    // 早退**不退还 Freebucks**。admit 一次 = 实付整小时单价，之后用 3 秒还是
+    // 59 分钟扣的一样多；DELETE 只退还 session_units（每日模型额度），不退款。
+    // 所以「空闲早退省钱」是错的——频繁释放只会**反复买新会话**。
+    // 默认 600s（2026-09-13 由 60s 上调）：把交互式停顿留在同一会话里，
+    // 减少 admit 次数（admit 次数 = 花钱次数）。
+    // 0 = 关闭释放（最省 admit，会话留到自然过期；代价是换模型要等）。
     // 控制台「额度保护」可调（5s..24h）。
-    idleReleaseSec: 60,
+    idleReleaseSec: 600,
   },
   limits: {
     maxConcurrentRequests: 32,
@@ -107,7 +110,8 @@ const DEFAULTS = {
     // 默认 200ms）。0 = 关闭（最低延迟）。
     requestJitterMs: 200,
     // 一个下游请求最多新建几个上游会话（Freebucks 计费单位）。
-    // 上游按会话占用时长计费：admit 预占一次、提前 DELETE 退未用时长。旧行为在
+    // 上游按整小时买断计费：admit 一次就扣整小时单价，早退 DELETE **不退**
+    // Freebucks（2026-09-13 实测，见 docs/account-scheduling-and-refund.md §3）。旧行为在
     // 报错时把「账号数 +1」个账号挨个 admit 一遍，几个账号一起在后台白扣
     // 一小时额度（issue #7）。默认 2：首个账号 + 一次换号兜底；复用已有热
     // session 不消耗预算。0 = 不限制（仅保留给调试）。

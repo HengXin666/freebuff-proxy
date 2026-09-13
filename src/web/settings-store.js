@@ -176,10 +176,11 @@ function clampConcurrency(n) {
 
 /**
  * 空闲释放：0（关闭）或 5s..24h。
- * 上游按 session 实际占用时长结算（N Freebucks/小时，提前 DELETE 退未用时长），
- * 所以默认压到 60s、下限放宽到 5s——空闲会话多挂一秒就多扣一秒。
- * 低于 ~5s 等于把每个回合都切成一条新会话（admit 往返变多、额度按条计费的
- * 订阅档位会吃亏），所以不放到 1s。
+ * 上游 admit 一次就按**整小时单价预扣**，早退 DELETE 不退 Freebucks（2026-09-13
+ * 实测，见 docs/account-scheduling-and-refund.md §3）。所以「空闲早退省钱」是错的——
+ * 释放后再来请求就是**又买一小时**，默认值应为「尽量别释放」的 600s。
+ * 下限仍保留 5s：低于 ~5s 等于把每个回合都切成一条新会话，admit 往返次数暴涨，
+ * 在「按条计费」的档位上反而更亏。
  */
 function clampIdleReleaseSec(n) {
   if (n <= 0) return 0

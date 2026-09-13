@@ -180,7 +180,7 @@ export class AccountRuntimes {
     this.dir = resolveCredentialsDir(config)
     /**
      * 上游会话句柄的持久化索引（/data/sessions.json）：admit/释放都落盘，
-     * 进程退出/换容器后仍能凭 instanceId 去 DELETE 退款；释放失败的句柄也
+     * 进程退出/换容器后仍能凭 instanceId 去 DELETE 释放槽位；释放失败的句柄也
      * 留在这里等下次清理（绝不丢 = 绝不留下无法寻址的计费孤儿）。
      */
     this.handleStore = new SessionHandleStore(resolveSessionIndexPath(config))
@@ -1177,8 +1177,8 @@ export class AccountRuntimes {
   }
 
   /**
-   * 释放某账号的上游会话（早退 DELETE → Freebucks 退款）。
-   * 换号/冷却时调用：失败账号的会话没人再用，留着只会白扣占用时长；
+   * 释放某账号的上游会话（早退 DELETE → 只退还 session_units，Freebucks 不退）。
+   * 换号/冷却时调用：失败账号的会话没人再用，留着只会白占一个上游会话槽位；
    * 有在途流时等它结束再释放（releaseWhenIdle），绝不掐断正在传输的 SSE。
    * @param {string} key
    */

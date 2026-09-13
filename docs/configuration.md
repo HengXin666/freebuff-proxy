@@ -21,7 +21,7 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 | 读请求体超时（防并发槽位泄漏） | `limits.body_read_timeout_ms`（默认 120000ms） |
 | 每账号并发（SSE 流数，溢出阈值） | `limits.account_max_concurrency`（默认 2，控制台「账号调度」实时调整） |
 | 上游请求抖动（打散机器式节奏） | `limits.request_jitter_ms`（默认 200ms，0 = 关闭） |
-| 空闲自动释放（早退退款，Freebucks） | 控制台「额度保护」→ `/data/settings.json`（`session.idle_release_sec` 默认 60s，可调 5s..24h，0 = 关闭） |
+| 空闲自动释放（释放会话槽位；**不退 Freebucks**） | 控制台「额度保护」→ `/data/settings.json`（`session.idle_release_sec` 默认 600s，可调 5s..24h，0 = 关闭） |
 | 单请求新会话预算（Freebucks 计费单位） | 控制台「额度保护」（`limits.max_new_sessions_per_request` 默认 2，0 = 不限） |
 | 会话句柄落盘（重启/换容器后可退款） | `/data/sessions.json`（自动维护，无需手工编辑） |
 | 会话过期提前切换（付费模型） | `session.re_admit_lead_sec`（默认 60s） |

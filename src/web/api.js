@@ -907,10 +907,10 @@ export function createWebApi(deps) {
           settingsStore?.get().accountOverflowWaitMs ?? 15_000,
         blockPremiumModels:
           settingsStore?.get().blockPremiumModels === true,
-        // 额度保护：空闲自动释放秒数 + 单请求新会话预算（Freebucks 计费单位）。
-        // 未在控制台保存过时回落 config.yaml 的默认值。
+        // 额度保护：空闲自动释放秒数 + 单请求新会话预算。
+        // 未在控制台保存过时回落 config.yaml 的默认值（默认 600s，见 config.js）。
         idleReleaseSec:
-          settingsStore?.get().idleReleaseSec ?? config.session.idleReleaseSec ?? 60,
+          settingsStore?.get().idleReleaseSec ?? config.session.idleReleaseSec ?? 600,
         maxNewSessionsPerRequest:
           settingsStore?.get().maxNewSessionsPerRequest ??
           config.limits.maxNewSessionsPerRequest ??
