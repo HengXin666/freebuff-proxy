@@ -76,6 +76,13 @@ const DEFAULTS = {
     // 半开连接）时，readRequestBody 的 for-await 永不返回，请求会一直占着
     // 全局槽位。超时即放弃该请求（408），从根上消除槽位泄漏。
     bodyReadTimeoutMs: 120_000,
+    // 「首字节之前」的总调度预算（毫秒）。本代理在写出响应头之前有多段串行
+    // 静默等待（全局槽位 → 账号 chat 锁 → 上游首字节），最坏情况会累加到
+    // 几分钟。上游链路前面挂着 Cloudflare（源站 100s 未回响应头即 524），
+    // 等待超过这个天花板时客户端只会看到一个「连上了但一直转圈」的连接。
+    // 这里给整个调度阶段一个总预算：超了就以 429 scheduling_timeout 快速返回
+    // 让客户端重试，绝不静默闷等（默认 45s，明显低于 100s 的 524 悬崖）。
+    schedulingBudgetMs: 45_000,
     // 每个账号同一时间最多可转发的 SSE 响应流数（账号并发）。默认 2：
     // 并发请求先挤在同一账号上（粘性优先，换号 = 多买一条 Freebucks 计费会话），
     // 超过该值才溢出到下一个账号。可在控制台「负载均衡」实时调整，立即生效。
@@ -135,6 +142,7 @@ const KEY_MAP = {
   upstream_timeout_sec: 'upstreamTimeoutSec',
   stream_idle_timeout_sec: 'streamIdleTimeoutSec',
   account_chat_wait_ms: 'accountChatWaitMs',
+  scheduling_budget_ms: 'schedulingBudgetMs',
   max_auto_retry_on_session_error: 'maxAutoRetryOnSessionError',
   stall_cooldown_sec: 'stallCooldownSec',
   max_new_sessions_per_request: 'maxNewSessionsPerRequest',

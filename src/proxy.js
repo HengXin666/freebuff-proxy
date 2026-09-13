@@ -461,14 +461,19 @@ export function createProxyHandler(ctx) {
     // 有界排队：闸门排满时最多等 slotWaitMs，超时以 429 server_busy 拒绝
     // （客户端可重试），绝不无界排队把整个服务静默钉死。
     let releaseSlot
+    // 客户端在排队期间断开：立即放弃等待（否则这个"已死"的请求会一直占着
+    // 它稍后拿到的槽位，直到走完整个上游流程）。
+    const slotGone = clientGoneSignal(req)
     try {
-      releaseSlot = await acquireRequestSlot(
-        config.limits.maxConcurrentRequests,
-        slotWaitMs(),
+      releaseSlot = await slotGone.race(
+        acquireRequestSlot(config.limits.maxConcurrentRequests, slotWaitMs()),
       )
     } catch (err) {
-      mapAndSendError(res, err)
+      // client_gone：连接已没了，安静收场（无法再写响应）。
+      if (err?.code !== 'client_gone') mapAndSendError(res, err)
       return
+    } finally {
+      slotGone.cleanup()
     }
     try {
       await handleChatCompletionsInner(req, res)
@@ -577,6 +582,12 @@ export function createProxyHandler(ctx) {
     }
 
     const stream = Boolean(body.stream)
+    /**
+     * 「首字节之前」的总预算起点：全局槽位/账号锁/上游首字节这些静默等待
+     * 全部计入。超预算即快速失败（429 scheduling_timeout），而不是让客户端
+     * 对着一个一直转圈的连接等到自己超时（上游前面是 Cloudflare，100s 524）。
+     */
+    const schedulingDeadline = Date.now() + schedulingBudgetMs()
     let attempt = 0
     const maxRetry = config.limits.maxAutoRetryOnSessionError ?? 1
     // 换号重试预算：账号数 +1（封顶 5 次）——多出的一次用于同账号 gate 重试
@@ -624,6 +635,12 @@ export function createProxyHandler(ctx) {
     let heldRt = null
     /** 当前持有的账号 chat 锁释放函数。 */
     let releaseChat = null
+    /**
+     * 客户端断开信号（整个请求共用；finally 里 cleanup）。账号锁等待是
+     * "首字节前静默等待"里最长的一段（热 75s / 冷 120s），客户端早就断了却
+     * 还在闷等，且拿到锁后会继续跑完上游流程——死请求钉死账号并发。
+     */
+    const chatGone = clientGoneSignal(req)
     /** 是否已完整等待过账号锁（account_busy 超时一次后，再等只给短窗，避免 5 次重试 × 长等待）。 */
     let chatWaited = false
     /**
@@ -723,10 +740,28 @@ export function createProxyHandler(ctx) {
             // （账号并发上限即"满了换号"阈值：所有账号都满员时才排队复用热
             // 会话，但排队只等一次完整 idle 周期，之后必须尽快换下一个账号，
             // 而不是在满员账号上反复长等把并发全部钉死）。
-            const waitMs = chatWaited ? Math.min(chatWaitMs(rt), 5_000) : chatWaitMs(rt)
+            // 夹到剩余调度预算：账号锁是本阶段最长的一段（热 75s / 冷 120s），
+            // 不能让它单独把整个请求拖过客户端耐心与 Cloudflare 100s 悬崖。
+            const budgetLeft = schedulingDeadline - Date.now()
+            if (budgetLeft <= 0) {
+              throw new UpstreamError(
+                'scheduling budget exhausted before a chat slot was free',
+                { status: 429, code: 'scheduling_timeout' },
+              )
+            }
+            const waitMs = Math.max(
+              1,
+              Math.min(
+                chatWaited ? Math.min(chatWaitMs(rt), 5_000) : chatWaitMs(rt),
+                budgetLeft,
+              ),
+            )
             try {
-              releaseChat = await runtimes.acquireChat(rt.key, waitMs)
+              releaseChat = await chatGone.race(
+                runtimes.acquireChat(rt.key, waitMs),
+              )
             } catch (lockErr) {
+              if (lockErr?.code === 'client_gone') throw lockErr
               if (lockErr?.code === 'account_busy' && attempt < maxAttempts) {
                 logger.warn('account busy; trying next account', {
                   key: rt.key,
@@ -744,14 +779,20 @@ export function createProxyHandler(ctx) {
                 pendingNoCooldown = true
                 continue
               }
+              const finalWaitMs = Math.max(
+                1,
+                Math.min(chatWaitMs(rt), schedulingDeadline - Date.now()),
+              )
               logger.warn('account busy; final bounded wait for chat slot', {
                 key: rt.key,
                 email: rt.email,
                 model: upstreamModel,
                 attempt,
-                waitMs: chatWaitMs(rt),
+                waitMs: finalWaitMs,
               })
-              releaseChat = await runtimes.acquireChat(rt.key, chatWaitMs(rt))
+              releaseChat = await chatGone.race(
+                runtimes.acquireChat(rt.key, finalWaitMs),
+              )
             }
             // 切换竞态：等待 chat 锁期间可能发生了代理/账号切换（本 runtime
             // 已被顶替，旧 session 正在被优雅释放）。此时不能继续用旧 runtime
@@ -859,6 +900,7 @@ export function createProxyHandler(ctx) {
               upstream: rt.upstream,
               // 会话剩余时间：用于把流 idle 超时收敛到会话过期附近，过期即掐
               sessionRemainingMs: snap.remainingMs,
+              schedulingDeadline,
             })
           }
 
@@ -983,9 +1025,15 @@ export function createProxyHandler(ctx) {
             const isTerminal =
               err.code === 'no_available_account' ||
               err.code === 'model_required' ||
-              err.code === 'upstream_auth_missing'
+              err.code === 'upstream_auth_missing' ||
+              // 客户端已断开：换号只会再买一条 Freebucks 计费会话给一个
+              // 没人接收的响应，必须立刻收场（连接已死，写不出去也不报错）。
+              err.code === 'client_gone' ||
+              // 调度预算已耗尽：预算是整个请求一份，后续每轮都会立即再超，
+              // 重试只会白烧 maxAttempts 次循环，直接快速失败让客户端重试。
+              err.code === 'scheduling_timeout'
             if (isTerminal) {
-              mapAndSendError(res, err)
+              if (err.code !== 'client_gone') mapAndSendError(res, err)
               return
             }
             if (attempt < maxAttempts) {
@@ -1100,8 +1148,10 @@ export function createProxyHandler(ctx) {
         }
       }
     } finally {
-      // 请求结束（成功/失败/预算耗尽）：释放账号串行化锁，恢复该账号轮询
+      // 请求结束（成功/失败/预算耗尽）：释放账号串行化锁，恢复该账号轮询；
+      // 并摘掉客户端断开监听器（keep-alive 连接复用，不摘会累积监听器）。
       dropChatHold()
+      chatGone.cleanup()
     }
   }
 
@@ -1206,6 +1256,17 @@ export function createProxyHandler(ctx) {
     return Number.isFinite(v) && v > 0 ? v : 0
   }
 
+  /**
+   * 「首字节之前」的调度总预算（毫秒）。上游链路前置 Cloudflare（源站 100s
+   * 未回响应头即 524），而本代理在 writeHead 之前有多段串行静默等待（全局槽位
+   * → 账号 chat 锁 → 上游首字节）。默认 45s：留足正常排队余量，又明显低于
+   * 100s 悬崖，绝不把请求静默拖到客户端早已超时。
+   */
+  function schedulingBudgetMs() {
+    const v = config.limits.schedulingBudgetMs
+    return Number.isFinite(v) && v > 0 ? v : 45_000
+  }
+
   /** 读请求体的上限（毫秒）。<=0 关闭（不建议）。 */
   function bodyReadTimeoutMs() {
     const v = config.limits.bodyReadTimeoutMs
@@ -1219,6 +1280,12 @@ export function createProxyHandler(ctx) {
     stream,
     upstream,
     sessionRemainingMs,
+    /**
+     * 「首字节之前」的调度截止时间戳（含全局槽位/账号锁/上游首字节）。
+     * 上游首字节也必须受它约束：不然账号锁等到位了，首字节又能再等 60s，
+     * 总和照样冲过 Cloudflare 的 100s 悬崖。
+     */
+    schedulingDeadline,
   }) {
     const headers = {
       ...filterRequestHeaders(req.headers),
@@ -1253,7 +1320,10 @@ export function createProxyHandler(ctx) {
         // chat 是流式接口，正常秒级出响应头；网络波动（TCP 黑洞）时若等
         // upstreamTimeoutSec（默认 600s）才 abort，账号 chat 锁会被占死
         // 10 分钟，期间所有新请求超时——与幽灵连接同源，必须尽快释放。
-        timeoutMs: chatHeaderTimeoutMs(),
+        timeoutMs: Math.max(
+          1_000,
+          Math.min(chatHeaderTimeoutMs(), schedulingDeadline - Date.now()),
+        ),
       })
     } finally {
       // 响应头已到/上游已失败：后续由 pipe 的 socket 监听接管，移除本监听器
@@ -1627,6 +1697,60 @@ function releaseRequestSlot() {
  */
 export function requestSlotStats() {
   return { inFlight: _inFlight, queued: _waitQueue.length, limit: _slotLimit }
+}
+
+/**
+ * 客户端断开信号（**调度阶段**用，区别于下方的 pipe 阶段）。
+ *
+ * 为什么必须有：本代理在调度上有多个「首字节之前的静默等待」——全局槽位、
+ * 账号 chat 锁、上游首字节。这些等待原先完全不感知客户端是否还在。客户端
+ * （DSH/sub2api）等不住会自行超时并 abort 旧请求，但代理这边仍在闷等
+ * （账号锁最长 accountChatWaitMs，默认 120s），**并且继续占着账号 chat 锁**。
+ * 账号并发默认只有 2，粘性调度又把请求集中到同一个账号上，于是几个"已死"的
+ * 请求就能把账号锁钉死 → 后续所有请求排队 → 表现为「跑着跑着完全不接单，
+ * 只有重启才恢复」。
+ *
+ * 语义：socket close → 视为客户端已走，等待立即放弃，并保证稍后授予的锁被释放。
+ * @param {import('node:http').IncomingMessage} req
+ */
+function clientGoneSignal(req) {
+  const socket = req.socket
+  /** @type {(() => void) | null} */
+  let onClose = null
+  const promise = new Promise((resolve) => {
+    if (!socket || socket.destroyed) {
+      resolve()
+      return
+    }
+    // 与 reqToAbortSignal 同因：只有底层 socket close 才代表真断开
+    // （req 'close' 在 body 读完时就触发，早于这里注册的时机）。
+    onClose = () => resolve()
+    socket.once('close', onClose)
+  })
+  return {
+    /** 客户端是否已断开（同步判断）。 */
+    isGone: () => Boolean(socket && socket.destroyed),
+    /** 与等待 Promise 竞速；客户端断开时以 client_gone 提前结束等待。 */
+    async race(waitPromise) {
+      const outcome = await Promise.race([
+        waitPromise.then((hold) => ({ hold }), (err) => ({ err })),
+        promise.then(() => ({ gone: true })),
+      ])
+      if (outcome.gone) {
+        // 竞速输了不等于锁没授予：授予后立刻归还，绝不泄漏槽位。
+        waitPromise.then((hold) => hold()).catch(() => {})
+        throw new UpstreamError(
+          'client disconnected while waiting for a scheduling slot',
+          { status: 499, code: 'client_gone' },
+        )
+      }
+      if (outcome.err) throw outcome.err
+      return outcome.hold
+    },
+    cleanup() {
+      if (onClose && socket) socket.removeListener('close', onClose)
+    },
+  }
 }
 
 /**

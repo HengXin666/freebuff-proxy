@@ -29,6 +29,7 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 | 上游流 idle 超时（幽灵连接治理） | `limits.stream_idle_timeout_sec`（默认 60s，最小 30s） |
 | 流掐断后账号短暂冷却 | `limits.stall_cooldown_sec`（默认 30s，0=关闭） |
 | 账号级串行化排队上限 | `limits.account_chat_wait_ms`（默认 120000ms） |
+| 「首字节之前」的调度总预算（超时 429 `scheduling_timeout`） | `limits.scheduling_budget_ms`（默认 45000ms，须低于上游前置 Cloudflare 的 100s 524 悬崖） |
 | Web 会话有效期 | `web.session_ttl_hours`（默认 168h） |
 | 配置文件路径 | 默认 `./config.yaml` 或 `FREEBUFF_PROXY_CONFIG` |
 | 数据目录 | 默认 `./data` 或 `FREEBUFF_PROXY_DATA_DIR`（Docker 固定 `/data`） |
