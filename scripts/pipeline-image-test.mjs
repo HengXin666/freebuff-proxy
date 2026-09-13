@@ -206,6 +206,40 @@ function stopContainer(name) {
 }
 
 /**
+ * 在容器内用 admin 账号打一次真实登录，返回 Set-Cookie。
+ *
+ * 为什么必须在**容器里**做：宿主侧端口映射下 cookie 的 Secure/Domain 判定
+ * 与浏览器不同，映射后取不到 cookie 会误报"登录坏了"。容器内 127.0.0.1
+ * 就是应用本身，等价于用户在本机浏览器打开控制台。失败返回 null。
+ */
+function loginInsideContainer(name) {
+  const body = JSON.stringify({ username: 'admin', password: 'pipeline-admin-pw' })
+  const cmd =
+    "wget -qO- -S --header='Content-Type: application/json' --post-data='" +
+    body +
+    "' http://127.0.0.1:${FREEBUFF_PROXY_PORT:-8787}/api/auth/login 2>&1 | head -30"
+  const r = run('docker', ['exec', name, 'sh', '-c', cmd])
+  const out = String(r.stdout || '') + String(r.stderr || '')
+  const m = out.match(/Set-Cookie:\s*(fb_session=[^;\r\n]+)/i)
+  return m ? m[1] : null
+}
+
+/**
+ * 在容器内请求一个需要登录的接口，返回 HTTP 状态码（0 = 连不上/没输出）。
+ *
+ * **这条断言是必须的**：数据文件自检接口曾因 `path` 变量遮蔽 node:path 而直接
+ * 500（真实用户故障），只测 /healthz 完全看不出来。
+ */
+function probeAuthedEndpoint(name, cookie, endpoint) {
+  const cmd = "wget -qO- -S --header='Cookie: " + cookie +
+    "' http://127.0.0.1:${FREEBUFF_PROXY_PORT:-8787}" + endpoint + " 2>&1 | head -30"
+  const r = run('docker', ['exec', name, 'sh', '-c', cmd])
+  const out = String(r.stdout || '') + String(r.stderr || '')
+  const m = out.match(/HTTP\/\S+\s+(\d{3})/)
+  return m ? Number(m[1]) : 0
+}
+
+/**
  * 删除 fixture 目录。
  *
  * **不能直接 rmSync**：容器以 root 启动，entrypoint 会把 /data chown 给 node(1000)。
@@ -286,6 +320,21 @@ function buildScenarios(files) {
     expectDirtyMention: '非法条目',
   })
   scenarios.push({
+    id: 'bom-users',
+    title: 'users.json 带 UTF-8 BOM（Windows 编辑器常见；期望正常启动）',
+    expectUp: true,
+    dirty: {
+      file: 'users.json',
+      content:
+        '\uFEFF' +
+        JSON.stringify(
+          { version: 1, users: [{ username: 'admin', salt: 's', passwordHash: '00', role: 'admin', apiKey: 'k' }] },
+          null,
+          2,
+        ),
+    },
+  })
+  scenarios.push({
     id: 'dirty-login-flows',
     title: 'login-flows.json 混入 null 条目（期望正常启动 + 日志点名）',
     expectUp: true,
@@ -349,6 +398,38 @@ async function runScenario(scenario, index, image) {
     const api = await httpGet(`http://127.0.0.1:${port}/api/system/data-status`)
     result.notes.push(api.status === 401 ? '控制台 API 已挂载（未登录 401）' : red(`控制台 API 异常（${api.status}）`))
     if (api.status !== 401) return result
+
+    // 真实登录 + 打需要鉴权的接口。
+    // 为什么必须有：**只测 /healthz 会漏掉"起来了但控制台接口 500"**——数据文件
+    // 自检接口就曾因 api.js 里 `const path = url.pathname` 遮蔽了 node:path 模块，
+    // 一路 500 到用户手里（真实故障）。这里在容器内真实登录，再逐个打关键接口。
+    const cookie = loginInsideContainer(name)
+    if (!cookie) {
+      result.notes.push(red('容器内 admin 登录失败（拿不到会话 cookie）'))
+      return result
+    }
+    result.notes.push('容器内 admin 登录成功')
+    const authedPaths = [
+      '/api/me',
+      '/api/accounts',
+      '/api/models',
+      '/api/system/data-status',
+      '/api/settings',
+      '/api/proxy',
+      '/api/users',
+      '/api/overview',
+    ]
+    const failures = []
+    for (const p of authedPaths) {
+      const code = probeAuthedEndpoint(name, cookie, p)
+      if (code !== 200) failures.push(`${p}=>${code || '无响应'}`)
+    }
+    if (failures.length) {
+      result.notes.push(red(`控制台接口异常: ${failures.join(', ')}`))
+      return result
+    }
+    result.notes.push(`控制台 ${authedPaths.length} 个接口全部 200`)
+
     result.ok = true
     return result
   } catch (err) {

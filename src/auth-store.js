@@ -258,7 +258,21 @@ export function listAccounts(dir) {
       continue
     }
     const key = accountKeyOf(user)
-    const target = accountCredentialsPath(dir, key)
+    let target
+    try {
+      target = accountCredentialsPath(dir, key)
+    } catch (err) {
+      // id 是 '' / '.' / '..' 这类无法当文件名用的值：safeAccountStem 会抛。
+      // 以前这个异常会直接从 listAccounts() 冒到启动流程 → 服务起不来。
+      // 凭据文件本身不该让整个服务停摆：跳过它并点名，交给用户处置。
+      invalidCredentialFiles.push(full)
+      logger.warn('跳过无法解析的账号凭据（key 不能当文件名用）', {
+        file: full,
+        key,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      continue
+    }
     if (path.basename(target) !== file) {
       if (fs.existsSync(target)) {
         // <key>.json 已存在 → 旧 <email>.json 是同账号的历史遗留，删除

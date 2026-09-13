@@ -43,8 +43,12 @@ export function readJsonFileState(file) {
   // 空文件不是合法 JSON：JSON.parse('') 抛 "Unexpected end of JSON input"，
   // 直接给出更准确的说明（电源掉电/写盘被杀的典型残留）。
   if (!raw.trim()) return { status: 'invalid', reason: '文件为空（0 字节）' }
+  // UTF-8 BOM：Windows 记事本 / 导出工具写出来的文件开头会带 U+FEFF。
+  // 它本身完全无害，但 JSON.parse 会直接报 "Unexpected token '\uFEFF'"，
+  // 于是 users.json 被判定成"损坏"→ 拒绝启动（真实用户场景）。剥掉即可。
+  const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
   try {
-    return { status: 'ok', data: JSON.parse(raw) }
+    return { status: 'ok', data: JSON.parse(text) }
   } catch (err) {
     return { status: 'invalid', reason: describe(err) }
   }
@@ -110,6 +114,22 @@ export function noteDroppedEntries(file, count, reason, backup = null) {
     droppedReason: reason || prev.droppedReason || '含非法条目',
     droppedBackup: backup || prev.droppedBackup || null,
   })
+}
+
+/**
+ * 登记"这个文件里还有几条上游会话句柄没结算"（sessions.json 的 sessions + orphans）。
+ *
+ * 为什么单独记：sessions.json 里挂着句柄**不是损坏**（服务照常启动、由启动扫尾
+ * 与释放流程慢慢清），但它确实是需要人知道的状态——每一条都占着上游会话槽位。
+ * 控制台「系统 → 数据文件自检」用它显示"N 条会话待结算"，让"到底清干净了没有"
+ * 一眼可见，而不是只能去翻启动日志。
+ * @param {string} file
+ * @param {number} count
+ */
+export function noteOpenHandles(file, count) {
+  const abs = path.resolve(String(file))
+  const prev = audit.get(abs) || { file: abs, status: 'ok', reason: null }
+  audit.set(abs, { ...prev, file: abs, openHandles: Math.max(0, Number(count) || 0) })
 }
 
 /** 当前进程所有已登记的数据文件状态（按路径排序，便于稳定输出）。 */
@@ -217,6 +237,42 @@ export function dumpDroppedEntries(file, items) {
 /** 对象（且非数组、非 null）：数据文件里"一条记录"的最低要求。 */
 export function isPlainRecord(v) {
   return Boolean(v) && typeof v === 'object' && !Array.isArray(v)
+}
+
+/**
+ * 从任意来源取一个"只含非空字符串"的代理 URL 列表。
+ *
+ * 为什么必须有它：代理列表是最容易被手改/被旧版本写脏的数据（null、数字、
+ * 对象、空串）。脏值如果原样传下去，会在**构造出网 agent 时**抛
+ * `new ProxyAgent({uri: 123})` → `ERR_INVALID_URL`，那发生在启动后的第一次
+ * 请求（最坏是启动期扫尾），表现为"更新镜像后起不来/一请求就崩"。
+ * 这里统一在入口过滤掉，并且**不再静默**：过滤了几条由调用方记账。
+ * @param {unknown} list
+ * @returns {{ urls: string[], dropped: number }}
+ */
+export function sanitizeProxyList(list) {
+  if (!Array.isArray(list)) return { urls: [], dropped: 0 }
+  const urls = []
+  let dropped = 0
+  for (const raw of list) {
+    const url = typeof raw === 'string' ? raw.trim() : ''
+    if (!url) {
+      dropped += 1
+      continue
+    }
+    try {
+      const u = new URL(url)
+      if (u.protocol !== 'http:' && u.protocol !== 'https:' && u.protocol !== 'socks5:' && u.protocol !== 'socks:') {
+        dropped += 1
+        continue
+      }
+    } catch {
+      dropped += 1
+      continue
+    }
+    urls.push(url)
+  }
+  return { urls, dropped }
 }
 
 /**

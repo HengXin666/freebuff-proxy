@@ -1,3 +1,4 @@
+import path from 'node:path'
 import {
   readRequestBody,
   sendJson,
@@ -17,7 +18,6 @@ import {
 } from '../auth-store.js'
 import { logger } from '../util/log.js'
 import { requestSlotStats } from '../proxy.js'
-import path from 'node:path'
 import { dataFileAudit } from '../util/json-store.js'
 
 const SESSION_COOKIE = 'fb_session'
@@ -112,10 +112,10 @@ export function createWebApi(deps) {
    */
   async function handle(req, res, url) {
     const method = (req.method || 'GET').toUpperCase()
-    // ⚠️ 变量名必须是 route：若叫 path，会遮蔽顶部的 node:path 模块，
-    // 使本文件 data-status 自检里的 path.basename() 抛 "is not a function"，
-    // 该接口 100% 返回 500（真实故障，v1.12.0 引入）。
-    // 路由字符串与文件系统路径语义完全不同，不要再用 path 当路由变量名。
+    // ⚠️ 这个变量名**必须是 route**：早先这里叫 `path`，把上面的 node:path 模块
+    // 整个遮蔽掉了，于是数据文件自检接口里的 `path.basename(...)` 变成
+    // "path.basename is not a function" —— 该接口直接 500（真实故障）。
+    // 路由字符串与 fs 路径语义完全不同，别再用 `path` 当路由变量名。
     const route = url.pathname
 
     // Freebuff upstream API surface (/api/v1/*) is never exposed.
@@ -202,6 +202,9 @@ export function createWebApi(deps) {
         droppedEntries: f.droppedEntries || 0,
         droppedReason: f.droppedReason || null,
         droppedBackup: f.droppedBackup || null,
+        // sessions.json 专用：还有几条上游会话句柄没结算（不是错误，是状态）。
+        // 控制台「系统」页把它显示成"N 条会话待结算"，让清没清干净一眼可见。
+        openHandles: f.openHandles || 0,
       }))
       sendJson(res, 200, {
         dir: config.server.dataDir,
@@ -1148,12 +1151,12 @@ export function createWebApi(deps) {
   }
 
   // ---- login flows (admin) ----
-  async function handleLoginFlows(method, path, req, res, user) {
+  async function handleLoginFlows(method, route, req, res, user) {
     if (user.role !== 'admin') {
       sendJson(res, 403, { error: '需要管理员权限' })
       return true
     }
-    if (method === 'POST' && path === '/api/accounts/login') {
+    if (method === 'POST' && route === '/api/accounts/login') {
       try {
         const flow = await loginFlows.start()
         logger.info('web login flow started', { id: flow.id })
@@ -1165,11 +1168,11 @@ export function createWebApi(deps) {
       }
       return true
     }
-    if (method === 'GET' && path === '/api/accounts/login') {
+    if (method === 'GET' && route === '/api/accounts/login') {
       sendJson(res, 200, { object: 'list', data: loginFlows.list() })
       return true
     }
-    const m = path.match(/^\/api\/accounts\/login\/([^/]+)(?:\/([^/]+))?$/)
+    const m = route.match(/^\/api\/accounts\/login\/([^/]+)(?:\/([^/]+))?$/)
     if (m) {
       const id = m[1]
       const action = m[2]

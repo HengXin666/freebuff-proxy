@@ -1,0 +1,20 @@
+#!/bin/sh
+# Fast local shim: blocks a guarded-source change that carries no note, before it is committed.
+# Install with:
+#   ln -sf ../../.agents/skills/hx-agent-notes/assets/hooks/pre-commit .git/hooks/pre-commit
+# The full gate set stays in CI; this keeps the feedback loop short.
+#
+# The scripts are TypeScript. Use whichever runner the project actually has; the first that
+# works wins. A bare-npm project has no tsx, but Node >= 22.6 runs the files directly.
+
+run() {
+  if command -v node >/dev/null 2>&1 && node -e 'process.exit(process.features.typescript ? 0 : 1)' 2>/dev/null; then
+    node "$@" && return 0 || return 1
+  fi
+  npx --yes tsx@4 "$@"
+}
+
+run .agents/skills/hx-agent-notes/scripts/verify-format.ts || exit 1
+run .agents/skills/hx-agent-notes/scripts/verify-backlinks.ts || exit 1
+run .agents/skills/hx-agent-notes/scripts/verify-coverage.ts --staged || exit 1
+exit 0

@@ -1313,9 +1313,11 @@ export class AccountRuntimes {
    * 官方客户端在 pending 期间**每 3 秒无限重放**直到拿到终态；而本服务原先只在
    * **启动时**扫一次，进程不重启就再也没人去取这些结算——这正是"退款总额永远是 0"
    * 最可疑的工程原因（不是上游不退，是我们问得太早且没再问）。
-   * @returns {Promise<{cleaned: number, failed: number, skipped: number}>}
+   * @param {{budgetMs?: number}} [opts] 本次扫尾的总预算（启动路径必须传，
+   *   否则一个连不通的上游能把启动卡住）。
+   * @returns {Promise<{cleaned: number, failed: number, skipped: number, deferred: number}>}
    */
-  async cleanupOrphanSessions() {
+  async cleanupOrphanSessions(opts = {}) {
     const resolve = (key) => {
       try {
         return this.get(key)?.upstream || null
@@ -1323,7 +1325,7 @@ export class AccountRuntimes {
         return null
       }
     }
-    return this.handleStore.cleanupOrphans(resolve)
+    return this.handleStore.cleanupOrphans(resolve, opts)
   }
 
 

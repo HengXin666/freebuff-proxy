@@ -1,0 +1,27 @@
+# Drop-in pipeline for the hx-agent-notes gates.
+# Copy to .gitlab-ci.yml, or include it:
+#   include:
+#     - local: .agents/skills/hx-agent-notes/assets/ci/gitlab-ci.yml
+
+agent-notes:
+  stage: test
+  image: node:20
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  variables:
+    # The coverage gate diffs against the merge base. Override for a squash-free history.
+    AGENT_NOTES_BASE_REF: $CI_MERGE_REQUEST_DIFF_BASE_SHA
+  script:
+    - |
+      if [ -z "$AGENT_NOTES_BASE_REF" ]; then
+        AGENT_NOTES_BASE_REF="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+      fi
+      if git cat-file -e "$AGENT_NOTES_BASE_REF" 2>/dev/null; then
+        REF_ARG="--base $AGENT_NOTES_BASE_REF"
+      else
+        REF_ARG="--staged"
+        git add -A
+      fi
+      npx --yes tsx@4 .agents/skills/hx-agent-notes/scripts/verify-all.ts $REF_ARG
+  cache: []

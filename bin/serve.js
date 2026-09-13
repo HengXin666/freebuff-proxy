@@ -105,6 +105,20 @@ function reportStartupFailure(err) {
     // 数据目录读不了不影响诊断输出
   }
 
+  // 配置 / 凭据这两类问题的堆栈一眼看不出处置办法，单独点名。
+  if (/YAMLParseError|YAML/i.test(detail)) {
+    lines.push(
+      '  看起来是 config.yaml 解析失败（多为手工编辑出错）。',
+      `      处置: 备份后移走它（mv <dataDir>/config.yaml <dataDir>/config.yaml.broken），` +
+        '程序会用内置默认值启动，再重新编辑。',
+    )
+  }
+  if (/Invalid account key/i.test(detail)) {
+    lines.push(
+      '  看起来是某个账号凭据文件里的 id/email 不能当文件名用（空 / . / .. 等）。',
+      '      处置: 检查 credentials/ 下的 *.json，修好或移走有问题的那一个；本版本起会跳过它并点名。',
+    )
+  }
   if (!bad.length && !dirty.length) {
     lines.push(
       '  未发现明显的数据文件问题。请把上面的完整堆栈发给维护者；' +
@@ -112,7 +126,7 @@ function reportStartupFailure(err) {
     )
   }
   lines.push(
-    '  提示: 控制台「总览 → 数据文件自检」(/api/system/data-status) 也列出同样的信息。',
+    '  提示: 控制台「系统 → 数据文件自检」(/api/system/data-status) 也列出同样的信息。',
     '',
   )
   console.error(lines.join('\n'))
@@ -147,7 +161,7 @@ async function main() {
         `[freebuff-proxy] ⚠ 数据文件损坏: ${f.file}\n` +
           `  原因: ${f.reason}\n` +
           `  处置: 停服后把该文件移走（mv ${f.file} ${f.file}.broken）再启动即可，\n` +
-          `        程序会按默认值重建；要保留历史就先备份。控制台「总览 → 数据文件自检」也会列出。\n`,
+          `        程序会按默认值重建；要保留历史就先备份。控制台「系统 → 数据文件自检」也会列出。\n`,
       )
     }
     for (const f of dirty) {
@@ -156,7 +170,7 @@ async function main() {
           `  原因: ${f.droppedReason}（丢弃 ${f.droppedEntries} 条）\n` +
           (f.droppedBackup ? `  原文留证: ${f.droppedBackup}\n` : '') +
           `  处置: 无需人工干预——坏条目已被丢弃，服务照常运行；\n` +
-          `        想核对丢了什么就打开上面的留证文件。控制台「总览 → 数据文件自检」也会列出。\n`,
+          `        想核对丢了什么就打开上面的留证文件。控制台「系统 → 数据文件自检」也会列出。\n`,
       )
     }
     if (bad.length || dirty.length) {
@@ -297,8 +311,12 @@ async function main() {
   // 计费孤儿"，会一直占着该账号的上游会话槽位（早退不退 Freebucks，见
   // docs/account-scheduling-and-refund.md §3）。
   try {
-    const sweep = await ctx.runtimes.cleanupOrphanSessions()
-    if (sweep.cleaned || sweep.failed || sweep.skipped) {
+    // 有界预算（15s）：清孤儿绝不能把启动卡死——连不通的上游 / 已被删的账号
+    // 会让逐条 DELETE 一直等，用户看到的就是"起不来"，而删掉 sessions.json 立刻
+    // 就好（这正是"删这个文件就正常"最典型的形态）。超预算的句柄留在索引里，
+    // 由后续启动 / 释放流程继续，信息不丢、只是不挡路。
+    const sweep = await ctx.runtimes.cleanupOrphanSessions({ budgetMs: 15_000 })
+    if (sweep.cleaned || sweep.failed || sweep.skipped || sweep.deferred) {
       logger.info('leftover session sweep on startup', sweep)
     }
   } catch (err) {

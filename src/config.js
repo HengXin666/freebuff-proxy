@@ -3,6 +3,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
+import { sanitizeProxyList } from './util/json-store.js'
 
 /**
  * @typedef {object} ProxyConfig
@@ -288,10 +289,19 @@ export function loadConfig(configPath) {
   if (!Array.isArray(merged.server.apiKeys)) merged.server.apiKeys = []
   merged.server.apiKeys = merged.server.apiKeys.map(String).filter(Boolean)
 
+  // 代理列表：只留"能当 URL 用"的非空字符串。脏值（null/数字/对象/畸形 URL）
+  // 原样留下会在构造出网 agent 时抛 ERR_INVALID_URL —— 那是启动路径上的崩溃。
+  // 兼容历史写法 [{ url: "http://..." }]（早期文档里的对象形态）。
   if (!Array.isArray(merged.upstream.proxies)) merged.upstream.proxies = []
-  merged.upstream.proxies = merged.upstream.proxies
-    .map((u) => (typeof u === 'string' ? u.trim() : ''))
-    .filter(Boolean)
+  merged.upstream.proxies = sanitizeProxyList(
+    merged.upstream.proxies.map((u) =>
+      u && typeof u === 'object' && typeof u.url === 'string' ? u.url : u,
+    ),
+  ).urls
+  if (merged.upstream.proxy && typeof merged.upstream.proxy === 'object') {
+    merged.upstream.proxy =
+      typeof merged.upstream.proxy.url === 'string' ? merged.upstream.proxy.url : null
+  }
 
   // Resolve data dir against project root when relative
   if (!path.isAbsolute(merged.server.dataDir)) {

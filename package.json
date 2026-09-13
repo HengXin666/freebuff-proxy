@@ -20,7 +20,16 @@
     "test": "node test/smoke.mjs",
     "pipeline:image": "node scripts/pipeline-image-test.mjs",
     "web": "node bin/serve.js",
-    "pricing": "node bin/pricing.js"
+    "pricing": "node bin/pricing.js",
+    "verify-notes": "node .agents/skills/hx-agent-notes/scripts/verify-all.ts",
+    "verify-notes:staged": "node .agents/skills/hx-agent-notes/scripts/verify-all.ts --staged",
+    "verify-notes:tree": "node .agents/skills/hx-agent-notes/scripts/verify-tree.ts",
+    "verify-notes:format": "node .agents/skills/hx-agent-notes/scripts/verify-format.ts",
+    "verify-notes:coverage": "node .agents/skills/hx-agent-notes/scripts/verify-coverage.ts",
+    "verify-notes:backlinks": "node .agents/skills/hx-agent-notes/scripts/verify-backlinks.ts",
+    "notes:new": "node .agents/skills/hx-agent-notes/scripts/new-note.ts",
+    "notes:archive": "node .agents/skills/hx-agent-notes/scripts/archive-note.ts",
+    "notes:board": "node .agents/skills/hx-agent-notes/scripts/build-board.ts --init board.html"
   },
   "dependencies": {
     "undici": "^8.10.0",

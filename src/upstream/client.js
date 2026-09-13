@@ -75,7 +75,22 @@ async function fetchWithAttemptTimeout(url, init, timeoutMs) {
  * 优先级：账号显式 proxy > upstream.proxies（全局池） > upstream.proxy > HTTP(S)_PROXY env。
  */
 function resolveProxy(config, accountProxy, accountId) {
-  const explicit = accountProxy || config?.upstream?.proxy
+  // 最后一道防线：代理值可能是脏数据（数字 / 对象 / 畸形 URL），直接喂给
+  // `new ProxyAgent({uri})` 会抛 ERR_INVALID_URL —— 那发生在启动后的第一次
+  // 出网调用（启动扫尾/首次请求），用户看到的就是"起不来/一用就崩"。
+  // 这里统一过一遍校验，非法值一律当作"没有这个代理"。
+  const clean = (v) => {
+    if (typeof v !== 'string') return null
+    const s = v.trim()
+    if (!s) return null
+    try {
+      const u = new URL(s)
+      return ['http:', 'https:', 'socks5:', 'socks:'].includes(u.protocol) ? s : null
+    } catch {
+      return null
+    }
+  }
+  const explicit = clean(accountProxy) || clean(config?.upstream?.proxy)
   if (explicit) {
     return {
       kind: 'single',
@@ -84,7 +99,7 @@ function resolveProxy(config, accountProxy, accountId) {
       indexFor: () => 0,
     }
   }
-  const pool = (config?.upstream?.proxies || []).filter(Boolean)
+  const pool = (config?.upstream?.proxies || []).map(clean).filter(Boolean)
   if (pool.length) {
     return {
       kind: 'pool',
@@ -323,7 +338,7 @@ export function createUpstreamClient(config, token, opts = {}) {
 
     /**
      * @param {'GET'|'POST'|'DELETE'} method
-     * @param {{ model?: string, instanceId?: string, compact?: boolean, signal?: AbortSignal }} [opts]
+     * @param {{ model?: string, instanceId?: string, compact?: boolean, signal?: AbortSignal, timeoutMs?: number }} [opts]
      */
     async freebuffSession(method, opts = {}) {
       /** @type {Record<string, string>} */
@@ -347,7 +362,11 @@ export function createUpstreamClient(config, token, opts = {}) {
         method,
         headers,
         signal: opts.signal,
-        timeoutMs: config.session.admitTimeoutMs,
+        // 调用方可给单次超时（启动扫尾用它把等待压进总预算）：不带就沿用
+        // admitTimeoutMs。启动路径不允许被一个连不通的上游拖住。
+        timeoutMs: Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+          ? opts.timeoutMs
+          : config.session.admitTimeoutMs,
         includeAuth: false, // already set
       })
 

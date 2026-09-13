@@ -61,11 +61,31 @@ docker logs --tail 60 freebuff-proxy
   只是数组里混进了结构非法的记录（`null` / 缺关键字段，常见于旧版本遗留或手工编辑）。
   程序会**逐条丢弃并留证**（丢掉的原文写到同目录 `xxx.json.dropped-<时间>`），
   **不需要人工干预**；想核对丢了什么就打开那个 `.dropped-` 文件。
+  `sessions.json` 的脏条目（缺 `key` / `instanceId`）走同一条路：好句柄留下、坏条目
+  丢弃留证，**绝不因此拒绝启动**——删掉这个文件只会永久失去寻址 DELETE 的能力。
+- 服务能起来，但要等十几秒到几分钟才监听端口（表现为「重启后久久打不开」）→
+  上游会话扫尾（`sessions.json` 里的遗留句柄）在等一个连不通的上游。这是**有界**的：
+  总预算 15s、单次 DELETE 8s，超预算的句柄原样留在索引里等下次启动。日志里能看到
+  `session handle startup sweep done {cleaned, failed, skipped, deferred}`，其中 `deferred`
+  就是「这次没轮到」的条数。**不要为了让它快点而删 sessions.json**——那会让这些句柄
+  永久无法寻址（上游槽位要等会话自然过期才回来）。治本请接上可用上游 / 换可用代理。
 - 看到 `[freebuff-proxy] ✗ 启动失败（服务未能进入监听状态）` → 兜底诊断段：它会把
   "哪些数据文件损坏 / 哪些含非法条目 / 残留的 `*.tmp`"连同可照抄的处置命令一起列出，
   下面紧跟真实堆栈。按它给的命令处置即可。
 - 日志里没有上面任何一行、但进程就是起不来 → 大概率不是数据问题，看容器退出码
   `docker inspect <容器> --format {{.State.ExitCode}}`，再贴完整日志排查。
+- 看到 `YAMLParseError` / 启动诊断里点名 `config.yaml` → 是 `config.yaml` 被手工改坏了。
+  它不是唯一真源（只是兜底默认值）：`mv data/config.yaml data/config.yaml.broken` 后重启即可，
+  程序会用内置默认值启动，前端「设置」照常可调。
+
+**症状 A2：服务起来了，但控制台某个接口 500**（例：`系统 → 数据文件自检`）
+
+这不是数据问题，是代码缺陷。已修的真例：`src/web/api.js` 里 `const path = url.pathname`
+把 `node:path` 模块遮蔽了，于是该接口内部的 `path.basename(...)` 抛
+`path.basename is not a function` → 一路 500（v1.12.0 引入，v1.13.2 修复）。
+另一处同类：路由变量改名只改一半，残留的 `${path}` 让 404 分支抛 `ReferenceError`。
+这两处都补了**源码级防回归断言**（`test/smoke.mjs` 的 SRC-GUARD 段）。
+遇到"只有某个接口 500"，先看容器日志里的堆栈行号，那才是真凶。
 
 > **为什么"旧数据 + 新镜像"曾经会起不来（v1.13.0 修复）**：早先三个 store 直接信任
 > 整个数组，数据里只要有 `null` 条目，就会在**构造期**抛 `TypeError`
@@ -77,7 +97,7 @@ docker logs --tail 60 freebuff-proxy
 **症状 B：升级后某个功能被重置了**（代理池空了 / 额度保护回到默认 / 模型管理被清空）
 
 说明对应的 JSON 内容不符合本版本预期，或文件被写坏了。控制台
-**总览 → 数据文件自检** 会把每个文件的装载状态（正常 / 尚未生成 / 损坏 + 原因）
+**系统 → 数据文件自检** 会把每个文件的装载状态（正常 / 尚未生成 / 损坏 + 原因）
 和**可直接复制的处置命令**列出来。修复前对应功能只会降级（回落默认值），
 不会拖垮服务。
 
@@ -110,7 +130,11 @@ npm run pipeline:image -- --image ghcr.io/hengxin666/freebuff-proxy:latest
 npm run pipeline:image -- --keep             # 保留 fixture 与容器便于排查
 ```
 
-它会真实构建、真实起容器、真实打健康检查，逐场景断言：
+它会真实构建、真实起容器、真实打健康检查，并在容器内用 admin 真实登录后
+**逐个打 8 个需要鉴权的控制台接口**（`/api/me`、`/api/accounts`、`/api/models`、
+`/api/system/data-status`、`/api/settings`、`/api/proxy`、`/api/users`、`/api/overview`）——
+只测 `/healthz` 会漏掉"起来了但控制台接口 500"这类故障（v1.13.0/v1.13.1 就带着
+`/api/system/data-status` 100% 500 发出去了）。逐场景断言：
 
 | 场景 | 期望 |
 | --- | --- |
@@ -118,6 +142,8 @@ npm run pipeline:image -- --keep             # 保留 fixture 与容器便于排
 | 当前 `data/` 副本（旧数据 + 新镜像） | 同上 |
 | 逐个把某个 JSON 写坏 | 能启动的必须**降级启动并在日志里点名**该文件 |
 | 数组里混入 `null` 条目（`web-sessions.json` / `login-flows.json`） | **正常启动**并点名"非法条目"（这是当年真实故障的形态；截断式损坏测不到它） |
+| `users.json` 带 UTF-8 BOM（Windows 编辑器/导出工具常见） | **正常启动**（BOM 会被剥掉；以前会被判"损坏"而拒绝启动） |
+| 任一场景起来之后 | 容器内 admin 真实登录成功，8 个鉴权接口**全部 200** |
 | `users.json` 写坏 | **拒绝启动**（exit ≠ 0）且日志说明原因与处置办法 |
 
 全程离线：测试目录**不含凭据**，不会连上游、不消耗任何额度

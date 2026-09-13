@@ -1,0 +1,43 @@
+name: agent-notes
+
+# Drop-in pipeline for the hx-agent-notes gates. Copy to .github/workflows/agent-notes.yml.
+# It needs no package.json and no dependency install: tsx is fetched by npx.
+#
+# Optional hardening once the workflow is trusted:
+#   - set the job to "required" in branch protection, and
+#   - ingest .agents/skills/hx-agent-notes/scripts into the repo so the pipeline
+#     pins the exact gate version instead of reading a working-tree copy.
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  agent-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The coverage gate diffs against the merge base; a shallow clone hides it.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Resolve the comparison base
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE" ]; then BASE="${{ github.event.before }}"; fi
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            BASE="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+          fi
+          echo "AGENT_NOTES_BASE_REF=$BASE" >> "$GITHUB_ENV"
+          echo "comparing against $BASE"
+
+      - name: Agent Notes gates
+        run: npx --yes tsx@4 .agents/skills/hx-agent-notes/scripts/verify-all.ts --base "$AGENT_NOTES_BASE_REF"

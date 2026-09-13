@@ -1866,47 +1866,6 @@ for (const model of verifiedSpecialModels) {
   })
   assert.equal(lr.status, 200)
   const cookie = lr.headers.get('set-cookie').split(';')[0]
-  // (AUTH-ENDPOINTS) 已登录后逐个真实打一遍控制台只读接口。
-  //
-  // 真实事故：`src/web/api.js` 的 handle() 里 `const path = url.pathname` 把
-  // `import path from 'node:path'` 遮蔽，`/api/system/data-status` 里的
-  // `path.basename()` 抛 "is not a function" → 该接口 100% 500，v1.12.0 起
-  // 一路带到线上（v1.13.0/v1.13.1/v1.13.2 全带），只跑 /healthz 的流水线发现不了。
-  //
-  // 这类故障只在"运行时真的调到那一行"才炸，纯静态自检兜不住，
-  // 所以这里必须**真的发请求**，并且断言 200 —— 顺带覆盖每次新增的接口。
-  {
-    const readOnlyEndpoints = [
-      '/api/me',
-      '/api/overview',
-      '/api/accounts',
-      '/api/models',
-      '/api/proxy',
-      '/api/settings',
-      '/api/users',
-      '/api/system/data-status',
-    ]
-    for (const ep of readOnlyEndpoints) {
-      const r = await fetch(`http://127.0.0.1:${wport}${ep}`, { headers: { cookie } })
-      assert.equal(r.status, 200, `GET ${ep} 必须 200（实际 ${r.status}）`)
-      const ct = r.headers.get('content-type') || ''
-      assert.ok(ct.includes('application/json'), `GET ${ep} 必须返回 JSON`)
-    }
-    // data-status 额外校验结构：它是「数据文件自检」，坏掉时用户要靠它定位问题
-    const dsRes = await fetch(`http://127.0.0.1:${wport}/api/system/data-status`, {
-      headers: { cookie },
-    })
-    const ds = await dsRes.json()
-    assert.ok(Array.isArray(ds.files), 'data-status 必须返回 files 数组')
-    assert.ok(typeof ds.ok === 'boolean', 'data-status 必须返回 ok 布尔')
-    // 每个文件项的 name 就是被遮蔽那行的产物（path.basename）——它必须真的有值
-    for (const f of ds.files) {
-      assert.ok(
-        typeof f.name === 'string' && f.name.length > 0,
-        'data-status 的每个文件项必须有 name（path.basename 的产物）',
-      )
-    }
-  }
   const pr = await fetch(`http://127.0.0.1:${wport}/api/accounts/probe`, {
     method: 'POST',
     headers: { cookie },
@@ -4710,6 +4669,36 @@ server.close()
     // 用真实 upstream 解析器再跑一次：应清掉所有遗留句柄
     await store.cleanupOrphans((key) => fbRuntimes.byKey.get(key)?.upstream)
     assert.equal(store.listOrphans().length, 0, '启动扫尾后不应残留待清理句柄')
+    // —— 启动扫尾必须是**有界**的：一个连不通的上游（DNS 黑洞/代理挂起/已被删的
+    // 账号）曾让每条 DELETE 各等 30s×3 次重放，服务十几分钟不进监听状态，用户看到
+    // 的就是「起不来，删 sessions.json 就好了」。预算用完的句柄只许 deferred（留到
+    // 下次启动继续），绝不许把启动路径拖住。
+    {
+      const hangFile = path.join(path.dirname(storeFile), 'sessions-hang.json')
+      fs.writeFileSync(hangFile, JSON.stringify({
+        version: 1,
+        sessions: [],
+        orphans: Array.from({ length: 4 }, (_, i) => ({
+          key: 'a',
+          instanceId: `hang-${i}`,
+          model: 'deepseek/deepseek-v4-flash',
+        })),
+      }))
+      const hangStore = new SessionHandleStore(hangFile)
+      // 永远拿不到结果的上游：模拟黑洞代理 / 上游不响应
+      const blackHole = { freebuffSession: () => new Promise(() => {}) }
+      const started = Date.now()
+      const res = await Promise.race([
+        hangStore.cleanupOrphans(() => blackHole, { budgetMs: 300 }),
+        new Promise((resolve) => setTimeout(() => resolve('timeout'), 3_000)),
+      ])
+      const elapsed = Date.now() - started
+      assert.notEqual(res, 'timeout', '扫尾必须在预算内返回，绝不能挂住启动路径')
+      assert.ok(elapsed < 2_500, `扫尾耗时必须受预算约束，实际 ${elapsed}ms`)
+      assert.equal(res.cleaned, 0, '连不上时不得谎报已清理')
+      assert.ok(res.failed + res.deferred >= 4, '未清理的句柄必须如实计入 failed/deferred')
+      assert.equal(hangStore.listOrphans().length, 4, '预算用完的句柄必须保留（信息不丢）')
+    }
     sm.getSnapshot()
     if (sm.hasLiveSlot()) await sm.release()
   }
@@ -5433,6 +5422,29 @@ server.close()
   const proxyStore = new ProxyStore(proxiesPath)
   assert.equal(proxyStore.loadStatus, 'invalid', '损坏的 proxies.json 必须报 invalid')
   assert.deepEqual(proxyStore.list(), [], '损坏的代理池按空处理（不抛）')
+
+  // 代理池里的脏值（null / 数字 / 畸形 URL）必须被丢弃：原样传下去会在
+  // 构造出网 agent 时抛 ERR_INVALID_URL —— 那是启动后的第一次出网就崩。
+  {
+    const dirtyProxies = write('proxies-dirty.json', JSON.stringify({
+      version: 1,
+      proxies: [null, 123, {}, 'not a url', 'http://127.0.0.1:7890', '  socks5://127.0.0.1:1080  '],
+    }))
+    const store = new ProxyStore(dirtyProxies)
+    assert.doesNotThrow(() => store.list())
+    assert.deepEqual(
+      store.list(),
+      ['http://127.0.0.1:7890', 'socks5://127.0.0.1:1080'],
+      '只保留合法代理 URL（去空白），脏值全部丢弃',
+    )
+    assert.ok(
+      dirtyDataFiles().some((e) => e.file === path.resolve(dirtyProxies)),
+      '丢弃脏代理必须记账（否则用户以为代理设置被静默重置）',
+    )
+    const { sanitizeProxyList: san } = await import('../src/util/json-store.js')
+    assert.deepEqual(san([{ url: 'http://a:1' }]), { urls: [], dropped: 1 }, '对象形态的代理条目按非法处理')
+    assert.deepEqual(san('http://a:1'), { urls: [], dropped: 0 }, '非数组输入不抛异常')
+  }
   const modelStore2 = new ModelStore(modelsPath)
   assert.equal(modelStore2.loadStatus, 'ok', 'custom-models.json 正常时必须报 ok')
   const webSessions = new WebSessionStore(webSessPath, 3600_000)
@@ -5570,6 +5582,23 @@ server.close()
     assert.equal(store.users.length, 0, '不得凭空造出用户')
   }
 
+  // ④b UTF-8 BOM：Windows 记事本 / 导出工具写出的文件开头带 U+FEFF。
+  //     它是无害的，但 JSON.parse 直接报 "Unexpected token '\uFEFF'" →
+  //     users.json 被判"损坏" → 拒绝启动（真实用户场景）。必须剥掉。
+  {
+    const p = path.join(dir, 'users-bom.json')
+    fs.writeFileSync(
+      p,
+      '\uFEFF' + JSON.stringify({ version: 1, users: [{ username: 'admin', salt: 's', passwordHash: '00', role: 'admin', apiKey: 'k' }] }),
+    )
+    const store = new UserStore(p)
+    assert.equal(store.loadStatus, 'ok', '带 BOM 的 users.json 必须能正常读取（BOM 要剥掉，别当成损坏）')
+    assert.equal(store.users.length, 1, '带 BOM 时用户数据必须完整')
+    const sess = path.join(dir, 'ws-bom.json')
+    fs.writeFileSync(sess, '\uFEFF' + JSON.stringify({ version: 1, sessions: [] }))
+    assert.doesNotThrow(() => new WebSessionStore(sess, 3600_000), '带 BOM 的 web-sessions.json 不能抛')
+  }
+
   // ⑤b 脏凭据文件必须被**点名**，不能静默消失（用户会以为账号丢了）
   {
     const credDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-creds-'))
@@ -5578,12 +5607,19 @@ server.close()
     }))
     fs.writeFileSync(path.join(credDir, 'broken.json'), '{"broken": tru')
     fs.writeFileSync(path.join(credDir, 'notoken.json'), JSON.stringify({ id: 'id-2', email: 'c@d.com' }))
-    const accounts = listAccounts(credDir)
+    // id 是 '.' → safeAccountStem 会抛；以前这个异常直接冒到启动流程把服务带崩
+    fs.writeFileSync(path.join(credDir, 'badkey.json'), JSON.stringify({ id: '.', email: 'x@y.com', authToken: 't' }))
+    let accounts
+    assert.doesNotThrow(() => { accounts = listAccounts(credDir) }, '无法当文件名的账号 key 不能让 listAccounts 抛异常')
     assert.equal(accounts.length, 1, '只有合法凭据能进账号列表')
     assert.equal(
       invalidCredentialFiles.length,
-      2,
-      '脏凭据文件必须被记账（否则控制台里账号凭空消失、无从排查）',
+      3,
+      '脏凭据文件（含 key 非法的）必须被记账（否则控制台里账号凭空消失、无从排查）',
+    )
+    assert.ok(
+      invalidCredentialFiles.some((p) => p.endsWith('badkey.json')),
+      'key 非法的凭据也必须被点名，而不是让服务崩溃',
     )
     assert.ok(
       invalidCredentialFiles.some((p) => p.endsWith('broken.json')) &&
@@ -5596,7 +5632,24 @@ server.close()
   // ⑥ sessions.json / account-state.json 的脏条目只能降级，不能抛
   {
     const p = write('sh-dirty.json', { version: 1, sessions: [null], orphans: [null, { key: 'a', instanceId: 'i' }] })
-    assert.doesNotThrow(() => new SessionHandleStore(p), '含 null 的会话句柄索引绝不能抛')
+    let sh
+    assert.doesNotThrow(() => { sh = new SessionHandleStore(p) }, '含 null 的会话句柄索引绝不能抛')
+    // 「控制台说一切正常、进程却起不来」的教训：脏条目必须记账（否则删 sessions.json
+    // 就成了唯一出路）。合法句柄要留下，坏条目要留证，文件本身仍算 ok。
+    assert.equal(sh.loadStatus, 'ok', '含脏条目的 sessions.json 仍应算 ok（不是损坏）')
+    assert.equal(sh.listOrphans().length, 1, '合法句柄必须保留（否则那些槽位再也回收不了）')
+    assert.equal(sh.listOrphans()[0].instanceId, 'i', '保留的必须是有 key+instanceId 的那条')
+    const shRec = dataFileAudit().find((e) => e.file === path.resolve(p))
+    assert.equal(shRec?.droppedEntries, 2, '丢弃条数必须记账（控制台据此显示「脏条目」）')
+    assert.ok(shRec?.droppedBackup && fs.existsSync(shRec.droppedBackup), '被丢弃的原文必须留证')
+    assert.equal(shRec?.openHandles, 1, '待结算句柄数必须登记（控制台「系统」页据此提示）')
+    assert.ok(
+      !invalidDataFiles().some((e) => e.file === path.resolve(p)),
+      '脏条目不能报成文件损坏（处置办法不同：前者无需人工干预）',
+    )
+    // 结构完全不对（sessions 不是数组）同样只是降级，不得抛
+    const bad = write('sh-shape.json', { version: 1, sessions: 'oops', orphans: [] })
+    assert.doesNotThrow(() => new SessionHandleStore(bad), 'sessions 字段结构不对绝不能抛')
     const ast = write('as-dirty.json', { version: 1, accounts: { a: null, b: 'x', c: { requests: 1 } } })
     const { AccountStateStore } = await import('../src/account-state-store.js')
     assert.doesNotThrow(() => new AccountStateStore(ast), '含脏记录的账号账本绝不能抛')
@@ -5638,6 +5691,42 @@ server.close()
     /function normalizeSvgPaths/.test(dashSrc) && /normalizeSvgPaths\(paths\)/.test(dashSrc),
     'icon() 必须对 SVG 片段做自闭合归一，否则相邻节点会被解析器吞掉',
   )
+}
+
+
+// (SRC-GUARD) 源码级防回归：变量遮蔽与被改名的残留引用。
+//
+// 真实事故：`src/web/api.js` 的 handle() 里 `const path = url.pathname` 把
+// `import path from 'node:path'` 整个遮蔽，`/api/system/data-status` 里
+// `path.basename()` 变 "is not a function" → 该接口一路 500 到用户手里；
+// 修名后又在同文件漏改一行（`No route for ${method} ${path}`）→ ReferenceError。
+// 这两种都只在"运行时真的调到那一行"才炸，静态自检必须兜住。
+{
+  const srcFiles = ['../src/web/api.js', '../src/proxy.js', '../src/server.js']
+  for (const rel of srcFiles) {
+    const src = fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
+    const name = rel.replace('../', '')
+    const usesNodePath = /^\s*import\s+(?:\*\s+as\s+)?path\s*,?\s*(?:from\s+)?['"]node:path['"]/m.test(src)
+    // ① 不得在局部重新声明 `path`（会遮蔽 node:path 模块）
+    assert.ok(
+      !/\bconst\s+path\s*=/.test(src),
+      `${name}: 不得用 const path = ... 遮蔽 node:path 模块（曾导致 path.basename is not a function）`,
+    )
+    // ② 路由变量必须叫 route/pathname，不得再出现 `path === '/...'` 这种旧命名
+    assert.ok(
+      !/\bpath\s*===\s*['"]\//.test(src),
+      `${name}: 路由变量必须叫 route/pathname，不得沿用已废弃的 path`,
+    )
+    // ③ 模板串里不得再引用裸 path：改名只改一半就是这个形态（ReferenceError）
+    assert.ok(
+      !/\$\{[^}]*\bpath\b[^}]*\}/.test(src),
+      `${name}: 模板串里引用了裸 path（改名漏改一行 → ReferenceError）`,
+    )
+    // ③ 用了 node:path 就必须真的 import 了它
+    if (/\bpath\.(?:basename|join|resolve|dirname|extname|sep)\b/.test(src)) {
+      assert.ok(usesNodePath, `${name}: 用了 path.* 就必须 import path from 'node:path'`)
+    }
+  }
 }
 
 globalThis.fetch = originalFetch

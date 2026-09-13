@@ -1,6 +1,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { readJsonFileState, noteDataFile } from '../util/json-store.js'
+import {
+  readJsonFileState,
+  noteDataFile,
+  noteDroppedEntries,
+  sanitizeProxyList,
+} from '../util/json-store.js'
 
 /**
  * 前端管理的全局代理池。
@@ -31,7 +36,20 @@ export class ProxyStore {
     this.loadStatus = st.status
     this.loadReason = st.status === 'invalid' ? st.reason : null
     if (st.status === 'ok' && Array.isArray(st.data?.proxies)) {
-      this.proxies = st.data.proxies.map(String).filter(Boolean)
+      // 只留能当 URL 用的条目：脏值原样传下去会在造出网 agent 时抛
+      // ERR_INVALID_URL（启动后的第一次出网 = 崩溃）。
+      const { urls, dropped } = sanitizeProxyList(st.data.proxies)
+      this.proxies = urls
+      if (dropped) {
+        noteDroppedEntries(
+          this.file,
+          dropped,
+          `${dropped} 条代理地址非法（空 / 非字符串 / 畸形 URL）已丢弃`,
+        )
+        console.error(
+          `[freebuff-proxy] 数据文件含非法条目: ${this.file} — ${dropped} 条代理地址非法已丢弃（其余 ${urls.length} 条保留）`,
+        )
+      }
     } else if (st.status === 'invalid') {
       console.error(`[freebuff-proxy] 数据文件损坏: ${this.file} — ${st.reason}（全局代理池按空处理）`)
     }
