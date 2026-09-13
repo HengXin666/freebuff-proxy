@@ -306,42 +306,55 @@ async function main() {
     // 自定义模型列表（前端「模型管理」，覆盖内置目录），实时生效
     getCustomModels: () => modelStore.list(),
   })
-  // 启动扫尾：把上次进程遗留 / 上次释放失败的上游会话句柄 DELETE 掉。
-  // 进程退出时内存里的 instanceId 就没了，不扫的话这些会话就是"无法寻址的
-  // 计费孤儿"，会一直占着该账号的上游会话槽位（早退不退 Freebucks，见
-  // docs/account-scheduling-and-refund.md §3）。
-  try {
-    // 有界预算（15s）：清孤儿绝不能把启动卡死——连不通的上游 / 已被删的账号
-    // 会让逐条 DELETE 一直等，用户看到的就是"起不来"，而删掉 sessions.json 立刻
-    // 就好（这正是"删这个文件就正常"最典型的形态）。超预算的句柄留在索引里，
-    // 由后续启动 / 释放流程继续，信息不丢、只是不挡路。
-    const sweep = await ctx.runtimes.cleanupOrphanSessions({ budgetMs: 15_000 })
-    if (sweep.cleaned || sweep.failed || sweep.skipped || sweep.deferred) {
-      logger.info('leftover session sweep on startup', sweep)
-    }
-  } catch (err) {
-    logger.warn('leftover session sweep failed (continuing)', {
-      error: err instanceof Error ? err.message : String(err),
-    })
-  }
+  /**
+   * 上游相关的启动工作（**一律不 await**）。
+   *
+   * 为什么：这些动作全都依赖"上游此刻可达"，而对**服务本身能不能用**毫无影响
+   * ——控制台、账号/额度查看、代理设置都不需要它们成功。把它们放在监听之前等待，
+   * 等于让一个不可达的上游决定"服务起不起来"：实测（真实数据 + 黑洞上游）v1.13.3
+   * 要 54s 才监听，期间 Docker HEALTHCHECK 一直失败，restart 策略就会把**还在启动
+   * 中**的容器反复杀掉重来——用户看到的就是"反复重启"。
+   *
+   * 所以顺序固定为：**先把端口监听起来，上游的活再异步做**。
+   * 扫尾本身仍有硬预算（SessionHandleStore：总预算 + 单次超时 + 本地竞速），
+   * 不会带着一个卡死的上游在后台无限堆积。
+   */
+  function startUpstreamWarmup() {
+    // 会话句柄扫尾：把上次进程遗留的句柄 DELETE 掉（进程退出后 instanceId 就没了，
+    // 不扫就是"无法寻址的计费孤儿"，一直占着上游槽位；见
+    // docs/account-scheduling-and-refund.md §3）。
+    void ctx.runtimes
+      .cleanupOrphanSessions({ budgetMs: 15_000 })
+      .then((sweep) => {
+        if (sweep.cleaned || sweep.failed || sweep.skipped || sweep.deferred) {
+          logger.info('leftover session sweep on startup', sweep)
+        }
+      })
+      .catch((err) => {
+        logger.warn('leftover session sweep failed (continuing)', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
 
-  if (ctx.authEmail) {
-    logger.info('upstream auth ready', {
-      account: ctx.authEmail,
-      accounts: ctx.runtimes.list().map((a) => a.email),
-    })
-    try {
-      const me = await ctx.upstream.me(['id', 'email'])
-      logger.info('upstream identity ok', { id: me.id, email: me.email })
-    } catch (err) {
-      logger.warn('upstream /api/v1/me check failed (continuing)', {
-        error: err instanceof Error ? err.message : String(err),
+    if (ctx.authEmail) {
+      logger.info('upstream auth ready', {
+        account: ctx.authEmail,
+        accounts: ctx.runtimes.list().map((a) => a.email),
+      })
+      // 身份自检纯属诊断信息：失败只写一行 warn，绝不挡启动。
+      void ctx.upstream
+        .me(['id', 'email'])
+        .then((me) => logger.info('upstream identity ok', { id: me.id, email: me.email }))
+        .catch((err) => {
+          logger.warn('upstream /api/v1/me check failed (continuing)', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        })
+    } else {
+      logger.info('no Freebuff accounts yet — add one from the web console', {
+        credentialsDir: ctx.runtimes.dir,
       })
     }
-  } else {
-    logger.info('no Freebuff accounts yet — add one from the web console', {
-      credentialsDir: ctx.runtimes.dir,
-    })
   }
 
   const loginFlows = new LoginFlowManager({
@@ -436,6 +449,10 @@ async function main() {
     modelStore,
     restart: scheduleRestart,
   })
+
+  // 端口已经在监听了 —— 现在才去碰上游（扫尾 + 身份自检）。
+  // 顺序是刻意的：上游可达与否绝不能决定"服务起不起来"。
+  startUpstreamWarmup()
 
   process.on('SIGINT', () => shutdown('SIGINT'))
   process.on('SIGTERM', () => shutdown('SIGTERM'))

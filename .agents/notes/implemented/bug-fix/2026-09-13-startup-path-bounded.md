@@ -23,7 +23,15 @@ Status: implemented
 
 ## Decision
 
-启动扫尾改为**有界**，脏条目改为**记账**：
+**上游相关的启动工作全部移出监听的临界路径**，并且扫尾本身**有界**：
+
+- `bin/serve.js` 里的 `startUpstreamWarmup()` **只在 `startServer()` 返回之后调用**
+  （不 await）：会话句柄扫尾与 `/api/v1/me` 身份自检都变成"监听之后再异步做"。
+  顺序是硬约束——上游可达与否**不允许**决定服务起不起来。
+  实测（真实数据 + 黑洞上游）：改前 27s（v1.13.4）/ 54s（v1.13.3）才监听，
+  改后**223ms** 端口就绪。
+
+扫尾与脏条目的其余机制：
 
 - `SessionHandleStore.cleanupOrphans(resolveUpstream, { budgetMs })` 有总预算
   （`STARTUP_SWEEP_BUDGET_MS = 15_000`）与单次上限（`DELETE_ATTEMPT_TIMEOUT_MS = 8_000`）；

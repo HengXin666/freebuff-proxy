@@ -63,12 +63,23 @@ docker logs --tail 60 freebuff-proxy
   **不需要人工干预**；想核对丢了什么就打开那个 `.dropped-` 文件。
   `sessions.json` 的脏条目（缺 `key` / `instanceId`）走同一条路：好句柄留下、坏条目
   丢弃留证，**绝不因此拒绝启动**——删掉这个文件只会永久失去寻址 DELETE 的能力。
-- 服务能起来，但要等十几秒到几分钟才监听端口（表现为「重启后久久打不开」）→
-  上游会话扫尾（`sessions.json` 里的遗留句柄）在等一个连不通的上游。这是**有界**的：
-  总预算 15s、单次 DELETE 8s，超预算的句柄原样留在索引里等下次启动。日志里能看到
-  `session handle startup sweep done {cleaned, failed, skipped, deferred}`，其中 `deferred`
-  就是「这次没轮到」的条数。**不要为了让它快点而删 sessions.json**——那会让这些句柄
-  永久无法寻址（上游槽位要等会话自然过期才回来）。治本请接上可用上游 / 换可用代理。
+- **容器反复重启（`RestartCount` 一直涨、退出码却是 0）** → 这是最容易被误判成"崩溃"
+  的一种：进程自己没崩，是 `restart: unless-stopped` 在**杀掉一个还没通过健康检查的**
+  容器。判据（一眼分辨，不用猜）：
+  ```bash
+  docker inspect freebuff-proxy --format '状态={{.State.Status}} 退出码={{.State.ExitCode}} 重启次数={{.RestartCount}}'
+  ```
+  **退出码 0 + 重启次数在涨 = 被重启策略杀的，不是崩溃**（崩溃会给非 0 退出码 + 堆栈；
+  137 = OOM）。根因是启动期间要等上游：Dockerfile 的 HEALTHCHECK 有 `--start-period=15s`，
+  15 秒内没监听成功就被判 unhealthy，连续失败即触发 restart，于是"起来了又被杀"。
+  v1.13.5 起上游相关的启动工作**全部移到监听之后异步做**，不存在这条路径；
+  旧版本若遇到，先接上可用上游（或修好代理）即可，**不要删 `sessions.json`**。
+- 服务起来了，但启动日志里十几秒后才出现 `session handle startup sweep done` →
+  这是**正常的后台扫尾**（v1.13.5 起它不再阻塞监听）。它是有界的：总预算 15s、
+  单次 DELETE 8s，超预算的句柄原样留在索引里等下次启动。字段含义：`cleaned` 已清、
+  `failed` 这次失败、`skipped` 找不到账号、`deferred` 这次没轮到。
+  **不要为了让它快点而删 sessions.json**——那会让这些句柄永久无法寻址
+  （上游槽位要等会话自然过期才回来）。治本请接上可用上游 / 换可用代理。
 - 看到 `[freebuff-proxy] ✗ 启动失败（服务未能进入监听状态）` → 兜底诊断段：它会把
   "哪些数据文件损坏 / 哪些含非法条目 / 残留的 `*.tmp`"连同可照抄的处置命令一起列出，
   下面紧跟真实堆栈。按它给的命令处置即可。
