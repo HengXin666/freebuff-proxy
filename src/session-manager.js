@@ -2,6 +2,11 @@ import { logger } from './util/log.js'
 import { UpstreamError } from './upstream/client.js'
 import { isFreeModel } from './model.js'
 
+/** 待结算退款的重试间隔：上游算完最终用量才会给回执，30s 足够且不扰上游。 */
+const REFUND_RETRY_INTERVAL_MS = 30_000
+/** 待结算退款的追问窗口上限（毫秒）。超窗后句柄仍留在 sessions.json，交给下次启动扫尾。 */
+const REFUND_RETRY_MAX_MS = 60 * 60 * 1000
+
 /**
  * Manages a single Freebuff free-session slot for this proxy process.
  * Model is always taken from the downstream request — never a proxy default.
@@ -100,8 +105,22 @@ export class SessionManager {
      * }}
      */
     this.freebucks = null
-    /** 最近一次早退 DELETE 的回执（控制台展示/排查用；Freebucks 恒为 0）。 */
+    /** 最近一次早退 DELETE 的回执（控制台展示/排查用）。 */
     this.lastRefund = null
+    /**
+     * 待结算退款（上游回 freebucksRefundPending 时的 instanceId）。
+     *
+     * **这是钱**：pending = "最终用量还没算完，用同一个 instance 再问一次回执"，
+     * 不是"不退"。句柄一旦丢弃，这笔已经预扣的 Freebucks 就永远取不回来。所以
+     * 只要还挂起就必须留着它，由 _refundRetryTimer 持续重试，直到拿到终态回执
+     * （含 0——0 也是终态，那时才允许收工）。
+     * @type {string | null}
+     */
+    this._pendingRefundInstanceId = null
+    /** 待结算退款的追问定时器。 */
+    this._refundRetryTimer = null
+    /** 本轮追问窗口的起点（用于 REFUND_RETRY_MAX_MS 封顶）。 */
+    this._refundRetryStartedAt = null
     /** 空闲自动释放定时器（在途归零后开始计时）。 */
     this._idleTimer = null
     /** 正在早退 DELETE（空闲释放/换号释放）：期间不得被选号复用。 */
@@ -225,13 +244,12 @@ export class SessionManager {
   /**
    * 空闲自动释放：在途归零后空闲超过 session.idleReleaseSec 就早退 DELETE。
    *
-   * ⚠️ 2026-09-13 实测（docs/account-scheduling-and-refund.md §3）：早退**不退款**。
-   * admit 一次 = 实付整小时单价，之后用 3 秒还是 59 分钟扣的一样多；DELETE 只退还
-   * session_units（每日模型额度），Freebucks 一分不退（freebucksRefund 恒为 0）。
+   * 早退 DELETE **会按实际占用时长退还 Freebucks**（详见
+   * docs/account-scheduling-and-refund.md §3，结论已于 2026-09-13 反转）：上游按
+   * 整小时单价预扣，提前释放按实际占用重算并退回未用部分；挂着的空闲会话是**在花钱**。
    *
-   * 所以这里释放的目的**不是省钱**，而是释放上游会话槽位（一个账号同时只有一条
-   * session，且 session 绑定模型），让换模型/换账号能拿到槽位。省钱只能靠**少 admit**，
-   * 因此默认空闲释放时长已上调到 600s，避免「释放 -> 再请求 -> 重买一小时」的抖动。
+   * 所以这里释放有**两个**收益：腾出上游会话槽位（一个账号同时只有一条 session，
+   * 且 session 绑定模型），以及**停止为空转时长付费**。默认空闲释放 60s 即为此。
    */
   _armIdleRelease() {
     const ms = this.idleReleaseMs()
@@ -250,7 +268,7 @@ export class SessionManager {
         this._armIdleRelease()
         return
       }
-      logger.info('releasing idle freebuff session (frees the account slot; no refund)', {
+      logger.info('releasing idle freebuff session (frees the account slot; refunds unused time)', {
         instanceId: this.session?.instanceId,
         model: this.session?.model,
         idleSec: Math.round(ms / 1000),
@@ -440,7 +458,7 @@ export class SessionManager {
    * 按模型计费方式分层：
    * - 免费模型（daily/referral/limited_offer/helper）：剩余不足
    *   `session.free_model_re_admit_lead_sec`（默认 300s = 5 分钟）即不再调度——
-   *   免费会话 admit 一次即买断整小时，过期中途被掐断会让响应截断，提前换最平滑；
+   *   会话按整小时计价，过期中途被掐断会让响应截断，提前换最平滑（未用时长会退还）；
    * - 付费模型（premium）：每次 admit 都是计费会话，尽量用到接近过期
    *   （沿用 `session.re_admit_lead_sec`，默认 60s），避免频繁新建付费会话。
    * @param {string} model
@@ -735,7 +753,7 @@ export class SessionManager {
     this._notifyStateChange()
   }
 
-  /** 释放会话（早退 DELETE 只退还 session_units，Freebucks 不退）。返回 true = 上游已确认结束。 */
+  /** 释放会话（早退 DELETE 按实际占用退还 Freebucks 未用部分）。返回 true = 上游已确认结束。 */
   async release() {
     return this.withLock(() => this._releaseUnlocked())
   }
@@ -750,7 +768,7 @@ export class SessionManager {
   }
 
   /**
-   * 释放会话（早退 DELETE：退还 session_units，**Freebucks 不退**，见 §3）。
+   * 释放会话（早退 DELETE：按实际占用时长退还 Freebucks 未用部分，见 §3）。
    *
    * **失败时绝不丢弃 instanceId**：句柄没了就永远无法再删，这条会话会一直占着
    * 上游会话槽位（该账号再也 admit 不了别的新模型）。所以失败时保留 session（连同
@@ -801,8 +819,13 @@ export class SessionManager {
         typeof body?.freebucksRefund === 'number' ? body.freebucksRefund : null
       if (settled) {
         // 只有拿到**终态**回执才算结算完成。没有金额 = 退款 0（vendor
-        // af898dc 口径：ended 且不带 freebucksRefund 字段就是 0）。
+        // af898dc 口径：ended 且不带 freebucksRefund 字段就是 0）——**0 也是终态**，
+        // 到这一步才算"问完了"，可以收工。
         refundSettled = true
+        if (this._pendingRefundInstanceId === instanceId) {
+          this._pendingRefundInstanceId = null
+          this._clearRefundRetry()
+        }
         // expected：按"实际占用时长"应付的退款（单价 × 未用满的小时数）。
         // 上游把结算挂在整点/5 的倍数上，expected 与 refund 的差就是需要解释的
         // 那部分——这正是"退款怎么都不是 5 的倍数"该被对账掉的地方。
@@ -833,12 +856,28 @@ export class SessionManager {
         this.lastRefund = entry
         this._emitRefund(entry)
       } else {
-        // 仍挂起：句柄必须留着（否则这笔预扣永远无法再结算），也**不能**上报成
-        // 退款 0 —— 报 pending=true，让账本归到"待结算"而不是"疑似退款失败"。
-        logger.warn('session refund still pending after replay', {
+        // 仍挂起：**这笔钱还没结算完**（pending = "最终用量还没算完，用同一个
+        // instance 再问一次回执"，不是"不退"）。所以：
+        //   ① 句柄必须留着（丢了这笔预扣就永远取不回来）；
+        //   ② 立刻挂上**持续**重试定时器——只靠"下次启动扫尾"意味着进程不重启
+        //      就再也没人问过，钱会一直挂在 pending 里（这正是我们之前把
+        //      "没结算完"误读成"不退"的工程原因）；
+        //   ③ 也**不能**上报成退款 0——报 pending=true，账本归到"待结算"。
+        logger.warn('session refund still pending; will keep polling for the receipt', {
           instanceId,
           model,
           attempts: 3,
+        })
+        this._pendingRefundInstanceId = instanceId
+        this._scheduleRefundRetry()
+        // 落盘到 sessions.json 的**待结算退款队列**：本进程内由
+        // _scheduleRefundRetry 追问，进程重启后由启动/周期扫尾接着追。
+        // 少了这一步，重启就把这笔钱的存在本身弄丢了。
+        this._emitSessionEvent({
+          type: 'refund_pending',
+          key: this.accountKey,
+          instanceId,
+          model,
         })
         // 上游已确认会话 ended —— **这条 session 不能继续占着**，否则该账号
         // 永远无法 admit 新会话（等于把整号废掉）。把句柄登记为 orphan：
@@ -916,6 +955,109 @@ export class SessionManager {
       this._notifySessionChange()
     }
     return released
+  }
+
+  /**
+   * **待结算退款**的持续重试：只要这笔预扣还没拿到终态回执就一直在问。
+   * 决策与证据见 .agents/notes/implemented/bug-fix/2026-09-13-refund-reversed.md。
+   *
+   * 与 _scheduleReleaseRetry（删不掉的退避重试）是两件事：那个问的是"会话删没删掉"，
+   * 这个问的是"钱退回来没有"。上游在 pending 期间要求**用同一个 instanceId 重放
+   * DELETE** 才能取回执（官方类型注释原话："replay DELETE with the same instance for
+   * its receipt"），官方客户端在 pending 期间每 3 秒重放一次。
+   *
+   * 这里取 30s 间隔 + 最长 1 小时：既不像 3s 那样对上游刷请求，又保证**进程不重启
+   * 也能拿到钱**。超时后句柄仍留在 sessions.json，由下次启动扫尾继续（信息不丢）。
+   */
+  _scheduleRefundRetry() {
+    if (this._refundRetryTimer) return
+    const instanceId = this._pendingRefundInstanceId
+    if (!instanceId) return
+    if (!this._refundRetryStartedAt) this._refundRetryStartedAt = Date.now()
+    if (Date.now() - this._refundRetryStartedAt > REFUND_RETRY_MAX_MS) {
+      logger.warn('pending refund still unsettled after the retry window; handle kept for next startup sweep', {
+        instanceId,
+        model: this.session?.model ?? null,
+      })
+      return
+    }
+    this._refundRetryTimer = setTimeout(() => {
+      this._refundRetryTimer = null
+      this._refundRetryStartedAt = null
+      if (!this._pendingRefundInstanceId) return
+      this._replayPendingRefund().catch((err) => {
+        logger.warn('pending refund replay failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+    }, REFUND_RETRY_INTERVAL_MS)
+    if (this._refundRetryTimer.unref) this._refundRetryTimer.unref()
+  }
+
+  /**
+   * 用**同一个 instanceId** 重放 DELETE 取退款回执。
+   *
+   * instanceId 只存在于内存（this._pendingRefundInstanceId）与 sessions.json 的
+   * orphan 列表里；这里不依赖 this.session（那条会话早已置为 none），所以空闲释放
+   * 之后的挂起退款也能继续被追问。
+   */
+  async _replayPendingRefund() {
+    const instanceId = this._pendingRefundInstanceId
+    if (!instanceId) return
+    const body = await this.upstream.freebuffSession('DELETE', {
+      instanceId,
+      timeoutMs: this.config.session?.admitTimeoutMs ?? 30_000,
+    })
+    const pending = body?.freebucksRefundPending === true
+    if (pending) {
+      // 还没算完：继续等，句柄留着。
+      this._scheduleRefundRetry()
+      return
+    }
+    if (body?.status !== 'ended') {
+      // 上游既没给终态也没说 pending：保留句柄，下次再问（绝不当作退 0）。
+      this._scheduleRefundRetry()
+      return
+    }
+    const refund =
+      typeof body?.freebucksRefund === 'number' ? body.freebucksRefund : null
+    this._pendingRefundInstanceId = null
+    this._clearRefundRetry()
+    this._refundRetryStartedAt = null
+    const model = this.session?.model ?? null
+    const price =
+      typeof this.freebucks?.prices?.[model] === 'number'
+        ? this.freebucks.prices[model]
+        : null
+    const entry = {
+      instanceId,
+      model,
+      refund,
+      expected: null,
+      price,
+      holdMs: null,
+      replayed: true,
+      at: new Date().toISOString(),
+    }
+    this.lastRefund = entry
+    // 结算到了才允许摘 orphan——这时钱已经回来了。
+    this._emitSessionEvent({ type: 'drop', key: this.accountKey, instanceId })
+    this._emitRefund(entry)
+    this._notifyStateChange()
+    logger.info('pending refund settled on replay', {
+      instanceId,
+      model,
+      refund,
+    })
+  }
+
+  /** 取消待结算重试（拿到终态回执后调用）。 */
+  _clearRefundRetry() {
+    if (this._refundRetryTimer) {
+      clearTimeout(this._refundRetryTimer)
+      this._refundRetryTimer = null
+    }
+    this._refundRetryStartedAt = null
   }
 
   /**

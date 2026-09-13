@@ -230,7 +230,7 @@ export function createWebApi(deps) {
         by: user.username,
       })
       // 重启前先**严格释放所有上游会话**：进程一退出内存里的 instanceId 就没了，
-      // 不放就会留下无法寻址的孤儿，白占上游会话槽位（早退不退 Freebucks）。
+      // 不放就会留下无法寻址的孤儿：既白占上游会话槽位，那笔已预扣的钱也追不回来。
       // 释放失败也不阻塞重启——句柄已落盘 sessions.json，新进程启动扫尾。
       let release = { ok: true, released: 0, failed: [] }
       try {

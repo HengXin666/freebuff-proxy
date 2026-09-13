@@ -1969,11 +1969,12 @@ for (const model of verifiedSpecialModels) {
       headers: { cookie },
     })
     const def = await getDefault.json()
-    // 2026-09-13：默认 60s -> 600s（实测早退不退 Freebucks，频繁释放=反复买一小时）
-    assert.equal(def.idleReleaseSec, 600, '未保存过时应回落 config.yaml 默认值')
+    // 2026-09-13 结论反转：早退 DELETE **会**按实际占用退还 Freebucks，所以默认回到
+    // 60s——挂着的空闲会话在按小时计价，早退才把未用时长换回来。
+    assert.equal(def.idleReleaseSec, 60, '未保存过时应回落 config.yaml 默认值')
     assert.ok(
-      def.idleReleaseSec >= 300,
-      '默认空闲释放不得低于 300s：早退不退 Freebucks，频繁释放 = 反复买一小时',
+      def.idleReleaseSec > 0 && def.idleReleaseSec <= 300,
+      '默认空闲释放应在 5s..300s 内：早退会退还未用时长，挂着空闲才是花钱',
     )
     assert.equal(def.maxNewSessionsPerRequest, 2)
 
@@ -5090,8 +5091,10 @@ server.close()
   // 覆盖**整个仓库**：一开始只扫了 3 个文件，结果 README / bin/pricing.js /
   // docs/deployment.md / proxy.js 等 10+ 处漏网——其中 README 与 CLI 输出
   // 直接给用户看，错了最误导。改为遍历全仓（排除第三方与运行时数据）。
+  // 2026-09-13 **反转**：早退 DELETE 会按实际占用退还 Freebucks（见文档 §3）。
+  // 现在钉死的是"不退"这一类已被证伪的说法，防止它再被写回来。
   const STALE_COPY =
-    /提前\s*DELETE\s*退未用时长|早退退款|按未用时长退|退还未用时长|退未用时长|按实际占用时长结算|白扣|退不了款|免费会话按占用时长结算/
+    /早退不退|不退\s*Freebucks|Freebucks\s*一分不退|绝不退|买断整小时|整小时买断|一分都不退|早退\s*DELETE\s*不退/
   const SKIP_DIR = new Set(['node_modules', '.git', 'data', 'data-test'])
   const walk = (dir, out = []) => {
     for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -5112,6 +5115,8 @@ server.close()
     // smoke 自身含正则字面量，也豁免（它就是这个守卫）。
     if (rel === 'docs/account-scheduling-and-refund.md') continue
     if (rel === 'test/smoke.mjs') continue
+    // Agent Notes 记录的是**历史决策与它的错在哪**（本次反转正需要引用旧说法），豁免。
+    if (rel.startsWith('.agents/notes/')) continue
     // AGENTS.md 是最高优先级约定，**必须一起扫**：它一旦写着旧口径，后来的人会直接照着做。
     // CLAUDE.md 只是指向它的符号链接，跳过以免同一内容报两次。
     if (rel === 'CLAUDE.md') continue
@@ -5119,17 +5124,36 @@ server.close()
     const hit = src.match(STALE_COPY)
     assert.ok(
       !hit,
-      `${rel} 出现了已被证伪的说法「${hit && hit[0]}」（早退不退 Freebucks，见 docs/account-scheduling-and-refund.md §3）`,
+      `${rel} 出现了已被证伪的说法「${hit && hit[0]}」（早退 DELETE **会**按实际占用退还 Freebucks；pending = 结算未完成，见 docs/account-scheduling-and-refund.md §3）`,
     )
   }
-  // 默认值必须远离 60s：短空闲释放 = 反复买新会话
+  // 默认值必须**短**：挂着的空闲会话在按小时计价，早退才能把未用时长退回来。
   assert.ok(
-    /idleReleaseSec:\s*600/.test(cfgSrc),
-    'config.js 的 idleReleaseSec 默认应为 600s',
+    /idleReleaseSec:\s*60/.test(cfgSrc),
+    'config.js 的 idleReleaseSec 默认应为 60s（早退会退款，挂着才是花钱）',
   )
   assert.ok(
-    /idle_release_sec:\s*600/.test(yamlSrc),
-    'config.example.yaml 的 idle_release_sec 默认应为 600s',
+    /idle_release_sec:\s*60/.test(yamlSrc),
+    'config.example.yaml 的 idle_release_sec 默认应为 60s',
+  )
+  // 退款追问必须是**常驻**行为：挂起的 pending 退款要靠重放 DELETE 取回执。
+  // 少了这条断言，后来的人很容易把"只在启动扫一次"当成够用（那正是旧版的做法，
+  // 也是"退款总额永远是 0"的工程成因之一）。
+  const handlesSrc = fs.readFileSync(
+    new URL('../src/session-handles.js', import.meta.url),
+    'utf8',
+  )
+  assert.ok(
+    /async sweepPendingRefunds/.test(handlesSrc),
+    '会话句柄库必须提供 sweepPendingRefunds（周期性追问待结算退款）',
+  )
+  const serveSrc2 = fs.readFileSync(
+    new URL('../bin/serve.js', import.meta.url),
+    'utf8',
+  )
+  assert.ok(
+    /sweepPendingRefunds/.test(serveSrc2) && /setInterval/.test(serveSrc2),
+    'serve.js 必须周期性调用 sweepPendingRefunds——只扫一次等于放弃那笔预扣',
   )
   // 控制台必须给出"推荐值"（按账号池实时算），而不是让用户猜
   assert.ok(
@@ -5726,6 +5750,77 @@ server.close()
     if (/\bpath\.(?:basename|join|resolve|dirname|extname|sep)\b/.test(src)) {
       assert.ok(usesNodePath, `${name}: 用了 path.* 就必须 import path from 'node:path'`)
     }
+  }
+}
+
+
+// (REFUND-QUEUE) 待结算退款队列：这是**钱**，行为必须钉死。
+//
+// 语义（见 .agents/notes/implemented/bug-fix/2026-09-13-refund-reversed.md）：
+//   - 上游回 freebucksRefundPending => 结算未完成，**入队并持续重放 DELETE 追问**；
+//   - 只有拿到终态回执（含 refund: 0）才允许出队；
+//   - 重放失败 / 账号没了 / 仍 pending，一律**保留记录**——绝不静默丢弃那笔预扣。
+{
+  const refundDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-refund-'))
+  const refundFile = path.join(refundDir, 'sessions.json')
+  const store = new SessionHandleStore(refundFile)
+  try {
+    store.notePendingRefund('k1', 'inst-1', 'm/x')
+    assert.equal(store.listPendingRefunds().length, 1, 'pending 应入队')
+    assert.equal(
+      JSON.parse(fs.readFileSync(refundFile, 'utf8')).pendingRefunds.length,
+      1,
+      'pending 必须落盘——否则进程重启就再也追不回那笔预扣',
+    )
+
+    let body = { status: 'ended', freebucksRefundPending: true }
+    const upstream = { freebuffSession: async () => body }
+    let r = await store.sweepPendingRefunds(() => upstream)
+    assert.equal(r.pending, 1, '仍 pending 时应计入 pending')
+    assert.equal(store.listPendingRefunds().length, 1, '仍 pending 时绝不出队')
+
+    // 终态退 0：也是终态，必须出队
+    body = { status: 'ended', freebucksRefund: 0 }
+    let settledInfo = null
+    r = await store.sweepPendingRefunds(() => upstream, {
+      onSettled: (i) => { settledInfo = i },
+    })
+    assert.equal(r.settled, 1, '退 0 是终态')
+    assert.equal(store.listPendingRefunds().length, 0, 'settled 应出队')
+    assert.equal(settledInfo.refund, 0)
+
+    // 非终态非 pending：保留，绝不当作退 0
+    store.notePendingRefund('k2', 'inst-2', 'm/y')
+    body = { status: 'active' }
+    r = await store.sweepPendingRefunds(() => upstream)
+    assert.equal(r.pending, 1, '既非终态也非 pending 时必须保留')
+    assert.equal(store.listPendingRefunds().length, 1)
+
+    // 账号已删/凭据变更：跳过但保留
+    r = await store.sweepPendingRefunds(() => null)
+    assert.equal(r.skipped, 1)
+    assert.equal(store.listPendingRefunds().length, 1, '无凭据也不能丢记录')
+
+    // 重放失败：保留
+    const boom = { freebuffSession: async () => { throw new Error('ECONNRESET') } }
+    r = await store.sweepPendingRefunds(() => boom)
+    assert.equal(r.failed, 1)
+    assert.equal(store.listPendingRefunds().length, 1, '重放失败也必须保留')
+
+    // 重启后从盘里恢复（这是「跨重启追问」的全部依据）
+    store.notePendingRefund('k3', 'inst-3', 'm/z')
+    const reloaded = new SessionHandleStore(refundFile)
+    assert.equal(
+      reloaded.listPendingRefunds().length,
+      2,
+      '重启后待结算退款队列必须还在',
+    )
+
+    // drop 事件同时清 orphan 与 pending（钱已回到手）
+    reloaded.handleEvent({ type: 'drop', key: 'k3', instanceId: 'inst-3' })
+    assert.equal(reloaded.listPendingRefunds().length, 1)
+  } finally {
+    fs.rmSync(refundDir, { recursive: true, force: true })
   }
 }
 

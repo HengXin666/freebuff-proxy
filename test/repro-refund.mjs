@@ -1,11 +1,19 @@
 /**
  * 退款决定性实验：同时测两套账（session units vs Freebucks）。
  *
- * 结论（2026-09-13，见 docs/account-scheduling-and-refund.md §3）：
+ * 结论（2026-09-13，**当天内经历一次反转**，见 docs/account-scheduling-and-refund.md §3）：
  *   早退 DELETE 会按实际占用比例退还 **session units**（rateLimitsByModel.recentCount），
- *   但 **Freebucks 的整小时预扣一分都不退**（freebucksRefund 恒为 0 / 长期 pending）。
+ *   **并且同样退还 Freebucks 的未用部分**——回执 `freebucksRefund` 是终态金额，
+ *   `freebucksRefundPending` 表示**结算未完成**（要用同一个 instanceId 重放 DELETE 取回执），
+ *   **不是"不退"**。
  *
- * 这个脚本就是得出该结论的可复现协议：
+ * ⚠️ 本脚本的默认参数（HOLD_MS=3 分钟、POLL_MS=20 分钟）**不足以区分**"按比例退但结算是 0"
+ * 与"结构上不退"——两者在这两个时间点上的预测完全一致，早期版本正是据此得出了错误结论。
+ * 要复现"退得回来"，请把 HOLD_MS 调到接近整个会话窗口（如 3300000 ≈ 55 分钟），
+ * 让占用足够长、结算窗口真正走完。
+ *
+ * 这个脚本的协议：
+ *   T0 GET 基线 -> T1 POST admit -> T2 admit 后 GET（看预扣）
  *   T0 GET 基线 -> T1 POST admit -> T2 admit 后 GET（看预扣）
  *   -> T3 持有一段时间 -> T4 DELETE -> T5 按官方节奏每 3s 重放 DELETE
  *   -> T6 GET 终态，对比两个计数器。

@@ -1,0 +1,5 @@
+{"t":"+    1s","ms":1243,"ev":"baseline","arm":"X-3min","email":"<account-email>","balance":25,"spent":0,"remaining":25,"limit":25,"units":0,"status":"none"}
+{"t":"+    2s","ms":1755,"ev":"baseline","arm":"Y-50min","email":"<account-email>","balance":25,"spent":0,"remaining":25,"limit":25,"units":0,"status":"none"}
+{"t":"+    2s","ms":2470,"ev":"admit","arm":"X-3min","http":200,"inst":"5fe9028b-14b3-411d-8168-177450265444","statusBody":"active","err":null}
+{"t":"+    3s","ms":3118,"ev":"admit","arm":"Y-50min","http":200,"inst":"0392d67e-623f-43e0-acbd-246214b6937e","statusBody":"active","err":null}
+{"t":"+  184s","ms":184313,"ev":"delete","arm":"X-3min","http":200,"pending":true,"status":"ended","raw":"{\"status\":\"ended\",\"freebucksRefundPending\":true}"}

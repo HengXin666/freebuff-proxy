@@ -52,9 +52,12 @@
 
 ## 计费与定价（Freebucks）
 
-上游按 **Freebucks（FB）** 计费：每个模型有**单价**（N FB/小时），**admit 一次就按整小时买断**
-——之后用 3 秒还是 59 分钟扣的一样多，**提前 DELETE 不退**（只退还 `session_units` 每日模型额度）。
-所以**花钱次数 = admit 次数**，省钱只能靠少开会话。每日池在**太平洋午夜**重置。
+上游按 **Freebucks（FB）** 计费：每个模型有**单价**（N FB/小时），admit 时**按整小时单价预扣**，
+提前 `DELETE` 会把**未用部分按实际占用时长退回来**（回执 `freebucksRefund`；
+`freebucksRefundPending` = 结算未完成，需要用同一个 `instanceId` 重放 DELETE 取回执，
+**不是"不退"**）。所以挂着的空闲会话是在花钱，空闲释放既腾槽位也省钱。
+每日池在**太平洋午夜**重置。本页旧版曾写"提前 DELETE 不退"——那是**证据不足的误判，已反转**
+（见 [account-scheduling-and-refund.md](./docs/account-scheduling-and-refund.md) §3）。
 
 **官方没有一份可引用的静态价格表**：定价由上游放在每次 session 响应的 `freebucks.prices`
 里（模型 → FB/小时），这份「按模型」的价目在公开网页上并不提供。所以本服务**不写死价格**，

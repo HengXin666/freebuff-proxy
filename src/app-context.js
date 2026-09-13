@@ -1328,6 +1328,48 @@ export class AccountRuntimes {
     return this.handleStore.cleanupOrphans(resolve, opts)
   }
 
+  /**
+   * 扫尾：把上次进程遗留 / 本次释放失败的会话句柄逐个 DELETE 取回执。
+   * 失败的保留在 sessions.json 里等下次机会——绝不静默丢弃。
+   *
+   * ⚠️ **必须周期性调用，不能只在启动时调一次。** 上游对"提前结束"的会话会回
+   * `freebucksRefundPending: true`——它的语义是"最终用量还没算完，用同一个 instance
+   * 再问一次回执"，**不是"不退"**（这层误解曾让我们得出错误结论并发版，见
+   * docs/account-scheduling-and-refund.md §3 的纠错）。官方客户端在 pending 期间
+   * **每 3 秒重放**直到拿到终态；只在启动时扫一次 = 进程不重启就再也没人问过，
+   * 那笔已经预扣的 Freebucks 会一直挂在 pending 里。
+   * @param {{budgetMs?: number}} [opts] 本次扫尾的总预算（启动路径必须传，
+   *   否则一个连不通的上游能把启动卡住）。
+   * @returns {Promise<{cleaned: number, failed: number, skipped: number, deferred: number}>}
+   */
+  async cleanupOrphanSessions(opts = {}) {
+    const resolve = (key) => {
+      try {
+        return this.get(key)?.upstream || null
+      } catch {
+        return null
+      }
+    }
+    return this.handleStore.cleanupOrphans(resolve, opts)
+  }
+
+  /**
+   * **追问待结算退款**（钱，不是槽位）：对每个挂起的 instance 重放一次 DELETE
+   * 取终态回执，拿到才出队。由 serve.js 的低频定时器周期调用，进程不重启也会
+   * 持续追问——这是"退款到底回没回来"能否成立的关键工程条件。
+   * @param {{budgetMs?: number}} [opts]
+   * @returns {Promise<{settled:number, pending:number, failed:number, skipped:number, deferred:number}>}
+   */
+  async sweepPendingRefunds(opts = {}) {
+    const resolve = (key) => {
+      try {
+        return this.get(key)?.upstream || null
+      } catch {
+        return null
+      }
+    }
+    return this.handleStore.sweepPendingRefunds(resolve, opts)
+  }
 
   /**
    * 严格释放全部账号（「断开全部连接」/「重启服务」/进程退出用）：

@@ -632,7 +632,7 @@ export function createProxyHandler(ctx) {
     const skipKeys = new Set()
     /**
      * 本次下游请求允许新建的上游会话数（Freebucks 计费单位）。
-     * 上游 admit 一次就按整小时买断（早退不退，见 docs/account-scheduling-and-refund.md §3），
+     * 上游按整小时单价预扣、早退按实际占用退还（见 docs/account-scheduling-and-refund.md §3），
      * 旧行为在报错时把「账号数+1」个账号挨个 admit 一遍，一次故障就买断好几条整小时
      * （issue #7）。复用已有热 session 不消耗预算。
      */
@@ -1031,7 +1031,7 @@ export function createProxyHandler(ctx) {
           //
           // 同时**必须把该账号的会话早退 DELETE 掉**：请求已经不会再用这条
           // 会话了，留着只会白占上游会话槽位（一个账号同时只有一条 session 且
-          // 绑定模型），换模型时会被它挡住。注意早退**不退 Freebucks**。
+          // 绑定模型），换模型时会被它挡住。早退会退还未用时长（越早越好）。
           // 释放失败也不丢句柄（SessionManager
           // 会保留 instanceId 并重试，sessions.json 里还有一份）。
           if (lastKey) {

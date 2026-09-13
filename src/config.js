@@ -54,22 +54,26 @@ const DEFAULTS = {
     reAdmitLeadSec: 60,
     // 免费模型（pool 非 premium）的提前切换阈值（秒）：会话剩余不足该值时
     // 不再调度到该会话上，提前 re-admit 换全新会话（默认 60s = 1 分钟）。
-    // Freebucks 计费（2026-09）：按模型单价（N/h）× 实际占用时长结算，admit
-    // 时按整小时预占、提前 DELETE 把未用时长退回（freebucksRefund）。所以提前
-    // re-admit 只是把当前这条的剩余时长换成新计费行——尽量少换、够用就复用。
+    // Freebucks 计费（2026-09，见 docs/account-scheduling-and-refund.md §3）：
+    // 每条 session 按整小时单价**预扣**，提前 DELETE 会按实际占用时长**退还**
+    // 未用部分（freebucksRefund 回执；pending = 结算未完成，需用同一 instance
+    // 重放 DELETE 取回执，不是"不退"）。所以提前 re-admit 只把当前这条换成新
+    // 计费行，但每条都有结算开销——够用就复用，别无谓空转。
     freeModelReAdmitLeadSec: 60,
     pollIntervalSec: 30,
     admitTimeoutMs: 30_000,
     // 空闲自动释放（秒）：会话在途请求归零后，空闲超过该时长就早退 DELETE。
-    // ⚠️ 2026-09-13 实测结论（docs/account-scheduling-and-refund.md §3）：
-    // 早退**不退还 Freebucks**。admit 一次 = 实付整小时单价，之后用 3 秒还是
-    // 59 分钟扣的一样多；DELETE 只退还 session_units（每日模型额度），不退款。
-    // 所以「空闲早退省钱」是错的——频繁释放只会**反复买新会话**。
-    // 默认 600s（2026-09-13 由 60s 上调）：把交互式停顿留在同一会话里，
-    // 减少 admit 次数（admit 次数 = 花钱次数）。
-    // 0 = 关闭释放（最省 admit，会话留到自然过期；代价是换模型要等）。
+    // ⚠️ 结论已于 2026-09-13 反转（见 docs/account-scheduling-and-refund.md §3）：
+    // 早退 DELETE **会按实际占用时长退还 Freebucks**（回执 freebucksRefund；
+    // freebucksRefundPending = 结算未完成，不是"不退"）。上游用户实测（issue
+    // #1337）退到每日池且可跨日叠加，官方 CLI 在 pending 期间每 3s 重放直到拿到
+    // 终态。
+    // 因此这里释放**既腾槽位也省钱**：挂着的空闲会话在按小时计价，越早释放越省。
+    // 默认 60s（2026-09-13 由错误的 600s 改回）：短空闲即释放，避免为一段
+    // 用不上的时间付费。设太大会让空闲会话持续计费。
+    // 0 = 关闭释放（会话留到自然过期；代价是空转时长照付 + 换模型要等）。
     // 控制台「额度保护」可调（5s..24h）。
-    idleReleaseSec: 600,
+    idleReleaseSec: 60,
   },
   limits: {
     maxConcurrentRequests: 32,
@@ -111,11 +115,11 @@ const DEFAULTS = {
     // 默认 200ms）。0 = 关闭（最低延迟）。
     requestJitterMs: 200,
     // 一个下游请求最多新建几个上游会话（Freebucks 计费单位）。
-    // 上游按整小时买断计费：admit 一次就扣整小时单价，早退 DELETE **不退**
-    // Freebucks（2026-09-13 实测，见 docs/account-scheduling-and-refund.md §3）。旧行为在
-    // 报错时把「账号数 +1」个账号挨个 admit 一遍——一次故障就买断好几条整小时
-    // （issue #7）。默认 2：首个账号 + 一次换号兜底；复用已有热
-    // session 不消耗预算。0 = 不限制（仅保留给调试）。
+    // 上游按整小时单价预扣：admit 一次就扣整小时单价，但早退 DELETE 会按实际
+    // 占用把未用部分**退回来**（见 docs/account-scheduling-and-refund.md §3）。
+    // 旧行为在报错时把「账号数 +1」个账号挨个 admit 一遍——一次故障就同时占用
+    // 好几条整小时额度（issue #7）。默认 2：首个账号 + 一次换号兜底；复用已有
+    // 热 session 不消耗预算。0 = 不限制（仅保留给调试）。
     maxNewSessionsPerRequest: 2,
   },
   logging: {

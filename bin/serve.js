@@ -336,6 +336,21 @@ async function main() {
         })
       })
 
+    // **退款追问**：待结算的挂起退款必须持续追，不能只等下次重启。
+    // 上游要求用同一个 instanceId 重放 DELETE 才给终态回执，且结算窗口可能跨
+    // 分钟级；只扫一次 = 进程活着就永远问不到那笔钱（见 docs/account-scheduling-and-refund.md §3）。
+    // 低频（5 分钟）、有界（30s 预算）、unref（不挡进程退出）。
+    const refundSweeper = setInterval(() => {
+      void ctx.runtimes
+        .sweepPendingRefunds({ budgetMs: 30_000 })
+        .catch((err) => {
+          logger.warn('pending refund sweep failed (continuing)', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        })
+    }, 5 * 60_000)
+    if (refundSweeper.unref) refundSweeper.unref()
+
     if (ctx.authEmail) {
       logger.info('upstream auth ready', {
         account: ctx.authEmail,

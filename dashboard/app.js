@@ -1043,15 +1043,15 @@ async function renderProxySettings(view) {
     el('div', { class: 'row spread' }, [
       el('div', {}, [
         el('h3', { style: 'margin:0 0 2px' }, '额度保护（Freebucks 计费）'),
-        el('span', { class: 'muted' }, '上游 2026-09 改版：每个模型有单价（N FB/小时），admit 一次就按整小时单价预扣，之后用 3 秒还是 59 分钟扣的一样多。'),
+        el('span', { class: 'muted' }, '上游 2026-09 改版：每个模型有单价（N FB/小时），admit 时按整小时单价预扣，早退时按实际占用时长把未用部分退还。'),
       ]),
     ]),
     el('div', { class: 'muted', style: 'margin-top:6px;line-height:1.6' }, [
-      '⚠️ 更正（2026-09-13 实测）：早退 DELETE 不退还 Freebucks——它只把 session_units（每日模型额度）按实际占用时长重算退回去。所以：',
-      el('b', {}, '花钱次数 = admit 次数'),
-      '；省钱只能靠「少开会话、尽量复用同一条热会话」，而不是「及时早退」。空闲释放仍有用，但作用变成了释放上游会话槽位（一个账号同时只有一条 session 且绑定模型）。',
+      '早退 DELETE 会按实际占用时长**退还** Freebucks 未用部分（回执 freebucksRefund；freebucksRefundPending = 结算未完成，不是「不退」）。所以：',
+      el('b', {}, '挂着的空闲会话是在花钱'),
+      '——空闲释放既腾出上游会话槽位（一个账号同时只有一条 session 且绑定模型），也把没用上的时长换回点数。释放后若上游回 pending，本服务会用同一个 instanceId 持续重放 DELETE 直到拿到终态回执。',
     ]),
-    el('div', { class: 'muted', style: 'margin-top:6px' }, '依据：docs/account-scheduling-and-refund.md §3（受控实验：预扣 units +1.0 / FB +5，DELETE 后重放 100 次共 555s 金额字段始终不出现）'),
+    el('div', { class: 'muted', style: 'margin-top:6px' }, '依据：docs/account-scheduling-and-refund.md §3（2026-09-13 结论反转：上游 issue #1337 实测退款到账、官方 FreebuffDesktopRefundInfo 的 reversal ledger、参考实现「refunded on early DELETE」）'),
     el('div', { class: 'row', style: 'margin-top:12px;gap:24px;flex-wrap:wrap' }, [
       el('div', {}, [
         el('label', { style: 'margin:0 0 4px' }, '空闲自动释放（秒，0 = 关闭；最小 5）'),
@@ -1101,7 +1101,7 @@ async function renderProxySettings(view) {
     ]),
     el('div', { class: 'muted', id: 'idle-release-hint', style: 'margin-top:8px' },
       idleReleaseSec > 0
-        ? `当前：会话空闲 ${idleReleaseSec}s 后释放（只退 session_units，不退 Freebucks）· 一个请求最多新建 ${maxNewSessions || '不限'} 个上游会话`
+        ? `当前：会话空闲 ${idleReleaseSec}s 后释放（按实际占用退还未用时长）· 一个请求最多新建 ${maxNewSessions || '不限'} 个上游会话`
         : `当前：空闲不释放（会话留到自然过期，最省 admit；代价是换模型要等释放）· 一个请求最多新建 ${maxNewSessions || '不限'} 个上游会话`),
     el('div', { id: 'idle-release-advice', style: 'margin-top:10px;padding:10px;border-radius:8px;background:rgba(255,196,0,.08);border:1px solid rgba(255,196,0,.25)' }, [
       el('div', { style: 'font-weight:600;margin-bottom:4px' }, '推荐值（按当前账号池实时算）'),
@@ -1212,21 +1212,21 @@ function updateSwitchLabel(input) {
 /**
  * 「空闲自动释放」推荐值：按当前账号池的真实模型分布算，而不是拍脑袋给个数。
  *
- * 为什么这个值需要权衡（2026-09-13 实测结论，见 docs/account-scheduling-and-refund.md §3）：
- *   - 早退 DELETE **不退 Freebucks**。admit 一次 = 实付整小时单价。
- *     所以「释放后再来请求」= 又买一小时，释放是**有代价**的；
- *   - 但一个账号同时只能有一条 session，且 session **绑定模型**。
- *     模型种类越多、账号越少，slot 越紧张，越需要及时释放；
- *   - 因此：模型集中在少数账号（每种模型都有大量请求复用同一条热会话）时,
- *     把空闲释放调**长**（少 admit = 省钱）；模型种类接近账号数（几乎每个账号
- *     都在被不同模型来回抢）时调**短**（否则换模型要干等释放）。
+ * 为什么这个值需要权衡（2026-09-13 结论反转，见 docs/account-scheduling-and-refund.md §3）：
+ *   - 早退 DELETE **会按实际占用时长退还 Freebucks**（未用部分）。所以挂着的空闲
+ *     会话**是在花钱**——单看钱，越早释放越省；
+ *   - 但一个账号同时只能有一条 session，且 session **绑定模型**。释放之后再来的请求
+ *     要**重新 admit**（admit 往返 + 一小段自己的占用），释放太勤也有摩擦成本；
+ *   - 因此：模型集中在少数账号（同一条热会话被反复复用）时，释放晚一点无所谓；
+ *     模型种类接近账号数（几乎每个账号都在被不同模型来回抢）时，更要及时释放，
+ *     否则换模型要干等，而等待本身不产生价值、还会让后续请求排队。
  *
- * 返回 { sec, why }；sec 已夹在 300..1800（5 分钟~30 分钟）这个保守区间内。
+ * 返回 { sec, why }；sec 已夹在 60..600（1 分钟~10 分钟）这个保守区间内。
  */
 function idleReleaseAdvice(accounts) {
   const pool = accounts.length
   if (!pool) {
-    return { sec: 600, why: '还没有账号，先给默认值 10 分钟。导入账号后这里会按真实模型分布重新计算。' }
+    return { sec: 60, why: '还没有账号，先给默认值 1 分钟。导入账号后这里会按真实模型分布重新计算。' }
   }
   const liveModels = new Set(
     accounts.map((a) => a.session && a.session.live && a.session.model).filter(Boolean),
@@ -1236,21 +1236,20 @@ function idleReleaseAdvice(accounts) {
   let sec
   let why
   if (distinct === 0) {
-    sec = 600
-    why = `当前 ${pool} 个账号都没有活跃会话，无从判断模型分布，先用默认值 10 分钟。有会话后会自动重算。`
+    sec = 60
+    why = `当前 ${pool} 个账号都没有活跃会话，无从判断模型分布，先用默认值 1 分钟。有会话后会自动重算。`
   } else if (ratio >= 0.8) {
-    sec = 300
-    why = `${pool} 个账号上正在跑 ${distinct} 种不同模型（模型数已接近账号数），会话槽位很紧：调短到 5 分钟，让换模型时能尽快拿到槽位。注意这会增加 admit 次数（=花钱次数）。`
+    sec = 60
+    why = `${pool} 个账号上正在跑 ${distinct} 种不同模型（模型数已接近账号数），会话槽位很紧：保持 1 分钟，让换模型时能尽快拿到槽位；同时早退会把未用时长退回来。`
   } else if (ratio <= 0.5) {
-    sec = 1800
-    why = `${pool} 个账号上只跑 ${distinct} 种模型（模型集中在少数账号，热会话复用充分），可以调长到 30 分钟：少释放就少 admit，而每次 admit 都是实付整小时。`
+    sec = 300
+    why = `${pool} 个账号上只跑 ${distinct} 种模型（模型集中在少数账号，热会话复用充分），可以放宽到 5 分钟：减少 admit 往返，又不会让空闲会话挂太久白计费。`
   } else {
-    sec = 600
-    why = `${pool} 个账号上正在跑 ${distinct} 种模型，分布适中，10 分钟是兼顾「少 admit」和「槽位够用」的平衡点。`
+    sec = 120
+    why = `${pool} 个账号上正在跑 ${distinct} 种模型，分布适中，2 分钟是兼顾「少 admit 往返」和「不为空闲时长付费」的平衡点。`
   }
   return { sec, why }
 }
-
 /** 重算并刷新推荐值区块（保存设置后调用，不整页重建）。 */
 function renderIdleReleaseAdvice() {
   const row = $('#idle-release-advice .advice-actions')
@@ -1285,7 +1284,7 @@ async function applyIdleReleaseAdvice(sec) {
     const hint = $('#idle-release-hint')
     if (hint) {
       hint.textContent = sec > 0
-        ? `当前：会话空闲 ${sec}s 后释放（只退 session_units，不退 Freebucks）· 一个请求最多新建 ${b || '不限'} 个上游会话`
+        ? `当前：会话空闲 ${sec}s 后释放（按实际占用退还未用时长）· 一个请求最多新建 ${b || '不限'} 个上游会话`
         : `当前：空闲不释放（会话留到自然过期，最省 admit；代价是换模型要等释放）· 一个请求最多新建 ${b || '不限'} 个上游会话`
     }
     renderIdleReleaseAdvice()
@@ -1365,14 +1364,14 @@ async function saveQuotaProtectionSettings() {
     })
     state.lowBalanceThreshold = lb
     toast(v > 0
-      ? `额度保护已更新：空闲 ${v}s 后释放（不退 Freebucks）· 单请求最多 ${b || '不限'} 个新会话`
+      ? `额度保护已更新：空闲 ${v}s 后释放（按实际占用退还未用时长）· 单请求最多 ${b || '不限'} 个新会话`
       : `已关闭空闲释放（会话留到自然过期）· 单请求最多 ${b || '不限'} 个新会话`)
     // 阈值变了要重画账号分区（低额度分组可能刚被打开/关闭）
     try { await refreshAccountsCard() } catch { /* 表未挂载时忽略 */ }
     const hint = $('#idle-release-hint')
     if (hint) {
       hint.textContent = v > 0
-        ? `当前：会话空闲 ${v}s 后释放（只退 session_units，不退 Freebucks）· 一个请求最多新建 ${b || '不限'} 个上游会话`
+        ? `当前：会话空闲 ${v}s 后释放（按实际占用退还未用时长）· 一个请求最多新建 ${b || '不限'} 个上游会话`
         : `当前：空闲不释放（会话留到自然过期，最省 admit；代价是换模型要等释放）· 一个请求最多新建 ${b || '不限'} 个上游会话`
     }
     renderIdleReleaseAdvice()
@@ -1924,10 +1923,10 @@ function poolLabel(pool) {
 /**
  * Freebucks 计量展示（上游 2026-09 改版）。
  *
- * **口径 = 整小时买断**：admit 一次就按「模型单价（Freebucks/小时）」预扣整小时，
- * 早退 DELETE **不退 Freebucks**（2026-09-13 实测，见 docs/account-scheduling-and-refund.md
- * §3），只退还 session_units（每日模型额度）。所以这里不再说"今天用了几次
- * 会话"，而是直接回答「这个号还能用多久」：
+ * **口径 = 按小时单价预扣 + 早退按实际占用退还**：admit 时按「模型单价
+ * （Freebucks/小时）」预扣整小时，提前 DELETE 会把未用部分**退回来**（回执
+ * freebucksRefund；pending = 结算未完成，见 docs/account-scheduling-and-refund.md §3）。
+ * 这里不再说"今天用了几次会话"，而是直接回答「这个号还能用多久」：
  *   余额 N FB · 单价 N/h · ≈可用 M 分钟 · 今日 剩余/上限
  * 金额单位是 Freebucks，时长单位是分钟（<1 分钟显示秒）。
  */
@@ -1948,12 +1947,12 @@ function fmtFreebucks(fb, currentModel, lastRefund) {
         (dailyMin != null ? ` ≈ ${fmtDuration(dailyMin)}` : '') +
         `（重置 ${reset ? reset.toLocaleString() : '太平洋午夜'}）`
       : null,
-    `计费方式：admit 一次 = 按整小时单价预扣（用 3 秒和 59 分钟扣的一样多）`,
-    `早退 DELETE：只退 session_units（每日模型额度），Freebucks 不退`,
+    `计费方式：admit 按整小时单价预扣，早退按实际占用退还未用部分`,
+    `早退 DELETE：按实际占用退还 Freebucks 未用部分（pending 时持续重放追问）`,
     fb.wallet && fb.wallet.balance ? `钱包 ${fmtNum(fb.wallet.balance)}` : null,
     fb.quotaExempt ? '服务端配额豁免' : null,
     lastRefund && lastRefund.refund != null
-      ? `上次早退回执：Freebucks 退回 ${fmtNum(lastRefund.refund)}（期望 ${lastRefund.expected != null ? fmtNum(lastRefund.expected) : '—'}；实测恒为 0）`
+      ? `上次早退回执：Freebucks 退回 ${fmtNum(lastRefund.refund)}（期望 ${lastRefund.expected != null ? fmtNum(lastRefund.expected) : '—'}）`
       : null,
   ].filter(Boolean).join('\n')
   const low = price != null && !fb.quotaExempt && Number(fb.balance) < price
@@ -2035,7 +2034,7 @@ function fmtQuota(quota, fb) {
     const tip = [
       model,
       hasPrice
-        ? `单价 ${fmtNum(price)} FB/小时（admit 一次按整小时买断；提前释放不退 Freebucks）`
+        ? `单价 ${fmtNum(price)} FB/小时（admit 按整小时预扣；提前释放按实际占用退还未用部分）`
         : '上游未返回该模型单价（freebucks.prices 无此模型）',
       minutes != null
         ? `今日池余额 ${fmtNum(poolLeft)} FB → ≈ 可用 ${fmtDuration(minutes)}`

@@ -22,18 +22,22 @@ const DELETE_ATTEMPT_TIMEOUT_MS = 8_000
 /**
  * 上游会话句柄的**持久化索引**（/data/sessions.json）。
  *
- * 为什么必须有它：Freebuff 的 session 是「admit 一次就按整小时买断」的计费行——
- * 早退 DELETE 不退 Freebucks（2026-09-13 实测，见 docs/account-scheduling-and-refund.md §3）。
+ * 为什么必须有它：Freebuff 的 session 按整小时单价**预扣**，早退 DELETE 会按实际
+ * 占用时长**退还**未用部分（回执 freebucksRefund；pending = 结算未完成，不是"不退"；
+ * 见 docs/account-scheduling-and-refund.md §3）。
  * 句柄（instanceId）只存在内存里时，一次进程重启 / 换容器 / /data 重挂，活着的会话
- * 就变成**无法寻址的孤儿**：既删不掉，也会一直占着上游会话槽位（该账号再也 admit
- * 不了新模型）。所以每次 admit/释放都把句柄落盘，启动时按这份索引做一次扫尾 DELETE
- * 释放槽位，平时释放失败的句柄也留在里面等下次机会。
+ * 就变成**无法寻址的孤儿**：既删不掉（腾不出槽位），那笔已预扣的钱也**永远取不回来**
+ * （回执必须用同一个 instanceId 重放 DELETE 才能拿到）。所以每次 admit/释放都把句柄
+ * 落盘，启动时按这份索引扫尾 DELETE 取回执，平时释放失败的句柄也留在里面等下次机会。
  *
  * 文件形如：
  *   { version:1, updatedAt, sessions:[{key,instanceId,model,admittedAt,expiresAt}],
  *     orphans:[{key,instanceId,model,admittedAt,expiresAt,note}] }
  * sessions = 本进程当前持有的活会话；orphans = DELETE 一直失败、暂时失联但仍
  * 需要继续尝试清理的句柄（绝不静默丢弃）。
+ *
+ * 待结算退款（`pendingRefunds`）的完整决策与证据见
+ * .agents/notes/implemented/bug-fix/2026-09-13-refund-reversed.md。
  *
  * **启动扫尾是有界的**：总预算 STARTUP_SWEEP_BUDGET_MS、单次 DELETE
  * DELETE_ATTEMPT_TIMEOUT_MS，超预算的句柄原样留下（信息不丢、只是不挡启动）。
@@ -50,8 +54,18 @@ export class SessionHandleStore {
     this.sessions = new Map()
     /** @type {Array<{key:string,instanceId:string,model?:string|null,admittedAt?:string|null,expiresAt?:string|null,note?:string}>} */
     this.orphans = []
+    /**
+     * 待结算退款队列：{"<key>\0<instanceId>": {key, instanceId, model, attempts,
+     * firstSeenAt, lastTriedAt}}。上游回 freebucksRefundPending 时入队，拿到终态
+     * 回执（含 0）才出队。
+     *
+     * 与 orphans 的分工：orphans 记"这个句柄得删"（槽位），本队列记"这笔钱得追"
+     * （退款）。两者高度重叠但现在都有独立用途——启动扫尾按 orphans 删，周期扫尾
+     * 按本队列追问退款。
+     */
+    this.pendingRefunds = new Map()
     /** 装载结果（'ok' | 'missing' | 'invalid'）。损坏 = 句柄索引丢失 = 上游会话
-     * 变成无法寻址的计费孤儿（删不掉、也释放不了槽位），必须在启动横幅里点名。 */
+     * 变成无法寻址的计费孤儿（删不掉、也释放不了槽位，退款也无从追起），必须在启动横幅里点名。 */
     this.loadStatus = 'missing'
     this.loadReason = null
     this.load()
@@ -93,6 +107,20 @@ export class SessionHandleStore {
           this.orphans.push({ ...normalize(s), note: s.note })
         } else {
           droppedItems.push(s)
+        }
+      }
+      for (const r of Array.isArray(raw?.pendingRefunds) ? raw.pendingRefunds : []) {
+        if (r && typeof r === 'object' && r.key && r.instanceId) {
+          this.pendingRefunds.set(refundKey(r.key, r.instanceId), {
+            key: r.key,
+            instanceId: r.instanceId,
+            model: r.model ?? null,
+            attempts: Number(r.attempts) || 0,
+            firstSeenAt: r.firstSeenAt ?? null,
+            lastTriedAt: r.lastTriedAt ?? null,
+          })
+        } else {
+          droppedItems.push(r)
         }
       }
       this.sessions.clear()
@@ -157,11 +185,18 @@ export class SessionHandleStore {
       this.save()
       return
     }
+    // 上游回 freebucksRefundPending：这笔钱还没结算完，**入队持续追问**。
+    // 不能只在内存里挂个定时器——进程重启就没了，那笔预扣再也追不回来。
+    if (ev.type === 'refund_pending' && ev.instanceId) {
+      this.notePendingRefund(key, ev.instanceId, ev.model ?? null)
+      return
+    }
     // 结算终于落地（或上游确认该 instance 已终结）：把排队中的 orphan 摘掉。
     // 少了这一步，orphan 会永远留在 sessions.json 里，每次进程启动都对着同一条
     // 早已结算的 instance 重放 DELETE（我的 (7.5) 回归用例就是这么抓到的）。
     if (ev.type === 'drop' && ev.instanceId) {
       this.dropOrphan(ev.instanceId)
+      this.dropPendingRefund(key, ev.instanceId)
     }
   }
 
@@ -173,6 +208,43 @@ export class SessionHandleStore {
   /** 待清理句柄（含本次与上次进程遗留）。 */
   listOrphans() {
     return [...this.orphans]
+  }
+
+  /** 待结算退款队列（含上次进程遗留）。 */
+  listPendingRefunds() {
+    return [...this.pendingRefunds.values()]
+  }
+
+  /**
+   * 记下一条**待结算退款**（上游回 freebucksRefundPending）。幂等：同一条
+   * instance 反复入队只累加 attempts，不产生重复项。
+   */
+  notePendingRefund(key, instanceId, model = null) {
+    if (!key || !instanceId) return
+    const k = refundKey(key, instanceId)
+    const prev = this.pendingRefunds.get(k)
+    this.pendingRefunds.set(k, {
+      key,
+      instanceId,
+      model: model ?? prev?.model ?? null,
+      attempts: (prev?.attempts ?? 0) + 1,
+      firstSeenAt: prev?.firstSeenAt ?? new Date().toISOString(),
+      lastTriedAt: new Date().toISOString(),
+    })
+    this.save()
+  }
+
+  /**
+   * 出队（**只在拿到终态回执后调用**——含退款 0）。
+   *
+   * 绝不因为"问了好几次还是 pending"就出队：pending 的语义是"最终用量还没算完"，
+   * 出队 = 主动放弃这笔已经预扣的 Freebucks。
+   */
+  dropPendingRefund(key, instanceId) {
+    if (!key || !instanceId) return false
+    const removed = this.pendingRefunds.delete(refundKey(key, instanceId))
+    if (removed) this.save()
+    return removed
   }
 
   /** 移除一条孤儿记录（清理成功后调用）。 */
@@ -272,6 +344,93 @@ export class SessionHandleStore {
     return { cleaned, failed, skipped, deferred }
   }
 
+  /**
+   * 周期扫尾：**追问所有待结算退款**，拿到终态回执才出队。
+   *
+   * 为什么必须有它（而不是只在启动时扫一次）：上游对提前结束的会话回
+   * `freebucksRefundPending`，要求**用同一个 instanceId 重放 DELETE** 取回执。
+   * 只在启动扫一次 = 进程不重启就再也没人问过，那笔预扣会永远挂在 pending 里。
+   * 参考实现（trefeon/freebuff-proxy）同样把这件事做成常驻的：单飞重放 + 手动
+   * Refresh 入口 + 夜间补跑。
+   *
+   * 与 cleanupOrphans 的分工：那个删句柄腾槽位，这个只追钱。两者共用一份预算，
+   * 且都**绝不**因为"还是 pending"就丢弃记录。
+   * @param {(key: string) => any} resolveUpstream
+   * @param {{budgetMs?: number, onSettled?: (info: {key: string, instanceId: string, refund: number | null}) => void}} [opts]
+   * @returns {Promise<{settled: number, pending: number, failed: number, skipped: number, deferred: number}>}
+   */
+  async sweepPendingRefunds(resolveUpstream, opts = {}) {
+    const budgetMs = Number.isFinite(opts.budgetMs)
+      ? Number(opts.budgetMs)
+      : STARTUP_SWEEP_BUDGET_MS
+    const deadline = Date.now() + budgetMs
+    const list = this.listPendingRefunds()
+    let settled = 0
+    let pending = 0
+    let failed = 0
+    let skipped = 0
+    let deferred = 0
+    for (const r of list) {
+      if (Date.now() >= deadline) {
+        deferred += 1
+        continue
+      }
+      const upstream = resolveUpstream?.(r.key)
+      if (!upstream) {
+        // 账号已删/凭据已换：没有 token 就问不了，记录留着（绝不静默丢弃）。
+        skipped += 1
+        continue
+      }
+      const attempt = () => {
+        const left = deadline - Date.now()
+        const ms = Math.max(250, Math.min(DELETE_ATTEMPT_TIMEOUT_MS, left))
+        return Promise.race([
+          upstream.freebuffSession('DELETE', { instanceId: r.instanceId, timeoutMs: ms }),
+          sleep(ms).then(() => {
+            throw new Error('DELETE 无响应（' + ms + 'ms 超时，记录保留）')
+          }),
+        ])
+      }
+      try {
+        const body = await attempt()
+        if (body?.freebucksRefundPending === true) {
+          // 还没算完：留在队列里等下一次（记一次尝试次数）。
+          this.notePendingRefund(r.key, r.instanceId, r.model)
+          pending += 1
+          continue
+        }
+        if (body?.status !== 'ended') {
+          // 既非终态也非 pending：保留记录（绝不当作退 0）。
+          pending += 1
+          continue
+        }
+        // 终态：没有金额字段就是退 0（vendor af898dc 口径），0 也是终态，可以收工。
+        const refund =
+          typeof body?.freebucksRefund === 'number' ? body.freebucksRefund : 0
+        this.dropPendingRefund(r.key, r.instanceId)
+        settled += 1
+        logger.info('pending refund settled', {
+          key: r.key,
+          instanceId: r.instanceId,
+          refund,
+          attempts: r.attempts,
+        })
+        opts.onSettled?.({ key: r.key, instanceId: r.instanceId, refund })
+      } catch (err) {
+        failed += 1
+        logger.warn('pending refund replay failed; record kept', {
+          key: r.key,
+          instanceId: r.instanceId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    if (settled || pending || failed || skipped || deferred) {
+      logger.info('pending refund sweep done', { settled, pending, failed, skipped, deferred })
+    }
+    return { settled, pending, failed, skipped, deferred }
+  }
+
   save() {
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true })
@@ -280,6 +439,7 @@ export class SessionHandleStore {
         updatedAt: new Date().toISOString(),
         sessions: this.list(),
         orphans: this.listOrphans(),
+        pendingRefunds: this.listPendingRefunds(),
       }
       const tmp = `${this.file}.tmp`
       fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), { mode: 0o600 })
@@ -293,6 +453,12 @@ export class SessionHandleStore {
       })
     }
   }
+}
+
+/** 待结算退款队列的键：一个账号上同一条 instance 只该有一条记录。 */
+function refundKey(key, instanceId) {
+  // 用 NUL 分隔（与冷却键同约定）：uuid/email 都不含它，不会撞键。
+  return key + String.fromCharCode(0) + instanceId
 }
 
 function normalize(s) {

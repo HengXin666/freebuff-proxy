@@ -1,0 +1,2 @@
+{"at":"2026-09-13T17:49:13.864Z","arm":"X-3min","email":"<account-email>","balance":20,"spent":5,"remaining":20,"limit":25,"pending":true,"receipt":"{\"status\":\"ended\",\"freebucksRefundPending\":true}"}
+{"at":"2026-09-13T17:49:14.853Z","arm":"Y-50min","email":"<account-email>","balance":20,"spent":5,"remaining":20,"limit":25,"pending":true,"receipt":"{\"status\":\"ended\",\"freebucksRefundPending\":true}"}
