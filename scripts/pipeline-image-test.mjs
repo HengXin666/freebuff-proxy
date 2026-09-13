@@ -200,6 +200,33 @@ function stopContainer(name) {
   run('docker', ['rm', '-f', name])
 }
 
+/**
+ * 删除 fixture 目录。
+ *
+ * **不能直接 rmSync**：容器以 root 启动，entrypoint 会把 /data chown 给 node(1000)。
+ * 本地开发机 uid 恰好是 1000（chown 等价于没变），但 CI runner 不是——宿主侧删除
+ * 会 EACCES，而它发生在 finally 里，会把整条流水线带崩（v1.12.0 的 CI 实测）。
+ * 所以优先借一个 root 容器删（用刚构建的镜像，不额外拉取），失败再退回本地删除。
+ * 任何情况下都不得抛：清理失败只是留个临时目录，不该判流水线失败。
+ */
+function removeFixture(dir, image) {
+  try {
+    const r = run('docker', [
+      'run', '--rm', '--entrypoint', 'rm',
+      '-v', `${dir}:/x`,
+      image, '-rf', '/x',
+    ])
+    if (r.status === 0) return
+  } catch {
+    // 落到下面的本地删除
+  }
+  try {
+    fs.rmSync(dir, { recursive: true, force: true })
+  } catch (err) {
+    console.warn(dim(`fixture 清理失败（不影响结论）: ${dir} — ${err?.code || err}`))
+  }
+}
+
 /** 等容器稳定：要么监听成功（healthz 200），要么进程退出/崩溃。 */
 async function waitForBoot(name, port, timeoutMs = BOOT_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs
@@ -294,8 +321,11 @@ async function runScenario(scenario, index, image) {
     return result
   } finally {
     stopContainer(name)
-    if (!keep) fs.rmSync(fixture.dir, { recursive: true, force: true })
-    else result.notes.push(dim(`fixture 保留在 ${fixture.dir}`))
+    if (keep) {
+      result.notes.push(dim(`fixture 保留在 ${fixture.dir}`))
+    } else {
+      removeFixture(fixture.dir, image)
+    }
     if (index >= 0) { /* 仅用于日志顺序 */ }
   }
 }
