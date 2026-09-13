@@ -46,7 +46,7 @@
 
 <p align="center"><img src="docs/images/03-users.webp" alt="用户管理"></p>
 
-> 截图来自真实运行的控制台（已对邮箱与 API Key 打码）。
+> 截图为控制台实际界面（用本地演示实例 + 模拟上游生成，账号与 API Key 均为占位值并已打码）。
 
 ---
 
@@ -137,7 +137,7 @@ docker compose down          # 停止（数据保留在 ./data）
 
 ### 想本地构建？（可选，开发调试用）
 
-默认使用 GHCR 预构建镜像（发版 `v*` tag 时自动推送，`latest` + 版本号 tag，如 `1.11.4`，semver 去 `v` 前缀）。
+默认使用 GHCR 预构建镜像（发版 `v*` tag 时自动推送，`latest` + 版本号 tag，如 `1.13.3`，semver 去 `v` 前缀）。
 想自己构建的话，把 compose 里的 `image: ghcr.io/hengxin666/freebuff-proxy:latest` 换成 `build: .`：
 
 ```yaml
@@ -163,8 +163,10 @@ docker compose up -d --build
 | **[多账号池与调度](docs/scheduling.md)** | 账号池自动切号、粘性优先（drain, not rotate）、Freebucks 额度口径与额度保护、工具签名兼容 |
 | **[连接治理与重启兜底](docs/connection-health.md)** | 上游卡死自动掐断（幽灵连接）、客户端断开即释放账号锁、全部断开重连、重启服务 |
 | **[代理支持](docs/proxy.md)** | 全局代理池、出口分配规则、代理优先级与连通性测试 |
+| **[多模态（图片输入）](docs/multimodal-image-input.md)** | 上游图片支持现状、哪些模型能看图、代理与 DSH 链路上的实际断点 |
 | **[下游 Agent 接入](docs/api.md)** | `chat/completions` 行为、全部路由表、开放 API 批量导入/删除账号 |
 | **[命令与本地开发](docs/development.md)** | npm 脚本、本地启动、CLI 登录、冒烟测试 |
+| **[截图生成](docs/screenshots.md)** | README 截图怎么用 mock 上游 + 无头 Chromium 复现（含打码） |
 | **[配置参考](docs/configuration.md)** | 每一项配置的唯一来源总表 |
 
 ---
