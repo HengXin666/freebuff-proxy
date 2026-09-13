@@ -440,7 +440,7 @@ export class SessionManager {
    * 按模型计费方式分层：
    * - 免费模型（daily/referral/limited_offer/helper）：剩余不足
    *   `session.free_model_re_admit_lead_sec`（默认 300s = 5 分钟）即不再调度——
-   *   免费会话按占用时长结算，过期中途被掐断会白占额度且响应截断，提前换最平滑；
+   *   免费会话 admit 一次即买断整小时，过期中途被掐断会让响应截断，提前换最平滑；
    * - 付费模型（premium）：每次 admit 都是计费会话，尽量用到接近过期
    *   （沿用 `session.re_admit_lead_sec`，默认 60s），避免频繁新建付费会话。
    * @param {string} model
@@ -655,7 +655,7 @@ export class SessionManager {
     const prev = this.session
     // 旧的 handle 还没删掉（DELETE 一直失败）而现在要换成新会话：不能就这么
     // 覆盖丢掉 instanceId——把它作为「待清理」交给上层落盘持久化，之后仍会
-    // 继续尝试 DELETE（否则它就成了无法寻址的孤儿，白扣整段占用时长）。
+    // 继续尝试 DELETE（否则它就成了无法寻址的孤儿，一直占着上游会话槽位）。
     if (
       this._releasePending &&
       this.hasLiveSlot(prev) &&
@@ -752,8 +752,8 @@ export class SessionManager {
   /**
    * 释放会话（早退 DELETE：退还 session_units，**Freebucks 不退**，见 §3）。
    *
-   * **失败时绝不丢弃 instanceId**：这条会话已经在上游计费，删不掉就等于让它
-   * 白扣满一小时，而且句柄没了就永远无法再删。所以失败时保留 session（连同
+   * **失败时绝不丢弃 instanceId**：句柄没了就永远无法再删，这条会话会一直占着
+   * 上游会话槽位（该账号再也 admit 不了别的新模型）。所以失败时保留 session（连同
    * instanceId）并置 _releasePending，由 _scheduleReleaseRetry 退避重试；即使
    * 重试耗尽也把句柄留在 sessions.json 里，交给下一次释放机会 / 下次进程启动
    * 的扫尾继续删。
@@ -884,8 +884,8 @@ export class SessionManager {
       })
       released = true
     } catch (err) {
-      // 关键：**保留 handle**（不动 this.session）。丢弃 instanceId 会让这条
-      // 已在上游计费的会话既删不掉也退不了款，只能白扣满一小时。
+      // 关键：**保留 handle**（不动 this.session）。丢弃 instanceId 会让这条会话
+      // 变成无法寻址的孤儿：既删不掉，也会一直占着该账号的上游会话槽位。
       this._releasePending = true
       logger.warn('session DELETE failed; keeping handle for retry', {
         instanceId,

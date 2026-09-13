@@ -221,8 +221,8 @@ export function createWebApi(deps) {
       logger.info('system restart requested via web console', {
         by: user.username,
       })
-      // 重启前先**严格释放所有上游会话**（拿 Freebucks 退款）：进程一退出
-      // 内存里的 instanceId 就没了，不放就等于让每条活会话白扣满占用时长。
+      // 重启前先**严格释放所有上游会话**：进程一退出内存里的 instanceId 就没了，
+      // 不放就会留下无法寻址的孤儿，白占上游会话槽位（早退不退 Freebucks）。
       // 释放失败也不阻塞重启——句柄已落盘 sessions.json，新进程启动扫尾。
       let release = { ok: true, released: 0, failed: [] }
       try {

@@ -149,7 +149,7 @@ async function main() {
   }
   if (payload.quotaExempt) console.log('  额度豁免   该账号 quotaExempt（不受上述池限制）')
   console.log()
-  console.log('  模型定价（按会话实际占用时长结算：admit 预占整小时，提前释放退未用时长）')
+  console.log('  模型定价（admit 一次按整小时买断；提前释放不退 Freebucks，只退还 session_units）')
   console.log()
   const w = Math.max(28, ...rows.map((r) => r.model.length))
   console.log(`  ${'模型'.padEnd(w)}  ${'FB/小时'.padStart(8)}  ${'今日池可跑'.padStart(12)}  ${'当前余额可跑'.padStart(12)}`)

@@ -292,9 +292,10 @@ async function main() {
     // 自定义模型列表（前端「模型管理」，覆盖内置目录），实时生效
     getCustomModels: () => modelStore.list(),
   })
-  // 启动扫尾：把上次进程遗留 / 上次释放失败的上游会话句柄 DELETE 掉拿退款。
+  // 启动扫尾：把上次进程遗留 / 上次释放失败的上游会话句柄 DELETE 掉。
   // 进程退出时内存里的 instanceId 就没了，不扫的话这些会话就是"无法寻址的
-  // 计费孤儿"，只能让上游白扣满一小时（Freebucks 按 session 时长结算）。
+  // 计费孤儿"，会一直占着该账号的上游会话槽位（早退不退 Freebucks，见
+  // docs/account-scheduling-and-refund.md §3）。
   try {
     const sweep = await ctx.runtimes.cleanupOrphanSessions()
     if (sweep.cleaned || sweep.failed || sweep.skipped) {
@@ -353,8 +354,8 @@ async function main() {
     loginFlows.shutdown()
     try {
       // strict：等到每条上游会话真的 DELETE 掉（或退避重试耗尽）再退出。
-      // 退出即失去内存里的 instanceId，不严格释放 = 白扣满一小时；失败的
-      // 句柄已落盘 sessions.json，下次启动扫尾继续删。
+      // 退出即失去内存里的 instanceId，不严格释放就会留下占着槽位的孤儿；
+      // 失败的句柄已落盘 sessions.json，下次启动扫尾继续删。
       const rel = await ctx.runtimes.shutdown({ strict: true })
       if (rel && rel.failed && rel.failed.length) {
         logger.warn('sessions still live at shutdown (handles persisted)', {

@@ -6,11 +6,12 @@ import { readJsonFileState, noteDataFile } from './util/json-store.js'
 /**
  * 上游会话句柄的**持久化索引**（/data/sessions.json）。
  *
- * 为什么必须有它：Freebuff 的 session 是「admit 即开始按小时计价、提前 DELETE
- * 才按未用时长退款」的计费行。句柄（instanceId）只存在内存里时，一次进程重启
- * / 换容器 / /data 重挂，活着的会话就变成**无法寻址的孤儿**——既删不掉也退不了
- * 款，只能让上游白扣满一小时。所以每次 admit/释放都把句柄落盘，启动时按这份
- * 索引做一次扫尾 DELETE（拿回退款），平时释放失败的句柄也留在里面等下次机会。
+ * 为什么必须有它：Freebuff 的 session 是「admit 一次就按整小时买断」的计费行——
+ * 早退 DELETE 不退 Freebucks（2026-09-13 实测，见 d
+ * 句柄（instanceId）只存在内存里时，一次进程重启 / 换容器 / /data 重挂，活着的会话
+ * 就变成**无法寻址的孤儿**：既删不掉，也会一直占着上游会话槽位（该账号再也 admit
+ * 不了新模型）。所以每次 admit/释放都把句柄落盘，启动时按这份索引做一次扫尾 DELETE
+ * 释放槽位，平时释放失败的句柄也留在里面等下次机会。
  *
  * 文件形如：
  *   { version:1, updatedAt, sessions:[{key,instanceId,model,admittedAt,expiresAt}],
@@ -29,7 +30,7 @@ export class SessionHandleStore {
     /** @type {Array<{key:string,instanceId:string,model?:string|null,admittedAt?:string|null,expiresAt?:string|null,note?:string}>} */
     this.orphans = []
     /** 装载结果（'ok' | 'missing' | 'invalid'）。损坏 = 句柄索引丢失 = 上游会话
-     * 变成无法寻址的计费孤儿（删不掉、退不了款），必须在启动横幅里点名。 */
+     * 变成无法寻址的计费孤儿（删不掉、也释放不了槽位），必须在启动横幅里点名。 */
     this.loadStatus = 'missing'
     this.loadReason = null
     this.load()

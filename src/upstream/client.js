@@ -335,7 +335,7 @@ export function createUpstreamClient(config, token, opts = {}) {
       }
       // 官方 CLI（callFreebuffSession）在已知 instance id 时 GET / DELETE 都带
       // x-freebuff-instance-id。DELETE 不带会被上游 400 instance_required——
-      // 会话删不掉 = 既不退款也不释放，账号在后台白扣一整小时（issue #7）。
+      // 会话删不掉 = 释放不掉，会一直占着该账号的上游会话槽位（issue #7）。
       if (method !== 'POST' && opts.instanceId) {
         headers[FREEBUFF_INSTANCE_HEADER] = opts.instanceId
       }

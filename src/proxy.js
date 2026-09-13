@@ -132,42 +132,42 @@ export function createProxyHandler(ctx) {
       req.url || '/',
       `http://${req.headers.host || 'localhost'}`,
     )
-    const path = url.pathname
+    const route = url.pathname
     const method = (req.method || 'GET').toUpperCase()
 
-    if (method === 'GET' && (path === '/healthz' || path === '/health')) {
+    if (method === 'GET' && (route === '/healthz' || route === '/health')) {
       sendJson(res, 200, { status: 'ok' })
       return
     }
 
     if (!authorize(req, res)) return
 
-    if (method === 'GET' && path === '/v1/models') {
+    if (method === 'GET' && route === '/v1/models') {
       await handleModels(res)
       return
     }
 
-    if (method === 'GET' && path === '/v1/freebuff/status') {
+    if (method === 'GET' && route === '/v1/freebuff/status') {
       await handleStatus(res)
       return
     }
 
-    if (method === 'GET' && path === '/v1/freebuff/accounts') {
+    if (method === 'GET' && route === '/v1/freebuff/accounts') {
       sendJson(res, 200, { object: 'list', data: runtimes.list() })
       return
     }
 
-    if (method === 'POST' && path === '/v1/freebuff/accounts/import') {
+    if (method === 'POST' && route === '/v1/freebuff/accounts/import') {
       await handleAccountsImport(req, res)
       return
     }
 
-    if (method === 'DELETE' && path === '/v1/freebuff/accounts') {
+    if (method === 'DELETE' && route === '/v1/freebuff/accounts') {
       await handleAccountsDelete(req, res)
       return
     }
 
-    if (method === 'POST' && path === '/v1/freebuff/session/end') {
+    if (method === 'POST' && route === '/v1/freebuff/session/end') {
       // End sessions on all cached runtimes (best-effort)
       const accounts = []
       for (const row of runtimes.list()) {
@@ -188,21 +188,21 @@ export function createProxyHandler(ctx) {
       return
     }
 
-    if (method === 'POST' && path === '/v1/chat/completions') {
+    if (method === 'POST' && route === '/v1/chat/completions') {
       await handleChatCompletions(req, res)
       return
     }
 
     // Auth-injected passthrough for other OpenAI-shaped /v1 routes only.
     // Chat completions are NOT handled here.
-    if (path.startsWith('/v1/')) {
+    if (route.startsWith('/v1/')) {
       await handleGenericPassthrough(req, res, url)
       return
     }
 
     sendJson(res, 404, {
       error: {
-        message: `No route for ${method} ${path}. Public API is under /v1.`,
+        message: `No route for ${method} ${route}. Public API is under /v1.`,
         type: 'invalid_request_error',
         code: 'not_found',
       },
@@ -632,9 +632,9 @@ export function createProxyHandler(ctx) {
     const skipKeys = new Set()
     /**
      * 本次下游请求允许新建的上游会话数（Freebucks 计费单位）。
-     * 上游按会话占用时长计费、admit 预占一次，旧行为在报错时把「账号数+1」
-     * 个账号挨个 admit 一遍，几个账号一起在后台白扣时长（issue #7）。
-     * 复用已有热 session 不消耗预算。
+     * 上游 admit 一次就按整小时买断（早退不退，见 docs/account-scheduling-and-refund.md §3），
+     * 旧行为在报错时把「账号数+1」个账号挨个 admit 一遍，一次故障就买断好几条整小时
+     * （issue #7）。复用已有热 session 不消耗预算。
      */
     const budgetSetting = settingsStore?.get?.()?.maxNewSessionsPerRequest
     const sessionBudget = {
@@ -1020,8 +1020,8 @@ export function createProxyHandler(ctx) {
             pendingRetryAfterMs = result.retryAfterMs ?? null
             pendingSwitchAccount = willSwitch
             pendingNoCooldown = result.noCooldown === true
-            // 换号前把失败账号的会话早退 DELETE（拿 Freebucks 退款）：
-            // 它已经在冷却，没人会再用它，留着只会白扣一整小时。
+            // 换号前把失败账号的会话早退 DELETE：它已经在冷却，没人会再用它，
+            // 留着只会白占一个上游会话槽位（该账号再也 admit 不了别的模型）。
             if (willSwitch && lastKey) runtimes.releaseSession(lastKey)
             continue
           }
@@ -1029,9 +1029,10 @@ export function createProxyHandler(ctx) {
           // 最后一次尝试也失败：把当前账号标记冷却（gate 瞬时问题 noCooldown 除外），
           // 避免下一个请求立刻又撞上同一个故障账号。
           //
-          // 同时**必须把该账号的会话早退 DELETE 掉拿退款**：请求已经不会再用
-          // 这条会话了，留着只能等空闲释放（默认 60s）甚至挂到过期——上游按
-          // session 时长计费，这就是白扣。释放失败也不丢句柄（SessionManager
+          // 同时**必须把该账号的会话早退 DELETE 掉**：请求已经不会再用这条
+          // 会话了，留着只会白占上游会话槽位（一个账号同时只有一条 session 且
+          // 绑定模型），换模型时会被它挡住。注意早退**不退 Freebucks**。
+          // 释放失败也不丢句柄（SessionManager
           // 会保留 instanceId 并重试，sessions.json 里还有一份）。
           if (lastKey) {
             const st = result.status
@@ -1042,7 +1043,7 @@ export function createProxyHandler(ctx) {
               st !== 429 &&
               result.noCooldown !== true
             if (!clientError || result.gateCode === 'stream_idle_timeout') {
-              logger.info('final attempt failed; releasing session early for refund', {
+              logger.info('final attempt failed; releasing session to free the slot', {
                 key: lastKey,
                 model: upstreamModel,
                 gateCode: result.gateCode,
@@ -1135,9 +1136,9 @@ export function createProxyHandler(ctx) {
               continue
             }
             // 最后一次尝试也失败（无重试机会）：会话不会再被用，立刻早退
-            // DELETE 退款，而不是等空闲释放/挂到过期白扣时长。
+            // DELETE 释放槽位，而不是等空闲释放 / 挂到过期。
             if (lastKey) {
-              logger.info('final upstream error; releasing session early for refund', {
+              logger.info('final upstream error; releasing session to free the slot', {
                 key: lastKey,
                 model: upstreamModel,
                 code: err.code,
@@ -1178,9 +1179,9 @@ export function createProxyHandler(ctx) {
             stack: err instanceof Error ? err.stack : undefined,
           })
           // 网络类错误、重试已耗尽：会话不会再被本次请求使用，立刻 DELETE
-          // 退款（失败也会保留句柄重试），别让它挂到过期白扣时长。
+          // 释放槽位（失败也会保留句柄重试），别让它挂到过期。
           if (lastKey) {
-            logger.info('final network error; releasing session early for refund', {
+            logger.info('final network error; releasing session to free the slot', {
               key: lastKey,
               model: upstreamModel,
               error: err instanceof Error ? err.message : String(err),

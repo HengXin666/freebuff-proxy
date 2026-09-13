@@ -4160,11 +4160,12 @@ server.close()
 }
 
 
-// ── Freebucks 计量改版（issue #7）：空闲早退退款 / 余额拦截 / 新会话预算 ──
+// ── Freebucks 计量改版（issue #7）：空闲释放 / 余额拦截 / 新会话预算 ──
 //
-// 上游 2026-09 起：session 从 admit 起按「单价(N/h) × 占用时长」计费，
-// admit 预占整小时、提前 DELETE 按未用时长退款。旧代理把 session 留到过期、
-// 报错时把每个账号都 admit 一遍，几个账号一起在后台白扣时长——下面回归针对它。
+// 上游 2026-09 起：admit 一次按「单价(N/h)」买断整小时，**早退 DELETE 不退**
+// （只退还 session_units；见 docs/account-scheduling-and-refund.md §3）。
+// 旧代理把 session 留到过期、报错时把每个账号都 admit 一遍——一次故障就买断
+// 好几条整小时。下面回归针对这两个问题。
 {
   const fbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-fb-'))
   saveAccountUser(fbDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
@@ -4347,7 +4348,7 @@ server.close()
     assert.equal(
       sessionPosts,
       postsBefore,
-      '余额不足不得再 admit 新会话（白扣占用时长）',
+      '余额不足不得再 admit 新会话（admit 一次即买断整小时）',
     )
   }
 
@@ -4390,7 +4391,7 @@ server.close()
     assert.equal(
       sessionPosts,
       postsBefore,
-      '余额不足不得经 forceReadmit 再 admit 新会话（白扣 + 触发封号判定）',
+      '余额不足不得经 forceReadmit 再 admit 新会话（再买断一小时 + 触发封号判定）',
     )
     fbRuntimes.clearCooldown('a', model)
   }
@@ -4595,7 +4596,7 @@ server.close()
 
 
   // (5) DELETE 失败**不得丢弃 instanceId**（issue：取消失败 = 会话再也删不掉、
-  //     白扣满一小时）。失败后句柄保留并退避重试，第二次成功才清空会话。
+  //     一直占着上游会话槽位）。失败后句柄保留并退避重试，第二次成功才清空会话。
   sessionPosts = 0
   sessionDeletes = 0
   deleteFailuresLeft = 1
@@ -4700,7 +4701,7 @@ server.close()
         sessionDeletes >= 2,
         '挂起时必须继续重放 DELETE，实际只发了 ' + sessionDeletes + ' 次',
       )
-      // 重放必须始终带同一个 instanceId（丢了就再也退不了款）
+      // 重放必须始终带同一个 instanceId（丢了就再也删不掉这条会话）
       for (const id of deleteInstanceIds) {
         assert.equal(id, instanceId, '重放必须带同一个 instanceId')
       }
@@ -5048,10 +5049,39 @@ server.close()
     new URL('../config.example.yaml', import.meta.url),
     'utf8',
   )
-  for (const [name, src] of [['dashboard/app.js', dashSrc], ['src/config.js', cfgSrc], ['config.example.yaml', yamlSrc]]) {
+  // 覆盖**整个仓库**：一开始只扫了 3 个文件，结果 README / bin/pricing.js /
+  // docs/deployment.md / proxy.js 等 10+ 处漏网——其中 README 与 CLI 输出
+  // 直接给用户看，错了最误导。改为遍历全仓（排除第三方与运行时数据）。
+  const STALE_COPY =
+    /提前\s*DELETE\s*退未用时长|早退退款|按未用时长退|退还未用时长|退未用时长|按实际占用时长结算|白扣|退不了款|免费会话按占用时长结算/
+  const SKIP_DIR = new Set(['node_modules', '.git', 'data', 'data-test'])
+  const walk = (dir, out = []) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (ent.isDirectory()) {
+        if (!SKIP_DIR.has(ent.name)) walk(path.join(dir, ent.name), out)
+      } else if (/\.(js|mjs|cjs|md|ya?ml|json)$/.test(ent.name)) {
+        out.push(path.join(dir, ent.name))
+      }
+    }
+    return out
+  }
+  const root = new URL('..', import.meta.url).pathname
+  const scanned = walk(root).filter((p) => !p.includes('/test/repro-'))
+  assert.ok(scanned.length > 20, `全仓扫描应覆盖足够多文件，实际 ${scanned.length}`)
+  for (const abs of scanned) {
+    const rel = path.relative(root, abs)
+    // 本文档（§3/§7）需要**引用**这些旧说法来解释纠错过程，豁免；
+    // smoke 自身含正则字面量，也豁免（它就是这个守卫）。
+    if (rel === 'docs/account-scheduling-and-refund.md') continue
+    if (rel === 'test/smoke.mjs') continue
+    // AGENTS.md 是最高优先级约定，规范上禁止改（需用户明确同意），故不扫。
+    // CLAUDE.md 是指向它的符号链接，同样豁免。
+    if (rel === 'AGENTS.md' || rel === 'CLAUDE.md') continue
+    const src = fs.readFileSync(abs, 'utf8')
+    const hit = src.match(STALE_COPY)
     assert.ok(
-      !/提前\s*DELETE\s*退未用时长|早退退款|按未用时长退|退还未用时长/.test(src),
-      `${name} 不得再出现"早退退款"的说法（实测不退 Freebucks）`,
+      !hit,
+      `${rel} 出现了已被证伪的说法「${hit && hit[0]}」（早退不退 Freebucks，见 docs/account-scheduling-and-refund.md §3）`,
     )
   }
   // 默认值必须远离 60s：短空闲释放 = 反复买新会话

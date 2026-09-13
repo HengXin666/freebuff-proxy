@@ -1941,7 +1941,7 @@ function fmtQuota(quota, fb) {
     const tip = [
       model,
       hasPrice
-        ? `单价 ${fmtNum(price)} FB/小时（计入今日 Freebucks 池，按实际占用时长结算）`
+        ? `单价 ${fmtNum(price)} FB/小时（admit 一次按整小时买断；提前释放不退 Freebucks）`
         : '上游未返回该模型单价（freebucks.prices 无此模型）',
       minutes != null
         ? `今日池余额 ${fmtNum(poolLeft)} FB → ≈ 可用 ${fmtDuration(minutes)}`

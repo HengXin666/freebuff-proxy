@@ -112,8 +112,8 @@ const DEFAULTS = {
     // 一个下游请求最多新建几个上游会话（Freebucks 计费单位）。
     // 上游按整小时买断计费：admit 一次就扣整小时单价，早退 DELETE **不退**
     // Freebucks（2026-09-13 实测，见 docs/account-scheduling-and-refund.md §3）。旧行为在
-    // 报错时把「账号数 +1」个账号挨个 admit 一遍，几个账号一起在后台白扣
-    // 一小时额度（issue #7）。默认 2：首个账号 + 一次换号兜底；复用已有热
+    // 报错时把「账号数 +1」个账号挨个 admit 一遍——一次故障就买断好几条整小时
+    // （issue #7）。默认 2：首个账号 + 一次换号兜底；复用已有热
     // session 不消耗预算。0 = 不限制（仅保留给调试）。
     maxNewSessionsPerRequest: 2,
   },
