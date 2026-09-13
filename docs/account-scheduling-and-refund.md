@@ -7,13 +7,15 @@
 > **一手证据来源（可自行核对）**：
 >
 > - **官方客户端开源源码** `github.com/CodebuffAI/freebuff`（公开快照；`npm i -g codebuff`
->   装的 CLI 与 `npm i freebuff` 同源）——本文关于**退款/计费语义**的结论主要来自它；
+>   装的 CLI 与 `npm i freebuff` 同源）——本文关于**计费语义**的结论来自它，但**它描述的是 `session_units` 那本账**（见 §3.1）；
 > - **本仓库代码**（`src/`、`bin/`）与 **`test/repro-*.mjs`** 复现脚本；
 > - **线上服务只读探测**：`GET /v1/freebuff/status`（管理员 key，不做任何写操作）；
 > - **rotator 独立账本**：`freebuff-rotator/rotator/LEDGER.md` + `state/ledger.json`。
 >
-> ⚠️ **本文第 3 节有一次公开的自我纠错**：早先结论「早退永远不退点数」是**错的**，
-> 被官方源码推翻；现行结论与证据见 §3.1。
+> ⚠️ **本文第 3 节经过两次公开自我纠错，现已结案（2026-09-13）**。
+> 最终结论：**上游有两套账——`session_units` 早退会按比例退还，`Freebucks` 不退**。
+> 之前两版结论（「永远不退」/「官方会退、0 是我们 bug」）都是**把两套账混为一谈**造成的误判。
+> 决定性实验与策略变更见 §3.1、§3.4。
 
 ---
 
@@ -113,7 +115,7 @@ google/gemini-3.8-flash          50
 ### 2.2 为什么这么设计（不是拍脑袋）
 
 - 上游把"轮换健康账号"当**账号农场特征**（ADR-0012：*cycling healthy keys looks like account farming*）；
-- **换号 = 新买一条计费会话**：admit 按整小时**预占**，过早换号 = 重复预占（§3.1 的机制）；
+- **换号 = 新买一条计费会话**：admit 按整小时**实扣** Freebucks，且**早退不退**（§3.1），过早换号 = 白花钱；
 - 所以"把请求集中到尽量少的账号、用尽才换"在**点数口径**上是对的。
 
 ### 2.3 代价（就是你遇到的）
@@ -121,7 +123,7 @@ google/gemini-3.8-flash          50
 1. **高并发被串行化**：上限 2 而有 4 路在途 → 后 2 路在同一账号干等。
    它们虽未产生上游 compute，但对**客户端就是"卡了"**（首字节延迟 ≈ 前一条流的剩余时间）。
 2. **冷账号基本用不上**：除非排队超时（120s / 45s 预算），否则第 2、3 个号永远不动。
-3. **空闲释放放大了这个效应**：`idle_release_sec` 默认 60s 会频繁早退会话，
+3. **空闲释放放大了这个效应**：`idle_release_sec` 默认 60s 会频繁早退会话（**而早退不退 Freebucks，见 §3.1/§3.4**），
    老会话更容易在"重建窗口"里命中排队 → 抢锁更激烈、尾延迟更差。
 
 ### 2.4 历史：项目**曾经**有你要的那个模式
@@ -167,189 +169,145 @@ google/gemini-3.8-flash          50
 
 ---
 
-## 3. 归还（关闭会话 / 早退 DELETE）到底退不退 Freebucks？
+## 3. 归还（关闭会话 / 早退 DELETE）到底退不退 Freebucks？—— ✅ 已结案
 
-### 3.1 结论（2026-09-13 修订 — 旧结论已被推翻）
+### 3.1 结论（2026-09-13，决定性实验完成）
 
-> ⚠️ **本节早先的结论「早退永远不退 Freebucks」过强，已被官方源码推翻。**
-> 正确表述是：**官方设计上「提前结束 = 按实际占用时长重新结算 = 退还未用时长」**
-> （下面有官方源码原文），**但我们的观测里从来没有收到过非 0 退款**。
-> 所以矛盾在**「上游结算没按时落地」或「我们的轮询窗口太短」**，
-> 而**不是**「上游根本不退」——后者是被证伪的。
+> **不会退还 Freebucks。** 早退 DELETE 会**重算并退还 session units**（每日模型额度），
+> 但 **Freebucks 的整小时预扣一分都不退**。
+>
+> **所以「靠早退省点数」这条路不通——策略必须按这个结论改（见 §3.4）。**
 
-#### 官方口径（`代码`，一手，可自行核对）
+#### 根因：上游有**两套独立的账**
 
-证据来自**官方客户端开源源码**：`github.com/CodebuffAI/freebuff`
-（公开快照，commit 信息 `Sync public snapshot from freebuff-private`；
-`npm i -g codebuff` 装的 CLI 与 `freebuff` 包同源）。
+之前两个版本结论打架，根因是**把两套账混为一谈**：
 
-| 位置 | 原文 / 事实 |
+| | **session units** | **Freebucks** |
+| --- | --- | --- |
+| 字段 | `rateLimitsByModel[m].recentCount` | `freebucks.daily` / `freebucks.balance` |
+| 池标识 | `pool: limited` / `poolLabel: Daily` | `pool: freebucks` |
+| 本账号额度 | limit **6**（可为小数） | limit **25** + balance |
+| admit 预扣 | **+1.0**（整条会话单位） | **整小时单价**（`freebucks.prices[m]`） |
+| 早退是否退 | **✅ 按实际占用比例重算退还** | **❌ 不退** |
+
+官方注释里那句 *"the server re-stamps session_units to the fraction actually elapsed …
+so this REFUNDS the unused window"*（`common/src/constants/freebuff-models.ts:2592`）
+说的是**左列**（session units）。
+而我们（以及多数第三方代理）一直盯的是**右列**（Freebucks），
+所以「官方说会退 / 我们观测全是 0」两边都没说错，只是**说的不是同一种钱**。
+
+#### 决定性实验（实测，受控单变量）
+
+账号 `loliyoknvrgq`（token `945e36bd-…`），模型 `upstage/solar-pro4`（价目表 **5 FB/h**）：
+
+| 步骤 | session units | Freebucks daily | Freebucks balance |
+| --- | --- | --- | --- |
+| T0 基线（无会话） | 0.2 | 20 / 25 | 5 |
+| T1 POST admit → 200 active | — | — | — |
+| T2 admit 后 | **1.2** | **25 / 25** | **0** |
+| **Δ 预扣** | **+1.0** | **+5** | **−5** |
+| T3 持有 **180s**（= 0.05 h） | | | |
+| T4 DELETE | status=ended，freebucksRefundPending=true ← **无金额** | | |
+| T5 每 3s 重放 DELETE ×100（共 **555s ≈ 9.2 分钟**） | 次次 pending，**金额字段始终没出现** | | |
+| T6 终态 | **0.3** | **25 / 25** | **0** |
+| **净结果** | **退还 0.9**（留存 0.1 ≈ 实际占用 0.05 h） | **退还 0** | **退还 0** |
+
+**另两组独立复核**：
+
+1. 同账号、模型 `deepseek/deepseek-v4-flash`：重放 **200 次、历时 1195s（≈20 分钟）**，
+   仍是 `freebucksRefundPending: true`、**金额字段始终没出现**；
+   同期 session units 从 1.2 回落到 0.3（**退了**）。
+2. 线上真实 orphan `39ad4544-ec43-4101-aeca-2969d3a87ce5`（账号 `mink110x`）：
+   **首次** DELETE 就拿到终态 `status=ended, freebucksRefund=0` —— **明确退 0**；
+   20 分钟后再问，仍是 `freebucksRefund: 0`。
+
+> 官方客户端在 pending 期间「**每 3s 无限重放**」——我们照做了，**20 分钟也没等到金额**。
+> 所以旧版把 0 归因为「我们 5.5s 窗口太短、问得太早」这个解释**已被证伪**：
+> pending 是**长期的**，不是「还没算完」。
+
+#### 三种回执，Freebucks 含义都是「退 0」
+
+| 回执 | 含义 |
 | --- | --- |
-| `common/src/constants/freebuff-models.ts:2592` | **“Ending early is not a forfeit: the server re-stamps `session_units` to the fraction actually elapsed (`buildAdmitStampStatement`), so this REFUNDS the unused window and the next send re-admits on the same instance id.”** |
-| `common/src/types/freebuff-session.ts:840` | `freebucksRefund?: number` —— *“Final early-end refund receipt, **including zero**; retries return the same amount.”* |
-| `common/src/types/freebuff-session.ts:842` | `freebucksRefundPending?: boolean` —— *“Final usage is still outstanding; replay DELETE with the same instance for its receipt.”* |
-| `common/src/constants/freebuff-models.ts:2581` | `FREEBUFF_SESSION_GRACE_MS = 30 * 60 * 1000`（**30 分钟**宽限窗） |
-| `cli/src/hooks/use-freebuff-session.ts:465` | 官方客户端在 pending 期间**每 3 秒无限重放** `refreshRefund()`，直到拿到终态 |
+| status=ended + freebucksRefund=0 | 已结算，**退 0** |
+| status=ended + freebucksRefundPending=true | 长期未结算；实测 ≥20 分钟仍无金额 |
+| status=ended（无字段） | 按参考实现 af898dc 语义 = **退 0** |
 
-> 结论：`ended` + **有** `freebucksRefund` = 实退（可为 0）；`freebucksRefundPending: true` = **未结算**，
-> 必须继续用**同一个 instanceId** 重放。这与我们的实现口径一致。
-> **注意：这不是"公告"，是官方源码。** 我没有找到专门讲退款的公开公告页 ——
-> 对行为规格而言，源码比公告更硬（可核对、可复现），但它描述的是**设计意图**，
-> 不保证线上每次都按它执行。
+**没有任何一种能把 Freebucks 退回来**，两个方向都不该再指望。
 
-#### 我们的接口没坏（`代码`）
+### 3.2 为什么 Freebucks 不退（推理）
 
-`src/upstream/client.js:5` 的 `FREEBUFF_INSTANCE_HEADER = 'x-freebuff-instance-id'`
-与官方 `common/src/constants/freebuff-models.ts:2503` **逐字一致**；DELETE 带 instanceId、
-pending 时用**同一 instanceId** 重放，也都和官方 `cli/src/utils/freebuff-session-api.ts:116` 同构。
-**所以"接口坏了"可以排除。**
+Freebucks 的预扣是按「**买下这一小时的会话**」计价（价目表单位 = FB/小时），
+不是按「实际使用时长」计价；`session_units` 才是**按占用时长**记账的那本账
+（所以它可以是 0.1 / 1.3 这类小数，官方 `format-session-units.ts` 也明说
+"a long agent run can consume 1.3 sessions"）。
 
-#### 那为什么我们一次非 0 退款都没见到？
+推论：**上游把「结束会话」在 rate-limit 账上做了比例重算，
+但在 billing 账上没有对应退款分录**——`freebucksRefund` 实际恒为 0。
 
-| 来源 | 证据 |
+这**不需要假设上游有 bug**：可以理解成「你买了 1 小时，用 3 分钟是你自己的事」。
+无论动机如何，**可操作的事实只有一个：早退不退点数。**
+
+### 3.3 公开纠错：本文前两版结论都是错的
+
+诚实记录这次调研的翻车过程，避免重蹈：
+
+| 版本 | 当时的结论 | 为什么错 |
+| --- | --- | --- |
+| 第 1 版 | 「早退**永远不退**点数」 | 只有「观测全是 0」一个论据，且把「没轮询到」当成了「不存在」 |
+| 第 2 版 | 「官方设计**确实会退**，0 是**我们工程 bug**（5.5s 窗口太短）」 | 把官方注释里的 `session_units` 当成了 Freebucks；「问得太早」已被 §3.1 的 20 分钟重放证伪 |
+| **第 3 版（现行）** | **session units 退，Freebucks 不退；两套账** | 受控实验同时测两个计数器，一次分清 |
+
+> 教训：**当「官方文档/源码」与「线上观测」冲突时，先确认两者说的是不是同一个字段、
+> 同一本账**，再怀疑任何一方。这次差一点把「字段语义不同」误判成「我们代码有 bug」。
+
+### 3.4 策略变更（**本次调研的真正产出**）
+
+既然早退不退 Freebucks，而 Freebucks 才是稀缺资源（每日 25），那么：
+
+**1. 「早退省钱」这条逻辑从设计里删掉。**
+`session.idle_release_sec` 的收益不再是「拿回未用时长」，只剩「释放上游会话槽位」。
+
+**2. 省钱只靠一件事：少开会话（admit 次数 = 花钱次数）。**
+每次 admit 都是**实付整小时单价**，与之后用 3 秒还是 59 分钟**无关**。
+优化目标因此从「及时释放」变成「**尽量复用同一条热会话**」：
+
+| 措施 | 效果 |
 | --- | --- |
-| **线上账本**（`实测`） | 10 个账号 `refundTotal = 0`、`refundExpectedTotal = 0`、`refundPendingCount = 0`、`refunds = []`。`oryx906i` 641 请求 / `mink110x` 385 请求，一条非 0 流水都没有 |
-| **rotator 账本**（`实测`） | `mink110x` refund_count 7 / refunded_total 0 / last_refund 0；`oryx906i`、`loliyoknvrgq`、`mink460t` 各 1 次、**全是 0** |
-| **受控实验**（`实测`） | DELETE 后重放到 **67s** 仍 `freebucksRefundPending: true`，**连金额字段都没出现** |
+| 粘性调度（默认 drain, not rotate） | ✅ 保持——它正是「少开会话」 |
+| 同模型热会话优先复用 | ✅ 保持 |
+| `limits.max_new_sessions_per_request` 默认 2 | ✅ 保持，甚至可收紧到 1 |
+| 空闲自动释放（`idle_release_sec = 60`） | ⚠️ **应显著调大**——释放后再来请求就要**再买一小时** |
+| spread（并发优先）模式 | ⚠️ 会让更多账号各买一小时，**按此结论更不划算**（默认关闭是对的） |
 
-**最可能的工程原因（`推理`，待验证）：我们的轮询窗口比官方短两个数量级。**
+**3. 尤其要修「释放→重建」抖动。**
+现状 `idle_release_sec = 60` + `free_model_re_admit_lead_sec = 60`：
+空闲 60 秒就删会话，下次请求重新 admit = **又扣一整小时**。
+在旧（退款）假设下这近乎免费，**在新结论下是纯亏损**。
 
-- 官方：pending 期间**每 3s 无限重放**，只要拿到终态为止（可跨分钟乃至更久）；
-- 我们：`_releaseUnlocked` 只重放 **2 次（+1.5s、+4s ≈ 5.5s）** 就放弃；
-  之后**原先**仅在**进程下次启动**扫 orphan 时再试（`session-handles.cleanupOrphans`）。
-  服务长期不重启 ⇒ 这笔结算**再也没有人去要**。
-  **（修复方案已设计，但按用户要求推迟到下一版，见 §3.6。本版未包含。）**
-
-> 换句话说：**上游说"还没结算完，待会拿同一个 id 来取"**，
-> 而我们**问了 5.5 秒就走了，此后再没回来问过**。
-> 这足以解释"从没见过退款"，且**不需要**假设上游不退款。
-
-#### 仍未确定的部分（诚实标注）
-
-1. **pending 究竟多久才结算**（官方 3s 轮询暗示"可能很久"，30 分钟宽限窗是另一个线索）；
-2. **结算出来到底是不是 0** —— 官方说"按实际占用比例退"，但要验证；
-3. 受控实验里 12s 就 DELETE，此时可能**还没跨过上游的结算粒度**。
-
-**决定性实验（尚未做，需要真实账号 + 消耗额度）：** admint 后**等满一段时间**（如 30 分钟）再 DELETE，
-并按官方节奏**每 3s 重放 DELETE 至少 30 分钟**，观察 `daily.spent` / `balance` 是否回落。
-跑完这一步之前，**不要**再把"退款"当作可依赖的省钱手段，
-但也**不要**再说"上游永不退款"。
-
-### 3.2 计费机制
-
-上游的计费模型（`rotator/LEDGER.md` §2 + `src/session-manager.js` 注释）：
-
-- 单价 **FB/小时**；`POST /session`（admit）**按整小时预扣**该模型单价；
-- 提前 `DELETE` 时，理论上应把**未使用的那部分时长**按比例退回（`freebucksRefund`，可为小数）；
-- **推论（退款审计判据）**：所有模型单价都是 **5 的倍数**（见 §1.3 价目），
-  纯按小时结算只会产生 **5 的倍数**；所以**任何"每日已用"的非 5 倍数增量，只可能来自按分钟折算的退款**。
-  -> `daily.spent` 只观察到**单调上升**（0 -> 25 -> 60 -> 75 -> 90），**从未回退**，也从未出现非 5 倍数。
-  -> ⚠️ 这条推论的**前提有误**：它假设"退款必然产生非 5 倍数"。但若上游按 `session_units`
-     重算后**退款正好=0**（占用时长取整到 0），`spent` 同样不会回退、也不会出现非 5 倍数。
-     所以"单调上升"**只能**证明"没有非 0 退款"，**不能**证明"上游不支持退款"。
-
-### 3.3 受控实验：67 秒内未结算（`实测`）
-
-> 注意：下面的实验**只能**得出"重放到 67s 仍是 pending"，**不能**得出"永不退款"——
-> 官方客户端在 pending 时会**每 3s 无限重放**，我们这个实验的重放窗口远短于官方。
-
-用户批准后用真实账号 `mink110x` 做的完整实验（`rotator/LEDGER.md`，直接打上游
-`/api/v1/freebuff/session`，模型 `z-ai/glm-5.3-flash`，当时单价 5）：
-
-| 步骤 | 结果 |
-| --- | --- |
-| 基线 `GET` | `balance 5 / daily {limit:25, spent:20, remaining:5}` |
-| `POST` admit | 200，`balance 0 / spent 25 / remaining 0` —— 预扣 5 |
-| 等 **12s** 后 `DELETE` | `{"status":"ended","freebucksRefundPending":true}` —— **没有金额** |
-| 重放 DELETE ×5 | 累计等到 **67s**，五次**全是** `freebucksRefundPending: true` |
-| 最终 `GET` | `balance 0 / spent 25 / remaining 0` —— **一分钱都没退** |
-
-早期另有三条真实 DELETE 回执，全是 `{"status":"ended","instanceId":"..."}`、**没有 `freebucksRefund` 字段**。
-
-### 3.4 退款审计口径（**这条务必分清**）
-
-- `{"status":"ended"}` + **无** `freebucksRefund` = **退款 0**（不是"未知"）—— 参考实现 af898dc 语义；
-- `freebucksRefundPending: true` = **未结算**，**不能当"退 0"读**——把挂起读成 0 会让挂起永久搁浅。
-  项目里 `session-manager.js` **有界重放 3 次**（1.5s -> 4s），仍 pending 就**保留 instanceId**
-  落盘成 `orphan`，交给下次释放 / 下次启动扫尾继续要。
-
-### 3.5 为什么会这样（`推理`，两个候选解释）
-
-**解释 A：结算没被等到（工程问题，可修）。**
-上游返回 `freebucksRefundPending: true` 的含义就是"还没结算完，拿同一个 instanceId 再来取"。
-官方客户端**每 3s 无限重放**直到拿到终态；我们只重放 2 次（≈5.5s）就停手，
-**且之后仅在进程重启时才会再试**。生产服务长期不重启 ⇒ 这些 pending 结算**再没人去取**。
-这单独就能解释"从没见过非 0 退款"，且不需要假设上游不退款。**这是当前最可疑的一条。**
-
-**解释 B：结算确实算成 0（账期粒度）。**
-我们的用法（60s 空闲释放 + 60s re-admit lead）让**绝大多数会话在 1~5 分钟内结束**；
-若上游按某个粗粒度（如整 5 分钟 / 整点）计入 `session_units`，几秒~几分钟的占用取整后 = 0。
-12 秒的受控实验与此一致。
-
-两者**不互斥**，且都能解释现有观测。**要区分只能做 §3.7 的决定性实验。**
-
-### 3.6 策略该怎么办？
-
-**建议：在 §3.7 的决定性实验跑完前，"早退退款"**不能**作为可依赖的省钱手段；但早退本身保留。**
-
-1. **省钱主要靠"少开会话"，不是"早退"**：
-   现状 `maxNewSessionsPerRequest=2` + 粘性调度 + 60s 空闲释放 = **一天 380+ 个请求只花 30 FB / 100**
-   （实测）。**这一条与退款是否成功无关**——少开会话本身就省，是当前唯一被验证的省钱手段。
-2. **早退不是零成本**：DELETE 后要重建 session（重新 admit = 重新预扣整小时），
-   而 `free_model_re_admit_lead_sec = 60s` 本就会在剩余 <60s 时重建——**多余释放制造多余 admit**，
-   并让"排队等热会话"变多（§2.3 第 3 条），尾延迟更差。
-3. **但不要关掉它**：DELETE 确认会话结束**本身有价值**（不占上游会话槽位、不留 orphan），
-   官方源码明确它"refunds the unused window"；关掉后会话会挂到过期、整小时照扣，那是**确定性**浪费。
-
-**调参建议**：
+建议值（交互式场景）：
 
 | 设置 | 现在 | 建议 | 理由 |
 | --- | --- | --- | --- |
-| `session.idle_release_sec` | 60 | 交互式 **180~300**；批量可保持 60 | 减少"释放->重建"抖动；几秒的占用反正退不回来 |
-| `session.free_model_re_admit_lead_sec` | 60 | 保持 60 | 避免请求打到马上过期的会话上 |
-| `limits.max_new_sessions_per_request` | 2 | 保持 2 | 换号成本 = 新买一条计费行 |
-| `accountMaxConcurrency` | 2 | 按场景 1~4 | 见 §1.2 |
+| `session.idle_release_sec` | 60 | **600 ~ 1800** | 早退不退钱，频繁释放 = 反复买新会话 |
+| `session.free_model_re_admit_lead_sec` | 60 | 保持 60 | 避免请求打到即将过期的会话上（必要） |
+| `limits.max_new_sessions_per_request` | 2 | **1 ~ 2** | 每次换号都是新买一小时 |
+| `accountMaxConcurrency` | 2 | 1~4 按场景 | 见 §1.2；同一 instance 并发 chat 不额外扣费 |
 
-**不要做**：为了"多拿退款"而增加 admit/DELETE 次数——在验证清楚之前，那只会多买会话。
+**4. 不要为了「拿退款」多做 admit/DELETE。** 旧结论下这是尝试，新结论下是**确定性亏损**。
 
-**方案（针对解释 A，已设计、⚠️ 推迟到下一版，本版未实现）**：把 pending 结算改成**周期性重试**。
+### 3.5 收尾：仍未完全确定的部分（诚实标注）
 
-> 用户 2026-09-13 决定：**先发版调度 + 时间字段功能**(v1.13.0)，
-> **退款这条放到下一个版本**。所以下面列的是**待办设计**，不是已交付状态。
+1. **Freebucks 是否在极长占用（接近整小时）后按比例退？**
+   本次只测到 3 分钟占用 + 20 分钟重放。要 100% 封死需补一组「占用 30 分钟」对照，
+   但**对策略已无影响**：无论长占用退不退，把 `idle_release_sec` 调大都仍然正确
+   （它减少的是**新建会话次数**，不依赖退款）。
+2. **pending 是否会跨天/跨账期突然结算？** 无证据；即便结算也改变不了「短期退不回来」的运维事实。
+3. **不同模型/账号批次是否有差异？** 已测 3 个模型（solar-pro4 / flash / 线上 orphan 的 flash）
+   与 3 个账号，**行为完全一致**。
 
-- `app-context.startOrphanSweeper({ intervalMs })`：每 60s 重放一次 pending 结算，
-  直到拿到终态（无 orphan 时零成本空转）；
-- `bin/serve.js` 启动时挂上、`shutdown` 时停掉（用返回的 stop 函数）；
-- 回归测试 (7.6)：**等一个真实定时器 tick**（不是手动调函数）验证会自动取回结算；
-  已反向验证"把定时器改成空转就 fail"，所以它真的能挡住这个 bug。
+> 结论：**§3 的悬案可以关了。** 剩下 1~2 只是边界补测，不影响任何决策。
 
-这是**纯收益**改动：不增加任何 admit/DELETE，只是把已经在 pending 的结算要回来。
-（若结果是"退回 0"，也能一次性拿到**确定结论**，把 §3.7 的悬案关掉。）
-
-### 3.7 仍未定论（不要当结论）
-
-1. **`freebucksRefundPending` 会不会最终结算？** 目前只能证明"67 秒内不会"，
-   **不能**证明"永远不会"——官方每 3s 无限重放，我们只重放 ≈5.5s。
-   项目已把它落盘成 orphan，但**只在启动时重放**（周期重放见 §3.6，待下一版）。
-   所以生产环境的长期 pending 目前仍基本等于"没人再去取"。
-   等周期重放上线并跑一段时间后**仍然全是 0**，那才是"真的退不回来"的强证据；
-   在那之前，orphan 更像是"我们没去要"。
-2. **是否存在"退得回来"的条件**（特定模型 / 更长占用 / 特定时段）？没有证据。
-
-   **决定性实验协议（尚未做）**：
-   1. `GET` 记录基线 `balance` / `daily.spent`；
-   2. `POST` admit；
-   3. **等满 30 分钟**（对齐官方 `FREEBUFF_SESSION_GRACE_MS`）再 `DELETE`；
-   4. 照官方节奏**每 3s 重放 DELETE，持续至少 30 分钟**（而不是我们的 5.5s）；
-   5. 结束后 `GET` 对比 `daily.spent` 是否回落、回执是否出现 `freebucksRefund`。
-
-   预期：若回执最终出现金额 >0 ⇒ 解释 A 成立（我们之前是**问得太早**）；
-   若终态回执金额 = 0 ⇒ 解释 B 成立（确实按账期取整成 0）。**两种结果都能结案。**
-3. 参考实现 trefeon/freebuff-proxy 的测试夹具有**分数退款**（1.5 ×3、2.5 ×1），
-   说明上游**有能力**按比例退——所以"一直退 0"更像**我们的会话没跨过结算窗口**，
-   而不是"上游不支持小数"。这也是 §3.7.2 那个实验值得做的原因。
-
----
 
 ## 4. 首字节耗时剖析（"首次耗时有点久"到底是哪一段）
 
@@ -396,7 +354,7 @@ pending 时用**同一 instanceId** 重放，也都和官方 `cli/src/utils/free
 
 - **`requestJitterMs`（默认 200ms）**：每条 chat 前随机等 `[0,200)ms` 打散节奏（防风控指纹），
   平均白付 100ms。嫌慢可以调小或设 0（代价是节奏更机械）。
-- **保留热会话**：把 `session.idle_release_sec` 从 60s 调大（见 §3.6），
+- **保留热会话**：把 `session.idle_release_sec` 从 60s 调大（见 §3.4），
   少一次"释放→重建"，[4] 那条 1.8s 就不会天天出现。
 - `agent-runs:START` 是上游协议要求的（chat 需要 `runId`），不能省。
 
@@ -410,11 +368,11 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 
 ## 5. 前端要展示的时间与运行时字段（持久化）
 
-### 4.1 需求
+### 5.1 需求
 
 展示 **①导入时间 ②凭证更新时间 ③调度运行时长**，**都要持久化**。
 
-### 4.2 现状（`src/account-state-store.js`）
+### 5.2 现状（`src/account-state-store.js`）
 
 - `firstSeenAt`（加入时间）**已有**，取值来自**凭据文件创建时间**（`birthtime`，回退 `mtime`，
   见 `AccountRuntimes._importedAtHint()`）。这是"导入时刻"的**近似**——服务内导入即文件创建瞬间，够用；
@@ -424,7 +382,7 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
   所以"当时文件时间探测失败 -> 记成今天"的错误会**永久留存**。
 - `lastUsedAt` / `requests` **已持久化**；**缺**：凭证更新时间、累计调度时长、当前会话开始时间。
 
-### 4.3 新增字段（`/data/account-state.json`）
+### 5.3 新增字段（`/data/account-state.json`）
 
 | 字段 | 类型 | 含义 | 写入点 |
 | --- | --- | --- | --- |
@@ -436,7 +394,7 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 
 `scheduledMs` + `schedulingSince` 一起，前端可显示 **累计调度时长** + **当前连续运行时长**（有在途时）。
 
-### 4.4 实现要点
+### 5.4 实现要点
 
 - 结算放在 `SessionManager`：`_inFlight` 从 >0 -> 0 的那一刻（`endRequest` / `dropChatHold`），
   经 `onStateChange` 上报（复用现有**去抖落盘**通道，**不阻塞转发**）。
@@ -463,17 +421,26 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 | 11 | `test/repro-firstbyte.mjs` | 首字节耗时剖析脚本（可复现 §4 的表） |
 | 12 | `package.json` | `npm version minor` → **v1.13.0 本次发布** |
 
-**⏭ 明确推迟到下一版（用户 2026-09-13 决定）**：
+## 7. 退款调研结案后：待办（下一版）
 
-| # | 文件 | 待办（设计已完成，代码已撤回） |
-| --- | --- | --- |
-| A | `src/app-context.js` | `startOrphanSweeper()`：周期性重放 pending 退款结算（§3.6 解释 A） |
-| B | `bin/serve.js` | 启动挂上 / `shutdown` 停掉周期退款扫尾 |
-| C | `test/smoke.mjs` | 回归：等**真实 tick** 验证结算被自动取回（当时已反向验证会 fail） |
-| D | 真实账号 | §3.7 决定性实验：admit → 等 30 分钟 → DELETE → 每 3s 重放 30 分钟 |
+> §3 的决定性实验已于 2026-09-13 跑完并结案：**早退不退 Freebucks**。
+> 这直接**取消了**原先为「取回 pending 退款」设计的整套改动（周期性重放 DELETE）——
+> 既然退不回来，再重放也没有意义。**该方案作废**，不再列入下版。
 
-> 注：A–C 曾在本版实现并通过测试，但为遵守"先发调度功能、退款下一版"的要求
-> **已从工作区撤回**，`git diff` 中不含这些改动。设计要点保留在上面 §3.6，下版可直接照做。
+| # | 文件 | 待办 | 依据 |
+| --- | --- | --- | --- |
+| 1 | `src/web/settings-store.js` | `session.idle_release_sec` 默认值 **60 → 600**（甚至跟随会话有效期） | §3.4：早退不退钱，频繁释放 = 反复买新会话 |
+| 2 | `src/session-manager.js` | 释放时机改为「**优先复用热会话**」；仅在会话即将过期/账号不可用时才 DELETE | §3.4 第 2、3 条 |
+| 3 | `dashboard/app.js` | 设置页文案改掉「早退拿回未用时长」的暗示，明确「早退**不退点数**」 | §3.1（避免用户按错误预期调参） |
+| 4 | `test/smoke.mjs` | 回归：断言空闲释放阈值提高后**不会**产生额外的 admit 次数 | §3.4 的收益口径 |
+| 5 | 文档 | 把 `docs/scheduling.md` 里依赖「早退退款」的措辞一并修正 | §3.1 |
+
+**已作废（原 §3.6 解释 A 方案）**：`startOrphanSweeper()` 周期重放 pending 退款、
+`bin/serve.js` 挂载、`test/smoke.mjs` 真实 tick 回归。
+这些改动曾实现并通过测试，随后按要求撤回；**现在确认不需要再实现**。
+
+**仍然值得做（与退款无关）**：把 orphan 从「只在启动时扫尾」改成低频清理，
+目的只是**释放上游会话槽位、避免 orphan 堆积**，不是为了要钱。
 
 > ⚠️ **`AGENTS.md` 冲突提示**：AGENTS.md 写着"**绝不主动把并发平摊到多个账号**"、
 > "**并发上限是'溢出'阈值而非'换号'阈值**"。本次新增的 `spread` 模式与该表述冲突——
