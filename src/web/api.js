@@ -192,12 +192,18 @@ export function createWebApi(deps) {
         status: f.status,
         reason: f.reason,
         critical: CRITICAL_DATA_FILES.has(path.basename(f.file)),
+        // 条目级问题（文件本身合法，但有若干条记录结构非法被丢弃并留证）：
+        // 与"文件损坏"是两件事，处置办法也不同（这里**不需要**人工删文件）。
+        droppedEntries: f.droppedEntries || 0,
+        droppedReason: f.droppedReason || null,
+        droppedBackup: f.droppedBackup || null,
       }))
       sendJson(res, 200, {
         dir: config.server.dataDir,
         ok: files.every((f) => f.status !== 'invalid'),
         files,
         invalid: files.filter((f) => f.status === 'invalid'),
+        dirty: files.filter((f) => f.droppedEntries > 0),
       })
       return true
     }

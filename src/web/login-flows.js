@@ -9,7 +9,15 @@ import {
   accountKeyOf,
 } from '../auth-store.js'
 import { logger } from '../util/log.js'
-import { readJsonFileState, noteDataFile } from '../util/json-store.js'
+import {
+  readJsonFileState,
+  noteDataFile,
+  noteDroppedEntries,
+  invalidShape,
+  ensureObjectEntries,
+  dumpDroppedEntries,
+  isPlainRecord,
+} from '../util/json-store.js'
 
 /**
  * Web-driven Freebuff login flow ("callback" style):
@@ -43,6 +51,9 @@ export class LoginFlowManager {
      * （重新发起即可，不致命），但要在自检里看得见。 */
     this.loadStatus = 'missing'
     this.loadReason = null
+    /** 被丢弃的非法条目数 + 留证文件（flows 里曾有 null/无 id 的条目）。 */
+    this.droppedEntries = 0
+    this.droppedBackup = null
     this.load()
     /** 上一轮 pollAll 是否还在跑（上游慢/挂起时防止每 4s 再堆一轮并发轮询）。 */
     this._polling = false
@@ -63,15 +74,40 @@ export class LoginFlowManager {
   }
 
   load() {
-    const st = readJsonFileState(this.file)
-    noteDataFile(this.file, st)
-    this.loadStatus = st.status
-    this.loadReason = st.status === 'invalid' ? st.reason : null
-    if (st.status === 'ok' && Array.isArray(st.data?.flows)) {
-      for (const f of st.data.flows) this.flows.set(f.id, f)
+    let st = readJsonFileState(this.file)
+    if (st.status === 'ok' && st.data?.flows !== undefined && !Array.isArray(st.data.flows)) {
+      st = invalidShape('flows 不是数组')
+    }
+    // 逐条校验：数组里混进 null 时原先 f.id 直接 TypeError（**启动期**抛，
+    // 进程还没监听端口就退出）。这里改为丢弃坏条目 + 留证，绝不整数组信任。
+    if (st.status === 'ok') {
+      const raw = Array.isArray(st.data?.flows) ? st.data.flows : []
+      const checked = ensureObjectEntries(
+        st.data,
+        'flows',
+        (f) => isPlainRecord(f) && typeof f.id === 'string' && f.id.trim().length > 0,
+      )
+      for (const f of checked.items) this.flows.set(f.id, f)
+      if (checked.dropped) {
+        this.droppedEntries = checked.dropped
+        this.droppedBackup = dumpDroppedEntries(
+          this.file,
+          raw.filter((f) => !checked.items.includes(f)),
+        )
+        noteDroppedEntries(this.file, checked.dropped, checked.reason, this.droppedBackup)
+        logger.warn('数据文件含非法条目: 登录流程（已丢弃并留证）', {
+          file: this.file,
+          dropped: checked.dropped,
+          reason: checked.reason,
+          backup: this.droppedBackup,
+        })
+      }
     } else if (st.status === 'invalid') {
       logger.warn('数据文件损坏: 登录流程', { file: this.file, reason: st.reason })
     }
+    noteDataFile(this.file, st)
+    this.loadStatus = st.status
+    this.loadReason = st.status === 'invalid' ? st.reason : null
     return st
   }
 

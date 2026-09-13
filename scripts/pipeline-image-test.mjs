@@ -155,6 +155,11 @@ function makeFixture(name, opts = {}) {
     const target = path.join(dataDir, opts.corrupt)
     fs.writeFileSync(target, '{"broken": tru')
   }
+  if (opts.dirty) {
+    // 脏条目：**合法 JSON、非法条目**——这是"更新镜像后起不来"的真实形态，
+    // 截断式损坏反而永远测不到（语法错误走的是另一条分支）。
+    fs.writeFileSync(path.join(dataDir, opts.dirty.file), opts.dirty.content)
+  }
   return { dir, dataDir, files }
 }
 
@@ -267,6 +272,29 @@ function buildScenarios(files) {
       expectRefuse: critical,
     })
   }
+  // 脏条目回归：数组里混进 null（JSON 合法、条目非法）曾让进程在监听端口之前
+  // 就 TypeError 退出，而语法级自检一律报 ok —— 用户只能靠删 json 试错。
+  // 期望：照常启动，且启动日志点名该文件与"非法条目"。
+  scenarios.push({
+    id: 'dirty-entries',
+    title: '数组里混入 null 条目（真实故障形态；期望正常启动 + 日志点名）',
+    expectUp: true,
+    dirty: {
+      file: 'web-sessions.json',
+      content: JSON.stringify({ version: 1, sessions: [null] }, null, 2),
+    },
+    expectDirtyMention: '非法条目',
+  })
+  scenarios.push({
+    id: 'dirty-login-flows',
+    title: 'login-flows.json 混入 null 条目（期望正常启动 + 日志点名）',
+    expectUp: true,
+    dirty: {
+      file: 'login-flows.json',
+      content: JSON.stringify({ version: 1, flows: [null] }, null, 2),
+    },
+    expectDirtyMention: '非法条目',
+  })
   return scenarios
 }
 
@@ -274,6 +302,7 @@ async function runScenario(scenario, index, image) {
   const name = `fbp-pipe-${scenario.id}`.replace(/[^a-zA-Z0-9_.-]/g, '-')
   const fixture = makeFixture(scenario.id, {
     corrupt: scenario.corrupt || null,
+    dirty: scenario.dirty || null,
     credentials: withCredentials,
     sourceDir: scenario.sourceDir,
   })
@@ -304,6 +333,12 @@ async function runScenario(scenario, index, image) {
     if (scenario.expectLogMention) {
       const mentioned = logs.includes(scenario.expectLogMention) && /数据文件损坏/.test(logs)
       result.notes.push(mentioned ? '启动日志点名了损坏文件' : red('启动日志未点名损坏文件'))
+      if (!mentioned) return result
+    }
+    if (scenario.expectDirtyMention) {
+      const mentioned =
+        logs.includes(scenario.expectDirtyMention) && !/启动失败/.test(logs)
+      result.notes.push(mentioned ? '启动日志点名了非法条目（并正常启动）' : red('启动日志未点名非法条目'))
       if (!mentioned) return result
     }
     // 健康检查必须真过（Dockerfile 的 HEALTHCHECK 坑过一次）

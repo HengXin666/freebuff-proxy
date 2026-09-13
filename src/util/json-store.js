@@ -80,9 +80,35 @@ export function noteDataFile(file, state) {
   // 是 ENOENT，但它**确实坏过**——控制台自检要说的是这件事，而不是"尚未生成"。
   if (prev?.status === 'invalid' && state.status === 'missing') return
   audit.set(abs, {
+    // 保留条目级信息（noteDroppedEntries 可能先于/晚于本函数调用）。
+    ...prev,
     file: abs,
     status: state.status,
     reason: state.status === 'invalid' ? state.reason : null,
+  })
+}
+
+/**
+ * 登记"条目级丢弃"：文件本身是合法 JSON（status 仍是 ok），但数组里有若干条
+ * 结构非法的记录被丢弃。与"文件损坏"是**两件事**，处置办法也不同：
+ *   - 损坏 → 移走文件让它按默认值重建；
+ *   - 脏条目 → 已自动丢弃并留证（`<file>.dropped-*`），无需人工干预。
+ * 控制台/启动横幅都要能区分，绝不能把"丢了 1 条脏数据"说成"文件损坏"。
+ * @param {string} file
+ * @param {number} count 丢弃条数
+ * @param {string} reason 原因摘要
+ * @param {string | null} backup 原文留证路径
+ */
+export function noteDroppedEntries(file, count, reason, backup = null) {
+  if (!count) return
+  const abs = path.resolve(String(file))
+  const prev = audit.get(abs) || { file: abs, status: 'ok', reason: null }
+  audit.set(abs, {
+    ...prev,
+    file: abs,
+    droppedEntries: (prev.droppedEntries || 0) + count,
+    droppedReason: reason || prev.droppedReason || '含非法条目',
+    droppedBackup: backup || prev.droppedBackup || null,
   })
 }
 
@@ -94,6 +120,103 @@ export function dataFileAudit() {
 /** 只取损坏的文件（启动横幅 / 控制台告警用）。 */
 export function invalidDataFiles() {
   return dataFileAudit().filter((e) => e.status === 'invalid')
+}
+
+/** 只取"有脏条目被丢弃"的文件（文件本身没坏，但丢过数据，必须能看见）。 */
+export function dirtyDataFiles() {
+  return dataFileAudit().filter((e) => (e.droppedEntries || 0) > 0)
+}
+
+
+/**
+ * 逐条校验数组字段：**只保留结构合法的条目**，并报告丢弃了几条。
+ *
+ * 为什么必须有它：三态读取只保证"文件是 JSON 对象"，管不了**条目**。
+ * 真实故障（v1.13.0 实测复现）：某些版本/手工编辑会往数组里留下 null 或非对象，
+ * 各 store 原先直接 `this.x = raw.x` 信任整数组，随后在构造期就炸：
+ *   - web-sessions.json 的 [null]  → _prune() 读 s.expiresAt → TypeError → 进程退出
+ *     （**还没开始监听端口**，所以 docker 里看到的就是"更新镜像后起不来"）；
+ *   - login-flows.json 的 [null]   → load() 读 f.id      → TypeError → 同上；
+ *   - users.json 混入 null/非对象  → all() 读 u.username → TypeError → 同上。
+ * 这些都是**合法 JSON**，原先的语法级自检一律报 ok，于是"启动横幅说一切正常、
+ * 进程却起不来"，用户只能靠删 json 试错。
+ *
+ * 因此口径统一为：坏条目**逐条丢弃 + 明确告警**（绝不整数组信任、也绝不为一条
+ * 脏数据拒绝启动）；文件本身坏了仍按 invalid 记账（见 readJsonFileState）。
+ * 被丢弃条目的原文会写到 `<file>.dropped-<时间戳>`，便于人工核对/恢复。
+ *
+ * @param {any} data 已解析的 JSON 根值
+ * @param {string} key 数组字段名（如 'sessions' / 'users' / 'flows'）
+ * @param {(item: any) => boolean} isValid 单条校验
+ * @returns {{items: any[], dropped: number, reason: string | null}}
+ *   - items：合法条目（无该字段/非数组时为空数组）
+ *   - dropped：丢弃条数（0 = 干净）
+ *   - reason：丢弃原因摘要（无丢弃为 null）
+ */
+export function ensureObjectEntries(data, key, isValid) {
+  const raw = data?.[key]
+  if (!Array.isArray(raw)) {
+    return { items: [], dropped: 0, reason: null }
+  }
+  const items = []
+  const droppedItems = []
+  for (const item of raw) {
+    let ok = false
+    try {
+      ok = Boolean(isValid(item))
+    } catch {
+      ok = false
+    }
+    if (ok) items.push(item)
+    else droppedItems.push(item)
+  }
+  if (!droppedItems.length) return { items, dropped: 0, reason: null }
+  return {
+    items,
+    dropped: droppedItems.length,
+    reason: describeDropped(droppedItems),
+  }
+}
+
+/** 把被丢弃的条目压缩成一行可读摘要（数量 + 类型 + 首个键）。 */
+function describeDropped(items) {
+  const kinds = [...new Set(items.map((it) => (it === null ? 'null' : Array.isArray(it) ? 'array' : typeof it)))]
+  const first = items[0]
+  let hint = ''
+  if (first && typeof first === 'object' && !Array.isArray(first)) {
+    const keys = Object.keys(first).slice(0, 4).join(',')
+    if (keys) hint = `（首个含字段: ${keys}）`
+  }
+  return `${items.length} 条非法条目已丢弃（类型: ${kinds.join('/')}）${hint}`
+}
+
+/**
+ * 把被丢弃的条目原文留证到 `<file>.dropped-<时间戳>`。
+ * 与 quarantineFile 同一思路：**丢数据可以，丢证据不行**（用户要能核对丢了什么）。
+ * @param {string} file 数据文件路径
+ * @param {any[]} items 被丢弃的原始条目
+ * @returns {string | null} 备份路径；写不了返回 null（不阻断启动）
+ */
+export function dumpDroppedEntries(file, items) {
+  if (!items?.length) return null
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const target = `${file}.dropped-${stamp}`
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(
+      target,
+      JSON.stringify({ file, droppedAt: new Date().toISOString(), items }, null, 2),
+      { mode: 0o600 },
+    )
+    return target
+  } catch {
+    return null
+  }
+}
+
+/** 对象（且非数组、非 null）：数据文件里"一条记录"的最低要求。 */
+export function isPlainRecord(v) {
+  return Boolean(v) && typeof v === 'object' && !Array.isArray(v)
 }
 
 /**

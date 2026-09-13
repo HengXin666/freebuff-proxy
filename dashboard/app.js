@@ -392,11 +392,17 @@ async function renderDataFilesCard(view) {
   const files = data?.files || []
   if (!files.length) return
   const invalid = files.filter((f) => f.status === 'invalid')
+  const dirty = files.filter((f) => (f.droppedEntries || 0) > 0)
+  const summary = invalid.length
+    ? `${invalid.length} 个损坏`
+    : dirty.length
+      ? `${dirty.length} 个含非法条目（已自动丢弃）`
+      : '全部正常'
   const card = el('div', { id: 'data-files-card', class: 'card', style: 'margin-top:12px' })
   card.append(el('div', { class: 'row spread' }, [
     el('div', {}, [
       el('h3', { style: 'margin:0 0 2px' }, '数据文件自检'),
-      el('span', { class: 'muted' }, `${data.dir} · 共 ${files.length} 个 JSON（${invalid.length ? invalid.length + ' 个损坏' : '全部正常'}）`),
+      el('span', { class: 'muted' }, `${data.dir} · 共 ${files.length} 个 JSON（${summary}）`),
     ]),
     el('button', { class: 'muted', onclick: () => refreshDataFilesCard() }, [icon('refresh', 13), '局部刷新']),
   ]))
@@ -405,19 +411,32 @@ async function renderDataFilesCard(view) {
       '⚠ 损坏的文件会让对应功能降级（配置回落默认值 / 账号履历丢失 / 会话退款索引丢失）。'
       + '停服后把文件移走再启动即可自动重建；下面的命令可直接照做。'))
   }
+  if (dirty.length) {
+    card.append(el('div', { class: 'muted', style: 'margin-top:8px;color:var(--yellow,#e0a800)' },
+      '⚠ 有文件里混进了结构非法的记录（null / 缺关键字段）。这类文件**本身没坏**，'
+      + '新版本会逐条丢弃并留证，不影响启动——但请核对丢掉的原文，必要时从备份恢复。'))
+  }
   const rows = files.map((f) => {
-    const badge = f.status === 'ok'
-      ? el('span', { class: 'badge ok' }, '正常')
+    const dirtyCount = f.droppedEntries || 0
+    const badge = f.status === 'invalid'
+      ? el('span', { class: 'badge err' }, '损坏')
       : f.status === 'missing'
         ? el('span', { class: 'badge' }, '尚未生成')
-        : el('span', { class: 'badge err' }, '损坏')
+        : dirtyCount
+          ? el('span', { class: 'badge err' }, `脏条目 ×${dirtyCount}`)
+          : el('span', { class: 'badge ok' }, '正常')
+    const desc = f.status === 'invalid'
+      ? f.reason
+      : dirtyCount
+        ? `${f.droppedReason || '含非法条目'}${f.droppedBackup ? '；原文: ' + f.droppedBackup.split('/').pop() : ''}`
+        : f.reason || (f.status === 'missing' ? '首次启动会自动创建' : '—')
     return el('tr', {}, [
       el('td', { class: 'mono', style: 'font-size:12px' }, f.name + (f.critical ? ' ⚠' : '')),
       el('td', {}, badge),
-      el('td', { class: 'muted', style: 'font-size:12px' }, f.reason || (f.status === 'missing' ? '首次启动会自动创建' : '—')),
+      el('td', { class: 'muted', style: 'font-size:12px' }, desc),
       el('td', {}, f.status === 'invalid'
         ? codeCopyButton(`mv ${f.file} ${f.file}.broken`)
-        : el('span', { class: 'muted' }, '—')),
+        : el('span', { class: 'muted' }, dirtyCount ? '无需处置（已自动丢弃）' : '—')),
     ])
   })
   card.append(el('div', { class: 'table-wrap', style: 'margin-top:10px' }, [

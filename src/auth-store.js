@@ -233,16 +233,30 @@ export function saveAccountUser(dir, user) {
  * 同一 key 出现多个文件时只保留 <key>.json（旧命名重复文件删除）。
  * @returns {Array<{ key: string, id: string | null, email: string, name?: string, path: string, proxy: string | null }>}
  */
+/**
+ * 上一次 listAccounts() 跳过的脏凭据文件（绝对路径）。
+ * 供启动自检/控制台告警使用——"账号不见了"必须能追到具体文件。
+ * @type {string[]}
+ */
+export const invalidCredentialFiles = []
+
 export function listAccounts(dir) {
   ensureCredentialsDir(dir)
   if (!fs.existsSync(dir)) return []
+  invalidCredentialFiles.length = 0
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'))
   /** @type {Map<string, { email: string, name?: string, id: string | null, path: string, proxy: string | null }>} */
   const byKey = new Map()
   for (const file of files) {
     const full = path.join(dir, file)
     const user = coerceUser(readJsonFile(full))
-    if (!user) continue
+    // 脏凭据文件（语法坏 / 缺 id+email / 缺 authToken）以前是**静默跳过**：
+    // 控制台里账号凭空消失，而磁盘上文件还在（用户以为"账号丢了"）。
+    // 这里显式点名，并把文件名和账号列出来，绝不无声无息。
+    if (!user) {
+      invalidCredentialFiles.push(full)
+      continue
+    }
     const key = accountKeyOf(user)
     const target = accountCredentialsPath(dir, key)
     if (path.basename(target) !== file) {

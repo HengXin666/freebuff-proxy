@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from 'node:fs'
 import process from 'node:process'
 import path from 'node:path'
 import net from 'node:net'
@@ -14,7 +15,11 @@ import { ProxyStore } from '../src/web/proxy-store.js'
 import { SettingsStore } from '../src/web/settings-store.js'
 import { ModelStore } from '../src/web/model-store.js'
 import { listAccounts } from '../src/auth-store.js'
-import { dataFileAudit, invalidDataFiles } from '../src/util/json-store.js'
+import {
+  dataFileAudit,
+  invalidDataFiles,
+  dirtyDataFiles,
+} from '../src/util/json-store.js'
 
 function isLoopbackHost(host) {
   return ['127.0.0.1', 'localhost', '::1'].includes(String(host || ''))
@@ -50,6 +55,70 @@ function waitForPortFree(host, port, timeoutMs) {
   })
 }
 
+/**
+ * 启动失败兜底：把"为什么起不来"直接写在日志最后一段。
+ *
+ * 起因是真实故障——镜像升级后容器起不来，用户只能靠"删几个 json 试试"恢复。
+ * 根因是几个 store 在**构造期**直接抛（数据文件数组里混进 null 条目），那时
+ * logDataFileAudit() 还没轮到执行，日志里既没有文件名字也没有处置办法。
+ * 现在无论哪个阶段抛，都保证输出：错误本身 + 已登记的数据文件状态 +
+ * 残留的写盘中间文件 + 可直接照做的处置命令。
+ * @param {unknown} err
+ */
+function reportStartupFailure(err) {
+  const detail = err instanceof Error ? err.stack || err.message : String(err)
+  const lines = [
+    '',
+    '[freebuff-proxy] ✗ 启动失败（服务未能进入监听状态）',
+    `  错误: ${err instanceof Error ? err.message : String(err)}`,
+  ]
+
+  const bad = invalidDataFiles()
+  const dirty = dirtyDataFiles()
+  if (bad.length) {
+    lines.push('  数据文件损坏:')
+    for (const f of bad) {
+      lines.push(`    - ${f.file}`)
+      lines.push(`      原因: ${f.reason}`)
+      lines.push(`      处置: 停服后 mv ${f.file} ${f.file}.broken 再启动（程序会按默认值重建）`)
+    }
+  }
+  if (dirty.length) {
+    lines.push('  数据文件含非法条目（已自动丢弃，原文留证）:')
+    for (const f of dirty) {
+      lines.push(
+        `    - ${f.file} — ${f.droppedReason}（丢弃 ${f.droppedEntries} 条）` +
+          (f.droppedBackup ? `，留证: ${f.droppedBackup}` : ''),
+      )
+    }
+  }
+
+  // 写盘被中断的残留：*.tmp 是原子写的中间态，正常完成后不会留在盘上。
+  try {
+    const dataDir = loadConfig(parseConfigPath(process.argv.slice(2))).server.dataDir
+    const tmps = fs.readdirSync(dataDir).filter((f) => f.endsWith('.tmp'))
+    if (tmps.length) {
+      lines.push('  残留的写盘中间文件（上次写盘被中断，可安全删除）:')
+      for (const t of tmps) lines.push(`    - ${path.join(dataDir, t)}`)
+    }
+  } catch {
+    // 数据目录读不了不影响诊断输出
+  }
+
+  if (!bad.length && !dirty.length) {
+    lines.push(
+      '  未发现明显的数据文件问题。请把上面的完整堆栈发给维护者；' +
+        '临时处置：把 data/ 下的状态 JSON 逐个移走（保留 credentials/）以定位是哪一个。',
+    )
+  }
+  lines.push(
+    '  提示: 控制台「总览 → 数据文件自检」(/api/system/data-status) 也列出同样的信息。',
+    '',
+  )
+  console.error(lines.join('\n'))
+  console.error(detail)
+}
+
 async function main() {
   const config = loadConfig(parseConfigPath(process.argv.slice(2)))
   configureLogger(config.logging)
@@ -64,11 +133,14 @@ async function main() {
     const files = dataFileAudit()
     if (!files.length) return
     const bad = invalidDataFiles()
+    const dirty = dirtyDataFiles()
     logger.info('data files checked', {
       total: files.length,
       ok: files.filter((f) => f.status === 'ok').length,
       missing: files.filter((f) => f.status === 'missing').length,
       invalid: bad.length,
+      // 条目级问题（文件合法但丢过脏条目）：与"文件损坏"分开计数，处置办法也不同
+      droppedEntries: dirty.reduce((n, f) => n + (f.droppedEntries || 0), 0),
     })
     for (const f of bad) {
       console.error(
@@ -78,9 +150,19 @@ async function main() {
           `        程序会按默认值重建；要保留历史就先备份。控制台「总览 → 数据文件自检」也会列出。\n`,
       )
     }
-    if (bad.length) {
+    for (const f of dirty) {
+      console.error(
+        `[freebuff-proxy] ⚠ 数据文件含非法条目: ${f.file}\n` +
+          `  原因: ${f.droppedReason}（丢弃 ${f.droppedEntries} 条）\n` +
+          (f.droppedBackup ? `  原文留证: ${f.droppedBackup}\n` : '') +
+          `  处置: 无需人工干预——坏条目已被丢弃，服务照常运行；\n` +
+          `        想核对丢了什么就打开上面的留证文件。控制台「总览 → 数据文件自检」也会列出。\n`,
+      )
+    }
+    if (bad.length || dirty.length) {
       logger.warn('data file problems detected (service continues in degraded mode)', {
         files: bad.map((f) => f.file),
+        dirtyFiles: dirty.map((f) => f.file),
       })
     }
   }
@@ -341,6 +423,11 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err instanceof Error ? err.stack || err.message : err)
+  try {
+    reportStartupFailure(err)
+  } catch {
+    // 诊断本身失败也必须把原始错误打出来
+    console.error(err instanceof Error ? err.stack || err.message : err)
+  }
   process.exitCode = 1
 })

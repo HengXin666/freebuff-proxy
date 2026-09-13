@@ -1,7 +1,15 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { readJsonFileState, noteDataFile, invalidShape } from '../util/json-store.js'
+import {
+  readJsonFileState,
+  noteDataFile,
+  noteDroppedEntries,
+  invalidShape,
+  ensureObjectEntries,
+  dumpDroppedEntries,
+  isPlainRecord,
+} from '../util/json-store.js'
 
 /**
  * JSON-file backed web users (control-plane accounts), separate from
@@ -53,6 +61,9 @@ export class UserStore {
     this.loadStatus = 'missing'
     /** 损坏原因（loadStatus === 'invalid' 时）。 */
     this.loadReason = null
+    /** 被丢弃的非法条目数 + 留证文件（users.json 的脏条目 = 有人丢了登录凭据）。 */
+    this.droppedEntries = 0
+    this.droppedBackup = null
     this.load()
   }
 
@@ -61,12 +72,40 @@ export class UserStore {
     if (st.status === 'ok' && !Array.isArray(st.data?.users)) {
       st = invalidShape('缺少 users 数组')
     }
+    // 逐条校验：数组里混进 null / 非对象时，原先会在 all() 里读 u.username 抛
+    // TypeError —— 那发生在**启动期**，进程还没监听端口就退出（真实故障形态）。
+    // 里层字段（salt/passwordHash）不在这里判：登录时 hashPassword 会先炸，
+    // 由 verifyPassword 兜住即可；这里只保证"每条都是对象且 username 可用"。
+    if (st.status === 'ok') {
+      const raw = st.data.users
+      const checked = ensureObjectEntries(
+        st.data,
+        'users',
+        (u) => isPlainRecord(u) && typeof u.username === 'string' && u.username.trim().length > 0,
+      )
+      this.users = checked.items
+      if (checked.dropped) {
+        this.droppedEntries = checked.dropped
+        this.droppedBackup = dumpDroppedEntries(
+          this.file,
+          raw.filter((u) => !checked.items.includes(u)),
+        )
+        noteDroppedEntries(this.file, checked.dropped, checked.reason, this.droppedBackup)
+        console.error(
+          `[freebuff-proxy] 数据文件含非法条目: ${this.file} — ${checked.reason}` +
+            (this.droppedBackup ? `（原文已留证: ${this.droppedBackup}）` : ''),
+        )
+        // 全部条目都是脏的 = 实质上没人能用这份文件引导 → 按损坏处理，
+        // 交给启动流程拒绝启动（否则会静默重建 admin，用户以为账号全丢）。
+        if (this.users.length === 0) {
+          st = invalidShape(`users 数组的 ${checked.dropped} 条记录全部非法`)
+        }
+      }
+    }
     noteDataFile(this.file, st)
     this.loadStatus = st.status
     this.loadReason = st.status === 'invalid' ? st.reason : null
-    if (st.status === 'ok') {
-      this.users = st.data.users
-    } else {
+    if (st.status !== 'ok') {
       // 损坏的 users.json 如果被当成"还没有账号"，ensureDefaultAdmin 会立刻
       // 建一个新 admin —— 用户看到的就是"我的用户/密码全没了"。这里保持空列表
       // 但把状态交给启动流程裁决（bin/serve.js 会拒绝启动并要求人工处置）。
@@ -102,7 +141,8 @@ export class UserStore {
   }
 
   getByApiKey(apiKey) {
-    if (!apiKey) return null
+    // 入参守卫：控制台/网关可能对没有 Authorization 头的请求传空值。
+    if (!apiKey || typeof apiKey !== 'string') return null
     return this.users.find((u) => u.apiKey === apiKey) || null
   }
 
