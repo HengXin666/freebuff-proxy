@@ -196,6 +196,7 @@ async function render() {
   view.classList.add('view-enter')
   if (route === 'users' && state.me.role === 'admin') await renderUsers(view)
   else if (route === 'playground') await renderPlayground(view)
+  else if (route === 'system' && state.me.role === 'admin') await renderSystem(view)
   else if (route === 'me') await renderMe(view)
   else await renderOverview(view)
 }
@@ -319,7 +320,11 @@ async function restartService() {
 
 function renderNav() {
   const items = [['overview', '总览', 'gauge'], ['playground', '测试对话', 'chat']]
-  if (state.me.role === 'admin') items.push(['users', '用户管理', 'users'])
+  if (state.me.role === 'admin') {
+    items.push(['users', '用户管理', 'users'])
+    // 数据文件自检是排障工具，不是日常操作——从总览页搬出来，admin 专属独立页。
+    items.push(['system', '系统', 'cpu'])
+  }
   items.push(['me', '我的', 'user'])
   const route = (location.hash || '#overview').slice(1) || 'overview'
   return el('nav', {}, items.map(([key, label, ic]) =>
@@ -376,7 +381,6 @@ async function renderOverview(view) {
     view.append(renderOverviewHeader(data))
     view.append(renderStatCards(data))
     view.append(await renderAccountsCard(data))
-    await renderDataFilesCard(view)
     await renderProxySettings(view)
     await renderModelSettings(view)
     if (state.me.role === 'admin') await renderFlowsCard(view)
@@ -387,14 +391,23 @@ async function renderOverview(view) {
   }
 }
 
-/**
- * 数据文件自检（/api/system/data-status）。
- *
- * 起因是真实故障：镜像升级后服务起不来，日志里只有一行 warn，用户只能靠
- * "删掉几个 json 就好了"试错。这里把 data/ 下每个 JSON 的装载状态摊开显示，
- * 损坏的给出**可直接照做**的处置命令，并把"哪些是派生数据（删了自动重建）、
- * 哪些是真源（删了就丢用户/丢退款句柄）"讲清楚。
- */
+/* ================================================================
+   SYSTEM — 数据文件自检（admin 独立页）
+   （为什么独立成页、而不是留在总览或折叠：见
+   .agents/notes/implemented/feature/2026-09-13-console-system-tab.md）
+   总览页只放日常要看的（账号 / 额度 / 代理 / 模型）；"出问题了才来看"的
+   数据文件状态搬到这一页。起因仍是真实故障：镜像升级后服务起不来，日志里
+   只有一行 warn，用户只能靠"删掉几个 json 就好了"试错——这里把 data/ 下
+   每个 JSON 的装载状态摊开显示，损坏的给出**可直接照做**的处置命令，并把
+   "哪些是派生数据（删了自动重建）、哪些是真源（删了就丢用户/丢会话句柄）"
+   讲清楚。
+   ================================================================ */
+async function renderSystem(view) {
+  view.innerHTML = ''
+  view.append(el('h2', { style: 'margin:0 0 12px' }, '系统'))
+  await renderDataFilesCard(view)
+}
+
 async function renderDataFilesCard(view) {
   let data = null
   try { data = await api('/api/system/data-status') } catch { return }
@@ -402,18 +415,19 @@ async function renderDataFilesCard(view) {
   if (!files.length) return
   const invalid = files.filter((f) => f.status === 'invalid')
   const dirty = files.filter((f) => (f.droppedEntries || 0) > 0)
-  const summary = invalid.length
-    ? `${invalid.length} 个损坏`
-    : dirty.length
-      ? `${dirty.length} 个含非法条目（已自动丢弃）`
-      : '全部正常'
-  const card = el('div', { id: 'data-files-card', class: 'card', style: 'margin-top:12px' })
+  const pending = files.reduce((n, f) => n + (f.openHandles || 0), 0)
+  const summary = [
+    invalid.length ? `${invalid.length} 个损坏` : null,
+    dirty.length ? `${dirty.length} 个含非法条目（已自动丢弃）` : null,
+    pending ? `${pending} 条上游会话待结算` : null,
+  ].filter(Boolean).join(' · ') || '全部正常'
+  const card = el('div', { id: 'data-files-card', class: 'card' })
   card.append(el('div', { class: 'row spread' }, [
     el('div', {}, [
       el('h3', { style: 'margin:0 0 2px' }, '数据文件自检'),
       el('span', { class: 'muted' }, `${data.dir} · 共 ${files.length} 个 JSON（${summary}）`),
     ]),
-    el('button', { class: 'muted', onclick: () => refreshDataFilesCard() }, [icon('refresh', 13), '局部刷新']),
+    el('button', { class: 'muted', onclick: () => refreshDataFilesCard() }, [icon('refresh', 13), '刷新']),
   ]))
   if (invalid.length) {
     card.append(el('div', { class: 'muted', style: 'margin-top:8px;color:var(--red)' },
@@ -427,24 +441,33 @@ async function renderDataFilesCard(view) {
   }
   const rows = files.map((f) => {
     const dirtyCount = f.droppedEntries || 0
+    const pending = f.openHandles || 0
     const badge = f.status === 'invalid'
       ? el('span', { class: 'badge err' }, '损坏')
       : f.status === 'missing'
         ? el('span', { class: 'badge' }, '尚未生成')
         : dirtyCount
           ? el('span', { class: 'badge err' }, `脏条目 ×${dirtyCount}`)
-          : el('span', { class: 'badge ok' }, '正常')
+          : pending
+            ? el('span', { class: 'badge' }, `待结算 ×${pending}`)
+            : el('span', { class: 'badge ok' }, '正常')
     const desc = f.status === 'invalid'
       ? f.reason
       : dirtyCount
         ? `${f.droppedReason || '含非法条目'}${f.droppedBackup ? '；原文: ' + f.droppedBackup.split('/').pop() : ''}`
-        : f.reason || (f.status === 'missing' ? '首次启动会自动创建' : '—')
+        : pending
+          ? `${pending} 条上游会话句柄尚未结算（每条都占着对应账号的会话槽位；启动扫尾 / 释放流程会继续 DELETE，不是故障、无需手工删文件）`
+          : f.reason || (f.status === 'missing' ? '首次启动会自动创建' : '—')
     return el('tr', {}, [
       el('td', { class: 'mono', style: 'font-size:12px' }, f.name + (f.critical ? ' ⚠' : '')),
       el('td', {}, badge),
       el('td', { class: 'muted', style: 'font-size:12px' }, desc),
       el('td', {}, f.status === 'invalid'
-        ? codeCopyButton(`mv ${f.file} ${f.file}.broken`)
+        // 真源文件（users.json / sessions.json）不能照抄 mv：sessions.json 里
+        // 可能还挂着没结算的会话句柄，删掉就永久失去寻址能力（槽位一直占着）。
+        ? (f.critical
+            ? el('span', { class: 'muted' }, '先备份再移走（真源文件，删了就找不回）')
+            : codeCopyButton(`mv ${f.file} ${f.file}.broken`))
         : el('span', { class: 'muted' }, dirtyCount ? '无需处置（已自动丢弃）' : '—')),
     ])
   })
