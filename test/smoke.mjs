@@ -5049,6 +5049,14 @@ server.close()
     new URL('../config.example.yaml', import.meta.url),
     'utf8',
   )
+  const cssSrc = fs.readFileSync(
+    new URL('../dashboard/style.css', import.meta.url),
+    'utf8',
+  )
+  const settingsSrc = fs.readFileSync(
+    new URL('../src/web/settings-store.js', import.meta.url),
+    'utf8',
+  )
   // 覆盖**整个仓库**：一开始只扫了 3 个文件，结果 README / bin/pricing.js /
   // docs/deployment.md / proxy.js 等 10+ 处漏网——其中 README 与 CLI 输出
   // 直接给用户看，错了最误导。改为遍历全仓（排除第三方与运行时数据）。
@@ -5101,6 +5109,43 @@ server.close()
   assert.ok(
     /idle-release-advice/.test(dashSrc),
     '控制台必须渲染推荐值区块',
+  )
+
+  // (LOW-BALANCE-GROUP) 用户自定义「低额度」分组：余额低于阈值就归类过去，
+  // 但**仍然参与调度**——它是预警不是故障。默认 15 FB（≈ deepseek-v4-flash 单价）。
+  assert.ok(
+    /id: 'lowbalance'/.test(dashSrc),
+    "控制台必须有 'lowbalance' 分组",
+  )
+  assert.ok(
+    /function lowBalanceHit/.test(dashSrc),
+    '低额度分组必须有 lowBalanceHit 判定',
+  )
+  // 归到「低额度」之后仍照常参与选号：该判定绝不能出现在后端调度路径里
+  for (const rel of ['src/proxy.js', 'src/app-context.js', 'src/session-manager.js']) {
+    let src = ''
+    try { src = fs.readFileSync(new URL('../' + rel, import.meta.url), 'utf8') } catch { continue }
+    assert.ok(
+      !/lowBalanceThreshold|lowbalance/.test(src),
+      rel + ' 不得读取 lowBalanceThreshold：低额度只是前端分组，不能影响调度',
+    )
+  }
+  assert.ok(
+    /lowBalanceThreshold: 15/.test(settingsSrc),
+    'settings-store 的 lowBalanceThreshold 默认应为 15',
+  )
+  // (WIDE-LAYOUT) 账号表 10 列，容器过窄会把「时间轴」挤成竖排单字
+  assert.ok(
+    /max-width: 1560px/.test(cssSrc),
+    '#app 容器应放宽到 1560px（账号表列多）',
+  )
+  assert.ok(
+    /\.acct-time/.test(cssSrc),
+    '时间轴单元格需要 .acct-time 样式（禁止被压成竖排单字）',
+  )
+  assert.ok(
+    /acct-time/.test(dashSrc),
+    'accountTimeCell 必须使用 .acct-time 类',
   )
   // 推荐值是「按账号池实时算」的，所以设置页必须真的把账号拉进来。
   // /api/proxy 只回代理信息、不含 session.model —— 曾因此让推荐值恒等于默认值

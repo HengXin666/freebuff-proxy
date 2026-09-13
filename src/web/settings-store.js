@@ -29,6 +29,10 @@ const DEFAULT_SETTINGS = Object.freeze({
   // 前端「模型管理」一键切换：开启则从 /v1/models 列表和调度（白名单）彻底排除。
   // 默认关闭以保持升级不改变现有行为；免费反代场景建议开启。
   blockPremiumModels: false,
+  // 「低额度」分组阈值（FB）：余额低于它就在控制台归到「低额度」分组——**只是分组
+  // 展示，不影响调度**（这些号照常参与选号，低额度不等于不能用）。默认 15 FB，
+  // 0 = 关闭该分组。用户要的是「一眼看到快跑完的号」，所以阈值可调。
+  lowBalanceThreshold: 15,
   // 注意：额度保护两项（idleReleaseSec / maxNewSessionsPerRequest）**不写死默认值**
   // ——只有用户在控制台保存过才进 settings.json，否则回落 config.yaml
   // （session.idle_release_sec / limits.max_new_sessions_per_request），
@@ -77,6 +81,9 @@ export class SettingsStore {
       }
       if (typeof raw?.blockPremiumModels === 'boolean') {
         this.settings.blockPremiumModels = raw.blockPremiumModels
+      }
+      if (Number.isInteger(raw?.lowBalanceThreshold)) {
+        this.settings.lowBalanceThreshold = clampLowBalance(raw.lowBalanceThreshold)
       }
       if (Number.isInteger(raw?.idleReleaseSec)) {
         this.settings.idleReleaseSec = clampIdleReleaseSec(raw.idleReleaseSec)
@@ -138,6 +145,17 @@ export class SettingsStore {
       }
       this.settings.blockPremiumModels = next.blockPremiumModels
     }
+    if (next?.lowBalanceThreshold !== undefined) {
+      if (
+        !Number.isInteger(next.lowBalanceThreshold) ||
+        next.lowBalanceThreshold < 0
+      ) {
+        throw new TypeError('lowBalanceThreshold must be an integer >= 0')
+      }
+      this.settings.lowBalanceThreshold = clampLowBalance(
+        next.lowBalanceThreshold,
+      )
+    }
     if (next?.idleReleaseSec !== undefined) {
       if (!Number.isInteger(next.idleReleaseSec) || next.idleReleaseSec < 0) {
         throw new TypeError('idleReleaseSec must be an integer >= 0')
@@ -182,6 +200,15 @@ function clampConcurrency(n) {
  * 下限仍保留 5s：低于 ~5s 等于把每个回合都切成一条新会话，admit 往返次数暴涨，
  * 在「按条计费」的档位上反而更亏。
  */
+/**
+ * 低额度分组阈值：0（关闭）或 1..10000 FB。上限给足空间（个别模型单价很高），
+ * 但别到「所有号都在低额度组里」那种失去意义的地步。
+ */
+function clampLowBalance(n) {
+  if (n <= 0) return 0
+  return Math.min(10_000, Math.max(1, n))
+}
+
 function clampIdleReleaseSec(n) {
   if (n <= 0) return 0
   return Math.min(86_400, Math.max(5, n))

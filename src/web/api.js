@@ -915,6 +915,8 @@ export function createWebApi(deps) {
           settingsStore?.get().maxNewSessionsPerRequest ??
           config.limits.maxNewSessionsPerRequest ??
           2,
+        // 「低额度」分组阈值（FB）。纯前端分组，不参与调度；0 = 关闭分组。
+        lowBalanceThreshold: settingsStore?.get().lowBalanceThreshold ?? 15,
       })
       return true
     }
@@ -991,6 +993,19 @@ export function createWebApi(deps) {
           return true
         }
         patch.blockPremiumModels = body.blockPremiumModels
+      }
+      if (body.lowBalanceThreshold !== undefined) {
+        if (
+          !Number.isInteger(body.lowBalanceThreshold) ||
+          body.lowBalanceThreshold < 0 ||
+          body.lowBalanceThreshold > 10_000
+        ) {
+          sendJson(res, 400, {
+            error: 'lowBalanceThreshold 必须是 0 或 1..10000 的整数（0 = 关闭低额度分组）',
+          })
+          return true
+        }
+        patch.lowBalanceThreshold = body.lowBalanceThreshold
       }
       if (body.idleReleaseSec !== undefined) {
         if (

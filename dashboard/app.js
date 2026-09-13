@@ -5,7 +5,7 @@
  */
 'use strict'
 
-const state = { me: null, accounts: [], users: [], models: [], flows: [], proxies: [], version: null }
+const state = { me: null, accounts: [], users: [], models: [], flows: [], proxies: [], version: null, lowBalanceThreshold: 15 }
 
 const $ = (sel, root = document) => root.querySelector(sel)
 const el = (tag, attrs = {}, children = []) => {
@@ -360,6 +360,15 @@ async function renderOverview(view) {
   view.append(skeletonOverview())
   startProgress()
   try {
+    // 低额度分组阈值必须先于账号表拿到：账号表在 renderProxySettings 之前渲染，
+    // 而阈值是在那里才读 /api/settings 的。若不在这里先取一次，首屏会**恒定**
+    // 用默认 15 分组（用户改过阈值却看不到效果）——与推荐值那次是同一类数据依赖坑。
+    try {
+      const s = await api('/api/settings')
+      if (Number.isInteger(s.lowBalanceThreshold)) {
+        state.lowBalanceThreshold = s.lowBalanceThreshold
+      }
+    } catch { /* 拿不到就用默认 15，不阻塞总览 */ }
     const data = await api('/api/overview')
     state.accounts = data.accounts
     endProgress()
@@ -590,9 +599,36 @@ const ACCOUNT_SECTIONS = [
   { id: 'banned', label: '已被封禁', hint: '上游已封号，不会再被调度', tone: 'err' },
   { id: 'exhausted', label: '额度不足', hint: 'Freebucks 买不起当前模型，等池子刷新或加号', tone: 'err' },
   { id: 'warning', label: '出现警告', hint: '限流 / 风控 / 探测失败，但还没封号', tone: 'warn' },
+  { id: 'lowbalance', label: '低额度', hint: '余额已接近见底——仍会被正常调度，只是提前提醒你该补号了', tone: 'warn' },
   { id: 'active', label: '正在调度', hint: '有活跃会话或已被选中过', tone: 'ok', open: true },
   { id: 'fresh', label: '从未使用', hint: '还没被调度过（干净号，尽量别浪费）', tone: 'idle' },
 ]
+
+/**
+ * 「低额度」判定：余额低于阈值（可调，默认 15 FB），但**还买得起当前模型**。
+ * 阈值来源：/api/settings 的 lowBalanceThreshold（0 = 关闭该分组）。
+ * 用户要这个分组的原因是「一眼看到快跑完的号」——所以它**不影响调度**，
+ * 归到这里的号照常参与选号（这点和「额度不足」完全不同）。
+ */
+function lowBalanceHit(a) {
+  const th = state.lowBalanceThreshold ?? 15
+  if (!(th > 0)) return false
+  const fb = a.freebucks
+  if (!fb || fb.quotaExempt) return false
+  // 今日池跑完 = 真的不能用 → 归 exhausted，不算「低额度」
+  if (fb.daily && Number(fb.daily.remaining) <= 0 && Number(fb.daily.limit) > 0) return false
+  const bal = Number(fb.balance)
+  if (!Number.isFinite(bal)) return false
+  // 买不起当前模型的不算（那是 exhausted）
+  const price = fb.prices && a.session?.model ? fb.prices[a.session.model] : null
+  if (price != null && bal < Number(price)) return false
+  // 「低于它无法使用就不纳入本组」：连**最便宜的模型**都买不起 = 实质不可用，
+  // 归 exhausted。否则余额 0 的号会被标成「低额度」，看着像还能救。
+  const prices = fb.prices ? Object.values(fb.prices).map(Number).filter((n) => Number.isFinite(n) && n > 0) : []
+  if (prices.length && bal < Math.min(...prices)) return false
+  if (bal <= 0) return false
+  return bal < th
+}
 
 /** 把一个账号归类到唯一分区（最坏优先）。 */
 function classifyAccount(a) {
@@ -614,6 +650,10 @@ function classifyAccount(a) {
       fb.daily && Number(fb.daily.remaining) <= 0 && Number(fb.daily.limit) > 0
     if (short || dailyGone) return 'exhausted'
   }
+  // 2.5) 低额度：余额低于用户设的阈值（默认 15 FB ≈ deepseek-v4-flash 单价），
+  //      但**还买得起当前模型**——所以这不是故障，是「快见底了」的提前预警。
+  //      注意必须排在「额度不足」之后：真买不起的号属于 exhausted，不该混进来。
+  if (lowBalanceHit(a)) return 'lowbalance'
   // 3) 警告：探测失败（风控/限流/凭证）或正在冷却
   if (probe || a.cooldownUntil) return 'warning'
   // 4) 正在调度：有活跃/在途会话，或被选号过
@@ -634,7 +674,7 @@ function buildAccountsTable(accounts) {
     if (!rows.length) continue
     const table = el('div', { class: 'table-wrap' }, [
       el('table', {}, [
-        el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发', '时间（导入/更新/调度）', '额度（今日 · FB/h）', 'Freebucks', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
+        el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发', '时间轴（导入/更新/调度）', '额度（今日 · FB/h）', 'Freebucks', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
         el('tbody', {}, rows.map((a, i) => buildAccountRow(a, i))),
       ]),
     ])
@@ -739,6 +779,12 @@ async function refreshAccountsCard({ silent = true } = {}) {
   try {
     const data = await api('/api/overview')
     state.accounts = data.accounts
+    try {
+      const s = await api('/api/settings')
+      if (Number.isInteger(s.lowBalanceThreshold)) {
+        state.lowBalanceThreshold = s.lowBalanceThreshold
+      }
+    } catch { /* 沿用当前值 */ }
     // 整体替换容器内部（不换容器本身，旧内容必然清空，不会残留分区）
     wrap.innerHTML = ''
     wrap.append(buildAccountsTable(data.accounts))
@@ -967,6 +1013,8 @@ async function renderProxySettings(view) {
 
   const idleReleaseSec = settings.idleReleaseSec ?? 600
   const maxNewSessions = settings.maxNewSessionsPerRequest ?? 2
+  const lowBalanceThreshold = settings.lowBalanceThreshold ?? 15
+  state.lowBalanceThreshold = lowBalanceThreshold
   const advice = idleReleaseAdvice(state.accounts)
   view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
@@ -992,6 +1040,20 @@ async function renderProxySettings(view) {
             max: 86400,
             style: 'width:90px',
             value: idleReleaseSec,
+            ...(state.me.role === 'admin' ? {} : { disabled: '' }),
+          }),
+        ]),
+      ]),
+      el('div', {}, [
+        el('label', { style: 'margin:0 0 4px' }, '低额度分组阈值（FB，0 = 关闭）'),
+        el('div', { class: 'row' }, [
+          el('input', {
+            id: 'low-balance-threshold',
+            type: 'number',
+            min: 0,
+            max: 10000,
+            style: 'width:90px',
+            value: lowBalanceThreshold,
             ...(state.me.role === 'admin' ? {} : { disabled: '' }),
           }),
         ]),
@@ -1264,17 +1326,26 @@ async function saveLoadBalanceSettings() {
 async function saveQuotaProtectionSettings() {
   const idle = $('#idle-release-sec')
   const budget = $('#max-new-sessions')
+  const lowBal = $('#low-balance-threshold')
   if (!idle || !budget) return
   try {
     const v = Math.max(0, Math.min(86400, parseInt(idle.value, 10) || 0))
     const b = Math.max(0, Math.min(16, parseInt(budget.value, 10) || 0))
+    const lb = lowBal ? Math.max(0, Math.min(10000, parseInt(lowBal.value, 10) || 0)) : 15
     await api('/api/settings', {
       method: 'POST',
-      body: JSON.stringify({ idleReleaseSec: v, maxNewSessionsPerRequest: b }),
+      body: JSON.stringify({
+        idleReleaseSec: v,
+        maxNewSessionsPerRequest: b,
+        lowBalanceThreshold: lb,
+      }),
     })
+    state.lowBalanceThreshold = lb
     toast(v > 0
       ? `额度保护已更新：空闲 ${v}s 后释放（不退 Freebucks）· 单请求最多 ${b || '不限'} 个新会话`
       : `已关闭空闲释放（会话留到自然过期）· 单请求最多 ${b || '不限'} 个新会话`)
+    // 阈值变了要重画账号分区（低额度分组可能刚被打开/关闭）
+    try { await refreshAccountsCard() } catch { /* 表未挂载时忽略 */ }
     const hint = $('#idle-release-hint')
     if (hint) {
       hint.textContent = v > 0
@@ -1408,7 +1479,7 @@ function accountTimeCell(a) {
       ? `本轮自：${new Date(a.schedulingSince).toLocaleString()}`
       : null,
   ].filter(Boolean).join('\n')
-  return el('td', { class: 'mono', style: 'font-size:11px;line-height:1.5', title }, [
+  return el('td', { class: 'mono acct-time', style: 'font-size:11px', title }, [
     el('div', {}, `导入 ${imported}`),
     el('div', { class: 'muted' }, updated ? `更新 ${updated}` : '更新 —'),
     el('div', { class: a.currentSchedulingMs > 0 ? '' : 'muted' }, `调度 ${total}`),

@@ -554,6 +554,16 @@ nav button.active {
 .model-chip .pool { font-size: 11px; }
 
 /* ---------- 自定义模型编辑行（可视化表单，不填 JSON） ---------- */
+/* 账号时间轴（导入/更新/调度）：四行短文本，禁止被压缩成竖排单字。
+   原来是内联 font-size:11px，宽度被其他列挤没时中文会逐字换行——
+   这里给它一个最小宽度 + nowrap，宁可让整表横向滚动。 */
+.acct-time {
+  min-width: 132px;
+  line-height: 1.55;
+  white-space: nowrap;
+}
+.acct-time > div { white-space: nowrap; }
+
 .cm-rows { display: flex; flex-direction: column; gap: 6px; }
 .cm-row {
   display: flex;
@@ -578,14 +588,23 @@ nav button.active {
 }
 .cm-row .icon { flex: 0 0 auto; }
 
-/* ---------- app 布局：内容居中 + 四周留白 ---------- */
+/* ---------- app 布局：内容居中 + 四周留白 ----------
+   宽度说明：账号表的列比较多（账号/状态/Session/并发/时间轴/额度/Freebucks/请求/
+   冷却/操作 = 10 列），1160px 会把「时间轴」那格挤成一行一个字。
+   这里放宽到 1560px：宽屏能用满，窄屏照旧靠 .table-wrap 横向滚动兜底。 */
 #app {
-  max-width: 1160px;
+  max-width: 1560px;
   margin: 0 auto;
   padding: 24px 28px 48px;
 }
 @media (max-width: 720px) {
   #app { padding: 14px; }
+}
+/* 表格安全网：极窄屏下允许横向滚动，而不是把单元格压到无法阅读。
+   表格用 min-width 保证各列有呼吸空间，overflow-x 已经在 .table-wrap 上。 */
+.table-wrap > table { min-width: 1080px; }
+@media (max-width: 1080px) {
+  .table-wrap > table { min-width: 0; }
 }
 
 /* ---------- view transition ---------- */
