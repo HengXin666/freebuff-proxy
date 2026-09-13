@@ -5074,8 +5074,8 @@ server.close()
     // smoke 自身含正则字面量，也豁免（它就是这个守卫）。
     if (rel === 'docs/account-scheduling-and-refund.md') continue
     if (rel === 'test/smoke.mjs') continue
-    // AGENTS.md 是最高优先级约定，规范上禁止改（需用户明确同意），故不扫。
-    // CLAUDE.md 是指向它的符号链接，同样豁免。
+    // AGENTS.md 是最高优先级约定（规则 1：须用户明确同意才可编辑），不在自动
+    // 守卫的管辖范围；CLAUDE.md 是指向它的符号链接，同样豁免。
     if (rel === 'AGENTS.md' || rel === 'CLAUDE.md') continue
     const src = fs.readFileSync(abs, 'utf8')
     const hit = src.match(STALE_COPY)

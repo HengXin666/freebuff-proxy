@@ -64,7 +64,8 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 - 前端展示上游 `rateLimitsByModel`（每模型 `已用/上限/重置时间`）；额度仅在 admit/活跃 session 时由上游返回。
 - 提供**只读探测刷新**（`POST /api/accounts/probe`，只 GET、不创建 session、不占额度）；导入账号后自动探测。
 - 多账号池自动切号：`rate_limited / spend_limited / ip_capped / free_mode_rate_limited / banned` 整号冷却并换下一个；`model_unavailable` 只冷却该模型。上游报错（chat 429 限流 / 5xx / 403 账号级封禁 / startAgentRun 失败 / 网络超时）冷却当前账号并继续轮询下一个；4xx 客户端错误不换号。
-- **换号有成本（Freebucks 按 session-hour 计费）**：单个下游请求最多新建 `limits.max_new_sessions_per_request`（默认 2）条会话；复用热 session 与被上游拒绝的 admit 不占预算；换号前先把失败账号的会话早退 DELETE 拿退款；非账号级瞬时故障（网络抖动）先同账号重试一次，不新建会话。
+- **两套独立账本，只有一套会退**：`session_units`（`rateLimitsByModel.recentCount`，上限 6）早退时按实际用时比例**退还**；**Freebucks（每日池 + 余额）绝不退**——admit 一次即买断整小时，用 3 秒和 59 分钟扣一样多。故省钱只有一条路：**少 admit**（复用热 session）；任何"提前释放能省钱"的推理都是错的（实测，见 `docs/account-scheduling-and-refund.md` §3）。
+- **换号有成本（admit 一次 = 买断整小时，与用多久无关）**：单个下游请求最多新建 `limits.max_new_sessions_per_request`（默认 2）条会话；复用热 session 与被上游拒绝的 admit 不占预算；换号前先把失败账号的会话早退 DELETE **腾出槽位（不退 Freebucks）**；非账号级瞬时故障（网络抖动）先同账号重试一次，不新建会话。
 - **`free_mode_capacity_deferred`（"Free mode is briefly at capacity"）不冷却**：是免费模式瞬时容量排队，上游自己说 "will be retried automatically"，实测同 session 立即重试即恢复（flash 尤常见）。优先复用当前热 session 重试，绝不为此无谓新建 session 或把账号钉死。
 - gate 错误（session_expired/superseded/waiting_room 等）：先同账号 re-admit 一次（不冷却），连续两次仍失败才升级为换号冷却。
 - **session 轮询 GET 跳过在途请求**：上游同一个号同一时间只能一个客户端在线，轮询若撞上正在进行的 chat 会干扰/顶掉活跃会话，因此有请求在途时本轮刷新跳过。
@@ -87,7 +88,7 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 - **无会话记忆/分组**：`conversation_id` 不决定账号；同模型请求由热 session 优先策略统一调度。
 - 同一个 `instanceId` 支持并发 chat；后台 session GET 在有请求在途时仍必须跳过，避免客户端身份/轮询干扰活跃会话。
 - 新模型优先使用空闲（冷）账号；没有空闲账号而必须复用同一账号时，先释放旧 session。gate 错误（session_expired/superseded/waiting room 等）自动 re-admit **一次**。
-- **空闲自动释放**：会话在途归零后空闲超过 `session.idle_release_sec`（默认 300s，控制台「额度保护」可调）就早退 `DELETE` 拿 Freebucks 退款；DELETE 必须带 `x-freebuff-instance-id`（否则上游 400 `instance_required`，删不掉也退不了款）。有请求排队等待该会话时不得释放。
+- **空闲自动释放**：会话在途归零后空闲超过 `session.idle_release_sec`（默认 600s，控制台「额度保护」可调）就早退 `DELETE` **腾出该账号的上游会话槽位**（一个账号同时只有一条 session 且绑定模型；**不退 Freebucks**）；DELETE 必须带 `x-freebuff-instance-id`（否则上游 400 `instance_required`，删不掉）。有请求排队等待该会话时不得释放。
 
 ## Web 控制台
 
