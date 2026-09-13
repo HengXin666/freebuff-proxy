@@ -18,6 +18,7 @@
     "doctor": "node bin/doctor.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node test/smoke.mjs",
+    "pipeline:image": "node scripts/pipeline-image-test.mjs",
     "web": "node bin/serve.js",
     "pricing": "node bin/pricing.js"
   },

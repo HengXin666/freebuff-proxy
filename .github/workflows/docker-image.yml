@@ -30,6 +30,23 @@ jobs:
       - run: npm test
       - run: npm run typecheck
 
+  # 镜像启动门禁：真实构建 + 真实起容器 + 真实打健康检查。
+  #
+  # 为什么单独有这一关：上面的 test 用 mock 上游、**不启动容器**，所以"新镜像 +
+  # 真实/旧 /data"这条路从没被验过——真实事故就是换镜像后容器起不来（删掉几个
+  # /data/*.json 才恢复）。这一关把那条路补上：空目录 / 现有 data 副本 / 逐个把
+  # 某个 JSON 写坏（users.json 必须拒绝启动），任何一个场景不过就不允许推镜像。
+  image-boot:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build image and verify it actually boots
+        run: node scripts/pipeline-image-test.mjs
+
   # 发版门禁：tag（v*）必须与 package.json 版本一致，否则直接失败。
   # 这是「发版必须更新版本号」的强制保障——漏 bump 版本就推 tag 会在这一步被拦下。
   check-version:
@@ -50,7 +67,7 @@ jobs:
         id: verify
 
   build-push:
-    needs: test
+    needs: [test, image-boot]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:

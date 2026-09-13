@@ -23,6 +23,17 @@ const el = (tag, attrs = {}, children = []) => {
     } else if (typeof c === 'string' && c.trimStart().startsWith('<')) {
       // 字符串以 < 开头视为 HTML 片段（图标 SVG 等内部受控内容）直接注入；
       // 其余字符串一律 createTextNode 安全转义（用户输入/API 返回不会以 < 开头）。
+      //
+      // 警告：**现成节点请直接塞进 children，不要这里拼 HTML 字符串**。
+      // 该分支走的是 HTML 片段解析（insertAdjacentHTML），会把手写的 SVG 片段
+      // 当成 HTML 解析：没写自闭合斜杠的形状标签（<circle ...>）会吞掉后面的
+      // 兄弟节点，多个图标因此并成一个、后续内容整段不渲染（历史故障）。
+      // 图标请一律用 icon()，它已经统一补好自闭合斜杠。
+      // 新增图标若忘了写斜杠，这里给开发者留一条可见的线索。
+      if (/<(rect|circle|ellipse|line|polyline|polygon)[^<>]*[^/]>/i.test(c)) {
+        console.warn('[dashboard] HTML 片段里有未自闭合的 SVG 形状标签，'
+          + '可能吞掉相邻节点；请改用 icon() 或补上" /"', c)
+      }
       node.insertAdjacentHTML('beforeend', c)
     } else {
       node.append(document.createTextNode(String(c)))
@@ -72,8 +83,24 @@ function icon(name, size = 16) {
   svg.setAttribute('stroke-linecap', 'round')
   svg.setAttribute('stroke-linejoin', 'round')
   svg.setAttribute('aria-hidden', 'true')
-  svg.innerHTML = paths
+  /**
+   * 图标路径是**手写的 SVG 片段**，很多自闭合形状（<rect ... /> / <circle ... />）
+   * 漏了斜杠，HTML 解析器会把它当成开标签把后面的兄弟节点吞进去 ——
+   * 这正是「点局部刷新后多出一条栏目」的原因之一（另一个是刷新选错了容器，
+   * 见 refreshAccountsCard 里的注释）。
+   * 这里统一补上 XHTML 自闭合斜杠，让每个图形的边界明确。
+   */
+  svg.innerHTML = normalizeSvgPaths(paths)
   return svg
+}
+
+/** 给未闭合的形状标签补 ` /`（<rect x=..> → <rect x=.. />），保持文本模板解析。 */
+function normalizeSvgPaths(paths) {
+  const re = new RegExp(
+    '<(rect|circle|ellipse|line|polyline|polygon|path|use|image)([^<>]*?)(?<!/)>',
+    'g',
+  )
+  return String(paths).replace(re, '<$1$2 />')
 }
 
 /* ---------------- api ---------------- */
@@ -340,6 +367,7 @@ async function renderOverview(view) {
     view.append(renderOverviewHeader(data))
     view.append(renderStatCards(data))
     view.append(await renderAccountsCard(data))
+    await renderDataFilesCard(view)
     await renderProxySettings(view)
     await renderModelSettings(view)
     if (state.me.role === 'admin') await renderFlowsCard(view)
@@ -348,6 +376,85 @@ async function renderOverview(view) {
     view.innerHTML = ''
     view.append(el('div', { class: 'card' }, err.message))
   }
+}
+
+/**
+ * 数据文件自检（/api/system/data-status）。
+ *
+ * 起因是真实故障：镜像升级后服务起不来，日志里只有一行 warn，用户只能靠
+ * "删掉几个 json 就好了"试错。这里把 data/ 下每个 JSON 的装载状态摊开显示，
+ * 损坏的给出**可直接照做**的处置命令，并把"哪些是派生数据（删了自动重建）、
+ * 哪些是真源（删了就丢用户/丢退款句柄）"讲清楚。
+ */
+async function renderDataFilesCard(view) {
+  let data = null
+  try { data = await api('/api/system/data-status') } catch { return }
+  const files = data?.files || []
+  if (!files.length) return
+  const invalid = files.filter((f) => f.status === 'invalid')
+  const card = el('div', { id: 'data-files-card', class: 'card', style: 'margin-top:12px' })
+  card.append(el('div', { class: 'row spread' }, [
+    el('div', {}, [
+      el('h3', { style: 'margin:0 0 2px' }, '数据文件自检'),
+      el('span', { class: 'muted' }, `${data.dir} · 共 ${files.length} 个 JSON（${invalid.length ? invalid.length + ' 个损坏' : '全部正常'}）`),
+    ]),
+    el('button', { class: 'muted', onclick: () => refreshDataFilesCard() }, [icon('refresh', 13), '局部刷新']),
+  ]))
+  if (invalid.length) {
+    card.append(el('div', { class: 'muted', style: 'margin-top:8px;color:var(--red)' },
+      '⚠ 损坏的文件会让对应功能降级（配置回落默认值 / 账号履历丢失 / 会话退款索引丢失）。'
+      + '停服后把文件移走再启动即可自动重建；下面的命令可直接照做。'))
+  }
+  const rows = files.map((f) => {
+    const badge = f.status === 'ok'
+      ? el('span', { class: 'badge ok' }, '正常')
+      : f.status === 'missing'
+        ? el('span', { class: 'badge' }, '尚未生成')
+        : el('span', { class: 'badge err' }, '损坏')
+    return el('tr', {}, [
+      el('td', { class: 'mono', style: 'font-size:12px' }, f.name + (f.critical ? ' ⚠' : '')),
+      el('td', {}, badge),
+      el('td', { class: 'muted', style: 'font-size:12px' }, f.reason || (f.status === 'missing' ? '首次启动会自动创建' : '—')),
+      el('td', {}, f.status === 'invalid'
+        ? codeCopyButton(`mv ${f.file} ${f.file}.broken`)
+        : el('span', { class: 'muted' }, '—')),
+    ])
+  })
+  card.append(el('div', { class: 'table-wrap', style: 'margin-top:10px' }, [
+    el('table', { style: 'font-size:12px' }, [
+      el('thead', {}, el('tr', {}, ['文件', '状态', '说明', '处置'].map((t) => el('th', {}, t)))),
+      el('tbody', {}, rows),
+    ]),
+  ]))
+  view.append(card)
+}
+
+/** 一键复制命令的小按钮（运维照抄用）。 */
+function codeCopyButton(cmd) {
+  return el('div', { class: 'row', style: 'gap:6px' }, [
+    el('code', { class: 'mono', style: 'font-size:11px' }, cmd),
+    el('button', {
+      class: 'icon', title: '复制这条命令',
+      onclick: async () => {
+        try {
+          await navigator.clipboard.writeText(cmd)
+          toast('已复制处置命令')
+        } catch {
+          toast('复制失败，请手动选中', true)
+        }
+      },
+    }, icon('copy', 12)),
+  ])
+}
+
+/** 数据文件自检卡片局部刷新。 */
+async function refreshDataFilesCard() {
+  const old = $('#data-files-card')
+  if (!old) return
+  const holder = document.createElement('div')
+  await renderDataFilesCard(holder)
+  const fresh = holder.querySelector('#data-files-card')
+  if (fresh) old.replaceWith(fresh)
 }
 
 function skeletonOverview() {
@@ -433,7 +540,7 @@ async function renderAccountsCard(data) {
   card.append(head)
 
   if (totalReq > 0) {
-    const bar = el('div', { class: 'balance-bar' })
+    const bar = el('div', { class: 'balance-bar', id: 'balance-bar' })
     for (const a of data.accounts) {
       if (!a.requests) continue
       const pct = Math.round((a.requests / totalReq) * 100)
@@ -445,7 +552,11 @@ async function renderAccountsCard(data) {
     card.append(bar)
   }
 
-  card.append(buildAccountsTable(data.accounts))
+  // 账号分区容器必须**自带 id**：局部刷新要按它整体替换。
+  // 早先这里直接 append 一个没 id 的 div，刷新时用 $('.table-wrap') 选到的却是
+  // **第一个分区里的表**，把它替换成"整张新表"，于是新表被塞进第一个 <details>
+  // 里、旧分区原样留着——用户看到的就是「多出一条栏目、旧的没被删掉」。
+  card.append(el('div', { id: 'accounts-sections' }, buildAccountsTable(data.accounts)))
   return card
 }
 
@@ -602,20 +713,47 @@ function probeReason(code, message) {
  * （实测点「关闭会话」后用户只看到"账号状态已刷新"）。要提示就由调用方自己弹。
  */
 async function refreshAccountsCard({ silent = true } = {}) {
-  const wrap = $('.table-wrap', $('#app'))
+  const wrap = $('#accounts-sections')
   if (!wrap) return render()
   wrap.classList.add('refreshing')
   try {
     const data = await api('/api/overview')
     state.accounts = data.accounts
-    const table = buildAccountsTable(data.accounts)
-    wrap.replaceWith(table)
-    // 更新统计卡片
-    const statGrid = $('.stat-grid', $('#app'))
-    if (statGrid) statGrid.replaceWith(renderStatCards(data))
+    // 整体替换容器内部（不换容器本身，旧内容必然清空，不会残留分区）
+    wrap.innerHTML = ''
+    wrap.append(buildAccountsTable(data.accounts))
+    wrap.classList.remove('refreshing')
+    refreshSnapshotExtras(data)
     if (!silent) toast('账号状态已刷新')
   } catch (err) {
+    wrap.classList.remove('refreshing')
     toast(err.message, true)
+  }
+}
+
+/**
+ * 概览页 snapshot 型区块的定点刷新：统计卡、负载均衡条、账号池计数。
+ * 都不重建页面、不动其它卡片。
+ */
+function refreshSnapshotExtras(data) {
+  const statGrid = $('.stat-grid', $('#app'))
+  if (statGrid) statGrid.replaceWith(renderStatCards(data))
+  const barHost = $('#balance-bar')
+  const totalReq = (data.accounts || []).reduce((n, a) => n + (a.requests || 0), 0)
+  if (barHost && totalReq > 0) {
+    barHost.innerHTML = ''
+    for (const a of data.accounts) {
+      if (!a.requests) continue
+      const pct = Math.round((a.requests / totalReq) * 100)
+      barHost.append(el('div', {
+        style: `flex:${pct};background:${colorFor(a.email)}`,
+        title: `${a.email} ${pct}%（${a.requests}/${totalReq}）`,
+      }))
+    }
+  }
+  const h2 = $('#app h2')
+  if (h2 && h2.textContent.startsWith('账号池') && data.accountCount != null) {
+    h2.textContent = `账号池（${data.accountCount}）`
   }
 }
 
@@ -627,15 +765,14 @@ async function refreshOverviewAfterAccountChange() {
   try {
     const data = await api('/api/overview')
     state.accounts = data.accounts
-    const wrap = $('.table-wrap', $('#app'))
-    if (wrap) wrap.replaceWith(buildAccountsTable(data.accounts))
-    const statGrid = $('.stat-grid', $('#app'))
-    if (statGrid) statGrid.replaceWith(renderStatCards(data))
-    // 更新 header「账号池（N）」计数
-    const h2 = $('#app h2')
-    if (h2 && h2.textContent.startsWith('账号池')) {
-      h2.textContent = `账号池（${data.accountCount}）`
+    // 与 refreshAccountsCard 共用同一套定点更新（同一个 id 容器），
+    // 绝不再用 $('.table-wrap') 去选"第一个分区的表"。
+    const wrap = $('#accounts-sections')
+    if (wrap) {
+      wrap.innerHTML = ''
+      wrap.append(buildAccountsTable(data.accounts))
     }
+    refreshSnapshotExtras(data)
   } catch (err) {
     toast(err.message, true)
   }
@@ -675,11 +812,11 @@ async function probeAllAccounts() {
     state.accounts = r.accounts
     const failed = (r.results || []).filter((x) => !x.ok)
     toast(failed.length ? `探测完成，${failed.length} 个失败（点击行内检测图标看详情）` : '探测完成（只读，不占额度）', !!failed.length)
-    const wrap = $('.table-wrap', $('#app'))
+    const wrap = $('#accounts-sections')
     if (wrap) {
-      wrap.replaceWith(buildAccountsTable(r.accounts))
-      const statGrid = $('.stat-grid', $('#app'))
-      if (statGrid) statGrid.replaceWith(renderStatCards({ accounts: r.accounts }))
+      wrap.innerHTML = ''
+      wrap.append(buildAccountsTable(r.accounts))
+      refreshSnapshotExtras({ accounts: r.accounts })
     } else render()
   } catch (err) {
     restore()
@@ -1881,15 +2018,34 @@ function openImportModal() {
 }
 
 /* ---------------- users ---------------- */
+
+/**
+ * 用户表定点刷新：只更新表格与「新建用户」卡片，标题和页面骨架保持不动。
+ * 早先「局部刷新」直接调 renderUsers(view)（先 view.innerHTML = '' 再重建），
+ * 那不是刷新而是"重建整页"，用户观感就是"又多出一条栏目"。
+ */
+async function refreshUsersTable(view) {
+  const oldTable = $('#users-table')
+  if (!oldTable) return renderUsers(view)
+  // 渲染进**游离容器**再取出新表替换旧表：标题、表单、滚动位置都不动，
+  // 也绝不会有旧节点残留（游离容器里的东西不参与文档渲染）。
+  const holder = document.createElement('div')
+  await renderUsers(holder)
+  const fresh = holder.querySelector('#users-table')
+  if (fresh) oldTable.replaceWith(fresh)
+}
+
 async function renderUsers(view) {
   view.innerHTML = ''
   view.append(el('div', { class: 'row spread', style: 'margin-bottom:16px' }, [
     el('h2', { style: 'margin:0' }, '用户管理'),
-    el('button', { class: 'muted', onclick: () => renderUsers(view) }, [icon('refresh', 13), '局部刷新']),
+    // 局部刷新必须是"原地更新"：早先直接 renderUsers(view) 会把 view 整个清空重渲染，
+    // 用户看到的是"又新出一条栏目"（而它并不是真的刷新）。
+    el('button', { class: 'muted', onclick: () => refreshUsersTable(view) }, [icon('refresh', 13), '局部刷新']),
   ]))
   state.users = (await api('/api/users')).data
 
-  const table = el('div', { class: 'table-wrap' }, [
+  const table = el('div', { class: 'table-wrap', id: 'users-table' }, [
     el('table', {}, [
       el('thead', {}, el('tr', {}, ['用户名', '角色', 'API Key', '操作'].map((t) => el('th', {}, t)))),
       el('tbody', {}, state.users.map((u, i) => {
@@ -1925,7 +2081,7 @@ async function renderUsers(view) {
   ])
   view.append(el('div', { class: 'card', style: 'padding:0;overflow:hidden;margin-bottom:16px' }, table))
 
-  const form = el('div', { class: 'card' }, [
+  const form = el('div', { class: 'card', id: 'users-new-card' }, [
     el('h3', { style: 'margin:0 0 8px' }, '新建用户'),
     el('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fit,minmax(180px,1fr))' }, [
       el('div', {}, [el('label', {}, '用户名'), el('input', { id: 'nu-user', placeholder: 'alice' })]),

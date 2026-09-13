@@ -35,6 +35,14 @@ import {
 } from '../src/free-mode.js'
 import { SettingsStore } from '../src/web/settings-store.js'
 import { ModelStore } from '../src/web/model-store.js'
+import { UserStore } from '../src/web/user-store.js'
+import { ProxyStore } from '../src/web/proxy-store.js'
+import { WebSessionStore } from '../src/web/session-store.js'
+import {
+  dataFileAudit,
+  invalidDataFiles,
+  quarantineFile,
+} from '../src/util/json-store.js'
 import {
   extractGateError,
   extractRateLimitError,
@@ -5037,6 +5045,120 @@ server.close()
   cgServer.close()
   fs.rmSync(cgDir, { recursive: true, force: true })
   mockMode = 'ok'
+}
+
+// ===========================================================================
+// (DATA-FILES) 数据目录 JSON 的统一读取口径
+//
+// 真实事故：镜像升级后容器起不来，用户删掉几个 /data/*.json 才恢复，而日志里
+// 只有一行容易被忽略的 warn。根因是每个 store 各自 try/catch，坏了就当空数据
+// 继续跑 —— 于是"配置悄悄回落默认值""账号履历全丢"都没人告诉你。
+// 这里锁死三件事：
+//   ① 损坏文件必须被**显式记账**（启动横幅 / 控制台自检读的就是这份账）；
+//   ② users.json 损坏**绝不静默重建管理员**（loadStatus 必须是 invalid）；
+//   ③ 派生缓存（catalog-cache.json）损坏时不能安静地当"从没同步过"，要留证。
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-datastore-'))
+  const write = (name, content) => {
+    const p = path.join(dir, name)
+    fs.writeFileSync(p, content)
+    return p
+  }
+  const broken = '{"broken": tru' // 截断 + 非法字面量，最接近写盘被中断的真实形态
+
+  // ① 六个控制面 store：正常文件 → ok；损坏文件 → invalid（都登记进审计）
+  const usersPath = write('users.json', JSON.stringify({ version: 1, users: [] }))
+  const settingsPath = write('settings.json', JSON.stringify({ version: 1, accountMaxConcurrency: 3 }))
+  const proxiesPath = write('proxies.json', broken)
+  const modelsPath = write('custom-models.json', JSON.stringify({ version: 1, models: [], hidden: [] }))
+  const webSessPath = write('web-sessions.json', JSON.stringify({ version: 1, sessions: [] }))
+
+  const userStore = new UserStore(usersPath)
+  assert.equal(userStore.loadStatus, 'ok', 'users.json 正常时必须报 ok')
+  const settingsStore = new SettingsStore(settingsPath)
+  assert.equal(settingsStore.get().accountMaxConcurrency, 3, 'settings.json 必须能读回设置')
+  const proxyStore = new ProxyStore(proxiesPath)
+  assert.equal(proxyStore.loadStatus, 'invalid', '损坏的 proxies.json 必须报 invalid')
+  assert.deepEqual(proxyStore.list(), [], '损坏的代理池按空处理（不抛）')
+  const modelStore2 = new ModelStore(modelsPath)
+  assert.equal(modelStore2.loadStatus, 'ok', 'custom-models.json 正常时必须报 ok')
+  const webSessions = new WebSessionStore(webSessPath, 3600_000)
+  assert.equal(webSessions.loadStatus, 'ok', 'web-sessions.json 正常时必须报 ok')
+
+  // 缺文件 = missing（首次启动），不是 invalid —— 否则全新部署会被误报成损坏
+  const missingStore = new ProxyStore(path.join(dir, 'nope.json'))
+  assert.equal(missingStore.loadStatus, 'missing', '文件不存在必须报 missing 而不是 invalid')
+
+  // 审计按**绝对路径**记账（同一进程里可能有多个同名文件，如测试各自的临时目录）
+  const byPath = new Map(dataFileAudit().map((e) => [e.file, e]))
+  const rec = byPath.get(path.resolve(proxiesPath))
+  assert.equal(rec?.status, 'invalid', '损坏文件必须出现在装载审计里')
+  assert.ok(rec?.reason, '损坏必须带上原因（否则用户无从下手）')
+  assert.ok(
+    invalidDataFiles().some((e) => e.file === path.resolve(proxiesPath)),
+    '损坏文件必须出现在 invalidDataFiles()（启动横幅/控制台自检都读它）',
+  )
+
+  // ② users.json 损坏：状态必须是 invalid，且**不能**被当成"没有账号"
+  //    —— 否则 bin/serve.js 的拒绝启动分支永远走不到，又会静默重建管理员。
+  const brokenUsers = write('users-broken.json', broken)
+  const brokenUserStore = new UserStore(brokenUsers)
+  assert.equal(
+    brokenUserStore.loadStatus,
+    'invalid',
+    '损坏的 users.json 必须报 invalid（bin/serve.js 据此拒绝启动）',
+  )
+  assert.equal(brokenUserStore.users.length, 0, '损坏时不得凭空造出用户')
+
+  // ③ 派生缓存损坏：必须登记为 invalid，且把损坏文件挪到一边留证（不静默覆盖）
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-catalogleak-'))
+  const cachePath = path.join(cacheDir, CATALOG_CACHE_FILENAME)
+  fs.writeFileSync(cachePath, broken)
+  const quarantined = quarantineFile(cachePath)
+  assert.ok(quarantined && fs.existsSync(quarantined), '损坏的派生缓存必须被挪走留证')
+  assert.ok(!fs.existsSync(cachePath), '挪走后原路径应为空，交给同步重新生成')
+  assert.ok(
+    quarantined.includes('.corrupt-'),
+    '备份文件名必须带 .corrupt- 前缀，便于用户识别与清理',
+  )
+
+  fs.rmSync(dir, { recursive: true, force: true })
+  fs.rmSync(cacheDir, { recursive: true, force: true })
+}
+
+// ===========================================================================
+// (CONSOLE-REFRESH) 控制台「局部刷新」必须是原地更新，不能"多出一条栏目"
+//
+// 实测故障：总览页点「局部刷新」会多出一条版面、旧内容还在。根因是刷新用
+// $('.table-wrap') 选中了**第一个分区的表**，把"整张新表"替换进去 —— 新表被塞
+// 进第一个 <details>，旧分区原样留着。用户页更直接：把 view.innerHTML 清空重建。
+// 这里用源码断言把两处钉死（这两个函数没法在 node 里直接跑，但结构是确定的）。
+{
+  const dashSrc = fs.readFileSync(
+    new URL('../dashboard/app.js', import.meta.url),
+    'utf8',
+  )
+  assert.ok(
+    /id: 'accounts-sections'/.test(dashSrc),
+    '账号分区必须有个带 id 的专用容器（局部刷新按它整体替换）',
+  )
+  assert.ok(
+    /\$\('#accounts-sections'\)/.test(dashSrc),
+    '局部刷新必须定位到 accounts-sections，而不是第一个 .table-wrap',
+  )
+  assert.ok(
+    !/\$\('\.table-wrap', \$\('#app'\)\)/.test(dashSrc),
+    '不得再用 $(".table-wrap", …) 做刷新定位——那正是"多出一条栏目"的根因',
+  )
+  assert.ok(
+    /function refreshUsersTable/.test(dashSrc) && !/onclick: \(\) => renderUsers\(view\)/.test(dashSrc),
+    '用户页「局部刷新」必须走 refreshUsersTable，不能 renderUsers(view) 重建整页',
+  )
+  // SVG 图标必须补自闭合斜杠：手写 <circle ...> 会吞掉相邻节点（同一类渲染错乱）
+  assert.ok(
+    /function normalizeSvgPaths/.test(dashSrc) && /normalizeSvgPaths\(paths\)/.test(dashSrc),
+    'icon() 必须对 SVG 片段做自闭合归一，否则相邻节点会被解析器吞掉',
+  )
 }
 
 globalThis.fetch = originalFetch

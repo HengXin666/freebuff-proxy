@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { readJsonFileState, noteDataFile } from '../util/json-store.js'
 
 /**
  * Web session store (control-plane logins). Persisted so restarts keep
@@ -19,18 +20,25 @@ export class WebSessionStore {
     this.ttlMs = ttlMs || 7 * 24 * 3600 * 1000
     /** @type {any[]} */
     this.sessions = []
+    /** 装载结果（'ok' | 'missing' | 'invalid'）：损坏 = 控制台登录态重置
+     * （重新登录即可），但仍要在启动自检里看得见。 */
+    this.loadStatus = 'missing'
+    this.loadReason = null
     this.load()
     this._prune()
   }
 
   load() {
-    try {
-      if (!fs.existsSync(this.file)) return
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'))
-      if (raw && Array.isArray(raw.sessions)) this.sessions = raw.sessions
-    } catch {
-      // ignore corrupt file
+    const st = readJsonFileState(this.file)
+    noteDataFile(this.file, st)
+    this.loadStatus = st.status
+    this.loadReason = st.status === 'invalid' ? st.reason : null
+    // 损坏时不能静默当"没人登录"：这只影响控制台登录态（用户重新登录即可），
+    // 但要让它出现在启动横幅/自检卡片里，而不是无声无息。
+    if (st.status === 'ok' && Array.isArray(st.data?.sessions)) {
+      this.sessions = st.data.sessions
     }
+    return st
   }
 
   save() {

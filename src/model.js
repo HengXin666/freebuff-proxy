@@ -13,6 +13,12 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import {
+  readJsonFileState,
+  noteDataFile,
+  quarantineFile,
+  invalidShape,
+} from './util/json-store.js'
 import { fileURLToPath } from 'node:url'
 
 const CATALOG_PATH = path.join(
@@ -120,12 +126,20 @@ function loadBuiltinCatalog() {
  */
 function loadCatalog() {
   let cached = null
-  try {
-    const raw = JSON.parse(fs.readFileSync(catalogCachePathInUse, 'utf8'))
-    if (Array.isArray(raw?.models) && raw.models.length > 0) cached = raw.models
-  } catch {
-    // 缓存不存在/损坏 → 纯内置 catalog
+  // 运行时缓存是**派生数据**（可由内置 catalog / 上游同步重建），所以坏了就
+  // 当没有——但必须显式登记 + 把损坏文件挪走留证，绝不能安静地当"从没同步过"。
+  let st = readJsonFileState(catalogCachePathInUse)
+  if (st.status === 'ok' && !Array.isArray(st.data?.models)) {
+    st = invalidShape('缺少 models 数组')
   }
+  if (st.status === 'invalid') {
+    const moved = quarantineFile(catalogCachePathInUse)
+    console.warn(
+      `[model] catalog 缓存损坏，已忽略并重建${moved ? `（原文件备份为 ${moved}）` : ''}: ${st.reason}`,
+    )
+  }
+  noteDataFile(catalogCachePathInUse, st)
+  if (st.status === 'ok' && st.data.models.length > 0) cached = st.data.models
   return mergeCatalogWithBuiltin(loadBuiltinCatalog(), cached)
 }
 

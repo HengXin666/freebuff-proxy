@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { readJsonFileState, noteDataFile } from '../util/json-store.js'
 
 /**
  * 前端管理的自定义模型列表（全局生效）。
@@ -37,13 +38,20 @@ export class ModelStore {
     this.models = []
     /** @type {string[]} 用户在前端「模型管理」删除/隐藏的模型 id（含内置目录的） */
     this.hiddenIds = []
+    /** 装载结果（'ok' | 'missing' | 'invalid'）：损坏时自定义模型/隐藏列表全丢，
+     * 表现为"模型管理被重置"，必须显式暴露。 */
+    this.loadStatus = 'missing'
+    this.loadReason = null
     this.load()
   }
 
   load() {
-    try {
-      if (!fs.existsSync(this.file)) return
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'))
+    const st = readJsonFileState(this.file)
+    noteDataFile(this.file, st)
+    this.loadStatus = st.status
+    this.loadReason = st.status === 'invalid' ? st.reason : null
+    if (st.status === 'ok') {
+      const raw = st.data
       if (raw && Array.isArray(raw.models)) {
         this.models = raw.models
           .map((m) => normalizeCustomModel(m))
@@ -54,11 +62,10 @@ export class ModelStore {
           .filter((x) => typeof x === 'string' && x.trim())
           .map((x) => x.trim())
       }
-    } catch (err) {
-      console.error(
-        `model store load failed: ${err instanceof Error ? err.message : err}`,
-      )
+    } else if (st.status === 'invalid') {
+      console.error(`[freebuff-proxy] 数据文件损坏: ${this.file} — ${st.reason}（自定义模型按空处理）`)
     }
+    return st
   }
 
   /**

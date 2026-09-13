@@ -17,6 +17,7 @@ import {
 } from '../auth-store.js'
 import { logger } from '../util/log.js'
 import { requestSlotStats } from '../proxy.js'
+import { dataFileAudit } from '../util/json-store.js'
 
 const SESSION_COOKIE = 'fb_session'
 
@@ -35,6 +36,13 @@ const SESSION_COOKIE = 'fb_session'
  *   restart?: () => void,
  * }} deps
  */
+/**
+ * 数据文件分级：critical = 丢失/损坏无法一键恢复，只能人工处置（users.json 的
+ * 登录凭据真源、sessions.json 里可能还挂着没退款的计费会话句柄）；
+ * 其余都是"重建即可"的派生/配置数据，控制台按损坏列出并给出 mv 建议。
+ */
+const CRITICAL_DATA_FILES = new Set(['users.json', 'sessions.json'])
+
 export function createWebApi(deps) {
   const {
     config,
@@ -169,6 +177,27 @@ export function createWebApi(deps) {
           : '已断开全部 session，下次请求将自动重建；正在传输的连接可能被中断',
         accounts,
         failed,
+      })
+      return true
+    }
+
+    if (method === 'GET' && path === '/api/system/data-status') {
+      // 数据文件自检：把 data/ 下每个 JSON 的装载状态（ok/missing/invalid）
+      // 连同**处置建议**返回。起因是真实故障——镜像升级后起不来、日志里只有
+      // 一行 warn，用户靠"删几个 json"试错；这里让控制台能一眼看到是哪个文件
+      // 坏了、为什么、该怎么办。
+      const files = dataFileAudit().map((f) => ({
+        file: f.file,
+        name: path.basename(f.file),
+        status: f.status,
+        reason: f.reason,
+        critical: CRITICAL_DATA_FILES.has(path.basename(f.file)),
+      }))
+      sendJson(res, 200, {
+        dir: config.server.dataDir,
+        ok: files.every((f) => f.status !== 'invalid'),
+        files,
+        invalid: files.filter((f) => f.status === 'invalid'),
       })
       return true
     }

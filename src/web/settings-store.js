@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { readJsonFileState, noteDataFile } from '../util/json-store.js'
 
 const DEFAULT_SETTINGS = Object.freeze({
   freeToolSignatureEnabled: true,
@@ -25,13 +26,24 @@ export class SettingsStore {
   constructor(file) {
     this.file = file
     this.settings = { ...DEFAULT_SETTINGS }
+    /** 装载结果（'ok' | 'missing' | 'invalid'）：损坏时是**回落默认值**，必须在
+     * 启动横幅/自检里说清楚，否则用户配的额度保护会悄悄消失。 */
+    this.loadStatus = 'missing'
+    this.loadReason = null
     this.load()
   }
 
   load() {
-    try {
-      if (!fs.existsSync(this.file)) return
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'))
+    const st = readJsonFileState(this.file)
+    noteDataFile(this.file, st)
+    this.loadStatus = st.status
+    this.loadReason = st.status === 'invalid' ? st.reason : null
+    if (st.status === 'invalid') {
+      // 结构也一并判：能解析但不是对象（如被写成数组/字符串）同样按损坏处理。
+      this.loadReason = st.reason
+    }
+    if (st.status === 'ok') {
+      const raw = st.data
       if (typeof raw?.freeToolSignatureEnabled === 'boolean') {
         this.settings.freeToolSignatureEnabled = raw.freeToolSignatureEnabled
       }
@@ -51,11 +63,10 @@ export class SettingsStore {
           raw.maxNewSessionsPerRequest,
         )
       }
-    } catch (err) {
-      console.error(
-        `settings store load failed: ${err instanceof Error ? err.message : err}`,
-      )
+    } else if (st.status === 'invalid') {
+      console.error(`[freebuff-proxy] 数据文件损坏: ${this.file} — ${st.reason}（已回落默认设置）`)
     }
+    return st
   }
 
   get() {

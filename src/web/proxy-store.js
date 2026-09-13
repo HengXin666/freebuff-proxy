@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { readJsonFileState, noteDataFile } from '../util/json-store.js'
 
 /**
  * 前端管理的全局代理池。
@@ -17,21 +18,24 @@ export class ProxyStore {
     this.file = file
     /** @type {string[]} */
     this.proxies = []
+    /** 装载结果（'ok' | 'missing' | 'invalid'）——损坏时=没有全局代理池（直连），
+     * 必须显式暴露：用户会以为"代理设置被重置了"。 */
+    this.loadStatus = 'missing'
+    this.loadReason = null
     this.load()
   }
 
   load() {
-    try {
-      if (!fs.existsSync(this.file)) return
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'))
-      if (raw && Array.isArray(raw.proxies)) {
-        this.proxies = raw.proxies.map(String).filter(Boolean)
-      }
-    } catch (err) {
-      console.error(
-        `proxy store load failed: ${err instanceof Error ? err.message : err}`,
-      )
+    const st = readJsonFileState(this.file)
+    noteDataFile(this.file, st)
+    this.loadStatus = st.status
+    this.loadReason = st.status === 'invalid' ? st.reason : null
+    if (st.status === 'ok' && Array.isArray(st.data?.proxies)) {
+      this.proxies = st.data.proxies.map(String).filter(Boolean)
+    } else if (st.status === 'invalid') {
+      console.error(`[freebuff-proxy] 数据文件损坏: ${this.file} — ${st.reason}（全局代理池按空处理）`)
     }
+    return st
   }
 
   list() {

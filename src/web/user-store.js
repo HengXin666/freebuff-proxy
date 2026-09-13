@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { readJsonFileState, noteDataFile, invalidShape } from '../util/json-store.js'
 
 /**
  * JSON-file backed web users (control-plane accounts), separate from
@@ -44,17 +45,37 @@ export class UserStore {
     this.file = file
     /** @type {any[]} */
     this.users = []
+    /**
+     * 装载结果（'ok' | 'missing' | 'invalid'）。启动流程据此判断 users.json 是否
+     * 需要人工处理——**损坏时绝不静默重建管理员**（用户会以为账号全丢了）。
+     * @type {'ok' | 'missing' | 'invalid'}
+     */
+    this.loadStatus = 'missing'
+    /** 损坏原因（loadStatus === 'invalid' 时）。 */
+    this.loadReason = null
     this.load()
   }
 
   load() {
-    try {
-      if (!fs.existsSync(this.file)) return
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'))
-      if (raw && Array.isArray(raw.users)) this.users = raw.users
-    } catch (err) {
-      console.error(`user store load failed: ${err instanceof Error ? err.message : err}`)
+    let st = readJsonFileState(this.file)
+    if (st.status === 'ok' && !Array.isArray(st.data?.users)) {
+      st = invalidShape('缺少 users 数组')
     }
+    noteDataFile(this.file, st)
+    this.loadStatus = st.status
+    this.loadReason = st.status === 'invalid' ? st.reason : null
+    if (st.status === 'ok') {
+      this.users = st.data.users
+    } else {
+      // 损坏的 users.json 如果被当成"还没有账号"，ensureDefaultAdmin 会立刻
+      // 建一个新 admin —— 用户看到的就是"我的用户/密码全没了"。这里保持空列表
+      // 但把状态交给启动流程裁决（bin/serve.js 会拒绝启动并要求人工处置）。
+      this.users = []
+      if (st.status === 'invalid') {
+        console.error(`[freebuff-proxy] 数据文件损坏: ${this.file} — ${st.reason}`)
+      }
+    }
+    return st
   }
 
   save() {

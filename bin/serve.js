@@ -14,6 +14,7 @@ import { ProxyStore } from '../src/web/proxy-store.js'
 import { SettingsStore } from '../src/web/settings-store.js'
 import { ModelStore } from '../src/web/model-store.js'
 import { listAccounts } from '../src/auth-store.js'
+import { dataFileAudit, invalidDataFiles } from '../src/util/json-store.js'
 
 function isLoopbackHost(host) {
   return ['127.0.0.1', 'localhost', '::1'].includes(String(host || ''))
@@ -53,6 +54,37 @@ async function main() {
   const config = loadConfig(parseConfigPath(process.argv.slice(2)))
   configureLogger(config.logging)
 
+  /**
+   * 数据文件定点自检（启动横幅）：把 data/ 下每个 JSON 的装载结果打印一行。
+   * 起因是真实故障——镜像升级后服务起不来，而日志里只有一行 warn，用户只能
+   * 靠"删掉几个 json 就好了"这种试错。现在启动时**明确说清楚**：哪些文件正常、
+   * 哪些缺失（首次启动）、哪些损坏以及怎么处置。
+   */
+  function logDataFileAudit() {
+    const files = dataFileAudit()
+    if (!files.length) return
+    const bad = invalidDataFiles()
+    logger.info('data files checked', {
+      total: files.length,
+      ok: files.filter((f) => f.status === 'ok').length,
+      missing: files.filter((f) => f.status === 'missing').length,
+      invalid: bad.length,
+    })
+    for (const f of bad) {
+      console.error(
+        `[freebuff-proxy] ⚠ 数据文件损坏: ${f.file}\n` +
+          `  原因: ${f.reason}\n` +
+          `  处置: 停服后把该文件移走（mv ${f.file} ${f.file}.broken）再启动即可，\n` +
+          `        程序会按默认值重建；要保留历史就先备份。控制台「总览 → 数据文件自检」也会列出。\n`,
+      )
+    }
+    if (bad.length) {
+      logger.warn('data file problems detected (service continues in degraded mode)', {
+        files: bad.map((f) => f.file),
+      })
+    }
+  }
+
   // 自重启子进程：等旧进程释放端口后再走正常启动流程
   if (process.env.FREEBUFF_PROXY_RESTART_CHILD === '1') {
     logger.info('restart child starting; waiting for port to free', {
@@ -64,6 +96,28 @@ async function main() {
 
   const dataDir = config.server.dataDir
   const userStore = new UserStore(path.join(dataDir, 'users.json'))
+  /**
+   * users.json 损坏**必须拒绝启动**，绝不能"当成还没有账号"继续跑：
+   * ensureDefaultAdmin 会立刻新建一个 admin，用户看到的是"我的账号和密码全没了"；
+   * 而实际上文件还在盘上（多半是被写坏/版本不兼容），把旧文件挪开就能重新引导。
+   * 数据目录里的其它文件坏了都只是降级（各自有兜底），只有这一份是登录凭据真源，
+   * 静默重建的代价远大于"暂停启动并把原因写清楚"。
+   */
+  if (userStore.loadStatus === 'invalid') {
+    console.error(
+      `\n[freebuff-proxy] 拒绝启动：数据文件损坏，不能安全引导管理员账号\n` +
+        `  文件: ${userStore.file}\n` +
+        `  原因: ${userStore.loadReason}\n\n` +
+        `  为什么不能自动重建：users.json 是控制台登录凭据（哈希+API Key）的唯一真源。\n` +
+        `  自动重建会新建一个 admin，让你以为"账号全丢了"，而原文件其实还在。\n\n` +
+        `  请二选一后重启：\n` +
+        `   1) 恢复原文件：把备份/旧版本复制回 ${userStore.file}\n` +
+        `   2) 重新引导：mv ${userStore.file} ${userStore.file}.broken 后重启\n` +
+        `      （全新管理员密码会打印在日志里；ADMIN_PASSWORD 也可直接指定）\n`,
+    )
+    process.exitCode = 1
+    return
+  }
   const webSessions = new WebSessionStore(
     path.join(dataDir, 'web-sessions.json'),
     (config.web.sessionTtlHours || 24 * 7) * 3600 * 1000,
@@ -192,6 +246,20 @@ async function main() {
     credentialsDir: ctx.runtimes.dir,
     config,
   })
+  // catalog 运行时缓存是**懒加载**的（第一次用到模型才读）。这里先按 dataDir
+  // 切路径并读一次，一是保证 /v1/models 与内置目录一致（原来由 startServer 里的
+  // 异步分支兜底，容器里可能晚于首个请求），二是让"缓存损坏"能出现在下面的自检里。
+  try {
+    const { applyCatalogCache } = await import('../src/model.js')
+    applyCatalogCache(dataDir)
+  } catch (err) {
+    logger.warn('catalog cache preload skipped', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+  // 到这里 data/ 下的 JSON 已全部装载过一遍（控制面 6 个 + 句柄索引 + 账号账本
+  // + 登录流程 + catalog 缓存），一次性把自检结果打到启动日志里。
+  logDataFileAudit()
 
   let server = null
   const shutdown = async (signal) => {

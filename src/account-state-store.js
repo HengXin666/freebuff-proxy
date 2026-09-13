@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { logger } from './util/log.js'
+import { readJsonFileState, noteDataFile } from './util/json-store.js'
 
 /** 两位小数（Freebucks 金额对账用）。 */
 function round2(n) {
@@ -48,13 +49,29 @@ export class AccountStateStore {
       lastSuccessKey: null,
       accounts: {},
     }
+    /** 装载结果（'ok' | 'missing' | 'invalid'）：损坏 = 账号履历与
+     * "余额买不起就别 admit"闸门失效（重启后可能去撞已知余额不足的号）。 */
+    this.loadStatus = 'missing'
+    this.loadReason = null
     this.load()
   }
 
   load() {
+    const st = readJsonFileState(this.file)
+    noteDataFile(this.file, st)
+    this.loadStatus = st.status
+    this.loadReason = st.status === 'invalid' ? st.reason : null
+    if (st.status !== 'ok') {
+      if (st.status === 'invalid') {
+        logger.warn('account-state: 读取失败，按空账本继续', {
+          file: this.file,
+          reason: st.reason,
+        })
+      }
+      return st
+    }
     try {
-      if (!fs.existsSync(this.file)) return
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'))
+      const raw = st.data
       const accounts = {}
       const src = raw?.accounts
       if (src && typeof src === 'object' && !Array.isArray(src)) {
@@ -77,6 +94,7 @@ export class AccountStateStore {
         error: err instanceof Error ? err.message : String(err),
       })
     }
+    return st
   }
 
   /**

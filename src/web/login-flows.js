@@ -9,6 +9,7 @@ import {
   accountKeyOf,
 } from '../auth-store.js'
 import { logger } from '../util/log.js'
+import { readJsonFileState, noteDataFile } from '../util/json-store.js'
 
 /**
  * Web-driven Freebuff login flow ("callback" style):
@@ -32,6 +33,10 @@ export class LoginFlowManager {
     this.config = config
     /** @type {Map<string, any>} */
     this.flows = new Map()
+    /** 装载结果（'ok' | 'missing' | 'invalid'）：损坏 = 等待中的登录流程全丢
+     * （重新发起即可，不致命），但要在自检里看得见。 */
+    this.loadStatus = 'missing'
+    this.loadReason = null
     this.load()
     /** 上一轮 pollAll 是否还在跑（上游慢/挂起时防止每 4s 再堆一轮并发轮询）。 */
     this._polling = false
@@ -52,15 +57,16 @@ export class LoginFlowManager {
   }
 
   load() {
-    try {
-      if (!fs.existsSync(this.file)) return
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'))
-      if (raw && Array.isArray(raw.flows)) {
-        for (const f of raw.flows) this.flows.set(f.id, f)
-      }
-    } catch {
-      // ignore
+    const st = readJsonFileState(this.file)
+    noteDataFile(this.file, st)
+    this.loadStatus = st.status
+    this.loadReason = st.status === 'invalid' ? st.reason : null
+    if (st.status === 'ok' && Array.isArray(st.data?.flows)) {
+      for (const f of st.data.flows) this.flows.set(f.id, f)
+    } else if (st.status === 'invalid') {
+      logger.warn('数据文件损坏: 登录流程', { file: this.file, reason: st.reason })
     }
+    return st
   }
 
   save() {

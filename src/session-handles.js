@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { logger } from './util/log.js'
+import { readJsonFileState, noteDataFile } from './util/json-store.js'
 
 /**
  * 上游会话句柄的**持久化索引**（/data/sessions.json）。
@@ -27,13 +28,29 @@ export class SessionHandleStore {
     this.sessions = new Map()
     /** @type {Array<{key:string,instanceId:string,model?:string|null,admittedAt?:string|null,expiresAt?:string|null,note?:string}>} */
     this.orphans = []
+    /** 装载结果（'ok' | 'missing' | 'invalid'）。损坏 = 句柄索引丢失 = 上游会话
+     * 变成无法寻址的计费孤儿（删不掉、退不了款），必须在启动横幅里点名。 */
+    this.loadStatus = 'missing'
+    this.loadReason = null
     this.load()
   }
 
   load() {
+    const st = readJsonFileState(this.file)
+    noteDataFile(this.file, st)
+    this.loadStatus = st.status
+    this.loadReason = st.status === 'invalid' ? st.reason : null
+    if (st.status !== 'ok') {
+      if (st.status === 'invalid') {
+        logger.warn('数据文件损坏: 会话句柄索引，无法扫尾退款', {
+          file: this.file,
+          reason: st.reason,
+        })
+      }
+      return st
+    }
     try {
-      if (!fs.existsSync(this.file)) return
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'))
+      const raw = st.data
       // 上次进程遗留的 sessions 一律视为孤儿：本进程还没 admit 过任何会话，
       // 这些句柄要么还有效（需要 DELETE 退款）要么已过期（DELETE 无害）。
       for (const s of Array.isArray(raw?.sessions) ? raw.sessions : []) {
@@ -46,11 +63,14 @@ export class SessionHandleStore {
       }
       this.sessions.clear()
     } catch (err) {
+      // 已经解析成 JSON 了：这里只可能是字段结构问题（Array.isArray 之后基本
+      // 不会抛）。保留原来的兜底，不让启动流程被一个索引文件拖死。
       logger.warn('session handle store load failed', {
         file: this.file,
         error: err instanceof Error ? err.message : String(err),
       })
     }
+    return st
   }
 
   /**
