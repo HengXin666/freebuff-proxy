@@ -317,7 +317,7 @@ export class AccountRuntimes {
       // 账号信息变更（token/代理）：旧 runtime 立即让位，session 等在途
       // 请求结束后再优雅释放（避免掐断正在传输的 SSE；等待方会在 chat
       // 流程通过 isCurrentRuntime 检测到已被顶替并重新选号）。
-      existing.sessions.releaseWhenIdle().catch(() => {})
+      this._disposeRuntime(existing, 'account credentials/proxy changed')
       this.byKey.delete(accountKey)
     }
 
@@ -423,6 +423,48 @@ export class AccountRuntimes {
   _accountConcurrency() {
     const n = this._getAccountConcurrency()
     return Number.isFinite(n) && n >= 1 ? Math.min(16, Math.floor(n)) : 1
+  }
+
+  /**
+   * 丢弃一个 runtime 时的统一收尾：先优雅释放它的上游会话（要用它的
+   * upstream 出网），**会话收尾后再关闭出网 agent**，否则 keep-alive
+   * socket 会随"更新凭证/导入账号/改代理池"的次数一直累积（运行越久越慢）。
+   * 全程不阻塞调用方（fire-and-forget），失败只记日志。
+   * @param {any} rt
+   * @param {string} why
+   */
+  _disposeRuntime(rt, why) {
+    if (!rt) return
+    /** 会话已尽量释放（或本来就没会话）→ 释放出网资源。 */
+    const closeUpstream = () => {
+      try {
+        const p = rt.upstream?.close?.()
+        if (p && typeof p.catch === 'function') p.catch(() => {})
+      } catch {
+        // ignore
+      }
+    }
+    let pending
+    try {
+      pending = rt.sessions?.releaseWhenIdle?.()
+    } catch (err) {
+      logger.warn(`${why}; session release threw`, {
+        key: rt.key,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+    if (pending && typeof pending.then === 'function') {
+      // 必须等会话释放（它要用 upstream 出网）再关 agent，否则 DELETE 会失败。
+      pending.then(closeUpstream, (err) => {
+        logger.warn(`${why}; deferred session release failed`, {
+          key: rt.key,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        closeUpstream()
+      })
+    } else {
+      closeUpstream()
+    }
   }
 
   chatLockFor(key) {
@@ -1070,12 +1112,7 @@ export class AccountRuntimes {
     const rt = this.byKey.get(key)
     if (!rt) return
     this.byKey.delete(key)
-    rt.sessions.releaseWhenIdle().catch((err) => {
-      logger.warn('account invalidated; deferred session release failed', {
-        key,
-        error: err instanceof Error ? err.message : String(err),
-      })
-    })
+    this._disposeRuntime(rt, 'account invalidated')
   }
 
   /**
@@ -1133,12 +1170,7 @@ export class AccountRuntimes {
     const oldRuntimes = [...this.byKey.values()]
     this.byKey.clear()
     for (const rt of oldRuntimes) {
-      rt.sessions.releaseWhenIdle().catch((err) => {
-        logger.warn('proxy pool changed; deferred session release failed', {
-          key: rt.key,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      })
+      this._disposeRuntime(rt, 'proxy pool changed')
     }
     logger.info('proxy pool changed; cached runtimes invalidated', {
       count: oldRuntimes.length,
@@ -1354,6 +1386,10 @@ export class AccountRuntimes {
     const tasks = [...this.byKey.values()].map((rt) => rt.sessions.shutdown())
     await Promise.allSettled(tasks)
     this.flushState()
+    // 关闭所有出网 agent（keep-alive socket），别把句柄留给进程退出流程。
+    await Promise.allSettled(
+      [...this.byKey.values()].map((rt) => rt.upstream?.close?.()),
+    )
     this.byKey.clear()
     return rel
   }

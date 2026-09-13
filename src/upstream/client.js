@@ -499,6 +499,30 @@ export function createUpstreamClient(config, token, opts = {}) {
         includeAuth: false,
       })
     },
+
+    /**
+     * 释放本 client 持有的出网资源（undici ProxyAgent / EnvHttpProxyAgent）。
+     *
+     * **必须显式调用**：每个账号 runtime 在构造时都会 `new ProxyAgent(...)`，
+     * 而 agent 自带 keep-alive 连接池。更新凭证、导入账号、切换代理池都会
+     * **重建 runtime 并丢弃旧的**——若旧 agent 不被 close，它的 socket 会一直
+     * 挂着，随"更新账号"的次数单调累积（实测每轮凭证更新留下 1 个常驻
+     * socket），表现为运行越久越慢、连接越难建立。
+     * @returns {Promise<void>}
+     */
+    async close() {
+      const agents =
+        proxyRes.kind === 'pool' ? proxyRes.agents : proxyRes.agent ? [proxyRes.agent] : []
+      await Promise.all(
+        agents.map(async (a) => {
+          try {
+            await a?.close?.()
+          } catch {
+            // 已关闭 / 正在关闭：忽略
+          }
+        }),
+      )
+    },
   }
 }
 

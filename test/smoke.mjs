@@ -4836,6 +4836,93 @@ server.close()
   )
 }
 
+// ===========================================================================
+// (AGENT-LEAK) 更新凭证 / 改代理池丢弃 runtime 时，必须关闭出网 agent
+//
+// 每个账号 runtime 构造时都会 new ProxyAgent（带 keep-alive 连接池）。
+// "更新凭证/导入账号/切换代理池"都会重建 runtime —— 若旧 agent 不 close，
+// 它的 socket 会随操作次数单调累积，表现为**运行越久越慢**、连接越难建立。
+// 修复前实测：12 轮更新 → 13 个常驻 socket；修复后 → 1 个。
+{
+  const origin = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end('{"ok":true}')
+  })
+  await new Promise((r) => origin.listen(0, '127.0.0.1', r))
+  const oport = origin.address().port
+
+  // 一个真正会转发 CONNECT 的代理，让请求能正常完成、连接进入 keep-alive
+  const proxySrv = http.createServer((req, res) => {
+    res.writeHead(200)
+    res.end('ok')
+  })
+  proxySrv.on('connect', (req, clientSock) => {
+    const [host, port] = req.url.split(':')
+    const up = net.connect(Number(port), host, () => {
+      clientSock.write('HTTP/1.1 200 Connection Established\r\n\r\n')
+      up.pipe(clientSock)
+      clientSock.pipe(up)
+    })
+    up.on('error', () => clientSock.destroy())
+    clientSock.on('error', () => up.destroy())
+  })
+  await new Promise((r) => proxySrv.listen(0, '127.0.0.1', r))
+  const pport = proxySrv.address().port
+  const socks = () =>
+    new Promise((r) => proxySrv.getConnections((_, n) => r(n)))
+
+  const leakDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-leak-'))
+  const leakCfg = loadConfig()
+  leakCfg.server.credentialsDir = leakDir
+  leakCfg.upstream.credentialsDir = leakDir
+  leakCfg.upstream.proxy = `http://127.0.0.1:${pport}`
+  leakCfg.upstream.apiBase = `http://127.0.0.1:${oport}`
+  leakCfg.session.pollIntervalSec = 3600
+  saveAccountUser(leakDir, {
+    id: 'leak1',
+    email: 'leak@example.com',
+    authToken: 'tok1',
+  })
+
+  const leakRuntimes = new AccountRuntimes(leakCfg)
+  const hit = async () => {
+    const rt = leakRuntimes.get('leak1')
+    try {
+      const res = await rt.upstream.raw('/api/v1/me', {
+        method: 'GET',
+        timeoutMs: 5_000,
+      })
+      await res.text()
+    } catch {
+      // 忽略：本用例只关心连接是否被回收
+    }
+  }
+
+  try {
+    await hit()
+    await new Promise((r) => setTimeout(r, 200))
+    assert.equal(await socks(), 1, '首次请求后应恰好有 1 条 keep-alive 连接')
+
+    // 反复"更新凭证"：每次都 invalidate（丢弃旧 runtime）
+    for (let i = 0; i < 12; i += 1) {
+      await leakRuntimes.invalidate('leak1')
+      await hit()
+    }
+    await new Promise((r) => setTimeout(r, 800))
+    const after = await socks()
+    assert.ok(
+      after <= 3,
+      `12 轮"更新凭证"后 socket 必须被回收（实测 ${after} 个）；` +
+        '累积即说明旧 runtime 的出网 agent 没有被 close',
+    )
+  } finally {
+    await leakRuntimes.shutdown()
+    origin.close()
+    proxySrv.close()
+    fs.rmSync(leakDir, { recursive: true, force: true })
+  }
+}
+
 globalThis.fetch = originalFetch
 fs.rmSync(tmpDir, { recursive: true, force: true })
 console.log('smoke ok')
