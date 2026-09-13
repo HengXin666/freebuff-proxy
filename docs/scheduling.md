@@ -112,9 +112,14 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
   换号兜底）；复用热 session 不消耗预算，被上游拒绝的 admit（`rate_limited` 等）也不消耗
   （只有真的新建了会话才扣）。旧行为在报错时把"账号数 +1"个账号挨个 admit 一遍，
   几个账号一起在后台白扣时长。
-- **余额买不起就不 admit**：`balance < prices[模型]` 且非 `quotaExempt` 的账号直接跳过
-  选号（上游反正会 429 `freebucksShortfall`）；每日池 `resetAt` 已过则视为本地数字过期，
-  放行一次真实 admit 用上游最新余额重新校准。
+- **两条封号判定都拦（`balance` 与每日池）**：上游对"额度不够"的封号判定有
+  **两条**——① Freebucks 跑完了（今日池 `daily.remaining <= 0`）；② 本次请求所需
+  Freebucks 高于剩余余额（`balance < prices[模型]`）。命中**任一条**就可能直接封号，
+  所以两条都要拦。**此前只判了 ②**，于是"池子跑完、但 balance 还留着数字"的账号会被放行，
+  照样送去撞封禁——现已修复，`reason` 会标明是 `daily_exhausted` 还是
+  `balance_shortfall`（日志同样区分）。`quotaExempt` 账号不受池/余额限制；
+  `daily.limit = 0` 表示"没有池子"而非"池子跑完"，不会误拦；每日池 `resetAt` 已过
+  则视为本地数字过期，放行一次真实 admit 用上游最新余额重新校准。
   **同号重试（`forceReadmit`）也走同一道闸门**——它会先 DELETE 再 admit，等于新买一条计费
   会话，不过闸就等于拿真钱去撞"余额不够"的封号判定。
 - **换号即释放**：账号级故障换号前，先把失败账号的会话早退 DELETE 拿退款，不让它继续

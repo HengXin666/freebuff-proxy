@@ -8,6 +8,7 @@ import { loadConfig } from '../src/config.js'
 import { AccountRuntimes } from '../src/app-context.js'
 import { SessionHandleStore } from '../src/session-handles.js'
 import { startServer } from '../src/server.js'
+import { SessionManager } from '../src/session-manager.js'
 import { requestSlotStats } from '../src/proxy.js'
 import { configureLogger } from '../src/util/log.js'
 import {
@@ -4678,6 +4679,161 @@ server.close()
   await stRuntimes.shutdown()
   stServer.close()
   fs.rmSync(stallDir, { recursive: true, force: true })
+}
+
+// ===========================================================================
+// (FBGATE) 封号判定的**两条**条件都必须拦（issue #11 实测）
+//
+// 上游对"余额不够"的封号判定有两条：
+//   ① Freebucks 跑完了（今日池 daily.remaining <= 0）
+//   ② 本次请求所需 Freebucks 高于剩余余额（balance < prices[model]）
+// 曾经的实现只判 ②，于是"池子跑完但 balance 还留着数字"的账号会被放行，
+// 照样送去撞封禁。本用例锁死两条都拦，并断言 reason 能区分是哪一条。
+{
+  const sm = new SessionManager({
+    config: loadConfig(),
+    accountKey: 'fbgate',
+    upstream: {},
+  })
+
+  const price = 25
+  const model = 'deepseek/deepseek-v4-flash'
+
+  // ① 今日池跑完，但余额看着还够 —— 必须拦（这正是以前漏掉的那条）
+  sm.freebucks = {
+    balance: 100,
+    daily: { limit: 85, spent: 85, remaining: 0, resetAt: null },
+    wallet: { balance: 0 },
+    prices: { [model]: price },
+    quotaExempt: false,
+    monthly: null,
+  }
+  const dailyGone = sm.freebucksFor(model)
+  assert.equal(
+    dailyGone.affordable,
+    false,
+    '今日池跑完（daily.remaining <= 0）必须拦——否则命中上游封号条件①',
+  )
+  assert.equal(dailyGone.reason, 'daily_exhausted', '必须标明是池子跑完')
+
+  // ② 余额买不起本次请求 —— 必须拦
+  sm.freebucks = {
+    balance: 1,
+    daily: { limit: 85, spent: 20, remaining: 65, resetAt: null },
+    wallet: { balance: 0 },
+    prices: { [model]: price },
+    quotaExempt: false,
+    monthly: null,
+  }
+  const poor = sm.freebucksFor(model)
+  assert.equal(poor.affordable, false, '余额 < 单价 必须拦——上游封号条件②')
+  assert.equal(poor.reason, 'balance_shortfall', '必须标明是余额不足')
+
+  // 两条都不命中 → 放行（不能误伤正常账号）
+  sm.freebucks = {
+    balance: 100,
+    daily: { limit: 85, spent: 20, remaining: 65, resetAt: null },
+    wallet: { balance: 0 },
+    prices: { [model]: price },
+    quotaExempt: false,
+    monthly: null,
+  }
+  const ok = sm.freebucksFor(model)
+  assert.equal(ok.affordable, true, '额度充足必须放行（不得误伤）')
+  assert.equal(ok.reason, null, '放行时不应有 reason')
+
+  // `limit = 0` 表示"没有池子"，不是"池子跑完"——不得误判为耗尽
+  sm.freebucks = {
+    balance: 100,
+    daily: { limit: 0, spent: 0, remaining: 0, resetAt: null },
+    wallet: { balance: 0 },
+    prices: { [model]: price },
+    quotaExempt: false,
+    monthly: null,
+  }
+  const noPool = sm.freebucksFor(model)
+  assert.equal(
+    noPool.affordable,
+    true,
+    'daily.limit=0 是"没有池子"，不是"池子跑完"，不得误拦',
+  )
+
+  // quotaExempt 账号不受池与余额限制
+  sm.freebucks = {
+    balance: 0,
+    daily: { limit: 85, spent: 85, remaining: 0, resetAt: null },
+    wallet: { balance: 0 },
+    prices: { [model]: price },
+    quotaExempt: true,
+    monthly: null,
+  }
+  assert.equal(
+    sm.freebucksFor(model).affordable,
+    true,
+    'quotaExempt 账号不受池/余额限制',
+  )
+
+  // 每日池 resetAt 已过 → 本地数字视为过期，放行一次真实 admit 重新校准
+  sm.freebucks = {
+    balance: 0,
+    daily: {
+      limit: 85,
+      spent: 85,
+      remaining: 0,
+      resetAt: new Date(Date.now() - 60_000).toISOString(),
+    },
+    wallet: { balance: 0 },
+    prices: { [model]: price },
+    quotaExempt: false,
+    monthly: null,
+  }
+  const stale = sm.freebucksFor(model)
+  assert.equal(
+    stale.affordable,
+    true,
+    'resetAt 已过说明本地数字过期，必须放行重新校准（否则账号被永久锁死）',
+  )
+  assert.equal(stale.stale, true, '必须标记为 stale')
+}
+
+// (FBGATE-CONSISTENCY) 控制台的"额度不足"判定必须与后端 freebucksFor 的两条
+// 封号条件一致 —— 曾经前端判了"今日池跑完"而后端没判，导致控制台显示"已用尽"
+// 却仍被送去调度。这里用源码断言把两处钉在一起，防止再次漂移。
+{
+  const dashSrc = fs.readFileSync(
+    new URL('../dashboard/app.js', import.meta.url),
+    'utf8',
+  )
+  const smSrc = fs.readFileSync(
+    new URL('../src/session-manager.js', import.meta.url),
+    'utf8',
+  )
+  assert.ok(
+    /daily\.remaining\)\s*<=\s*0[\s\S]{0,80}daily\.limit\)\s*>\s*0/.test(dashSrc),
+    '控制台必须保留"今日池跑完"的判定（daily.remaining <= 0 且 limit > 0）',
+  )
+  assert.ok(
+    /dailyRemaining\s*<=\s*0/.test(smSrc),
+    '后端 freebucksFor 必须判定"今日池跑完"——否则与控制的分类口径漂移',
+  )
+  assert.ok(
+    /shortOnBalance/.test(smSrc),
+    '后端 freebucksFor 必须判定"余额买不起"',
+  )
+  // 后端必须能区分"池跑完"与"余额不足"，否则日志/错误信息会误导排查方向
+  assert.ok(
+    /daily_exhausted/.test(smSrc),
+    '后端必须区分出 daily_exhausted（否则排查时只看到"余额不够"）',
+  )
+  assert.ok(
+    /balance_shortfall/.test(smSrc),
+    '后端必须区分出 balance_shortfall',
+  )
+  // 前端必须与后端一致地覆盖"池跑完"这条，不能只判余额
+  assert.ok(
+    /dailyGone/.test(dashSrc),
+    '控制台必须保留 dailyGone（今日池跑完）判定',
+  )
 }
 
 globalThis.fetch = originalFetch

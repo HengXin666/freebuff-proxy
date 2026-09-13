@@ -470,7 +470,11 @@ function classifyAccount(a) {
   const code = String(probe?.code || '').toLowerCase()
   // 1) 封禁：探测明确 banned，或已记录过封禁时间
   if (a.bannedAt || code.includes('banned')) return 'banned'
-  // 2) 额度不足：Freebucks 余额买不起当前模型（或今日池已空）
+  // 2) 额度不足：**与后端 freebucksFor 的两条封号判定严格对齐**——
+  //    ① 今日池跑完（daily.remaining <= 0，且 limit > 0 才算真有池子）；
+  //    ② 余额买不起当前模型（balance < 单价）。
+  //    前端先于后端修好过这条，而当时后端只判 ②，于是出现"控制台显示已用尽、
+  //    调度器却仍把请求送上去"的错位；两处必须保持一致。
   const fb = a.freebucks
   if (fb) {
     const price = fb.prices && a.session?.model ? fb.prices[a.session.model] : null

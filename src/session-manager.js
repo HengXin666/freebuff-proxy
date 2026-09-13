@@ -199,9 +199,16 @@ export class SessionManager {
 
   /**
    * 该模型在这个账号上的 Freebucks 账目：
-   *   { known, price, balance, affordable, quotaExempt, resetAt }
+   *   { known, price, balance, affordable, quotaExempt, resetAt, reason }
    * known=false 表示还没有拿到过 freebucks 块（老上游/尚未探测）——此时不拦截。
    * 无 price 的模型 = 不计费（unmetered），永远可买。
+   *
+   * **上游的封号判定有两条**（issue #11 实测）：
+   *   ① Freebucks 跑完了（今日池 `daily.remaining <= 0`）；
+   *   ② 本次请求所需 Freebucks 高于剩余余额（`balance < prices[model]`）。
+   * 命中任一条就可能直接封号，所以 `affordable === false` 必须同时覆盖两者
+   * ——只判 ② 会漏掉"池子跑完但 balance 还留着数字"的账号，照样送上去撞封禁。
+   * `reason` 标明是哪一条命中，便于日志与前端解释（不再只报"余额不够"）。
    * @param {string} model
    */
   freebucksFor(model) {
@@ -233,16 +240,40 @@ export class SessionManager {
     }
     const monthlySpent =
       fb.monthly != null && Number(fb.monthly.remainingUsd) <= 0
+    // 条件①：今日池跑完（`limit > 0` 才算真的有池子，避免把 limit=0 的
+    // "没有池子" 误判成"池子跑完"）。resetAt 已过在上面就 return 了，所以这里
+    // 的 remaining 一定是未重置周期的数字。quotaExempt 账号不受任何池限制。
+    const dailyLimit = Number(fb.daily?.limit)
+    const dailyRemaining = Number(fb.daily?.remaining)
+    const dailyExhausted =
+      Number.isFinite(dailyLimit) &&
+      dailyLimit > 0 &&
+      Number.isFinite(dailyRemaining) &&
+      dailyRemaining <= 0
+    // 条件②：余额买不起本次请求
+    const shortOnBalance = Number(fb.balance) < price
+    const exempt = fb.quotaExempt === true
     const affordable =
-      fb.quotaExempt === true ||
-      (Number(fb.balance) >= price && !monthlySpent)
+      exempt || (!dailyExhausted && !shortOnBalance && !monthlySpent)
+    /** 命中哪一条（用于日志/前端解释；affordable=true 时为 null）。 */
+    const reason = affordable
+      ? null
+      : dailyExhausted
+        ? "daily_exhausted"
+        : monthlySpent
+          ? "monthly_exhausted"
+          : "balance_shortfall"
     return {
       known: true,
       price,
       balance: fb.balance,
       affordable,
       unmetered: false,
-      quotaExempt: fb.quotaExempt === true,
+      quotaExempt: exempt,
+      dailyExhausted,
+      dailyRemaining: Number.isFinite(dailyRemaining) ? dailyRemaining : null,
+      dailyLimit: Number.isFinite(dailyLimit) ? dailyLimit : null,
+      reason,
       resetAt: fb.daily?.resetAt || null,
     }
   }

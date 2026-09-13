@@ -785,16 +785,24 @@ export class AccountRuntimes {
             key,
             email: emailByKey.get(key),
             code: 'freebucks_exhausted',
+            reason: fb.reason || null,
             message:
-              `freebucks balance ${fb.balance} < price ${fb.price} for ${model}` +
+              (fb.reason === 'daily_exhausted'
+                ? `freebucks daily pool exhausted (${fb.dailyRemaining}/${fb.dailyLimit}) for ${model}`
+                : fb.reason === 'monthly_exhausted'
+                  ? `freebucks monthly allowance exhausted for ${model}`
+                  : `freebucks balance ${fb.balance} < price ${fb.price} for ${model}`) +
               (fb.resetAt ? ` (refills ${fb.resetAt})` : ''),
           })
           logger.info('skip account: freebucks cannot afford model', {
             key,
             email: emailByKey.get(key),
             model,
+            reason: fb.reason || 'balance_shortfall',
             balance: fb.balance,
             price: fb.price,
+            dailyRemaining: fb.dailyRemaining,
+            dailyLimit: fb.dailyLimit,
           })
           continue
         }
@@ -970,11 +978,16 @@ export class AccountRuntimes {
             logger.info('skip re-admit: freebucks cannot afford model', {
               key: opts.preferredKey,
               model,
+              reason: fbGate.reason || 'balance_shortfall',
               balance: fbGate.balance,
               price: fbGate.price,
+              dailyRemaining: fbGate.dailyRemaining,
+              dailyLimit: fbGate.dailyLimit,
             })
             throw new UpstreamError(
-              `freebucks balance ${fbGate.balance} < price ${fbGate.price} for ${model}`,
+              fbGate.reason === 'daily_exhausted'
+                ? `freebucks daily pool exhausted for ${model}`
+                : `freebucks balance ${fbGate.balance} < price ${fbGate.price} for ${model}`,
               { status: 429, code: 'freebucks_exhausted' },
             )
           }
