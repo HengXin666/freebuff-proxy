@@ -874,6 +874,15 @@ async function renderProxySettings(view) {
     settings = { freeToolSignatureEnabled: true }
   }
   state.proxies = data.proxies || []
+  // 「空闲释放推荐值」要按账号池实时算（活跃模型/账号比），而 /api/proxy 只回
+  // 代理信息、不含 session.model。这里单独拉一次 overview 填充 state.accounts。
+  // 独立 try：overview 挂了也不能把上面的 settings 一起拖垮（否则整页回落到默认值）。
+  try {
+    const overview = await api('/api/overview')
+    if (Array.isArray(overview.accounts)) state.accounts = overview.accounts
+  } catch {
+    // 拉不到就沿用已有的 state.accounts（可能为空 → 推荐值退回默认 600s）
+  }
 
   const signatureEnabled = settings.freeToolSignatureEnabled !== false
   const toggleAttrs = {

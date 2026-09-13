@@ -5072,6 +5072,13 @@ server.close()
     /idle-release-advice/.test(dashSrc),
     '控制台必须渲染推荐值区块',
   )
+  // 推荐值是「按账号池实时算」的，所以设置页必须真的把账号拉进来。
+  // /api/proxy 只回代理信息、不含 session.model —— 曾因此让推荐值恒等于默认值
+  // （永远显示"还没有账号"），点进去看到的建议是假的。这里钉死这个数据依赖。
+  assert.ok(
+    /async function renderProxySettings[\s\S]{0,900}api\('\/api\/overview'\)/.test(dashSrc),
+    'renderProxySettings 必须额外拉 /api/overview 填充 state.accounts（推荐值依赖它）',
+  )
 }
 
 // ===========================================================================
