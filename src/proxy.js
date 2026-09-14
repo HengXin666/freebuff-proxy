@@ -1031,7 +1031,8 @@ export function createProxyHandler(ctx) {
           //
           // 同时**必须把该账号的会话早退 DELETE 掉**：请求已经不会再用这条
           // 会话了，留着只会白占上游会话槽位（一个账号同时只有一条 session 且
-          // 绑定模型），换模型时会被它挡住。早退会退还未用时长（越早越好）。
+          // 绑定模型），换模型时会被它挡住。一次 admit 买断一小时，付费时段内
+          // 换模型才需要早退腾槽位（那一小时已付款，闲置不额外花钱）。
           // 释放失败也不丢句柄（SessionManager
           // 会保留 instanceId 并重试，sessions.json 里还有一份）。
           if (lastKey) {

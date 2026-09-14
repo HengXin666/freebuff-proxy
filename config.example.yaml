@@ -43,18 +43,21 @@ session:
   re_admit_lead_sec: 60
   # 免费模型（pool 非 premium）的提前切换阈值（秒）：会话剩余不足该值时
   # 不再调度到该会话上，提前 re-admit 换全新会话（默认 60s = 1 分钟）。
-  # 2026-09 Freebucks 计费：admit 一次按整小时单价预扣，早退 DELETE **不退** Freebucks
-  # （2026-09-13 实测，见 docs/account-scheduling-and-refund.md §3）；尽量少换、能复用就复用。
+  # 2026-09 计费：admit 一次 = **买断一小时**（整小时单价当场预扣，回执带 expiresAt）。
+  # 所以尽量少换、能复用就复用（见 docs/account-scheduling-and-refund.md §3）。
   free_model_re_admit_lead_sec: 60
   poll_interval_sec: 30
   admit_timeout_ms: 30000
   # 空闲自动释放（秒，控制台「额度保护」可调，保存立即生效）：
-  # 会话在途请求归零后空闲超过该时长就早退 DELETE。
-  # 2026-09-13 **反转**：早退 DELETE **会按实际占用时长退还 Freebucks**（未用部分）。
-  # admit 一次 = 实付整小时单价，用 3 秒和 59 分钟扣的一样多，所以「早退省钱」是错的：
-  # 释放后再来请求 = 又买一小时。默认 600s（控制台可调 5s..24h）；
-  # 0 = 关闭（会话留到自然过期，最省 admit；代价是换模型要等释放）
-  idle_release_sec: 600
+  # ⚠️ **已付费时段内不释放**（2026-09-14 一手实测后改）：
+  #   admit 买断整小时 → 这一小时内继续用**边际成本为 0**；
+  #   而 DELETE 之后那一小时就作废，重开 = 重新买一整小时。
+  #   实测早退只回 freebucksRefundPending，2 分钟内未到账；而 units 那本账是当场退的。
+  #   又因为实测 24 个「账号 × 模型」组合里 22 个是 Freebucks 先见底，
+  #   早退等于拿稀缺的账去省不稀缺的账（见 docs/freebucks-strategy.html）。
+  # 因此本项是**付费时段结束之后**的空闲释放时长：过期后尽快腾槽位给别的模型。
+  # 默认 60s（控制台可调 5s..24h）；0 = 关闭（会话留到自然过期，代价是换模型要等）
+  idle_release_sec: 60
 
 limits:
   max_concurrent_requests: 32

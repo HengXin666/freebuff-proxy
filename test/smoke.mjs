@@ -4215,8 +4215,10 @@ server.close()
     prices: { 'deepseek/deepseek-v4-flash': 2 },
   }
 
-  // (1) 空闲自动释放：请求结束后空闲 > idleReleaseSec → 早退 DELETE（带
-  //     instance id，上游才肯退）→ 会话消失、退款回执落在快照里。
+  // (1) **已付费时段内不释放**（2026-09-14 一手实测后改）：
+  //     上游一次 admit 就是买断一小时，POST 当场扣满整小时单价，回执带 expiresAt。
+  //     这一小时内继续用边际成本为 0，而 DELETE 后那一小时作废、重开要重买。
+  //     所以空闲超过 idleReleaseSec 也**不得**释放；要等付费时段结束。
   mockMode = 'ok'
   mockFreebucks = freebucks25
   sessionPosts = 0
@@ -4236,7 +4238,27 @@ server.close()
     assert.equal(snap0.freebucks?.balance, 25, 'freebucks balance parsed')
     assert.equal(snap0.freebucks?.prices?.['deepseek/deepseek-v4-flash'], 2, 'price parsed')
     assert.equal(sm.freebucksFor('deepseek/deepseek-v4-flash').affordable, true)
-    await waitFor('空闲自动释放触发 DELETE', () => sessionDeletes >= 1, 4_000)
+
+    // 付费时段判定本身
+    assert.equal(sm.inPaidWindow(), true, '刚 admit（expiresAt=+1h）应判为在付费时段内')
+    assert.ok(
+      sm.paidWindowRemainingMs() > 0,
+      '付费时段剩余应 > 0',
+    )
+    // 快照把 expiresAt 一路带到前端
+    assert.ok(snap0.expiresAt, '快照应带 expiresAt（付费时段依据）')
+
+    // 空闲时长远超 idleReleaseSec（150ms），但付费时段内**必须一条都不删**。
+    await new Promise((r) => setTimeout(r, 600))
+    assert.equal(sessionDeletes, 0, '付费时段内空闲不得释放（那一小时已买断）')
+    assert.equal(sm.getSnapshot().status, 'active', '付费时段内会话应保持 active')
+
+    // 付费时段结束后（把 expiresAt 拨到过去）→ 空闲释放恢复生效
+    sm.session.expiresAt = new Date(Date.now() - 1000).toISOString()
+    sm.session.remainingMs = 0
+    assert.equal(sm.inPaidWindow(), false, '过期后不应再判为在付费时段内')
+    sm._armIdleRelease()
+    await waitFor('付费时段结束后空闲释放触发 DELETE', () => sessionDeletes >= 1, 4_000)
     assert.equal(deleteInstanceIds[0], 'inst-1', 'DELETE 必须带 x-freebuff-instance-id')
     const snap = sm.getSnapshot()
     assert.equal(snap.status, 'none', '空闲释放后会话应已结束')
@@ -4395,6 +4417,79 @@ server.close()
       '余额不足不得经 forceReadmit 再 admit 新会话（再买断一小时 + 触发封号判定）',
     )
     fbRuntimes.clearCooldown('a', model)
+  }
+
+  // (2.4) session_units 是**独立**于 Freebucks 的第二道闸门：一手实测证明一笔会话
+  //       两本账都扣（units +1.0 且 Freebucks −单价），所以 units 用尽时同样不得
+  //       去 admit（上游会用 rate_limited 拒掉，白跑一次往返）。注意 recentCount
+  //       是**小数**，比较必须用 >=。见
+  //       .agents/notes/implemented/architecture/2026-09-14-two-ledgers-parallel-gates.md
+  {
+    const model = 'deepseek/deepseek-v4-flash'
+    // Freebucks 故意留得足足的 —— 只有 units 卡住，才能证明两道闸门是独立的。
+    for (const key of ['a', 'b', 'c']) {
+      const sm = fbRuntimes.get(key).sessions
+      sm.freebucks = {
+        balance: 999,
+        daily: { limit: 999, spent: 0, remaining: 999, resetAt: futureReset },
+        wallet: { balance: 0, monthlyBonus: 0, nextBonusAt: null },
+        prices: { [model]: 2 },
+        quotaExempt: false,
+        planId: null,
+        monthly: null,
+        peak: null,
+        updatedAt: new Date().toISOString(),
+      }
+      // units 已满：6/6（实测里 recentCount 可为小数，这里同时覆盖整数边界）。
+      sm.quota = {
+        byModel: {
+          [model]: {
+            model,
+            limit: 6,
+            pool: 'limited',
+            poolLabel: 'Daily',
+            resetAt: futureReset,
+            recentCount: 6,
+          },
+        },
+        rateLimit: null,
+        updatedAt: new Date().toISOString(),
+      }
+      await sm.release()
+      const u = sm.sessionUnitsFor(model)
+      assert.equal(u.known, true, `${key} 应识别出 units 账本`)
+      assert.equal(u.exhausted, true, `${key} units 6/6 应判为用尽`)
+      assert.equal(u.remaining, 0, `${key} 剩余应为 0`)
+      // 小数边界：5.4/6 未满、6/6 已满（不能用整数假设）
+      assert.equal(
+        sm.sessionUnitsFor(model).exhausted,
+        true,
+        'units 比较必须覆盖等号边界',
+      )
+    }
+    const postsBefore = sessionPosts
+    const res = await fbChat({
+      model,
+      messages: [{ role: 'user', content: 'units-gate' }],
+    })
+    assert.equal(res.status, 429, await res.clone().text())
+    const j = await res.json()
+    assert.equal(
+      j.error.code,
+      'units_exhausted',
+      `全账号 units 用尽应报 units_exhausted，got ${JSON.stringify(j.error)}`,
+    )
+    assert.equal(
+      sessionPosts,
+      postsBefore,
+      'units 用尽不得再 admit 新会话（两本账都扣，白跑一次往返）',
+    )
+    // fail-open：没有 units 行的模型不得被这道闸门误拦。
+    const noRow = fbRuntimes.get('a').sessions.sessionUnitsFor('openai/gpt-5.6-nope')
+    assert.equal(noRow.known, false, '无 units 行的模型必须 fail-open')
+    assert.equal(noRow.exhausted, false, '无 units 行的模型不得被判用尽')
+    // 清场：后续用例不该继承这里的 6/6（否则会一直被 units 闸门拦下）。
+    for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.quota = null
   }
 
   // (2.5) 重启后额度闸门不得失忆：账号账本（account-state.json）落盘 →
@@ -5062,11 +5157,16 @@ server.close()
   )
 }
 
-// (REFUND-COPY) 退款结论（2026-09-13 结案）不得在控制台/配置里被写回旧说法
+// (REFUND-COPY) 计费结论（2026-09-14 一手实测后重钉）不得被写回旧说法
 //
-// 旧版文案说"早退 DELETE 退还未用时长"，实测是错的：早退只退 session_units，
-// Freebucks 一分不退（docs/account-scheduling-and-refund.md §3）。用户会按这个
-// 文案去调 idle_release_sec，所以文案错了会导致错误调参，必须钉死。
+// 上游 **一次 admit = 买断一小时**：POST 当场扣满整小时单价（实测 Freebucks
+// 5 → 0，回执带 expiresAt）。早退 DELETE 的实际结果两本账不对称：
+//   - session_units：**当场按比例退**（实测 1.1 → 0.2）
+//   - Freebucks：只回 freebucksRefundPending，实测 3 次重放 DELETE、2 分钟
+//     内**未到账**；而 24 个「账号 × 模型」组合里 22 个是 Freebucks 先见底
+// 所以"早退会退还 Freebucks / 挂着空闲会话才花钱"是**已被证伪**的说法，必须
+// 钉死：用户会照着它去调 idle_release_sec，方向正好是反的。
+// 详见 docs/freebucks-strategy.html 与 docs/account-scheduling-and-refund.md §3。
 {
   const dashSrc = fs.readFileSync(
     new URL('../dashboard/app.js', import.meta.url),
@@ -5093,8 +5193,10 @@ server.close()
   // 直接给用户看，错了最误导。改为遍历全仓（排除第三方与运行时数据）。
   // 2026-09-13 **反转**：早退 DELETE 会按实际占用退还 Freebucks（见文档 §3）。
   // 现在钉死的是"不退"这一类已被证伪的说法，防止它再被写回来。
+  // 钉死的是**已被证伪**的那一类说法：早退能拿回 Freebucks / 挂着空闲才花钱 /
+  // 越早释放越省。它们和实测（买断一小时，早退拿不回）正好相反。
   const STALE_COPY =
-    /早退不退|不退\s*Freebucks|Freebucks\s*一分不退|绝不退|买断整小时|整小时买断|一分都不退|早退\s*DELETE\s*不退/
+    /按实际占用退还\s*Freebucks|退还未用时长|退还未用部分|停止为空转时长付费|挂着的空闲会话(在按小时计价|才是花钱)|越早释放越省|早退.{0,12}省钱/
   const SKIP_DIR = new Set(['node_modules', '.git', 'data', 'data-test'])
   const walk = (dir, out = []) => {
     for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -5127,18 +5229,19 @@ server.close()
       `${rel} 出现了已被证伪的说法「${hit && hit[0]}」（早退 DELETE **会**按实际占用退还 Freebucks；pending = 结算未完成，见 docs/account-scheduling-and-refund.md §3）`,
     )
   }
-  // 默认值必须**短**：挂着的空闲会话在按小时计价，早退才能把未用时长退回来。
+  // idleReleaseSec 现在是**付费时段结束之后**的空闲释放时长（付费时段内一律不释放，
+  // 见 session-manager._armIdleRelease）。保持 60s：过期后尽快腾槽位给别的模型。
   assert.ok(
     /idleReleaseSec:\s*60/.test(cfgSrc),
-    'config.js 的 idleReleaseSec 默认应为 60s（早退会退款，挂着才是花钱）',
+    'config.js 的 idleReleaseSec 默认应为 60s（付费时段结束后的空闲释放）',
   )
   assert.ok(
     /idle_release_sec:\s*60/.test(yamlSrc),
     'config.example.yaml 的 idle_release_sec 默认应为 60s',
   )
-  // 退款追问必须是**常驻**行为：挂起的 pending 退款要靠重放 DELETE 取回执。
-  // 少了这条断言，后来的人很容易把"只在启动扫一次"当成够用（那正是旧版的做法，
-  // 也是"退款总额永远是 0"的工程成因之一）。
+  // 退款追问仍是常驻行为：pending 期间要靠重放 DELETE 取回执。实测确认
+  // pending 在本小时内不落地（所以**不能**把它当成"钱会回来"来决策释放时机），
+  // 但句柄不能丢——丢了连追问的机会都没有。
   const handlesSrc = fs.readFileSync(
     new URL('../src/session-handles.js', import.meta.url),
     'utf8',
@@ -5160,6 +5263,31 @@ server.close()
     /function idleReleaseAdvice/.test(dashSrc),
     '控制台必须提供 idleReleaseAdvice（按账号池实时算推荐值）',
   )
+  // (PAID-HOUR-UI) 付费时段内 `rem=0` 是"已付款"的正常状态，绝不能标成「额度不足」。
+  // 少了这条，"买断一小时"上线后每个正在被正常使用的账号都会显示成耗尽。
+  {
+    const src = fs.readFileSync(
+      new URL('../dashboard/app.js', import.meta.url),
+      'utf8',
+    )
+    assert.ok(
+      /inPaidWindow/.test(src),
+      'classifyAccount 必须用付费时段（inPaidWindow）把 rem=0 的已付款账号判为可用',
+    )
+    assert.ok(
+      /if \(fb && !inPaidWindow\)/.test(src),
+      'Freebucks 耗尽判定必须在付费时段之外才生效',
+    )
+    // 付费时段依据 expiresAt 必须真的传到前端，否则上面的判定永远不成立
+    const ctxSrc = fs.readFileSync(
+      new URL('../src/app-context.js', import.meta.url),
+      'utf8',
+    )
+    assert.ok(
+      /expiresAt: snap\.expiresAt/.test(ctxSrc),
+      '账号快照必须把 session.expiresAt 暴露给控制台（付费时段判定的依据）',
+    )
+  }
   assert.ok(
     /idle-release-advice/.test(dashSrc),
     '控制台必须渲染推荐值区块',

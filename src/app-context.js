@@ -291,6 +291,10 @@ export class AccountRuntimes {
           this.accountState.account(a.key)?.refundExpectedTotal ?? 0,
         refundPendingCount:
           this.accountState.account(a.key)?.refundPendingCount ?? 0,
+        // session_units 口径的应退（上游会立即兑现的那本账；与 Freebucks 的
+        // refundExpectedTotal 区分开——后者长期停留在 pending）。
+        refundUnitsExpectedTotal:
+          this.accountState.account(a.key)?.refundUnitsExpectedTotal ?? 0,
         // 是否被使用过（粘性调度：未用过的账号排最后启用）+ 最近使用时间
         used: this.everUsed(a.key),
         lastUsedAt: this._lastUsedAt.has(a.key)
@@ -322,6 +326,10 @@ export class AccountRuntimes {
               model: snap.model,
               remainingMs: snap.remainingMs,
               live: snap.live,
+              // 付费时段的终点：一次 admit = 买断一小时，控制台据此区分
+              // "rem=0 但仍可用（已付款）"与"真的用尽"，别再误报额度不足。
+              expiresAt: snap.expiresAt || null,
+              admittedAt: snap.admittedAt || null,
             }
           : null,
         // 每日免费 session 额度（来自最近一次 admit/refresh 的上游返回）
@@ -767,6 +775,9 @@ export class AccountRuntimes {
       // 调度不会为了它白开一条计费 session（上游反正也会 429）。
       const fbInfo = sessions?.freebucksFor?.(model)
       const unaffordable = fbInfo?.known && fbInfo.affordable === false ? 1 : 0
+      // session_units 用尽的账号也排到最后（两本账都扣，units 没了同样会被上游拒）。
+      const unitsInfo = sessions?.sessionUnitsFor?.(model)
+      const unitsOut = unitsInfo?.known && unitsInfo.exhausted ? 1 : 0
       const used = this.everUsed(key, sessions)
       // tier 按"会话状态"分（与 used 无关）：
       //   0 = 同模型热 session（复用零成本）
@@ -793,6 +804,7 @@ export class AccountRuntimes {
         load,
         exhausted: exhausted ? 1 : 0,
         unaffordable,
+        unitsOut,
         rotation: i,
       })
     }
@@ -826,8 +838,9 @@ export class AccountRuntimes {
         (spread ? a.load - b.load : b.lastUsedAt - a.lastUsedAt) ||
         a.load - b.load ||
         a.exhausted - b.exhausted ||
-        // 余额买不起的账号排最后（复用它的热 session 仍然优先——不计费）
+        // 余额买不起 / 时长额度用尽的账号排最后（复用它的热 session 仍优先——不计费）
         a.unaffordable - b.unaffordable ||
+        a.unitsOut - b.unitsOut ||
         a.rotation - b.rotation,
     )
     if (process.env.FB_DEBUG_SCHED) {
@@ -943,6 +956,32 @@ export class AccountRuntimes {
         // 计费会话时**才拦。注意不能提到 reusable 判断之外：活跃的同模型热
         // session 在 admit 时就已经预扣了整小时，复用它不再产生费用，拦下来
         // 反而等于把已经付过的钱丢掉、再去别的号上买一条新的。
+        // ① session_units 闸门（时长预算）：一个会话**两本账都扣**（一手实测），
+        //    所以 units 不够时同样不该去买——上游会用 rate_limited 拒掉，
+        //    白白一次 admit 往返。⚠️ recentCount 是小数，比较用 >=。
+        const units = rt.sessions.sessionUnitsFor?.(model)
+        if (units?.known && units.exhausted) {
+          failures.push({
+            key,
+            email: emailByKey.get(key),
+            code: 'units_exhausted',
+            message:
+              `session units exhausted (${units.used}/${units.limit}, ${units.poolLabel || units.pool || 'daily'}) for ${model}` +
+              (units.resetAt ? ` (refills ${units.resetAt})` : ''),
+          })
+          logger.info('skip account: session units exhausted', {
+            key,
+            email: emailByKey.get(key),
+            model,
+            used: units.used,
+            limit: units.limit,
+            pool: units.pool,
+          })
+          continue
+        }
+        // ② Freebucks 闸门（货币预算）：**这才是上游真正的拒付/封号判据**——
+        //    实测 deepseek-v4-flash 在 units=0.1/6 完全没超标的情况下仍被拒，
+        //    理由是 freebucksShortfall{price,balance}。所以两道闸门都必须过。
         const fb = rt.sessions.freebucksFor?.(model)
         if (fb?.known && fb.affordable === false) {
           failures.push({
@@ -1037,16 +1076,24 @@ export class AccountRuntimes {
     // 全部账号都是"余额买不起"时给出**独立错误码**：这跟"账号都在冷却/没号"
     // 是完全不同的处境（前者等每日池刷新就好，后者要加号/等冷却），调用方与
     // 控制台不该看到同一个笼统的 no_available_account。
+    // 两本账任一耗尽都算"额度用尽"（与分开的闸门一一对应）：
+    //   freebucks_exhausted = 货币预算不够（上游真正的拒付判据）
+    //   units_exhausted     = 时长预算用尽
+    const EXHAUST_CODES = new Set(['freebucks_exhausted', 'units_exhausted'])
     const allExhausted =
       failures.length > 0 &&
-      failures.every((f) => f.code === 'freebucks_exhausted')
+      failures.every((f) => EXHAUST_CODES.has(f.code))
     if (allExhausted) {
       const cheapest = failures.map((f) => f.message).join('; ')
+      // 两个闸门都命中时用更中性的 freebucks_exhausted 保持兼容（既有调用方/测试
+      // 认这个码）；只有全是 units 用尽时才报 units_exhausted。
+      const onlyUnits = failures.every((f) => f.code === 'units_exhausted')
+      const code = onlyUnits ? 'units_exhausted' : 'freebucks_exhausted'
       throw new UpstreamError(
-        `No Freebuff account can afford model ${model} (Freebucks exhausted). ${cheapest}`,
+        `No Freebuff account can afford model ${model} (${onlyUnits ? 'session units' : 'Freebucks'} exhausted). ${cheapest}`,
         {
           status: 429,
-          code: 'freebucks_exhausted',
+          code,
           body: { model, failures },
           retryAfterMs: this.earliestCooldownMs(),
         },
@@ -1142,6 +1189,14 @@ export class AccountRuntimes {
           // 必须先过额度闸门：余额买不起还去 admit，正好命中上游"请求所需
           // Freebucks 高于余额 → 直接封号"的判定。买不起就冷却该号并交给下面的
           // 全新选号去挑一个买得起的账号。
+          // 同号重试会**新买一条**计费会话，所以两本账都要先过。
+          const unitGate = rt.sessions.sessionUnitsFor?.(model)
+          if (unitGate?.known && unitGate.exhausted) {
+            throw new UpstreamError(
+              `session units exhausted (${unitGate.used}/${unitGate.limit}) for ${model}`,
+              { status: 429, code: 'units_exhausted' },
+            )
+          }
           const fbGate = rt.sessions.freebucksFor?.(model)
           if (fbGate?.known && fbGate.affordable === false) {
             logger.info('skip re-admit: freebucks cannot afford model', {
@@ -1177,7 +1232,9 @@ export class AccountRuntimes {
   }
 
   /**
-   * 释放某账号的上游会话（早退 DELETE → 只退还 session_units，Freebucks 不退）。
+   * 释放某账号的上游会话（早退 DELETE → session_units **当场**按实际占用退还；
+   * Freebucks 侧回 freebucksRefundPending，由待结算队列持续重放追问）。
+   * 两本账并行扣费，一手实测见 docs/evidence/ledger-session-units-vs-freebucks.json。
    * 换号/冷却时调用：失败账号的会话没人再用，留着只会白占一个上游会话槽位；
    * 有在途流时等它结束再释放（releaseWhenIdle），绝不掐断正在传输的 SSE。
    * @param {string} key

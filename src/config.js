@@ -63,15 +63,17 @@ const DEFAULTS = {
     pollIntervalSec: 30,
     admitTimeoutMs: 30_000,
     // 空闲自动释放（秒）：会话在途请求归零后，空闲超过该时长就早退 DELETE。
-    // ⚠️ 结论已于 2026-09-13 反转（见 docs/account-scheduling-and-refund.md §3）：
-    // 早退 DELETE **会按实际占用时长退还 Freebucks**（回执 freebucksRefund；
-    // freebucksRefundPending = 结算未完成，不是"不退"）。上游用户实测（issue
-    // #1337）退到每日池且可跨日叠加，官方 CLI 在 pending 期间每 3s 重放直到拿到
-    // 终态。
-    // 因此这里释放**既腾槽位也省钱**：挂着的空闲会话在按小时计价，越早释放越省。
-    // 默认 60s（2026-09-13 由错误的 600s 改回）：短空闲即释放，避免为一段
-    // 用不上的时间付费。设太大会让空闲会话持续计费。
-    // 0 = 关闭释放（会话留到自然过期；代价是空转时长照付 + 换模型要等）。
+    // ⚠️ **已付费时段内不释放**（2026-09-14 一手实测后改，结论与 09-13 版相反）：
+    // 上游一次 admit = **买断一小时**，POST 当场扣满整小时单价、回执带 expiresAt。
+    // 实测（账号 lolid8faw4er，模型 solar-pro4，无 units 行 → 纯 Freebucks 计费）：
+    //   admit rem 5 → 0；25s 后 DELETE → {freebucksRefundPending:true}；
+    //   +20/+40/+60/+120s rem 仍为 0（未到账）；重放 DELETE ×2 仍只有 pending。
+    // 而 session_units 那本账早退是**当场按比例退**的（实测 1.1 → 0.2）。
+    // 不对称才关键：实测 24 个「账号 × 模型」组合里 **22 个是 Freebucks 先见底**，
+    // 所以早退等于拿稀缺的账去省不稀缺的账——已付费的这一小时内继续用边际成本为 0。
+    // 因此 idleReleaseSec 现在是**付费时段结束之后**的空闲释放时长；付费时段内
+    // 一律不因空闲释放（见 session-manager._armIdleRelease 与 docs/freebucks-strategy.html）。
+    // 0 = 关闭释放（会话留到自然过期；代价是换模型要等）。
     // 控制台「额度保护」可调（5s..24h）。
     idleReleaseSec: 60,
   },

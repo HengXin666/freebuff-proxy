@@ -12,12 +12,23 @@
 > - **线上服务只读探测**：`GET /v1/freebuff/status`（管理员 key，不做任何写操作）；
 > - **rotator 独立账本**：`freebuff-rotator/rotator/LEDGER.md` + `state/ledger.json`。
 >
-> ⚠️ **本文第 3 节经过三次公开自我纠错，现行第 4 版（2026-09-13）。**
-> **最终结论：早退 DELETE 会按实际占用时长退还 Freebucks。**
-> `session_units` 与 `Freebucks` 是两本账，但**都退**；`freebucksRefundPending`
-> 表示**结算未完成**（须用同一个 `instanceId` 重放 DELETE 取回执），**不是「不退」**。
-> 前两版（「永远不退」/「0 是我们 bug」）与第 3 版（「两套账、Freebucks 不退」）都已作废，
-> 具体错在哪见 §3.4。
+> ⚠️ **本文第 3 节经过四次公开自我纠错，现行第 5 版（2026-09-14）。**
+> **现行结论（一手实测，`docs/evidence/ledger-session-units-vs-freebucks.json`）：**
+>
+> 1. `session_units` 与 `Freebucks` **不是同一笔钱的两个视角，而是两道并行闸门**——
+>    一笔会话**两本账同时各扣一次**。实测：`upstage/solar-pro4` 一次 admit 让
+>    units 0.1 → 1.1（+1.0）**且** `Freebucks` 5 → 0（池 5/25 → 0/25）。
+> 2. **`Freebucks` 才是上游的拒付判据**：`deepseek/deepseek-v4-flash` 在 units 0.1/6
+>    完全没超标时仍被 `rate_limited`，理由是 `freebucksShortfall{price:25,balance:5}`、
+>    `pool: freebucks`。所以**这道闸门不能拆**。
+> 3. **`session_units` 才是会立即兑现的那本账**：早退后 units 当场按实际占用回填
+>    （1.1 → 0.2，小数，无取整），而 `Freebucks` 侧只回 ``freebucksRefundPending`: true`。
+> 4. `freebucksRefundPending` = **结算未完成**（须用同一个 `instanceId` 重放 DELETE 取回执），
+>    **不是「不退」**；但**本仓库至今未观测到 `Freebucks` 侧金额落地**——该问题仍未结案（§3.6）。
+>
+> 前四版（「永远不退」/「0 是我们 bug」/「两套账、`Freebucks` 不退」/「两本账都退」）都已作废，
+> 具体错在哪见 §3.4。**第 4 版的错误是把「两本账都退」当成对「两本账是什么关系」的回答**——
+> 它们的关系是**并行扣费**，不是同一笔钱。
 
 ---
 
@@ -175,8 +186,11 @@ google/gemini-3.8-flash          50
 
 ### 3.1 结论
 
-> **会退（强证据，但本轮未亲眼观测到到账）。** 早退 DELETE 应按**实际占用时长**把未用部分退还：
-> `session_units`（每日模型额度）**和** `Freebucks`（每日池 + 余额）**都退**。
+> **分开看：`session_units` 当场就退（本仓库一手实测）；Freebucks 仍只回 pending、至今未观测到到账。**
+> 一笔会话**两本账同时各扣一次**——`upstage/solar-pro4` 一次 admit 让 units `0.1→1.1` **且**
+> Freebucks `5→0`；早退后 units 当场回填到 `0.2`（按实际占用比例，小数、无取整），
+> 而 Freebucks 侧只回 `freebucksRefundPending: true`。
+> 原始记录：`docs/evidence/ledger-session-units-vs-freebucks.json`。
 >
 > ⚠️ **2026-09-13 当晚的真实上游复测结果（必须一并读）：** 三臂（占用 2s / 3min / 50min，
 > 模型 5 FB/h）与一条线上真实会话（占用 53min，15 FB/h）**全部**只拿到
@@ -197,7 +211,10 @@ google/gemini-3.8-flash          50
 > **所以「早退省钱」是成立的**：挂着的空闲会话在按小时计价，早退把没用上的时间换回点数。
 > 策略按此调整（见 §3.5、§3.7）。
 
-#### 一笔会话的两本账（都退，只是计量单位不同）
+#### 一笔会话的两本账：**两道并行闸门**（不是同一笔钱，而是一起扣）
+
+> 实测：一次 admit 同时让 units `0.1 → 1.1` **且** Freebucks `5 → 0`。
+> 所以它们不是「同一笔钱的两种单位」，而是**各自独立收费的两道闸门**，调度必须两道都过。
 
 || **session units** | **Freebucks** |
 || --- | --- | --- |
@@ -205,7 +222,9 @@ google/gemini-3.8-flash          50
 | 池标识 | `pool: limited` / `poolLabel: Daily` | `pool: freebucks` |
 | 本账号额度 | limit **6**（可为小数） | limit **25** + balance |
 | admit 预扣 | **+1.0**（整条会话单位） | **整小时单价**（`freebucks.prices[m]`） |
-| 早退是否退 | **✅ 按实际占用比例重算退还** | **✅ 按实际占用退还（回执 `freebucksRefund`）** |
+| 早退是否退 | **✅ 当场按实际占用比例重算退还**（实测 `1.1 → 0.2`） | ⚠️ 回 `freebucksRefundPending`，**至今未观测到金额落地** |
+| 是否上游拒付判据 | ❌ 否（units 充足时仍可能被拒） | ✅ **是**（`freebucksShortfall` 是 `rate_limited` 的明示理由） |
+| 在调度里的角色 | 时长闸门 `units_exhausted` | 货币闸门 `freebucks_exhausted` |
 
 #### 为什么我们一度得出「不退」（这次误判的机理）
 
@@ -300,7 +319,8 @@ Amount`` 三态 + 「A zero receipt is a real receipt」**——与我们当年�
 | 第 1 版 | 「早退**永远不退**」 | 只有「观测全是 0」一个论据 |
 | 第 2 版 | 「官方设计**会退**，0 是**我们的 bug**」 | 把官方注释里的 `session_units` 当成了 Freebucks 的退款依据 |
 | 第 3 版 | 「**两套账：units 退，Freebucks 不退**」 | 受控实验**设计不足以区分竞争假设**（只测了 3 分钟占用），且把 `pending` 读成了「不退」；还用 `REFUND-COPY` 守卫把这个错误说法**从全仓封杀** |
-| **第 4 版（现行）** | **两本账都退；`pending` = 结算未完成，必须持续重放追问** | 以一手证据（用户实测 issue + 官方账本类型 + 参考实现）为准 |
+| 第 4 版 | 「**两本账都退**」 | 方向对了，但**没回答「两本账是什么关系」**——把它当成同一笔钱的两个视角，于是从没验证两本账是否**各自独立扣费**；也从未实测 Freebucks 是否到账 |
+| **第 5 版（现行）** | **两本账是两道并行闸门：一笔会话两本账同时各扣一次；`session_units` 当场按比例退，Freebucks 仍 pending** | 一手实测 `docs/evidence/ledger-session-units-vs-freebucks.json`（同账号同会话 `solar-pro4`：units `0.1→1.1→0.2`、FB `5→0`；`flash` 在 units 充足时仍因 `freebucksShortfall` 被拒） |
 
 > **教训（这次真正该记住的）：**
 > 1. 当「文档/源码注释」与「线上观测」冲突时，先确认说的是不是**同一个字段、同一本账**；
@@ -335,8 +355,12 @@ Amount`` 三态 + 「A zero receipt is a real receipt」**——与我们当年�
 
 ### 3.6 仍未完全确定的部分（诚实标注）
 
-> ⚠️ **这是本文最重要的一节。** 上面 §3.1 的「会退」是**基于一手文档与用户实测的推断**，
-> **不是我们自己的观测结论**。2026-09-13 当晚的复测**没有观测到任何一笔到账**。
+> ⚠️ **这是本文最重要的一节。** §3.1 里 **`session_units` 当场按比例退**是**本仓库一手实测**
+> （`0.1→1.1→0.2`，见 `docs/evidence/ledger-session-units-vs-freebucks.json`）；
+> 但 **Freebucks 侧「早退是否真退钱」仍然未证实**——至今**没有观测到任何一笔金额落地**。
+>
+> **这两个问题必须分开问**（第 5 版的核心纠正）：
+> 「Freebucks 是否被扣」= **已证实（是）**；「Freebucks 是否退还」= **未证实**。
 
 1. **不同模型/账号批次是否有差异？** 未逐一验证。参考实现与官方类型都按「按比例退」实现，
    且支持跨日结算。
@@ -346,9 +370,14 @@ Amount`` 三态 + 「A zero receipt is a real receipt」**——与我们当年�
      refunds go through"）——若属实，任何**不跨刷新点**的实验都必然只看到 pending。
    - 我们的 `2026-09-14T07:00Z` 刷新点观测**在本轮交付时尚未结束**，因此
      **「按比例退」目前仍属未证实**。
-3. **线上那条终态 `freebucksRefund: 0`（占用 53min、expected 1.66）怎么解释？**
-   两种可能都无法排除：(a) 短占用/该模型被结算成 0；(b) 确实不退。
-   **这条是最不利于"会退"的数据点，必须保留在案。**
+3. **线上那些终态 `freebucksRefund: 0` 怎么解释？—— 第 5 版已给出解释。**
+   全部 9 条 `refund: 0` 记录的模型**都是 `deepseek/deepseek-v4-flash`**。
+   实测证明该模型走 **`session_units`** 记账（units `1→0.1` 时 Freebucks 余额纹丝不动），
+   而它**同时也有 Freebucks 单价 25** —— 之所以退 0，是因为**那本账根本没有产生消费**。
+   所以这些 0 是**正确的终态**，不是「上游吞了钱」。
+   原先记录的 `expected`（按 Freebucks 单价算出的 14.79/13.2/1.66）是**用错了账本口径**，
+   已修正为按 units 口径记录 `expectedUnits`（见 Agent Note
+   `.agents/notes/implemented/architecture/2026-09-14-two-ledgers-parallel-gates.md`）。
 3. **`freebucksRefund` 不含字段时是 0 吗？** 按 vendor af898dc 口径 = 0，且 0 是**终态**
    （可以收工，不必再问）。
 

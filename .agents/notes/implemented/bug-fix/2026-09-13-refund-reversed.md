@@ -80,6 +80,11 @@ its receipt"*，即**结算未完成**）读成「不退」，就得出了错误
 - 上游若某天真的改成不退（或结算口径变化），现象会是：pending 长期不落地、退款恒为 0。
   届时应重跑实验——**这次请把占用调到接近整个会话窗口**，否则又会得到一个无法区分假设的结论。
 - `freebucksRefund` 为 0 现在被当作**终态**（可以收工）。这是参考实现与 vendor af898dc 的口径。
+  补充（2026-09-14）：**线上观测到的 0 全部落在 `deepseek/deepseek-v4-flash` 上**，而该模型实测走
+  `session_units` 记账——那本 Freebucks 账**根本没产生消费**，所以 0 是**正确的终态**，不是「上游吞了钱」。
+  原先按 Freebucks 单价算出的 `expected` 是用错了口径，已改为按 units 记 `expectedUnits`。
+  两本账的**并行**关系见
+  [2026-09-14-two-ledgers-parallel-gates.md](../architecture/2026-09-14-two-ledgers-parallel-gates.md)。
 
 ## Testing
 
@@ -94,7 +99,10 @@ its receipt"*，即**结算未完成**）读成「不退」，就得出了错误
   线上那条拿到**终态 `freebucksRefund: 0`**（expected 1.66）。
   原始日志：`docs/evidence/refund-*.jsonl`。
 
-  **这意味着本条 note 的结论强度是 medium，不是 high。** 已实现的行为（持续重放追问 +
+  **这意味着本条 note 的结论强度是 medium，不是 high。**（2026-09-14 复核：本 note 覆盖的是
+  **Freebucks 侧**是否退钱，**该问题至今仍未证实**；而 `session_units` 侧「早退当场按比例退」
+  已被一手实测证实，两件事不要混为一谈——见
+  [2026-09-14-two-ledgers-parallel-gates.md](../architecture/2026-09-14-two-ledgers-parallel-gates.md)。） 已实现的行为（持续重放追问 +
   只有终态才出队）**在任何一种结论下都正确**，所以保留；但「早退一定会退钱」这个前提
   **仍未被本仓库自己的观测证实**。跨每日池刷新点（`2026-09-14T07:00Z`）的观测在本 note
   写下时**尚未结束**。

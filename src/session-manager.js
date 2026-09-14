@@ -242,18 +242,106 @@ export class SessionManager {
   }
 
   /**
+   * session_units 闸门（与 Freebucks **并行**的第二道，见
+   * .agents/notes/implemented/architecture/2026-09-14-two-ledgers-parallel-gates.md）。
+   *
+   * 上游一笔会话**同时**扣两本账：units（`rateLimitsByModel[model].recentCount`，小数）
+   * 与 Freebucks。实测 `deepseek-v4-flash` 在 units `0.1/6` 完全没超标时仍被
+   * `rate_limited`（理由 `freebucksShortfall`），所以 Freebucks 那道**不能删**；
+   * 但 units 用尽同样会被上游拒，不拦就等于白跑一次 admit 再换回冷却。
+   *
+   * 返回 `{known, used, limit, remaining, exhausted, pool, poolLabel, resetAt}`。
+   * **fail-open**：无该模型行 / `limit<=0` / 非有限数 → `known:false`（不拦截），
+   * 这样老上游与没有 `rateLimitsByModel` 的账号行为不变。
+   * @param {string} model
+   */
+  sessionUnitsFor(model) {
+    const row = this.quota?.byModel?.[model]
+    if (!row || typeof row !== 'object') {
+      return { known: false, used: null, limit: null, remaining: null, exhausted: false }
+    }
+    const limit = Number(row.limit)
+    const used = Number(row.recentCount)
+    if (!Number.isFinite(limit) || limit <= 0 || !Number.isFinite(used)) {
+      return { known: false, used: null, limit: null, remaining: null, exhausted: false }
+    }
+    const remaining = Math.max(0, limit - used)
+    return {
+      known: true,
+      used,
+      limit,
+      remaining,
+      exhausted: remaining <= 0,
+      pool: row.period || row.pool || null,
+      poolLabel: row.poolLabel || null,
+      resetAt: row.resetAt || null,
+    }
+  }
+
+  /**
+   * 距离本会话「已付费时段」结束还有多少毫秒；无法判定时返回 null。
+   *
+   * 上游**一次 admit 就是买断一小时**（一手实测 2026-09-14）：POST 当场扣满
+   * 整小时单价（Freebucks 5 → 0），回执带 admittedAt / expiresAt。因此在这
+   * 一小时之内，继续发请求的**边际成本是 0**；而 DELETE 之后那一小时就作废，
+   * 重开 = 重新买一整小时。
+   *
+   * expiresAt 优先；上游只回 remainingMs 时用它兜底（admit 时的快照）。
+   * @param {{expiresAt?: string|null, remainingMs?: number|null, status?: string, admittedAt?: string|null}} [session]
+   */
+  paidWindowRemainingMs(session = this.session) {
+    if (!session) return null
+    // grace（ended 但仍持 instanceId）：上游允许把在途做完，不再续期。
+    if (session.status === 'ended') return 0
+    const exp = session.expiresAt != null ? Date.parse(session.expiresAt) : NaN
+    if (Number.isFinite(exp)) return exp - Date.now()
+    const rem = Number(session.remainingMs)
+    if (Number.isFinite(rem)) {
+      // remainingMs 是 admit 时的快照，按 admit 时刻折算成"现在还剩多少"。
+      const admitted = session.admittedAt != null ? Date.parse(session.admittedAt) : NaN
+      if (Number.isFinite(admitted)) return admitted + rem - Date.now()
+      return rem
+    }
+    return null
+  }
+
+  /** 本会话是否仍在已付费时段内（判不出来时返回 false = 不拦）。 */
+  inPaidWindow(session = this.session) {
+    const left = this.paidWindowRemainingMs(session)
+    return left != null && left > 0
+  }
+
+  /**
    * 空闲自动释放：在途归零后空闲超过 session.idleReleaseSec 就早退 DELETE。
    *
-   * 早退 DELETE **会按实际占用时长退还 Freebucks**（详见
-   * docs/account-scheduling-and-refund.md §3，结论已于 2026-09-13 反转）：上游按
-   * 整小时单价预扣，提前释放按实际占用重算并退回未用部分；挂着的空闲会话是**在花钱**。
+   * ⚠️ **已付费时段内不释放**（2026-09-14 一手实测后改）。
    *
-   * 所以这里释放有**两个**收益：腾出上游会话槽位（一个账号同时只有一条 session，
-   * 且 session 绑定模型），以及**停止为空转时长付费**。默认空闲释放 60s 即为此。
+   * 上游一次 admit 就是**买断一小时**：POST 当场扣满整小时单价，回执带
+   * expiresAt。实测（账号 `lolid8faw4er`，模型 solar-pro4，该模型无 units 行
+   * → 纯 Freebucks 计费）：
+   *
+   *     admit      rem 5 → 0      （当场扣满）
+   *     25s 后 DELETE → {status:"ended", freebucksRefundPending:true}
+   *     +20/+40/+60/+120s          rem 仍为 0，**未到账**
+   *     重放 DELETE ×2             仍然只有 pending，无金额
+   *
+   * 而 **session_units 那本账早退是当场按比例退的**（实测 1.1 → 0.2）。
+   * 关键是不对称：实测 24 个「账号 × 模型」组合，**22 个是 Freebucks 先见底**
+   * （Freebucks 才是上游真正的拒付判据 freebucksShortfall）。所以早退等于
+   * **拿稀缺的账去省不稀缺的账**——已付费的这一小时内继续用，边际成本为 0。
+   *
+   * 因此：付费时段内**不因空闲而释放**（见
+   * .agents/notes/implemented/architecture/2026-09-14-paid-hour-hold.md、
+   * docs/freebucks-strategy.html）。
+   * 腾槽位给别的模型由上层显式 release 负责，不走这条空闲路径。
+   * idleReleaseSec 仍然有效：它是付费时段**结束之后**的空闲释放时长。
    */
   _armIdleRelease() {
     const ms = this.idleReleaseMs()
-    if (!ms || !this.hasLiveSlot()) {
+    // 仍在已付费时段内：闲置不花钱，释放才是浪费（那一小时已买断）。
+    const left = this.paidWindowRemainingMs()
+    const inPaid = left != null && left > 0
+    if (!ms || !this.hasLiveSlot() || inPaid) {
       this._clearIdleRelease()
       return
     }
@@ -268,7 +356,7 @@ export class SessionManager {
         this._armIdleRelease()
         return
       }
-      logger.info('releasing idle freebuff session (frees the account slot; refunds unused time)', {
+      logger.info('releasing idle freebuff session (paid window over; frees the account slot)', {
         instanceId: this.session?.instanceId,
         model: this.session?.model,
         idleSec: Math.round(ms / 1000),
@@ -753,7 +841,7 @@ export class SessionManager {
     this._notifyStateChange()
   }
 
-  /** 释放会话（早退 DELETE 按实际占用退还 Freebucks 未用部分）。返回 true = 上游已确认结束。 */
+  /** 释放会话（早退 DELETE；Freebucks 侧只回 pending，实测未到账）。返回 true = 上游已确认结束。 */
   async release() {
     return this.withLock(() => this._releaseUnlocked())
   }
@@ -844,11 +932,20 @@ export class SessionManager {
           price != null && holdMs != null
             ? Math.max(0, round2(price * (1 - holdMs / 3_600_000)))
             : null
+        // units 口径的应退：上游有 0.1 小时的最小时长下限（扣 0.1 起），
+        // 所以"应退"= 1 − max(0.1, 占用小时数)。与 Freebucks 口径的 expected
+        // **并存**：两本账的应退是两个不同的数，混在一起会让"Freebucks 侧为何
+        // 长期 pending"这个未结问题彻底隐身（见架构 note）。
+        const expectedUnits =
+          holdMs != null
+            ? Math.max(0, round2(1 - Math.max(0.1, holdMs / 3_600_000)))
+            : null
         const entry = {
           instanceId,
           model,
           refund,
           expected,
+          expectedUnits,
           price,
           holdMs,
           at: new Date().toISOString(),
@@ -1034,6 +1131,7 @@ export class SessionManager {
       model,
       refund,
       expected: null,
+      expectedUnits: null,
       price,
       holdMs: null,
       replayed: true,

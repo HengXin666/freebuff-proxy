@@ -64,15 +64,27 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 - 前端展示上游 `rateLimitsByModel`（每模型 `已用/上限/重置时间`）；额度仅在 admit/活跃 session 时由上游返回。
 - 提供**只读探测刷新**（`POST /api/accounts/probe`，只 GET、不创建 session、不占额度）；导入账号后自动探测。
 - 多账号池自动切号：`rate_limited / spend_limited / ip_capped / free_mode_rate_limited / banned` 整号冷却并换下一个；`model_unavailable` 只冷却该模型。上游报错（chat 429 限流 / 5xx / 403 账号级封禁 / startAgentRun 失败 / 网络超时）冷却当前账号并继续轮询下一个；4xx 客户端错误不换号。
-- **两本账，早退都退**：`session_units`（`rateLimitsByModel.recentCount`，上限 6）与 **Freebucks（每日池 + 余额）** 都在提前 DELETE 时**按实际占用时长退还未用部分**（`freebucksRefund`）。`freebucksRefundPending` = **结算未完成**（要用同一个 `instanceId` 重放 DELETE 取回执），**不是"不退"**——必须持续重放追问，绝不在 pending 时丢弃句柄。早退因此**既腾槽位又省钱**（见 `docs/account-scheduling-and-refund.md` §3，2026-09-13 结论反转）。
-- **换号有成本（每条会话都从 admit 起按整小时计价，但早退会把未用部分退回来）**：单个下游请求最多新建 `limits.max_new_sessions_per_request`（默认 2）条会话；复用热 session 与被上游拒绝的 admit 不占预算；换号前先把失败账号的会话早退 DELETE **腾出槽位并取回未用时长**；非账号级瞬时故障（网络抖动）先同账号重试一次，不新建会话。
+- **两本账是并行的两道闸门**（一手实测：一笔会话 units `0.1→1.1` **且** Freebucks `5→0`）：
+  `session_units`（`rateLimitsByModel.recentCount`，上限 6，**小数**）与 **Freebucks（每日池 + 余额）**
+  各自独立扣费，所以调度**两道都要过**（`units_exhausted` / `freebucks_exhausted` 各自成立）。
+  ⚠️ **Freebucks 才是上游真正的拒付判据**（units 充足时仍可能因 `freebucksShortfall` 被 `rate_limited`），
+  **绝不能拆掉**。
+- **一次 admit = 买断一小时**（2026-09-14 一手实测）：POST 当场扣满整小时单价（Freebucks `5→0`，
+  回执带 `expiresAt`）。**这一小时内继续发请求边际成本为 0**；DELETE 之后那一小时作废，
+  重开 = 重新买一整小时。早退 DELETE 的退款**两本账不对称**：`session_units` **当场**按比例退还
+  （实测 `1.1→0.2`）；Freebucks 侧**只回 `freebucksRefundPending`**，实测 25s 早退后重放 DELETE ×2、
+  观察 2 分钟**未到账**。实测 24 个「账号 × 模型」组合里 **22 个是 Freebucks 先见底**，
+  所以早退等于**拿稀缺的账去省不稀缺的账**——**付费时段内绝不为空闲而释放**。
+  句柄仍须保留并重放追问（pending 时丢弃就连追问机会都没了），但**不得**把 pending 当成"钱会回来"。
+  见 `docs/freebucks-strategy.html`、`docs/account-scheduling-and-refund.md` §3 第 5 版。
+- **换号有成本（一次 admit 买断一整小时）**：单个下游请求最多新建 `limits.max_new_sessions_per_request`（默认 2）条会话；复用热 session 与被上游拒绝的 admit 不占预算；换号前先把失败账号的会话早退 DELETE **腾出槽位**；非账号级瞬时故障（网络抖动）先同账号重试一次，不新建会话。
 - **`free_mode_capacity_deferred`（"Free mode is briefly at capacity"）不冷却**：是免费模式瞬时容量排队，上游自己说 "will be retried automatically"，实测同 session 立即重试即恢复（flash 尤常见）。优先复用当前热 session 重试，绝不为此无谓新建 session 或把账号钉死。
 - gate 错误（session_expired/superseded/waiting_room 等）：先同账号 re-admit 一次（不冷却），连续两次仍失败才升级为换号冷却。
 - **session 轮询 GET 跳过在途请求**：上游同一个号同一时间只能一个客户端在线，轮询若撞上正在进行的 chat 会干扰/顶掉活跃会话，因此有请求在途时本轮刷新跳过。
 - **粘性优先调度（drain, not rotate）**：Freebuff 会话是**无状态**的（每次请求由客户端带全量历史），
   **不做 conversation_id 粘性/分组/记忆**。选号排序 = 同模型热 session > 已用过的账号（最近用过的优先）
   > **从未用过的账号（排最后，只有已用账号都不可用/满员排队超时才启用）**；上游把"轮换健康账号"
-  直接当账号农场特征，而每次 admit 都要起一条计费会话（早退会退未用部分，但仍应少换），所以**绝不主动把并发平摊到多个账号**。
+  直接当账号农场特征，而每次 admit 都买断一整小时，所以**绝不主动把并发平摊到多个账号**。
   冷启动的“选号 + admit”必须串行化，同一账号的并发请求只创建一个 session。
   **并发上限是"溢出"阈值而非"换号"阈值**：单账号在途流数达到 `accountMaxConcurrency`（默认 2）时，
   新请求先在该账号上有界排队（超时 `account_busy` 后再换下一个账号），**不为了并发去启用新账号**。
@@ -88,7 +100,7 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 - **无会话记忆/分组**：`conversation_id` 不决定账号；同模型请求由热 session 优先策略统一调度。
 - 同一个 `instanceId` 支持并发 chat；后台 session GET 在有请求在途时仍必须跳过，避免客户端身份/轮询干扰活跃会话。
 - 新模型优先使用空闲（冷）账号；没有空闲账号而必须复用同一账号时，先释放旧 session。gate 错误（session_expired/superseded/waiting room 等）自动 re-admit **一次**。
-- **空闲自动释放**：会话在途归零后空闲超过 `session.idle_release_sec`（默认 60s，控制台「额度保护」可调）就早退 `DELETE`——**既腾出该账号的上游会话槽位**（一个账号同时只有一条 session 且绑定模型），**也把未用时长对应的 Freebucks 退回来**（挂着的空闲会话在按小时计价）。DELETE 必须带 `x-freebuff-instance-id`（否则上游 400 `instance_required`，删不掉也追不回那笔预扣）。有请求排队等待该会话时不得释放。
+- **空闲自动释放（付费时段内不释放）**：一次 admit 买断一小时，**这一小时内绝不为空闲而释放**（闲置不花钱，释放才是把已买的钱丢掉）。`session.idle_release_sec`（默认 60s，控制台「额度保护」可调）现在是**付费时段结束之后**的空闲释放时长；到期后即释放，**腾出该账号的上游会话槽位**（一个账号同时只有一条 session 且绑定模型）。DELETE 必须带 `x-freebuff-instance-id`（否则上游 400 `instance_required`）。有请求排队等待该会话时不得释放。实现在 `session-manager._armIdleRelease` + `inPaidWindow()`（见 `docs/freebucks-strategy.html`）。
 
 ## Web 控制台
 

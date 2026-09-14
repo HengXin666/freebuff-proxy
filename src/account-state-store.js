@@ -228,6 +228,12 @@ export class AccountStateStore {
         Number(rec.refundExpectedTotal || 0) + entry.expected,
       )
     }
+    // session_units 口径的应退（上游会**立即**兑现的那本账；Freebucks 侧长期 pending）。
+    if (typeof entry.expectedUnits === 'number') {
+      rec.refundUnitsExpectedTotal = round2(
+        Number(rec.refundUnitsExpectedTotal || 0) + entry.expectedUnits,
+      )
+    }
     if (entry.pending === true) {
       rec.refundPendingCount = Number(rec.refundPendingCount || 0) + 1
     }

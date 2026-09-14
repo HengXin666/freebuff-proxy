@@ -149,7 +149,7 @@ async function main() {
   }
   if (payload.quotaExempt) console.log('  额度豁免   该账号 quotaExempt（不受上述池限制）')
   console.log()
-  console.log('  模型定价（admit 按整小时单价预扣；提前释放按实际占用退还未用部分）')
+  console.log('  模型定价（一次 admit = 买断一小时；时段内复用不额外计费）')
   console.log()
   const w = Math.max(28, ...rows.map((r) => r.model.length))
   console.log(`  ${'模型'.padEnd(w)}  ${'FB/小时'.padStart(8)}  ${'今日池可跑'.padStart(12)}  ${'当前余额可跑'.padStart(12)}`)

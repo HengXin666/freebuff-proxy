@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Freebucks 最优策略 — 一小时是买断的</title>
+<style>
+:root{--bg:#0e1116;--card:#161b22;--line:#272e38;--fg:#e6edf3;--dim:#8b949e;
+--red:#f85149;--green:#3fb950;--amber:#d29922;--blue:#58a6ff;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;}
+.wrap{max-width:940px;margin:0 auto;padding:36px 22px 70px}
+h1{font-size:27px;line-height:1.35;margin:0 0 10px;letter-spacing:-.3px}
+h2{font-size:19px;margin:0 0 14px;display:flex;align-items:center;gap:9px}
+h2 .n{display:inline-flex;align-items:center;justify-content:center;width:25px;height:25px;
+border-radius:50%;background:var(--blue);color:#04121f;font-size:13px;font-weight:700;flex:none}
+.sub{color:var(--dim);margin:0 0 26px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin:0 0 18px}
+.verdict{background:linear-gradient(135deg,#12261a,#161b22);border:1px solid #2b6b3a;border-left:5px solid var(--green)}
+.verdict .big{font-size:20px;font-weight:700;line-height:1.5;margin:0}
+.verdict .big em{color:var(--green);font-style:normal}
+.warn{background:#241a12;border:1px solid #6b4a1f;border-left:5px solid var(--amber)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:680px){.grid2{grid-template-columns:1fr}}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
+.p-red{background:#3d1518;color:var(--red)}
+.p-green{background:#12301c;color:var(--green)}
+.p-amber{background:#3a2c10;color:var(--amber)}
+.p-dim{background:#1f2630;color:var(--dim)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}
+th{color:var(--dim);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.4px}
+td.num{font-variant-numeric:tabular-nums;font-weight:700}
+.ok{color:var(--green)}.bad{color:var(--red)}.mid{color:var(--amber)}
+.track{position:relative;height:38px;border-radius:7px;background:#0b0f14;border:1px solid var(--line);overflow:hidden;margin:7px 0 4px}
+.seg{position:absolute;top:0;bottom:0;display:flex;align-items:center;justify-content:center;
+font-size:12px;font-weight:700;color:#04121f;white-space:nowrap;overflow:hidden}
+.paid{background:var(--red)}
+.idle{background:repeating-linear-gradient(45deg,#1d242e,#1d242e 6px,#232b36 6px,#232b36 12px);color:var(--dim)}
+.used{background:var(--green)}
+.axis{display:flex;justify-content:space-between;color:var(--dim);font-size:11.5px;margin-bottom:16px}
+.lbl{font-size:13.5px;font-weight:600;margin-top:14px}
+.lbl small{color:var(--dim);font-weight:400}
+.big2{font-size:38px;font-weight:800;letter-spacing:-1px;line-height:1.1}
+.kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;text-align:center}
+@media(max-width:680px){.kpi{grid-template-columns:1fr}}
+.kpi .v{font-size:29px;font-weight:800;letter-spacing:-.5px}
+.kpi .k{font-size:12.5px;color:var(--dim);margin-top:2px}
+ul{margin:8px 0 0;padding-left:20px}li{margin:5px 0}
+.foot{color:var(--dim);font-size:12.5px;border-top:1px solid var(--line);padding-top:16px;margin-top:26px}
+.foot code{background:#1f2630;padding:1px 6px;border-radius:4px;font-size:12px;color:#a5d6ff}
+.arrow{text-align:center;color:var(--dim);font-size:19px;margin:2px 0}
+</style>
+</head>
+<body><div class="wrap">
+<h1>Freebuff 的计费策略：<span style="color:var(--green)">一次 admit = 买断一小时</span></h1>
+<p class="sub">别管"退款"这个词——它按小时卖，早退不等于退钱。本图全部数字为一手实测。</p>
+<div class="card verdict">
+<p class="big">最优解：<em>不要早退</em>。已经付过的那一小时，用满它。</p>
+<p style="margin:12px 0 0;color:#9fb3a6">同一小时内第 2 次提问，边际成本是 <b style="color:var(--green)">0</b>。
+一旦 DELETE，那一小时就作废，重开 = 重新买一整小时。</p>
+</div>
+<h2><span class="n">1</span>它到底怎么收费</h2>
+<div class="card">
+<p style="margin:0 0 6px">admit 的那一刻<b>一次性扣满整个小时</b>，不是按消息、也不是按秒。</p>
+<div class="grid2" style="margin-top:14px">
+<div style="background:#0b0f14;border:1px solid var(--line);border-radius:9px;padding:14px">
+<div style="color:var(--dim);font-size:12.5px">POST /session 之前</div>
+<div class="big2" style="color:var(--fg)">5</div>
+<div style="color:var(--dim);font-size:12.5px">Freebucks 余额</div></div>
+<div style="background:#0b0f14;border:1px solid var(--line);border-radius:9px;padding:14px">
+<div style="color:var(--dim);font-size:12.5px">POST /session 之后</div>
+<div class="big2" style="color:var(--red)">0</div>
+<div style="color:var(--dim);font-size:12.5px">当场扣满，回执带 expiresAt = +1 小时</div></div>
+</div>
+<p style="margin:14px 0 0;color:var(--dim);font-size:13.5px">
+官方类型文档原话：<i>"Reward sessions are exactly one hour of wall-clock time"</i> —— 一小时是<b>墙钟时间</b>，
+你在里面发 1 条还是 100 条，价格一样。</p>
+</div>
+<h2><span class="n">2</span>早退到底退回了什么（两本账不一样）</h2>
+<div class="card">
+<table>
+<tr><th>账本</th><th>早退 DELETE 的实际结果</th><th>实测到账？</th></tr>
+<tr><td><b>session_units</b><br><small style="color:var(--dim)">时间额度 · 上限 6</small></td>
+<td>按占用比例<b>当场</b>退<br><small style="color:var(--dim)">实测 1.1 → 0.2，带小数</small></td>
+<td><span class="pill p-green">✔ 立即到账</span></td></tr>
+<tr><td><b>Freebucks</b><br><small style="color:var(--dim)">每日池 · 真钱</small></td>
+<td>只回 <code style="color:#a5d6ff">freebucksRefundPending: true</code><br>
+<small style="color:var(--dim)">重放 DELETE 追问，仍只有 pending</small></td>
+<td><span class="pill p-red">✘ 2 分钟内没到账</span></td></tr>
+</table>
+<div style="margin-top:16px;background:#0b0f14;border:1px solid var(--line);border-radius:9px;padding:14px;font-size:14px">
+<b>实测记录</b>（账号 lolid8faw4er，模型 solar-pro4，该模型<b>没有 units 行</b> → 纯 Freebucks 计费）<br>
+<div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;margin-top:9px;line-height:1.85;color:#c9d1d9">
+基线 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;rem=5 &nbsp;spent=20<br>
+<span style="color:var(--red)">admit &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;rem=0 &nbsp;spent=25&nbsp;&nbsp;← 当场扣满</span><br>
+25s 后 DELETE → <span style="color:var(--amber)">{status:"ended", freebucksRefundPending:true}</span><br>
++20s/+40s/+60s/+120s &nbsp;rem=0 &nbsp;spent=25&nbsp;&nbsp;← 纹丝不动<br>
+重放 DELETE ×2 → 仍然只有 pending，无金额<br>
+<span style="color:var(--red)">再 POST 同模型 → rate_limited, freebucksShortfall</span>&nbsp;&nbsp;← 钱真的没了
+</div></div>
+<p style="margin:14px 0 0;color:var(--dim);font-size:13.5px">
+⚠ 唯一未定的：官方类型说退款"重放会返回同一金额"，issue #1337 说可能<b>在每日池刷新时</b>才落地。
+本账号刷新点在 16 小时后。即使那时到账，<b>本小时内也拿不回来，也重买不了</b>。</p>
+</div>
+<h2><span class="n">3</span>所以差别有多大（同一天、同一个模型、4 次提问）</h2>
+<div class="card">
+<p style="margin:0 0 4px;color:var(--dim);font-size:13.5px">
+场景：一小时内你问了 4 次，间隔 5 / 15 / 25 分钟。solar-pro4 单价 5，每日池 25。</p>
+<div class="lbl" style="color:var(--red)">方案 A ── 现在的默认：空闲 60 秒就 DELETE</div>
+<div class="track">
+<div class="seg paid" style="left:0%;width:4%">买</div>
+<div class="seg idle" style="left:4%;width:4.3%">丢</div>
+<div class="seg paid" style="left:8.3%;width:4%">买</div>
+<div class="seg idle" style="left:12.3%;width:20.7%">丢</div>
+<div class="seg paid" style="left:33%;width:4%">买</div>
+<div class="seg idle" style="left:37%;width:37.7%">丢</div>
+<div class="seg paid" style="left:74.7%;width:4%">买</div>
+<div class="seg idle" style="left:78.7%;width:21.3%">丢</div>
+</div>
+<div class="axis"><span>0 分</span><span>15 分</span><span>30 分</span><span>45 分</span><span>60 分</span></div>
+<div style="color:var(--red);font-weight:700">4 次 admit = 4 × 5 = 20 Freebucks。
+<span style="color:var(--dim);font-weight:400">池子 25，第 5 次就没额度了。</span></div>
+<div class="lbl" style="color:var(--green);margin-top:26px">方案 B ── 最优：买一次，用满整小时</div>
+<div class="track">
+<div class="seg used" style="left:0%;width:4%">买</div>
+<div class="seg used" style="left:4%;width:96%;background:#1f6f34">一小时全程复用，边际成本 0</div>
+</div>
+<div class="axis"><span>0 分</span><span>15 分</span><span>30 分</span><span>45 分</span><span>60 分</span></div>
+<div style="color:var(--green);font-weight:700">1 次 admit = 5 Freebucks。
+<span style="color:var(--dim);font-weight:400">同样 4 次提问。</span></div>
+<div class="kpi" style="margin-top:26px;padding-top:20px;border-top:1px solid var(--line)">
+<div><div class="v bad">20</div><div class="k">方案 A 花费</div></div>
+<div><div class="v ok">5</div><div class="k">方案 B 花费</div></div>
+<div><div class="v" style="color:var(--green)">省 75%</div><div class="k">同一小时、同样 4 次提问</div></div>
+</div>
+</div>
+<h2><span class="n">4</span>为什么这件事特别要命</h2>
+<div class="card warn">
+<p style="margin:0 0 10px">我算了 <b>24 个「账号 × 模型」组合</b>，看哪本账先见底（每日池 ÷ 单价 vs units 上限）：</p>
+<table>
+<tr><th>模型</th><th>单价</th><th>池子够跑</th><th>units 上限</th><th>谁先见底</th></tr>
+<tr><td>deepseek-v4-flash</td><td class="num">25</td><td class="num">0.4 小时</td><td class="num">6 小时</td><td><span class="pill p-red">Freebucks</span></td></tr>
+<tr><td>mimo-v2.5</td><td class="num">10</td><td class="num">1.0 小时</td><td class="num">6 小时</td><td><span class="pill p-red">Freebucks</span></td></tr>
+<tr><td>solar-pro4</td><td class="num">5</td><td class="num">2.0 小时</td><td class="num">6 小时</td><td><span class="pill p-red">Freebucks</span></td></tr>
+<tr><td>gemini-3.8-flash</td><td class="num">50</td><td class="num">0.2 小时</td><td class="num">5 小时</td><td><span class="pill p-red">Freebucks</span></td></tr>
+</table>
+<p style="margin:14px 0 0"><b style="color:var(--amber)">22 / 24 都是 Freebucks 先见底。</b>
+而早退只把 <b>units</b> 退回来 —— 我们等于在拿<b>稀缺的账</b>去省<b>不稀缺的账</b>。</p>
+</div>
+<h2><span class="n">5</span>落到代码上：只改一件事</h2>
+<div class="card">
+<div class="grid2">
+<div style="background:#241a12;border:1px solid #6b4a1f;border-radius:9px;padding:15px">
+<div class="pill p-red">现在</div>
+<p style="margin:11px 0 0;font-size:14px">
+<code style="color:#a5d6ff">idle_release_sec = 60</code><br>
+空闲 60 秒 → DELETE。流量有间隔就疯狂重复买。</p></div>
+<div style="background:#12261a;border:1px solid #2b6b3a;border-radius:9px;padding:15px">
+<div class="pill p-green">已改成</div>
+<p style="margin:11px 0 0;font-size:14px">
+<b>已付费时长内不释放</b><br>
+保留到 <code style="color:#a5d6ff">expiresAt</code>；只在<b>必须腾槽位给别的模型</b>时才早退。</p></div>
+</div>
+<p style="margin:18px 0 0;font-size:14px"><b>落地位置：</b></p>
+<ul style="font-size:14px;color:#c9d1d9">
+<li><code>session-manager.paidWindowRemainingMs()</code> / <code>inPaidWindow()</code>：付费时段判定（fail-open）</li>
+<li><code>_armIdleRelease()</code>：时段内直接清计时器、不释放；<code>idle_release_sec</code> 变成"时段结束之后"的释放时长</li>
+<li>控制台 <code>classifyAccount()</code>：<b>付费时段内 <code>rem=0</code> 判为可用</b>，不再误报「额度不足」</li>
+<li>测试：<code>smoke</code> 用例 1 双向钉死（时段内 0 次 DELETE；过期后恢复释放）</li>
+</ul>
+<p style="margin:18px 0 0;font-size:14px"><b>代价（说清楚，不是白赚）：</b></p>
+<ul style="font-size:14px;color:#c9d1d9">
+<li>一个账号同时只能有 1 条 session 且<b>绑定模型</b>，hold 住这一小时，别的模型这一小时用不了这个号</li>
+<li>所以并发多模型时要靠<b>账号池分散</b>，而不是靠频繁释放腾位置</li>
+<li>顺带好处：admit 次数大幅下降 → 上游眼中更不像"轮换账号的农场"</li>
+</ul>
+</div>
+<div class="card verdict" style="margin-top:24px">
+<p class="big" style="font-size:18px">一句话：<em>把那一小时当成已经买到手、会过期的资产</em>——
+该做的不是"暂停后恢复"，而是<b>根本别暂停</b>。</p>
+</div>
+<div class="foot">
+实测时间 2026-09-14 · 出口 <code>127.0.0.1:2334</code> · 端点 <code>www.codebuff.com/api/v1/freebuff/session</code><br>
+证据：DELETE 回执 3 次重放均 pending；官方快照 <code>freebuff-session.ts</code> / <code>freebuff-models.ts</code>；
+线上 11 条退款记录全部 <code>refund=0</code>。
+</div>
+</div></body></html>
