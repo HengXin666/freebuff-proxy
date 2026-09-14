@@ -4241,6 +4241,23 @@ server.close()
 
     // 付费时段判定本身
     assert.equal(sm.inPaidWindow(), true, '刚 admit（expiresAt=+1h）应判为在付费时段内')
+    // (REUSE-COUNT) 「我们在省钱」必须可被前端量化：一次 admit = 买断一小时，
+    // 之后的每次复用都是零边际成本。计数器要如实反映 admit/reuse。
+    assert.equal(sm.admitCount, 1, '首次请求应记为买过 1 条会话')
+    assert.equal(sm.reuseCount, 0, '此时还没有复用')
+    {
+      const again = await fbChat({
+        model: 'deepseek/deepseek-v4-flash',
+        messages: [{ role: 'user', content: 'reuse-me' }],
+      })
+      assert.equal(again.status, 200, await again.clone().text())
+      assert.equal(sessionPosts, 1, '复用不得再 admit（那一小时已买断）')
+      assert.equal(sm.admitCount, 1, '复用不应增加 admitCount')
+      assert.equal(sm.reuseCount, 1, '同一小时内第二次请求应记为 1 次复用')
+      const row = fbRuntimes.list().find((x) => x.key === 'a')
+      assert.equal(row.admitCount, 1, '账号列表必须暴露 admitCount（前端显示"买过几条"）')
+      assert.equal(row.reuseCount, 1, '账号列表必须暴露 reuseCount（前端显示"复用几次"）')
+    }
     assert.ok(
       sm.paidWindowRemainingMs() > 0,
       '付费时段剩余应 > 0',
@@ -5263,6 +5280,31 @@ server.close()
     /function idleReleaseAdvice/.test(dashSrc),
     '控制台必须提供 idleReleaseAdvice（按账号池实时算推荐值）',
   )
+  // (REUSE-UI) 「我们在省钱」必须能一眼看到：全局复用率 + 每账号 admit/reuse 计数。
+  // 复用发生在已买断的一小时内 → 边际成本 0，所以复用率就是省掉的重买比例。
+  {
+    const src = fs.readFileSync(
+      new URL('../dashboard/app.js', import.meta.url),
+      'utf8',
+    )
+    assert.ok(
+      /会话复用率/.test(src),
+      '总览必须有「会话复用率」卡片（让用户直观看到在省钱）',
+    )
+    assert.ok(
+      /a\.admitCount/.test(src) && /a\.reuseCount/.test(src),
+      '账号行必须显示 admitCount / reuseCount（买过几条 · 复用几次）',
+    )
+    const mgrSrc = fs.readFileSync(
+      new URL('../src/session-manager.js', import.meta.url),
+      'utf8',
+    )
+    assert.ok(
+      /this\.reuseCount \+= 1/.test(mgrSrc),
+      'ensureSession 的热路径必须累加 reuseCount',
+    )
+  }
+
   // (PAID-HOUR-UI) 付费时段内 `rem=0` 是"已付款"的正常状态，绝不能标成「额度不足」。
   // 少了这条，"买断一小时"上线后每个正在被正常使用的账号都会显示成耗尽。
   {

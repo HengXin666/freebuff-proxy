@@ -132,6 +132,16 @@ export class SessionManager {
      */
     this.admitCount = 0
     /**
+     * 复用热 session 的次数（每次请求命中"已有可用会话、无需 admit"时 +1）。
+     *
+     * 与 admitCount 配对，用来在控制台上直接证明**我们在省钱**：复用不产生任何
+     * 上游扣费（一次 admit = 买断一小时，时段内复用边际成本为 0），所以
+     * `reuseCount / (reuseCount + admitCount)` 就是这段时间里省掉的重买次数。
+     *
+     * 只统计**请求侧**的复用（ensureSession 走热路径），不含后台轮询。
+     */
+    this.reuseCount = 0
+    /**
      * 释放失败待重试：DELETE 失败时**绝不能丢弃 instanceId**——丢了这条会话
      * 就永远删不掉（连 session_units 也退不回来），只能白占一个上游会话槽位。
      * true = session 里仍留着 instanceId，等待下一次释放机会重试。
@@ -507,6 +517,12 @@ export class SessionManager {
 
   getSnapshot() {
     const s = this.session
+    // admit/reuse 计数：让控制台能显示"这个号买了几条、复用了几次"——
+    // 复用是**零成本**的（买断的一小时内），这个比例直接就是省下的重买次数。
+    const counts = {
+      admitCount: this.admitCount,
+      reuseCount: this.reuseCount,
+    }
     if (!s) {
       return {
         status: 'none',
@@ -514,6 +530,7 @@ export class SessionManager {
         freebucks: this.freebucks,
         lastRefund: this.lastRefund,
         lastProbe: this.lastProbe,
+        ...counts,
       }
     }
     const remainingMs =
@@ -528,6 +545,7 @@ export class SessionManager {
       freebucks: this.freebucks,
       lastRefund: this.lastRefund,
       lastProbe: this.lastProbe,
+      ...counts,
     }
   }
 
@@ -611,6 +629,8 @@ export class SessionManager {
     }
     return this.withLock(async () => {
       if (this.isUsableForModel(model)) {
+        // 热路径：这条会话的整小时已经买过了，复用它**不产生任何新扣费**。
+        this.reuseCount += 1
         return this.session
       }
 
@@ -652,8 +672,11 @@ export class SessionManager {
         })
         await this._waitForIdle(Math.min(left, 2_000))
       }
-      // 等待期间可能已被其他路径重建/续期，重新检查
-      if (this.isUsableForModel(model)) return this.session
+      // 等待期间可能已被其他路径重建/续期，重新检查（同样是复用已有会话）
+      if (this.isUsableForModel(model)) {
+        this.reuseCount += 1
+        return this.session
+      }
 
       // 持有的 slot 已不可用（模型不符 / 已过期 / 即将过期）：先释放再 admit，
       // 平滑切换——避免带着旧 session 直接 POST 造成上游 model_locked 或排队。

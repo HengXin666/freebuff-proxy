@@ -339,6 +339,12 @@ export class AccountRuntimes {
         freebucks: snap?.freebucks || null,
         // 最近一次早退 DELETE 的退款回执（空闲释放/换号释放都会产生）
         lastRefund: snap?.lastRefund || null,
+        // ── 「我们在省钱」的只读证据 ─────────────────────────────
+        // admitCount = 真买过几条计费会话（每条 = 实付一整小时）；
+        // reuseCount = 命中有可用会话、直接白用了几次（边际成本 0）。
+        // 复用率 = reuse / (reuse + admit)，即"省掉的重买比例"。
+        admitCount: snap?.admitCount ?? 0,
+        reuseCount: snap?.reuseCount ?? 0,
       }
     })
   }

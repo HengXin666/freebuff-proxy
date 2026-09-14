@@ -548,6 +548,12 @@ function renderStatCards(data) {
   const slots = data.slots || null
   const gateValue = slots ? `${slots.inFlight}/${slots.limit}` : String(inFlight)
   const gateFull = slots ? slots.inFlight >= slots.limit : false
+  // 会话复用率 = "我们在省钱"的全局证据：一次 admit 就买断一小时，所以每次
+  // 复用都是**零边际成本**的。复用率 = 复用次数 /（复用 + 新买）。
+  const admits = data.accounts.reduce((n, a) => n + (Number(a.admitCount) || 0), 0)
+  const reuses = data.accounts.reduce((n, a) => n + (Number(a.reuseCount) || 0), 0)
+  const reusePct =
+    admits + reuses > 0 ? Math.round((reuses / (admits + reuses)) * 100) : null
   const cards = [
     { label: '账号总数', value: total, cls: '' },
     { label: '可用账号', value: available, cls: 'green' },
@@ -557,9 +563,21 @@ function renderStatCards(data) {
       value: gateValue,
       cls: gateFull ? 'red' : '',
     },
+    {
+      // 复用率越高 = 越少重复买整小时。hover 给出原始次数，便于核对。
+      label: '会话复用率',
+      value: reusePct != null ? `${reusePct}%` : '—',
+      cls: reusePct != null && reusePct > 0 ? 'green' : '',
+      tip:
+        reusePct != null
+          ? `买过 ${admits} 条会话，复用 ${reuses} 次。\n` +
+            '一次 admit = 买断一小时，复用发生在这小时内 → 边际成本 0。\n' +
+            '复用率 = 省掉的重买比例。'
+          : '还没有请求记录：有请求后这里会显示复用（省钱）比例。',
+    },
   ]
   return el('div', { class: 'stat-grid' }, cards.map((c, i) =>
-    el('div', { class: 'stat', style: `animation-delay:${i * 60}ms` }, [
+    el('div', { class: 'stat', style: `animation-delay:${i * 60}ms`, ...(c.tip ? { title: c.tip } : {}) }, [
       el('div', { class: 'label' }, c.label),
       el('div', { class: `value ${c.cls}` }, c.value),
     ]),
@@ -736,9 +754,29 @@ function buildAccountsTable(accounts) {
 
 function buildAccountRow(a, i) {
   const cd = a.cooldownUntil ? new Date(a.cooldownUntil).toLocaleString() : null
-  const sess = a.session?.live
-    ? `${a.session.model} · ${fmtMs(a.session.remainingMs)}`
-    : (a.session?.status === 'none' ? '无活跃' : (a.session?.status || '—'))
+  // Session 列同时回答两件事：(1) 这条会话**还能白用多久**；(2) 这个号
+  // 到现在为止**买过几条 / 复用了几次**——后者是"我们在省钱"的直接证据，
+  // 因为复用发生在已买断的一小时内，边际成本为 0。
+  const admits = Number(a.admitCount) || 0
+  const reuses = Number(a.reuseCount) || 0
+  const reuseRate =
+    admits + reuses > 0 ? Math.round((reuses / (admits + reuses)) * 100) : null
+  const countsTip =
+    `买过 ${admits} 条会话（每条实付一整小时），复用 ${reuses} 次` +
+    (reuseRate != null ? ` · 复用率 ${reuseRate}%` : '') +
+    '。复用发生在已买断的一小时内，不再产生任何扣费。'
+  const sessNode = el('div', {}, [
+    el('div', {}, a.session?.live
+      ? `${a.session.model} · ${fmtMs(a.session.remainingMs)}`
+      : (a.session?.status === 'none' ? '无活跃' : (a.session?.status || '—'))),
+    admits + reuses > 0
+      ? el('div', { class: 'muted', style: 'font-size:11px', title: countsTip },
+          reuseRate != null
+            ? `买 ${admits} · 复用 ${reuses}（省 ${reuseRate}%）`
+            : `买 ${admits}`)
+      : '',
+  ])
+  const sess = sessNode
   // 探测失败原因（country_blocked 强风控 / rate_limited / banned / 凭证无效…）
   const probeFail = a.lastProbe && a.lastProbe.ok === false ? a.lastProbe : null
   const probe = probeFail ? probeReason(probeFail.code, probeFail.message) : null
