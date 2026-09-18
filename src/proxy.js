@@ -25,6 +25,10 @@ import {
 } from './util/http.js'
 import { freebuffAuthHeaders } from './auth-store.js'
 import {
+  getCliVersion,
+  officialChatHeaders,
+} from './upstream/official-fingerprint.js'
+import {
   coerceUser,
   saveAccountUser,
   deleteAccountUser,
@@ -1356,11 +1360,14 @@ export function createProxyHandler(ctx) {
       accept: stream
         ? 'application/json, text/event-stream'
         : req.headers.accept || 'application/json',
-      // Match the official CLI chat UA exactly（对齐 trefeon cliUserAgent）：
-      // ai-sdk/openai-compatible/<sdk-version>/codebuff。绝不能带 freebuff-proxy
-      // 等自有标记——上游按 UA 指纹代理客户端（参考 trefeon client.go 注释）。
-      'user-agent': 'ai-sdk/openai-compatible/1.0.0/codebuff',
-      ...freebuffAuthHeaders(upstream.token),
+      // chat 头逐字对齐官方 codebuff provider 分支：**只有** Authorization +
+      // user-agent（+可选 x-freebuff-acting-user-id）。官方 chat **不带**
+      // x-codebuff-api-key —— 那个头只出现在 session / agent-runs 等端点；多发就是
+      // 多余的指纹面。常量真源见 src/upstream/official-fingerprint.js 与
+      // .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md
+      ...officialChatHeaders(upstream.token, {
+        version: getCliVersion(),
+      }),
     }
 
     // 风控：chat 调用前打散节奏（随机 [0, requestJitterMs)）。上游按请求

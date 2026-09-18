@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process'
 import { loadConfig } from '../src/config.js'
 import { buildAppContext } from '../src/app-context.js'
 import { startServer } from '../src/server.js'
+import { refreshCliVersion } from '../src/upstream/official-fingerprint.js'
 import { configureLogger, logger } from '../src/util/log.js'
 import { UserStore } from '../src/web/user-store.js'
 import { WebSessionStore } from '../src/web/session-store.js'
@@ -320,6 +321,16 @@ async function main() {
    * 不会带着一个卡死的上游在后台无限堆积。
    */
   function startUpstreamWarmup() {
+    // 指纹对齐：把 chat UA 里的 CLI 版本号刷成 npm 上 freebuff 的最新版本。
+    // 上游按请求指纹判断"是不是官方客户端"，写死一个过时版本本身就是破绽；
+    // best-effort 且失败保留现值，绝不因一次网络失败影响可用性。
+    // 见 .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md
+    void refreshCliVersion()
+      .then((version) => {
+        logger.info('cli fingerprint version aligned', { version })
+      })
+      .catch(() => {})
+
     // 会话句柄扫尾：把上次进程遗留的句柄 DELETE 掉（进程退出后 instanceId 就没了，
     // 不扫就是"无法寻址的计费孤儿"，一直占着上游槽位；见
     // docs/account-scheduling-and-refund.md §3）。

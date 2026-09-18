@@ -24,7 +24,10 @@ export async function createMockUpstreamServer(state) {
         if (path === '/api/v1/me') {
           return json({ id: 'u1', email: 'a@b.c' })
         }
-        if (path === '/api/v1/freebuff/session' && method === 'POST') {
+        // 官方 POST 准入端点是 .../session/admission（不是 .../session）；
+        // 这个真实 HTTP mock 必须跟着走，否则测的就不是一个真实的链路。
+        // 见 .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md
+        if (path === '/api/v1/freebuff/session/admission' && method === 'POST') {
           state.bumpSessionPosts()
           const model = req.headers['x-freebuff-model'] || 'deepseek/deepseek-v4-flash'
           const rateLimit = {

@@ -129,7 +129,8 @@ globalThis.fetch = async (url, init = {}) => {
   if (u.includes('/api/v1/me')) {
     return jsonRes({ id: 'u1', email: 'a@b.c' })
   }
-  if (u.includes('/api/v1/freebuff/session') && method === 'POST') {
+  // 官方 POST 走 .../session/admission（GET/DELETE 走 .../session）。
+  if (u.includes('/api/v1/freebuff/session/admission') && method === 'POST') {
     sessionPosts++
     const model =
       headers['x-freebuff-model'] ||
@@ -773,6 +774,66 @@ function chat(body, headers = {}) {
   })
   assert.equal(res.status, 200, '无 tools 时 mock 不触发拒绝，正常 200')
   assert.equal(calls.filter((c) => c.url.includes('/chat/completions')).length, 1)
+}
+
+// 指纹对齐：chat 请求必须与官方 CLI 的形态一致。
+// 依据（全部静态提取自官方 freebuff@0.0.178 二进制，见
+// src/upstream/official-fingerprint.js）：
+//   chat UA = ai-sdk/openai-compatible/<真版本>/codebuff（旧实现硬编码 1.0.0）；
+//   POST 准入走 .../session/admission，不是 .../session。
+// 用独立全新账号目录起服务：热 session 复用不会发 POST，断言不到准入形状。
+{
+  const fpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-fp-'))
+  saveAccountUser(fpDir, { id: 'fp', email: 'fp@example.com', authToken: 'token-fp' })
+  const fpConfig = loadConfig()
+  fpConfig.server.host = '127.0.0.1'
+  fpConfig.server.port = 0
+  fpConfig.server.apiKeys = ['sk-test']
+  fpConfig.upstream.credentialsDir = fpDir
+  fpConfig.session.pollIntervalSec = 3600
+  const fpRuntimes = new AccountRuntimes(fpConfig)
+  const fpServer = await startServer({
+    config: fpConfig,
+    runtimes: fpRuntimes,
+    ...(() => {
+      const rt = fpRuntimes.getAny()
+      return { authToken: rt.authToken, authSource: rt.source, authEmail: rt.email, upstream: rt.upstream, sessions: rt.sessions }
+    })(),
+  })
+  const fpPort = fpServer.address().port
+  calls = []
+  sessionPosts = 0
+  completionAttempts = 0
+  mockMode = 'ok'
+  const res = await fetch('http://127.0.0.1:' + fpPort + '/v1/chat/completions', {
+    method: 'POST',
+    headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'deepseek/deepseek-v4-flash', messages: [{ role: 'user', content: 'hello' }] }),
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  const chatCall = calls.find((c) => c.url.includes('/chat/completions'))
+  assert.ok(chatCall, '应发出 chat 请求')
+  const ua = chatCall.headers['user-agent'] || chatCall.headers['User-Agent']
+  assert.ok(ua, 'chat 必须带 user-agent')
+  assert.match(ua, /^ai-sdk\/openai-compatible\/\d+\.\d+\.\d+\/codebuff$/, 'UA 必须是官方 ai-sdk 形状 + 真实版本号, got ' + ua)
+  assert.ok(!ua.includes('/1.0.0/'), 'UA 不得再是硬编码的 1.0.0（与真 CLI 版本不符）')
+  // 已知偏差（未删）：官方 chat 只带 Authorization + user-agent，本代理仍带
+  // x-codebuff-api-key —— raw() 统一注入 freebuffAuthHeaders，而本项目 token 由网页
+  // 登录签发，auth-store 记录「只带 Bearer 会 401」。删它有打死全部认证的风险，
+  // 在未验证前不动。这里如实断言当前确实带了，把偏差钉在测试里可见。
+  assert.ok(chatCall.headers['x-codebuff-api-key'], 'chat 当前仍带 x-codebuff-api-key（已知未对齐，见 fingerprint note）')
+  assert.ok(String(chatCall.headers.Authorization || chatCall.headers.authorization || '').startsWith('Bearer '), 'chat 必须带 Bearer Authorization')
+  const admitCall = calls.find((c) => c.url.includes('/api/v1/freebuff/session') && c.method === 'POST')
+  assert.ok(admitCall, '应发出准入请求')
+  assert.ok(admitCall.url.endsWith('/api/v1/freebuff/session/admission'), 'POST 准入端点应为 .../session/admission, got ' + admitCall.url)
+  assert.equal(admitCall.headers['x-freebuff-model'], 'deepseek/deepseek-v4-flash')
+  assert.equal(admitCall.headers['x-freebuff-wallet-spend-limit'], '0')
+  assert.equal(admitCall.headers['x-freebuff-first-tab-discount'], '0')
+  assert.ok(admitCall.headers['x-fb-timezone'], '准入请求应带本机时区')
+  await fpRuntimes.shutdown()
+  fpServer.close()
+  fs.rmSync(fpDir, { recursive: true, force: true })
+  mockMode = 'ok'
 }
 // tool signature compatibility: default on, hot-disable without restart
 {

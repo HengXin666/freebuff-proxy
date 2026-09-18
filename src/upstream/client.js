@@ -1,17 +1,25 @@
 import { freebuffAuthHeaders } from '../auth-store.js'
 import { logger } from '../util/log.js'
 import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from 'undici'
+import {
+  BUN_USER_AGENT,
+  HEADER_COMPACT_SESSION as FREEBUFF_COMPACT_SESSION_HEADER,
+  HEADER_INSTANCE_ID as FREEBUFF_INSTANCE_HEADER,
+  HEADER_MODEL as FREEBUFF_MODEL_HEADER,
+  SESSION_ADMISSION_ENDPOINT,
+  SESSION_ENDPOINT,
+  officialApiKeyHeaders,
+  officialSessionHeaders,
+} from './official-fingerprint.js'
 
-export const FREEBUFF_INSTANCE_HEADER = 'x-freebuff-instance-id'
-export const FREEBUFF_MODEL_HEADER = 'x-freebuff-model'
-export const FREEBUFF_COMPACT_SESSION_HEADER = 'x-freebuff-compact-session'
-
-/**
- * 官方 CLI 非 chat 调用的默认 UA（裸 bun fetch，无 UA 覆盖时 Bun 自带）。
- * 对齐 trefeon bunUserAgent = Bun/1.3.14（匹配 pinned reference/freebuff
- * .bun-version 与线上探测）。chat 用 ai-sdk UA，见 proxy.js。
- */
-export const BUN_USER_AGENT = 'Bun/1.3.14'
+// 常量真源在 ./official-fingerprint.js（逐字取自官方二进制）。这里 re-export
+// 只是为兼容既有 import 点，不要在本文件另立取值。
+export {
+  BUN_USER_AGENT,
+  FREEBUFF_COMPACT_SESSION_HEADER,
+  FREEBUFF_INSTANCE_HEADER,
+  FREEBUFF_MODEL_HEADER,
+}
 
 export class UpstreamError extends Error {
   /**
@@ -338,37 +346,57 @@ export function createUpstreamClient(config, token, opts = {}) {
 
     /**
      * @param {'GET'|'POST'|'DELETE'} method
-     * @param {{ model?: string, instanceId?: string, compact?: boolean, signal?: AbortSignal, timeoutMs?: number }} [opts]
+     * @param {{ model?: string, instanceId?: string, compact?: boolean, signal?: AbortSignal, timeoutMs?: number, walletSpendLimit?: number, firstTabDiscount?: boolean }} [opts]
      */
     async freebuffSession(method, opts = {}) {
-      /** @type {Record<string, string>} */
+      // 头集合逐字对齐官方 jg()：Authorization + x-fb-timezone +
+      // x-freebuff-first-tab-discount，POST 另带 model / wallet-spend-limit。
+      // 见 officialSessionHeaders 与
+      // .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md
+      //
+      // 注意：官方 jg() 只用 Authorization + x-fb-timezone + first-tab-discount
+      // （POST 另加 model / wallet-spend-limit），**不含** x-codebuff-api-key。
+      // 但本项目 token 由网页登录签发，既有实现记录「只带 Bearer 会 401」，
+      // 故这里**额外**保留该头（唯一的已知残留差异，理由与待验证项见
+      // .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md）。
       const headers = {
+        ...officialSessionHeaders(method, token, {
+          model: opts.model,
+          instanceId: opts.instanceId,
+          compact: opts.compact,
+          walletSpendLimit: opts.walletSpendLimit,
+        }),
         ...freebuffAuthHeaders(token),
       }
-      if (method === 'POST' && opts.model) {
-        headers[FREEBUFF_MODEL_HEADER] = opts.model
-      }
-      // 官方 CLI（callFreebuffSession）在已知 instance id 时 GET / DELETE 都带
-      // x-freebuff-instance-id。DELETE 不带会被上游 400 instance_required——
-      // 会话删不掉 = 释放不掉，会一直占着该账号的上游会话槽位（issue #7）。
-      if (method !== 'POST' && opts.instanceId) {
-        headers[FREEBUFF_INSTANCE_HEADER] = opts.instanceId
-      }
-      if (method === 'GET' && opts.compact) {
-        headers[FREEBUFF_COMPACT_SESSION_HEADER] = '1'
-      }
 
-      const res = await apiFetch('/api/v1/freebuff/session', {
+      const init = {
         method,
         headers,
         signal: opts.signal,
         // 调用方可给单次超时（启动扫尾用它把等待压进总预算）：不带就沿用
         // admitTimeoutMs。启动路径不允许被一个连不通的上游拖住。
-        timeoutMs: Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
-          ? opts.timeoutMs
-          : config.session.admitTimeoutMs,
+        timeoutMs:
+          Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+            ? opts.timeoutMs
+            : config.session.admitTimeoutMs,
         includeAuth: false, // already set
-      })
+      }
+
+      // 官方 POST 打 .../session/admission，GET/DELETE 打 .../session（二进制
+      // PN$）。优先用官方端点对齐指纹；老部署没有 /admission 时回落
+      // legacy /session —— 绝不因为"对齐"丢掉可用性（官方自己把 404/405 当作
+      // session_admission_unavailable，我们回落即可）。
+      let res = await apiFetch(
+        method === 'POST' ? SESSION_ADMISSION_ENDPOINT : SESSION_ENDPOINT,
+        init,
+      )
+      if (method === 'POST' && (res.status === 404 || res.status === 405)) {
+        logger.warn('session admission endpoint unavailable; falling back', {
+          status: res.status,
+          fallback: SESSION_ENDPOINT,
+        })
+        res = await apiFetch(SESSION_ENDPOINT, init)
+      }
 
       if (res.status === 404) {
         return { status: 'none' }
