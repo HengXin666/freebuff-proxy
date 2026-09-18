@@ -3,13 +3,17 @@ import path from 'node:path'
 import { readJsonFileState, noteDataFile } from '../util/json-store.js'
 
 const DEFAULT_SETTINGS = Object.freeze({
-  // 保留为历史开关：曾用于往 tools 末尾补官方 end_turn 占位（躲"外来工具集"判定）。
-  // 2026-09-18 实测该占位对上游的 tool-schema 指纹检查已无效（带任意 tools 一律
-  // 404 "No endpoints found"），真正生效的是 stripToolsOnSchemaRejection。
+  // 转发上游时是否补齐**官方真签名工具**（名字 + 真实参数 schema），让上游不把请求
+  // 判作第三方客户端并降级。上游 2026-09-17 起要求签名工具「名字 + 真实参数 schema」
+  // 双真 —— 旧实现补的空心 end_turn 正是它点名封堵的形态。关掉 = 接受被判外来并降级。
+  // 判据与对照实验见
+  // .agents/notes/implemented/bug-fix/2026-09-19-genuine-tool-signature.md
   freeToolSignatureEnabled: true,
-  // 上游以 tool-schema 指纹拒掉带工具的请求（404 No endpoints found）时，
-  // 是否去掉 tools 重发一次。开启 = 至少拿到文本回答；关闭 = 把 404 原样透传
-  // （下游 Responses 桥接层会把它崩成 CF 502 空体，客户端只见 "no body"）。
+  // 上游以 404 "No endpoints found" 拒掉带工具的请求时，是否去掉 tools 重发一次。
+  // 开启 = 至少拿到文本回答；关闭 = 把 404 原样透传（下游 Responses 桥接层会把它
+  // 崩成 CF 502 空体，客户端只见 "no body"）。
+  // 这是**未知判据变化**的最后一道兜底：签名工具已对齐已知判据，但上游改规则时
+  // 仍靠它保命。见 .agents/notes/implemented/bug-fix/2026-09-18-tool-schema-rejection-strip.md
   stripToolsOnSchemaRejection: true,
   // 每个账号同一时间可并发的 SSE 响应流数（账号内并发），默认 2。
   // 账号调度是"粘性优先"（drain, not rotate）：并发请求先挤同一账号，超过该值

@@ -1194,7 +1194,7 @@ async function renderProxySettings(view) {
   view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
     el('div', {}, [
       el('h3', { style: 'margin:0 0 2px' }, '免费额度策略'),
-      el('span', { class: 'muted' }, '工具签名兼容'),
+      el('span', { class: 'muted' }, '工具签名兼容（补齐官方真签名工具，避免被上游判作第三方客户端而降级）'),
     ]),
     el('label', { class: 'switch', for: 'free-tool-signature' }, [
       el('input', toggleAttrs),
@@ -1408,7 +1408,11 @@ async function saveFreeToolSignatureSetting(event) {
       method: 'POST',
       body: JSON.stringify({ freeToolSignatureEnabled: enabled }),
     })
-    toast(enabled ? '工具签名兼容已开启' : '工具签名兼容已关闭')
+    toast(
+      enabled
+        ? '工具签名兼容已开启（转发时会补齐官方签名工具）'
+        : '工具签名兼容已关闭（带工具的请求可能被判第三方并降级）',
+    )
     // 从服务端回读一次，把开关还原为可交互状态并同步到真实值，避免按钮被永久禁用
     try {
       const s = await api('/api/settings')

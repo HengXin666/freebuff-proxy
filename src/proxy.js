@@ -29,6 +29,10 @@ import {
   officialChatHeaders,
 } from './upstream/official-fingerprint.js'
 import {
+  ENFORCED_FOREIGN_SIGNALS,
+  detectForeignClient,
+} from './upstream/foreign-client-signals.js'
+import {
   coerceUser,
   saveAccountUser,
   deleteAccountUser,
@@ -1237,12 +1241,37 @@ export function createProxyHandler(ctx) {
     // 规范开场（对齐 trefeon PR #207：base3 run 必须以 base3 canonical 身份
     // 开头，而不是 base2 的 strategic-assistant 身份）。
     body.messages = ensureFreebuffSystemMessages(body.messages, agentId)
+    // 补齐**官方真签名工具**（名字 + 真实参数 schema），否则上游把请求判成
+    // 第三方客户端并降级到 inclusionai/ling-3.0-tiny:free —— 其 slug 不可路由时
+    // 以 404 失败、下游桥接层再崩成 502 空体，即 issue#15「所有模型空响应」。
+    // 判据与实测见
+    // .agents/notes/implemented/bug-fix/2026-09-19-genuine-tool-signature.md
     const freeToolSignatureEnabled =
       settingsStore?.get().freeToolSignatureEnabled !== false
     body.tools = ensureFreebuffToolSignature(
       body.tools,
       freeToolSignatureEnabled,
     )
+    // 可观测性：把「上游会怎么看这个工具集」算出来记进日志。判定权永远在上游，
+    // 本地算这份只为让「正在被降级」在出问题时能被看见（上游不回明确错误，
+    // 症状只是回答变差或 404/502，不主动暴露原因）。
+    //
+    // isRootAgent 恒为 true：本代理转发的一律是 root agent（base2-free* /
+    // base3-free-*，见 model.agentIdForModel），而该参数只影响「无工具」时的
+    // 只报不罚信号分类，不影响任何降级判定。
+    if (Array.isArray(body.tools) && body.tools.length > 0) {
+      const verdict = detectForeignClient(body, true)
+      if (verdict.signal && ENFORCED_FOREIGN_SIGNALS.includes(verdict.signal)) {
+        logger.warn('upstream may treat request as a foreign client', {
+          signal: verdict.signal,
+          model: upstreamModel,
+          toolCount: verdict.toolCount,
+          sampleToolNames: verdict.sampleToolNames,
+          foreignToolNames: verdict.foreignToolNames,
+          hollowToolNames: verdict.hollowToolNames,
+        })
+      }
+    }
 
     const existingMeta =
       body.codebuff_metadata && typeof body.codebuff_metadata === 'object'

@@ -20,6 +20,11 @@ Status: implemented
 ——一个**从未在任何版本存在过**的用户代理，本身就是一条"这是代理"的证据。
 端点打错则更根本：官方 `PN$(H)` 明确 `POST → .../session/admission`、其余 → `.../session`。
 
+头与端点之外还有第三个、也是**最重**的指纹面：`tools` 工具集的形状。上游 2026-09-17
+起要求签名工具「名字 + 真实参数 schema」双真，并在源码里点名本代理当时注入的空心
+`end_turn`。该面已由
+[2026-09-19-genuine-tool-signature.md](2026-09-19-genuine-tool-signature.md) 接手。
+
 取值全部来自对官方发布二进制的**静态提取**（不是猜测、也不是从报文反推）：
 
 ```sh
@@ -101,5 +106,10 @@ tar xzf freebuff-linux-x64.tar.gz && strings -n 6 freebuff > fbref-str.txt
   `/1.0.0/`；POST 命中 `.../session/admission`；带 model / wallet-spend-limit /
   first-tab-discount / `x-fb-timezone`；`x-codebuff-api-key` 断言为"仍带"（已知偏差）。
 - 上表四处偏差的原文锚点：二进制 `strings` 提取，命令见本文 Problem 段。
-- **未做的验证**（诚实边界）：`x-codebuff-api-key` 对 chat 是否必需、以及指纹对齐
-  后上游是否不再返回 tool-schema 404 —— 两者都需要打线上，本轮**未执行**。
+- `test/smoke.mjs`（指纹组）另断言：转发上游的工具集会被
+  `detectForeignClient` 判为**自己人**（`signal === null`）—— 见
+  [2026-09-19-genuine-tool-signature.md](2026-09-19-genuine-tool-signature.md)。
+- **未做的验证**（诚实边界）：`x-codebuff-api-key` 对 chat 是否必需 —— 需要打线上，
+  本轮**未执行**。至于"指纹对齐后上游是否不再返回 tool-schema 404"：判据真源已在
+  [2026-09-19-genuine-tool-signature.md](2026-09-19-genuine-tool-signature.md)
+  测绘并有本地对照实验，但**线上实测同样未做**。

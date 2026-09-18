@@ -13,7 +13,11 @@ Status: implemented
 2. 上游对 `tools` 做指纹比对 —— 把"工具集是否与官方 CLI 一致"当作第三方客户端
    判据（freebuff 源码 `freebuff-models.ts` 原话："the tool-schema check
    (docs/freebuff-abuse-detection.md), which downgrades third-party clients"）。
-3. 比对失败时 /api/v1/chat/completions 回 `404`，body 形如
+3. 比对失败**本身不是错误**：上游把请求**降级**改投
+   `inclusionai/ling-3.0-tiny:free`（`FREEBUFF_DOWNGRADE_MODEL_ID`），不回 4xx。
+   该 slug 现已从 OpenRouter 目录下架（2026-09-19 实测，详见
+   [2026-09-19-genuine-tool-signature.md](2026-09-19-genuine-tool-signature.md)），
+   降级于是变成路由失败：/api/v1/chat/completions 回 `404`，body 形如
    `{"error":{"message":"No endpoints found for <model>","code":404}}` ——
    **字面说"模型不存在"，与工具毫无关联**。
 4. 代理把 404 当"客户端 4xx，不换号、不重试"原样透传；下游 Responses 桥接层
@@ -34,7 +38,13 @@ Status: implemented
 24 个工具名仍 404"等更细的规律**不成立**。复核发现那批实验跑在**账号池正被逐个
 封禁**的同一时间窗内（A/B/C 系列 14:20-14:25、Y/R/Q/S 系列 14:40-14:46），
 后期账号已全部返回 `403 account_suspended` —— 那些"规律"是**装置漂移产生的伪影**，
-不是上游的真实判据。上游 tool-schema 检查的精确规则**仍未测绘**，本文不主张。
+不是上游的真实判据。
+
+**判据已测绘**（2026-09-19）：真源是上游开源的
+`common/src/constants/foreign-client-signals.ts`，规则是"签名工具必须名字 + 真实参数
+schema 双真"，零参数工具永远不算。本文发表时那句"精确规则仍未测绘"已被取代，
+测绘结果与对照实验见
+[2026-09-19-genuine-tool-signature.md](2026-09-19-genuine-tool-signature.md)。
 
 另确认第二个缺陷：上游对第三方客户端的封禁回
 `403 {"error":"account_suspended","message":"...third-party client or proxy..."}`，
@@ -71,10 +81,13 @@ Status: implemented
 - **什么都不做，把 404 原样透传** — 最省事，且"不替客户端做决定"是好原则。
   但它等于承认"带工具的 agent 完全不可用"。实测已证明该 404 与"模型不存在"无关，
   继续按客户端错误处理是**错误归因**，不是保守。
-- **继续补签名工具（往 tools 末尾加官方 `end_turn`）** — 既有实现
-  （`ensureFreebuffToolSignature`）正是这个思路。它的**最强理由**是：这曾是真实
-  有效的对策，且成本为零。但上游已把它升级为整集指纹比对，补单个名字不再够用。
-  保留该开关（不再依赖它），把剥离逻辑另立。
+- **继续补**空心**签名工具（往 tools 末尾加官方 `end_turn` 名字 + 空 schema）** —
+  既有实现正是这个思路。它的**最强理由**是：这曾是真实有效的对策，且成本为零。
+  但上游 2026-09-17 起要求「名字 + 真实参数 schema」双真，零参数工具**永远不算签名**，
+  并把这一形态逐字收进测试夹具、点名 freebuff-proxy。该写法已被
+  [2026-09-19-genuine-tool-signature.md](2026-09-19-genuine-tool-signature.md)
+  换成官方真签名工具（`lookup_agent_info` + `decide`）；**补签名仍在用**，
+  变的是补什么。
 - **逐字复刻官方 24 个工具的完整 schema** — 理论上能过指纹（官方 CLI 就靠它通过）。
   但官方 schema 是上游私有实现（要从 140MB 二进制里逆），每次上游改版都要重逆；
   且这只是"伪装成官方客户端"，维护成本与风险都高于"对齐指纹 + 剥离兜底"。
@@ -85,8 +98,9 @@ Status: implemented
 
 ## Consequences
 
-- 带工具的请求：第一次仍会打到上游并吃一个 404（多一次往返），之后才剥离重试。
-  指纹对齐后该路径应不再触发；若上游改变判据，它是最后一道兜底。
+- 带工具的请求：若上游以 404 拒掉带工具的请求，会多一次往返后才剥离重试。
+  请求形态对齐官方签名工具后该路径应不再触发；若上游改变判据，它是最后一道兜底。
+  （注意 404 的直接成因是降级目标 slug 下架，见本文 Problem 第 3 条。）
 - **工具能力在免费模式下可能仍不可用**（取决于上游判据是否只看指纹）。
 - `account_suspended` 归一为 `banned` 后，被封账号进入 24h 冷却并在控制台标记
   `banned`——这是**正确的**行为，代价是账号池会快速见底。

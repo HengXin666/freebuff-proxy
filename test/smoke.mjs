@@ -35,9 +35,15 @@ import {
   ensureFreebuffToolSignature,
   normalizeReasoningFields,
   normalizeOutputBudget,
+  FREEBUFF_SIGNATURE_TOOL_DEFINITIONS,
+  FREEBUFF_SIGNATURE_TOOL_NAMES,
   FREEBUFF_SIGNATURE_TOOL_NAME,
   FREEBUFF_SYSTEM_OPENING,
 } from '../src/free-mode.js'
+import {
+  detectForeignClient,
+  isGenuineSignatureTool,
+} from '../src/upstream/foreign-client-signals.js'
 import { SettingsStore } from '../src/web/settings-store.js'
 import { ModelStore } from '../src/web/model-store.js'
 import { UserStore } from '../src/web/user-store.js'
@@ -599,13 +605,41 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
   ]
   const signedTools = ensureFreebuffToolSignature(originalTools, true)
   assert.equal(originalTools.length, 1)
-  assert.equal(signedTools.length, 2)
-  assert.equal(signedTools[1].function.name, FREEBUFF_SIGNATURE_TOOL_NAME)
+  // 注入的是**官方真签名工具**：主签名（带参数、走 schema 子集）+ 自定义名兜底。
+  assert.equal(signedTools.length, 1 + FREEBUFF_SIGNATURE_TOOL_NAMES.length)
+  assert.ok(signedTools[1].function.name === FREEBUFF_SIGNATURE_TOOL_NAME)
+  // 主签名工具必须带**非空** schema —— 上游判据要求签名工具「名字 + 真实参数」双真，
+  // 零参数工具永远不算签名（旧实现注入空心 end_turn 正是被上游点名的洗白形态）。
+  assert.ok(
+    signedTools[1].function.parameters &&
+      Object.keys(signedTools[1].function.parameters.properties || {}).length > 0,
+    '主签名工具必须带非空参数 schema',
+  )
+  // 每个注入的工具都必须被上游判据认可为「货真价实」，否则等于没注入。
+  for (const def of FREEBUFF_SIGNATURE_TOOL_DEFINITIONS) {
+    assert.ok(
+      isGenuineSignatureTool({
+        name: def.function.name,
+        parameters: def.function.parameters,
+      }),
+      '注入的签名工具必须通过上游 isGenuineSignatureTool：' + def.function.name,
+    )
+    assert.ok(
+      FREEBUFF_SIGNATURE_TOOL_NAMES.includes(def.function.name),
+      '注入的工具名必须在官方签名名集内：' + def.function.name,
+    )
+  }
   assert.equal(ensureFreebuffToolSignature(originalTools, false), originalTools)
   assert.deepEqual(ensureFreebuffToolSignature([], true), [])
   assert.equal(
     ensureFreebuffToolSignature(signedTools, true),
     signedTools,
+  )
+  // 只带其中一个签名工具时，应把缺的那个补上（两个都带才最稳）。
+  const half = [originalTools[0], FREEBUFF_SIGNATURE_TOOL_DEFINITIONS[0]]
+  assert.equal(
+    ensureFreebuffToolSignature(half, true).length,
+    1 + FREEBUFF_SIGNATURE_TOOL_NAMES.length,
   )
 }
 
@@ -856,10 +890,25 @@ function chat(body, headers = {}) {
   assert.equal(enabledRes.status, 200, await enabledRes.clone().text())
   const enabledCall = calls.find((c) => c.url.includes('/chat/completions'))
   const enabledBody = JSON.parse(enabledCall.body)
+  // 转发上游的工具集 = 客户端原工具 + 官方真签名工具（顺序：原工具在前）。
   assert.deepEqual(
     enabledBody.tools.map((tool) => tool.function.name),
-    ['web_search', 'end_turn'],
+    ['web_search', ...FREEBUFF_SIGNATURE_TOOL_NAMES],
   )
+  // 决定性断言：这**整个工具集**送进上游判据必须判「自己人」（signal === null）。
+  // 旧实现注入空心 end_turn，上游判 foreign_toolset 并把请求降级到
+  // inclusionai/ling-3.0-tiny:free —— 那正是 issue#15「所有模型空响应」的根因。
+  const verdict = detectForeignClient(
+    { tools: enabledBody.tools, messages: enabledBody.messages },
+    true,
+  )
+  assert.equal(
+    verdict.signal,
+    null,
+    '转发上游的工具集不得被判为外来：' + verdict.signal,
+  )
+  assert.deepEqual(verdict.hollowToolNames, [], '不得再出现空心签名工具')
+  assert.deepEqual(verdict.foreignToolNames, [], '不得夹带第三方 harness 工具名')
 
   settingsStore.save({ freeToolSignatureEnabled: false })
   calls = []

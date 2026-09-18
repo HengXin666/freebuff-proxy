@@ -2,6 +2,12 @@
  * Freebuff free-mode request shape gates (client-side enforcement helpers).
  * Server source of truth: freebuff common/src/constants/free-agents.ts
  */
+import { FREEBUFF_SIGNATURE_TOOL_DEFINITIONS } from './upstream/foreign-client-signals.js'
+
+// 转发签名工具定义：调用方（测试、控制台）从本模块一处取用，避免各处另立取值。
+export { FREEBUFF_SIGNATURE_TOOL_DEFINITIONS }
+// 判据镜像的同义导出：调用方要判断"上游会怎么看这个工具集"时不必再 import 第二个文件。
+export { detectForeignClient, isGenuineSignatureTool } from './upstream/foreign-client-signals.js'
 
 /** Canonical opening the free-mode gate requires at the start of a system message. */
 export const FREEBUFF_SYSTEM_OPENING =
@@ -31,23 +37,37 @@ You help the user with coding and technical questions. Be concise and accurate.
 Follow the user's instructions in subsequent messages.
 `
 
-export const FREEBUFF_SIGNATURE_TOOL_NAME = 'end_turn'
-
-const FREEBUFF_SIGNATURE_TOOL = Object.freeze({
-  type: 'function',
-  function: Object.freeze({
-    name: FREEBUFF_SIGNATURE_TOOL_NAME,
-    description: 'Compatibility marker only. Do not call this function.',
-    parameters: Object.freeze({
-      type: 'object',
-      properties: Object.freeze({}),
-    }),
-  }),
-})
+/**
+ * 我们注入的签名工具名（**按上游判据构造**，定义在
+ * src/upstream/foreign-client-signals.js 的 FREEBUFF_SIGNATURE_TOOL_DEFINITIONS）。
+ *
+ * 两条并挂、任一通过即可（上游是 some()）：
+ *   - `lookup_agent_info`：官方设计划工具，参数表 { agentId } —— 走**真实 schema 子集**判定。
+ *   - `decide`：官方自定义工具（无 schema 可比）—— 走**自定义名放行**判定。
+ * 留两条是因为两条规则各自独立：任一条被上游收紧，另一条仍然成立。
+ *
+ * 判据、对照实验与取舍见
+ * .agents/notes/implemented/bug-fix/2026-09-19-genuine-tool-signature.md
+ */
+export const FREEBUFF_SIGNATURE_TOOL_NAMES = Object.freeze(
+  FREEBUFF_SIGNATURE_TOOL_DEFINITIONS.map((t) => t.function.name),
+)
 
 /**
- * Add one Freebuff-specific tool name to a foreign toolset so upstream keeps
- * the requested model. Tool-free requests do not trigger that upstream check.
+ * 主签名工具名（带参数、有结构可校验的那一个）。
+ *
+ * 为什么不再用 `end_turn`：上游 2026-09-17 起要求签名工具「名字 + 真实参数 schema」
+ * 双真，**零参数工具永远不算签名**（复制的名字加 `{}` 与真货逐字节相同，没有结构
+ * 可验证）。上游还把「往 tools 末尾补空心 end_turn」这种形态逐字收进测试夹具
+ * （`PROXY_HOLLOW_END_TURN`）并在注释里点名 freebuff-proxy —— 即本代理。
+ */
+export const FREEBUFF_SIGNATURE_TOOL_NAME = 'lookup_agent_info'
+
+/**
+ * 把一个外来工具集补齐成「上游认得的客户端」形态：追加官方真签名工具，
+ * 让上游不把请求降级。无工具的请求不触发该判据（上游对无工具是只报不罚）。
+ *
+ * 幂等：已带任一签名工具就原样返回；两个都带更稳，所以缺哪个补哪个。
  *
  * @param {unknown} tools
  * @param {boolean} enabled
@@ -55,15 +75,22 @@ const FREEBUFF_SIGNATURE_TOOL = Object.freeze({
  */
 export function ensureFreebuffToolSignature(tools, enabled = true) {
   if (!enabled || !Array.isArray(tools) || tools.length === 0) return tools
-  const alreadyPresent = tools.some(
-    (tool) =>
-      tool &&
-      typeof tool === 'object' &&
-      tool.function &&
-      typeof tool.function === 'object' &&
-      tool.function.name === FREEBUFF_SIGNATURE_TOOL_NAME,
+  const present = new Set(
+    tools
+      .map((tool) =>
+        tool &&
+        typeof tool === 'object' &&
+        tool.function &&
+        typeof tool.function === 'object'
+          ? tool.function.name
+          : null,
+      )
+      .filter(Boolean),
   )
-  return alreadyPresent ? tools : [...tools, FREEBUFF_SIGNATURE_TOOL]
+  const missing = FREEBUFF_SIGNATURE_TOOL_DEFINITIONS.filter(
+    (def) => !present.has(def.function.name),
+  )
+  return missing.length === 0 ? tools : [...tools, ...missing]
 }
 
 /**
