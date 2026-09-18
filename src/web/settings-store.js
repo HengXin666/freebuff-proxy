@@ -3,7 +3,14 @@ import path from 'node:path'
 import { readJsonFileState, noteDataFile } from '../util/json-store.js'
 
 const DEFAULT_SETTINGS = Object.freeze({
+  // 保留为历史开关：曾用于往 tools 末尾补官方 end_turn 占位（躲"外来工具集"判定）。
+  // 2026-09-18 实测该占位对上游的 tool-schema 指纹检查已无效（带任意 tools 一律
+  // 404 "No endpoints found"），真正生效的是 stripToolsOnSchemaRejection。
   freeToolSignatureEnabled: true,
+  // 上游以 tool-schema 指纹拒掉带工具的请求（404 No endpoints found）时，
+  // 是否去掉 tools 重发一次。开启 = 至少拿到文本回答；关闭 = 把 404 原样透传
+  // （下游 Responses 桥接层会把它崩成 CF 502 空体，客户端只见 "no body"）。
+  stripToolsOnSchemaRejection: true,
   // 每个账号同一时间可并发的 SSE 响应流数（账号内并发），默认 2。
   // 账号调度是"粘性优先"（drain, not rotate）：并发请求先挤同一账号，超过该值
   // 才溢出到下一个账号；从不主动平摊到新账号（上游把轮换健康账号当农场特征，
@@ -66,6 +73,10 @@ export class SettingsStore {
       if (typeof raw?.freeToolSignatureEnabled === 'boolean') {
         this.settings.freeToolSignatureEnabled = raw.freeToolSignatureEnabled
       }
+      if (typeof raw?.stripToolsOnSchemaRejection === 'boolean') {
+        this.settings.stripToolsOnSchemaRejection =
+          raw.stripToolsOnSchemaRejection
+      }
       if (Number.isInteger(raw?.accountMaxConcurrency)) {
         this.settings.accountMaxConcurrency = clampConcurrency(
           raw.accountMaxConcurrency,
@@ -110,6 +121,13 @@ export class SettingsStore {
         throw new TypeError('freeToolSignatureEnabled must be a boolean')
       }
       this.settings.freeToolSignatureEnabled = next.freeToolSignatureEnabled
+    }
+    if (next?.stripToolsOnSchemaRejection !== undefined) {
+      if (typeof next.stripToolsOnSchemaRejection !== 'boolean') {
+        throw new TypeError('stripToolsOnSchemaRejection must be a boolean')
+      }
+      this.settings.stripToolsOnSchemaRejection =
+        next.stripToolsOnSchemaRejection
     }
     if (next?.accountMaxConcurrency !== undefined) {
       if (

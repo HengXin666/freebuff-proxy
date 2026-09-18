@@ -613,6 +613,46 @@ export function extractRateLimitError(body, status) {
   return null
 }
 
+/**
+ * 上游把"账号生命周期终止"写成多个不同字面量，必须归一成一个 code。
+ *
+ * 2026-09-18 实测：免费模式对第三方客户端的封禁回的是
+ * 403 `{"error":"account_suspended","message":"Your account has been suspended
+ * for accessing Freebuff with a third-party client or proxy..."}` —— 注意
+ * `error` 是**字符串**而非对象。不归一，它会以 403 落入"4xx 客户端错误，
+ * 不换号"的分支，于是**每一个被封的账号都被反复复用**、错误原样甩给下游
+ * （`app-context.markCooldown` 也无法记 bannedAt，控制台看不见封禁）。
+ *
+ * @param {any} body
+ * @param {number} [status]
+ * @returns {string | null} 归一后的 code（目前统一为 'banned'）
+ */
+/*
+ * 归一理由见
+ * .agents/notes/implemented/bug-fix/2026-09-18-tool-schema-rejection-strip.md
+ */
+export function extractAccountBanError(body, status) {
+  if (!body || typeof body !== 'object') return null
+  const nested =
+    body.error && typeof body.error === 'object' && !Array.isArray(body.error)
+      ? body.error
+      : null
+  const code =
+    nested?.code ||
+    (typeof body.error === 'string' ? body.error : null) ||
+    body.code ||
+    body.status
+  if (typeof code !== 'string') return null
+  if (
+    code === 'account_suspended' ||
+    code === 'banned' ||
+    code === 'country_blocked'
+  ) {
+    return 'banned'
+  }
+  return null
+}
+
 export function extractGateError(body, status) {
   if (!body || typeof body !== 'object') return null
   const nested =

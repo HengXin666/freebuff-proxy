@@ -163,7 +163,7 @@ docker compose up -d --build
 |------|------|
 | **[部署与运维](docs/deployment.md)** | `/data` 里各文件的作用、持久化与备份、GitHub Actions 自动构建镜像 |
 | **[Web 控制台](docs/web-console.md)** | 登录与忘记密码找回、添加 Freebuff 账号的浏览器回调、用户与 API Key 管理 |
-| **[多账号池与调度](docs/scheduling.md)** | 账号池自动切号、粘性优先（drain, not rotate）、Freebucks 额度口径与额度保护、工具签名兼容 |
+| **[多账号池与调度](docs/scheduling.md)** | 账号池自动切号、粘性优先（drain, not rotate）、Freebucks 额度口径与额度保护、工具签名兼容与工具被拒兜底 |
 | **[连接治理与重启兜底](docs/connection-health.md)** | 上游卡死自动掐断（幽灵连接）、客户端断开即释放账号锁、全部断开重连、重启服务 |
 | **[代理支持](docs/proxy.md)** | 全局代理池、出口分配规则、代理优先级与连通性测试 |
 | **[多模态（图片输入）](docs/multimodal-image-input.md)** | 上游图片支持现状、哪些模型能看图、代理与 DSH 链路上的实际断点 |

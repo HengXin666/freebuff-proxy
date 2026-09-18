@@ -205,3 +205,22 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
 控制台「总览 → 免费额度策略」提供「工具签名兼容」开关，默认开启。开启时，代理会在非空
 `tools` 列表末尾补充 Freebuff 官方工具名 `end_turn`，避免工具请求被识别为外来工具集；关闭时
 原样转发客户端工具列表。切换后立即生效并持久化到 `/data/settings.json`，无需重启。
+
+> **2026-09-18 实测更新**：上游已把「工具集是否与官方一致」升级为 **tool-schema 指纹比对**，
+> 补一个 `end_turn` 占位已经无效——**只要请求带 `tools` 就会被回**
+> `404 No endpoints found for <model>`（哪怕逐字复刻官方 24 个工具名）。该错误字面指向模型，
+> 与工具毫无关联；下游 Responses 桥接层还会把它崩成 Cloudflare 纯文本 502，客户端 SDK 最终
+> 报 `502 status code (no body)` ——也就是「所有模型都空响应」。真正生效的是下面这个开关。
+
+### 工具请求兜底（工具被拒时去掉工具重试）
+
+控制台「总览 → 免费额度策略」下方的「工具请求兜底」开关，默认开启，持久化到
+`/data/settings.json`（`stripToolsOnSchemaRejection`）。
+
+开启时，代理发现上游以 `404 No endpoints found` 拒掉带工具的请求，会**去掉
+`tools` / `tool_choice` / `parallel_tool_calls` 后重发一次**，并把
+`x-freebuff-proxy-tools-stripped: 1` 写进响应头。含义是：模型这轮不会调用工具，但会给出
+文本回答——下游 agent 至少能继续跑。关闭时该 404 原样透传（下游会崩成 502 空体）。
+
+只对**确实带了 `tools`** 的请求生效；不带工具时重试没有意义。旧式 `functions` 字段不删
+（它不触发该检查）。

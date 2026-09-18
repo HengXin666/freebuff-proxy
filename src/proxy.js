@@ -7,6 +7,7 @@ import {
   isModelAllowed,
 } from './model.js'
 import {
+  extractAccountBanError,
   extractGateError,
   extractRateLimitError,
   isSessionRecoverableGate,
@@ -31,8 +32,10 @@ import {
 import {
   ensureFreebuffSystemMessages,
   ensureFreebuffToolSignature,
+  hasClientTools,
   normalizeReasoningFields,
   normalizeOutputBudget,
+  stripClientTools,
   stripFreebuffConversationState,
 } from './free-mode.js'
 import { logger } from './util/log.js'
@@ -954,6 +957,7 @@ export function createProxyHandler(ctx) {
               // 会话剩余时间：用于把流 idle 超时收敛到会话过期附近，过期即掐
               sessionRemainingMs: snap.remainingMs,
               schedulingDeadline,
+              upstreamModel,
             })
           }
 
@@ -1341,6 +1345,8 @@ export function createProxyHandler(ctx) {
      * 总和照样冲过 Cloudflare 的 100s 悬崖。
      */
     schedulingDeadline,
+    /** 上游模型 id（仅用于日志；forwardBody.model 即它，但显式传更清楚）。 */
+    upstreamModel,
   }) {
     const headers = {
       ...filterRequestHeaders(req.headers),
@@ -1364,22 +1370,59 @@ export function createProxyHandler(ctx) {
     if (jitterMs > 0) await sleep(Math.random() * jitterMs)
 
     const abortCtrl = reqToAbortSignal(req)
+    // 工具声明被上游拒绝时，去掉 tools 再发一次（见 isToolSchemaRejection）。
+    // 只对"客户端确实带了 tools"的请求生效——没有工具可去时重试毫无意义。
+    // 判据与取舍见
+    // .agents/notes/implemented/bug-fix/2026-09-18-tool-schema-rejection-strip.md
+    const toolStripCapable =
+      hasClientTools(forwardBody) &&
+      settingsStore?.get?.()?.stripToolsOnSchemaRejection !== false
+    let requestBody = forwardBody
+    let toolsStripped = false
     let upstreamRes
+    /** 非 2xx 时上游响应体的文本（在循环里读一次，避免重复消费流）。 */
+    let upstreamErrText = null
     try {
-      upstreamRes = await upstream.raw('/api/v1/chat/completions', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(forwardBody),
-        signal: abortCtrl.signal,
-        // 响应头等待上限收紧到 body idle 同量级（默认 120s，带 30s 下限）：
-        // chat 是流式接口，正常秒级出响应头；网络波动（TCP 黑洞）时若等
-        // upstreamTimeoutSec（默认 600s）才 abort，账号 chat 锁会被占死
-        // 10 分钟，期间所有新请求超时——与幽灵连接同源，必须尽快释放。
-        timeoutMs: Math.max(
-          1_000,
-          Math.min(chatHeaderTimeoutMs(), schedulingDeadline - Date.now()),
-        ),
-      })
+      // 最多两轮：第一轮带原工具集，被 tool-schema 拒后第二轮去掉工具。
+      for (let round = 0; round < 2; round++) {
+        upstreamRes = await upstream.raw('/api/v1/chat/completions', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(requestBody),
+          signal: abortCtrl.signal,
+          // 响应头等待上限收紧到 body idle 同量级（默认 120s，带 30s 下限）：
+          // chat 是流式接口，正常秒级出响应头；网络波动（TCP 黑洞）时若等
+          // upstreamTimeoutSec（默认 600s）才 abort，账号 chat 锁会被占死
+          // 10 分钟，期间所有新请求超时——与幽灵连接同源，必须尽快释放。
+          timeoutMs: Math.max(
+            1_000,
+            Math.min(chatHeaderTimeoutMs(), schedulingDeadline - Date.now()),
+          ),
+        })
+        if (upstreamRes.ok) {
+          upstreamErrText = null
+          break
+        }
+        const errText = await safeText(upstreamRes)
+        if (
+          round === 0 &&
+          toolStripCapable &&
+          isToolSchemaRejection(upstreamRes.status, errText)
+        ) {
+          toolsStripped = true
+          requestBody = stripClientTools(forwardBody)
+          logger.warn('tool-schema rejection; retrying without tools', {
+            status: upstreamRes.status,
+            model: forwardBody.model,
+            tools: Array.isArray(forwardBody.tools)
+              ? forwardBody.tools.length
+              : 0,
+          })
+          continue
+        }
+        upstreamErrText = errText
+        break
+      }
     } finally {
       // 响应头已到/上游已失败：后续由 pipe 的 socket 监听接管，移除本监听器
       abortCtrl.cleanup()
@@ -1387,9 +1430,13 @@ export function createProxyHandler(ctx) {
 
     const status = upstreamRes.status
     const respHeaders = filterResponseHeaders(upstreamRes.headers)
+    if (toolsStripped) {
+      // 可观测性：下游能看出这次回答是在"无工具"模式下取得的。
+      res.setHeader('x-freebuff-proxy-tools-stripped', '1')
+    }
 
     if (!upstreamRes.ok) {
-      const text = await safeText(upstreamRes)
+      const text = upstreamErrText ?? (await safeText(upstreamRes))
       let parsed = null
       try {
         parsed = text ? JSON.parse(text) : null
@@ -1403,6 +1450,20 @@ export function createProxyHandler(ctx) {
         (parsed.error?.code || parsed.error || parsed.code || parsed.status)) ||
         null
       const gateCode = extractGateError(parsed, status)
+      // 账号封禁归一：上游把"因第三方客户端被封"写成 403
+      // {"error":"account_suspended",...}（error 是**字符串**）。不归一它就会以
+      // 403 落进"4xx 客户端错误不换号"分支 —— 每个被封的账号被反复复用、错误
+      // 原样甩给下游，控制台也记不上 bannedAt（见 extractAccountBanError）。
+      // 归一后必须**重算 errCode**：下面的 shouldSwitchAccountOnError 与
+      // markCooldown 都按 errCode 分支，只改 parsedBody 而留着旧 errCode 等于没改。
+      const banCode = extractAccountBanError(parsed, status)
+      if (banCode && parsed && typeof parsed === 'object') {
+        parsed.error =
+          parsed.error && typeof parsed.error === 'object'
+            ? { ...parsed.error, code: banCode }
+            : { code: banCode, message: parsed.error || parsed.message }
+      }
+      const effectiveErrCode = banCode || errCode
       const parsedBody = parsed || {
         error: { message: text, type: 'upstream_error' },
       }
@@ -1413,7 +1474,7 @@ export function createProxyHandler(ctx) {
       // 优先复用当前热 session 重试，但绝不冷却账号，避免为瞬时容量
       // 无谓开启另一个计费 session；若账号另有故障，外层仍会正常切号。
       if (
-        errCode === 'free_mode_capacity_deferred' ||
+        effectiveErrCode === 'free_mode_capacity_deferred' ||
         gateCode === 'free_mode_capacity_deferred'
       ) {
         return {
@@ -1446,14 +1507,17 @@ export function createProxyHandler(ctx) {
       }
       // 账号侧故障（429 限流 / 5xx / 403 账号级封禁）：冷却当前账号并换号重试，
       // 而不是把错误直接甩给用户。4xx 客户端错误（400/401/404/422 等）不换号。
-      const switchAccount = shouldSwitchAccountOnError(status, errCode)
+      const switchAccount = shouldSwitchAccountOnError(status, effectiveErrCode)
       if (switchAccount) {
         return {
           ok: false,
           wrote: false,
           recoverable: true,
           switchAccount: true,
-          gateCode: typeof errCode === 'string' ? errCode : `http_${status}`,
+          gateCode:
+            typeof effectiveErrCode === 'string'
+              ? effectiveErrCode
+              : `http_${status}`,
           retryAfterMs,
           status,
           body: parsedBody,
@@ -1620,6 +1684,38 @@ function sleep(ms) {
 function methodHasBody(method) {
   const m = (method || 'GET').toUpperCase()
   return m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE'
+}
+
+/**
+ * 上游是否因为**工具集指纹**拒绝了这次 chat。
+ *
+ * 现场（2026-09-18 直连线上 freebuff-proxy 一手实测）：带任意 `tools`
+ * （含逐字复刻官方 24 个工具名 + 中性 schema）→
+ * `404 {"error":{"message":"No endpoints found for <model>","code":404}}`；
+ * 同一个请求去掉 `tools` → 200。
+ *
+ * 这条错误**字面指向模型**，与工具毫无关联——正因如此它长期被当成
+ * "模型不存在/不可用"处理（404 属于 4xx 客户端错误，不换号、不重试），
+ * 最终把一个 404 透传给下游；下游 Responses 桥接层把它崩成 Cloudflare
+ * 纯文本 502，客户端 SDK 解析成 "502 status code (no body)"，表现为
+ * **所有模型全部空响应**。
+ *
+ * 所以必须按"工具被拒"识别并走剥离重试，不能按客户端 4xx 收场。
+ * 取舍与实测矩阵见
+ * .agents/notes/implemented/bug-fix/2026-09-18-tool-schema-rejection-strip.md
+ *
+ * @param {number} status
+ * @param {string} text 上游响应体原文
+ * @returns {boolean}
+ */
+function isToolSchemaRejection(status, text) {
+  if (status !== 404) return false
+  const s = String(text || '')
+  return (
+    s.includes('No endpoints found') ||
+    s.includes('no_endpoints') ||
+    s.includes('no endpoints')
+  )
 }
 
 /**

@@ -1047,6 +1047,8 @@ export function createWebApi(deps) {
       sendJson(res, 200, {
         freeToolSignatureEnabled:
           settingsStore?.get().freeToolSignatureEnabled !== false,
+        stripToolsOnSchemaRejection:
+          settingsStore?.get().stripToolsOnSchemaRejection !== false,
         accountMaxConcurrency: settingsStore?.get().accountMaxConcurrency ?? 2,
         // 账号调度模式（'sticky' 默认 / 'spread' 并发优先）+ 溢出排队上限。
         accountSchedulingMode:
@@ -1096,6 +1098,15 @@ export function createWebApi(deps) {
           return true
         }
         patch.freeToolSignatureEnabled = body.freeToolSignatureEnabled
+      }
+      if (body.stripToolsOnSchemaRejection !== undefined) {
+        if (typeof body.stripToolsOnSchemaRejection !== 'boolean') {
+          sendJson(res, 400, {
+            error: 'stripToolsOnSchemaRejection 必须是布尔值',
+          })
+          return true
+        }
+        patch.stripToolsOnSchemaRejection = body.stripToolsOnSchemaRejection
       }
       if (body.accountMaxConcurrency !== undefined) {
         if (

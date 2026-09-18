@@ -399,6 +399,32 @@ globalThis.fetch = async (url, init = {}) => {
         { 'retry-after': '60' },
       )
     }
+    // 上游 tool-schema 指纹拒：带 tools 一律 404 "No endpoints found"
+    // （2026-09-18 线上实测原样复刻）。去掉 tools 后放行 → 验证剥离重试。
+    if (mockMode === 'tool_schema_reject' && Array.isArray(body.tools)) {
+      return jsonRes(
+        {
+          error: {
+            message: 'No endpoints found for ' + body.model + '.',
+            code: 404,
+            type: null,
+            param: null,
+          },
+        },
+        404,
+      )
+    }
+    // 账号封禁：403 {"error":"account_suspended"}（error 是**字符串**）
+    if (mockMode === 'suspended_a' && String(compAuthOf(headers)).includes('token-a')) {
+      return jsonRes(
+        {
+          error: 'account_suspended',
+          message:
+            'Your account has been suspended for accessing Freebuff with a third-party client or proxy.',
+        },
+        403,
+      )
+    }
     // 所有账号的 chat 都 500（账号级故障 → 连续换号），用于验证新会话预算
     if (mockMode === 'err_500_all') {
       return jsonRes({ error: 'internal_error', message: 'boom' }, 500)
@@ -486,6 +512,16 @@ globalThis.fetch = async (url, init = {}) => {
     })
   }
   return jsonRes({ error: 'unexpected ' + u }, 500)
+}
+
+/** 从请求头取上游认证 token（多账号测试区分 token-a / token-b 用）。 */
+function compAuthOf(headers = {}) {
+  return (
+    headers.Authorization ||
+    headers.authorization ||
+    headers['x-codebuff-api-key'] ||
+    ''
+  )
 }
 
 function jsonRes(obj, status = 200, extraHeaders = {}) {
@@ -681,6 +717,63 @@ function chat(body, headers = {}) {
   assert.ok(calls.some((c) => c.url.includes('/chat/completions')))
 }
 
+
+// tool-schema rejection: 上游以 404 "No endpoints found" 拒掉带工具的请求时，
+// 代理必须**去掉 tools 再发一次**，而不是把 404 透传给下游。
+// 背景（2026-09-18 一手实测）：上游对 tools 做 tool-schema 指纹比对，任何非官方
+// 工具集一律 404（字面却说"模型不存在"）；下游 Responses 桥接层会把它崩成
+// Cloudflare 纯文本 502 → 客户端 SDK 报 "502 status code (no body)"，
+// 表现就是"所有模型全部空响应"。
+{
+  calls = []
+  completionAttempts = 0
+  mockMode = 'tool_schema_reject'
+  const res = await chat({
+    model: 'deepseek/deepseek-v4-flash',
+    stream: false,
+    messages: [{ role: 'user', content: 'hello' }],
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'run_code',
+          description: 'Execute code.',
+          parameters: { type: 'object', properties: {} },
+        },
+      },
+    ],
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  const j = await res.json()
+  assert.equal(j.choices[0].message.content, 'hi')
+  // 必须恰好两次 chat 尝试：第一次带 tools 被拒，第二次不带 tools 成功。
+  const chatCalls = calls.filter((c) => c.url.includes('/chat/completions'))
+  assert.equal(chatCalls.length, 2, '应重试恰好一次')
+  const first = JSON.parse(chatCalls[0].body)
+  const second = JSON.parse(chatCalls[1].body)
+  // 第一次带 tools（原工具 + 签名工具 end_turn，签名开关默认开）。
+  assert.ok(Array.isArray(first.tools), '第一次应带 tools')
+  assert.ok(
+    first.tools.some((t) => t.function && t.function.name === 'run_code'),
+    '第一次应保留客户端原始工具',
+  )
+  assert.equal(second.tools, undefined, '第二次必须已剥离 tools')
+  assert.equal(second.tool_choice, undefined)
+  assert.equal(res.headers.get('x-freebuff-proxy-tools-stripped'), '1')
+}
+
+// 不带 tools 的请求遇到同样 404 时**不得**重试（没有工具可去），原样返回 404。
+{
+  calls = []
+  completionAttempts = 0
+  mockMode = 'tool_schema_reject'
+  const res = await chat({
+    model: 'deepseek/deepseek-v4-flash',
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+  assert.equal(res.status, 200, '无 tools 时 mock 不触发拒绝，正常 200')
+  assert.equal(calls.filter((c) => c.url.includes('/chat/completions')).length, 1)
+}
 // tool signature compatibility: default on, hot-disable without restart
 {
   calls = []
@@ -1373,6 +1466,69 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
+
+// account_suspended（403，error 为字符串）必须归一为 banned：
+// 冷却该账号并**换号重试**，绝不能当客户端 4xx 把错误甩给用户。
+// 背景（2026-09-18 线上实测）：上游对第三方客户端的封禁回的是
+// 403 {"error":"account_suspended"}（error 是字符串，没有 code 字段）；
+// 不归一它就会落进"4xx 客户端错误不换号"分支，于是每个被封账号被反复复用。
+{
+  const banDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-ban-'))
+  saveAccountUser(banDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
+  saveAccountUser(banDir, { id: 'b', email: 'b@example.com', authToken: 'token-b' })
+  const banConfig = loadConfig()
+  banConfig.server.host = '127.0.0.1'
+  banConfig.server.port = 0
+  banConfig.server.apiKeys = ['sk-test']
+  banConfig.upstream.credentialsDir = banDir
+  banConfig.session.pollIntervalSec = 3600
+  const banRuntimes = new AccountRuntimes(banConfig)
+  const banServer = await startServer({
+    config: banConfig,
+    runtimes: banRuntimes,
+    ...(() => {
+      const rt = banRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const banPort = banServer.address().port
+  mockMode = 'suspended_a'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  const res = await fetch(`http://127.0.0.1:${banPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  // token-a 被封 → 必须换到 token-b 成功，而不是把 403 甩给下游。
+  assert.equal(res.status, 200, await res.clone().text())
+  assert.ok(
+    calls.filter((c) => c.url.includes('/chat/completions')).length >= 2,
+    '封禁后必须换号重试',
+  )
+  // 被封账号被标记 banned（控制台分区与调度排除都靠它）。
+  const banAccounts = banRuntimes.list()
+  const bannedA = banAccounts.find((x) => x.email === 'a@example.com')
+  assert.equal(bannedA.banned, true, 'account_suspended 应归一为 banned')
+  assert.equal(bannedA.available, false)
+  await banRuntimes.shutdown()
+  banServer.close()
+  fs.rmSync(banDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
 // completions 返回 free_mode_rate_limited → 冷却当前账号并换号重试一次
 {
   const rlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-rlcomp-'))

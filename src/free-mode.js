@@ -67,6 +67,59 @@ export function ensureFreebuffToolSignature(tools, enabled = true) {
 }
 
 /**
+ * 客户端是否声明了工具。只看 OpenAI 新式 `tools` 数组——旧式 `functions`
+ * 字段不触发上游的 tool-schema 检查（见 stripClientTools 的说明）。
+ *
+ * @param {Record<string, any>} body
+ * @returns {boolean}
+ */
+export function hasClientTools(body) {
+  return Boolean(
+    body &&
+      typeof body === 'object' &&
+      Array.isArray(body.tools) &&
+      body.tools.length > 0,
+  )
+}
+
+/**
+ * 剥离客户端的工具声明，返回新对象（不改原对象）。
+ *
+ * 为什么需要：上游对 `tools` 做 **tool-schema 指纹比对** —— 它把"工具集与
+ * 官方 CLI 是否一致"当作第三方客户端判据（freebuff 源码 freebuff-models.ts
+ * 注释原话："the tool-schema check (docs/freebuff-abuse-detection.md), which
+ * downgrades third-party clients"）。任何非官方 schema（bash / run_code /
+ * 自定义工具）都会让 /api/v1/chat/completions 直接返回 404
+ * `No endpoints found for <model>` —— 注意它报的是"模型不存在"，与工具毫无
+ * 字面关联，极难从错误本身归因。
+ *
+ * 实测（2026-09-18，直连线上 freebuff-proxy）：无 tools → 200；带任意 tools
+ * （含完整复刻官方 24 个工具名 + 中性 schema）→ 404 No endpoints found。
+ *
+ * 因此当上游以该错误拒绝工具请求时，代理只能**去掉工具**再发一次：模型不调用
+ * 工具，但至少给出文本回答，而不是把一个 404 甩给下游（下游 Responses 桥接层
+ * 会把它崩成 Cloudflare 纯文本 502，客户端 SDK 解析成
+ * "502 status code (no body)" —— 就是"所有模型都空响应"的现场）。
+ *
+ * `functions`（OpenAI 旧式）**不删**：它不触发该检查（实测 200）。
+ *
+ * @param {Record<string, any>} body
+ * @returns {Record<string, any>}
+ */
+/*
+ * 决策与实测见
+ * .agents/notes/implemented/bug-fix/2026-09-18-tool-schema-rejection-strip.md
+ */
+export function stripClientTools(body) {
+  if (!body || typeof body !== 'object') return body
+  const out = { ...body }
+  delete out.tools
+  delete out.tool_choice
+  delete out.parallel_tool_calls
+  return out
+}
+
+/**
  * Ensure messages[] has a leading system message whose text starts with the
  * Freebuff free-mode opening. Does not strip or rewrite user content beyond
  * that gate requirement.

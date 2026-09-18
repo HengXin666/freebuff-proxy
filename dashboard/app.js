@@ -1180,6 +1180,17 @@ async function renderProxySettings(view) {
   }
   if (signatureEnabled) toggleAttrs.checked = ''
   if (state.me.role !== 'admin') toggleAttrs.disabled = ''
+  // 上游以 tool-schema 指纹拒掉带工具的请求时，是否去掉 tools 重发一次。
+  // 开启 = 至少拿到文本回答；关闭 = 把 404 原样透传（下游会崩成 502 空体）。
+  const stripTools = settings.stripToolsOnSchemaRejection !== false
+  const stripAttrs = {
+    id: 'strip-tools-on-reject',
+    type: 'checkbox',
+    class: 'switch-input',
+    onchange: saveStripToolsSetting,
+  }
+  if (stripTools) stripAttrs.checked = ''
+  if (state.me.role !== 'admin') stripAttrs.disabled = ''
   view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
     el('div', {}, [
       el('h3', { style: 'margin:0 0 2px' }, '免费额度策略'),
@@ -1189,6 +1200,17 @@ async function renderProxySettings(view) {
       el('input', toggleAttrs),
       el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
       el('span', { class: 'switch-status' }, signatureEnabled ? '已开启' : '已关闭'),
+    ]),
+  ]))
+  view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
+    el('div', {}, [
+      el('h3', { style: 'margin:0 0 2px' }, '工具请求兜底'),
+      el('span', { class: 'muted' }, '工具被拒时去掉工具重试（上游对 tools 做指纹比对，带工具会被回 404 No endpoints found；开着才能出文本回答，关掉则错误原样透传）'),
+    ]),
+    el('label', { class: 'switch', for: 'strip-tools-on-reject' }, [
+      el('input', stripAttrs),
+      el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
+      el('span', { class: 'switch-status' }, stripTools ? '已开启' : '已关闭'),
     ]),
   ]))
 
@@ -1399,6 +1421,30 @@ async function saveFreeToolSignatureSetting(event) {
     toast(err.message, true)
   }
   input.disabled = false // 成功/失败后都恢复可交互
+}
+
+/** 工具被拒时剥离 tools 重试开关（见 /api/settings.stripToolsOnSchemaRejection）。 */
+async function saveStripToolsSetting(event) {
+  const input = event.currentTarget
+  const enabled = input.checked
+  input.disabled = true
+  try {
+    await api('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({ stripToolsOnSchemaRejection: enabled }),
+    })
+    toast(enabled ? '工具兜底重试已开启' : '工具兜底重试已关闭')
+    try {
+      const s = await api('/api/settings')
+      const actual = s.stripToolsOnSchemaRejection !== false
+      input.checked = actual
+      updateSwitchLabel(input)
+    } catch { /* 忽略回读失败，仍保持可交互 */ }
+  } catch (err) {
+    input.checked = !enabled
+    toast(err.message, true)
+  }
+  input.disabled = false
 }
 
 /** 一键屏蔽收费模型开关：pool=premium（gpt-5.6-luna / kimi / -max 等）从列表与调度排除 */
