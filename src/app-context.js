@@ -15,6 +15,20 @@ import { AccountStateStore } from './account-state-store.js'
 import { UpstreamError, isSessionRecoverableGate } from './upstream/client.js'
 import { logger } from './util/log.js'
 
+/**
+ * 账号级冷却里“被上游拒付/封禁”的那几种 code。
+ * 控制台的可用判定与选号调度用**同一套** code：banned / rate_limited 等
+ * 一旦命中，账号既不参与调度、也不该被显示成可用。
+ */
+const UNAVAILABLE_COOLDOWN_CODES = new Set([
+  'banned',
+  'rate_limited',
+  'spend_limited',
+  'ip_capped',
+  'free_mode_rate_limited',
+  'premium_slot_taken',
+])
+
 /** Errors where trying another logged-in account may succeed. */
 const SWITCHABLE_CODES = new Set([
   'rate_limited',
@@ -266,6 +280,18 @@ export class AccountRuntimes {
     return listAccounts(this.dir).map((a) => {
       const cd = this.cooldowns.get(a.key)
       const cooling = Boolean(cd && cd.until > now)
+      /**
+       * 账号状态分档（用户要求：一键刷新后至少能区分 ban 与正常）：
+       *   - banned：账号生命周期终点（账本里有 bannedAt，或当前冷却 code = banned），
+       *     不可自行恢复，只能换号/等平台解封；
+       *   - unavailable：限流 / 额度 / IP 上限等**暂时**拒付，冷却到期即可恢复；
+       * 其余仍算 available（含只有 per-model 冷却的账号）。
+       */
+      const coolingCode = cooling ? cd.code || null : null
+      const banned =
+        Boolean(this.accountState.account(a.key)?.bannedAt) || coolingCode === 'banned'
+      const unavailable =
+        banned || (cooling && UNAVAILABLE_COOLDOWN_CODES.has(coolingCode))
       const rt = this.byKey.get(a.key)
       const snap = rt?.sessions?.getSnapshot?.()
       const chatLock = this.chatLocks.get(a.key)
@@ -274,7 +300,13 @@ export class AccountRuntimes {
       return {
         ...a,
         lastUsed: this._lastSuccessKey === a.key,
+        // available 保持原语义（无账号级冷却）不动，避免改动既有消费者；
+        // banned / unavailable 是新增的**更细粒度**分档，控制台按它们区分
+        // "封禁"与"暂时被拒"，API 侧仍可只看 available。
         available: !cooling,
+        banned,
+        unavailable,
+        status: banned ? 'banned' : unavailable ? 'unavailable' : 'ok',
         cooldownUntil: cooling ? new Date(cd.until).toISOString() : null,
         cooldownCode: cooling ? cd.code : null,
         requests: this.stats.byKey.get(a.key) || 0,

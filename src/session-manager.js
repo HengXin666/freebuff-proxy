@@ -2,6 +2,16 @@ import { logger } from './util/log.js'
 import { UpstreamError } from './upstream/client.js'
 import { isFreeModel } from './model.js'
 
+/** 账号级故障状态码（回执反映账号处境，不反映某条会话的生死）。 */
+const ACCOUNT_LEVEL_SESSION_STATUSES = new Set([
+  'banned',
+  'country_blocked',
+  'rate_limited',
+  'spend_limited',
+  'ip_capped',
+  'free_mode_rate_limited',
+])
+
 /** 待结算退款的重试间隔：上游算完最终用量才会给回执，30s 足够且不扰上游。 */
 const REFUND_RETRY_INTERVAL_MS = 30_000
 /** 待结算退款的追问窗口上限（毫秒）。超窗后句柄仍留在 sessions.json，交给下次启动扫尾。 */
@@ -831,6 +841,35 @@ export class SessionManager {
       if (this.session?.instanceId) opts.instanceId = this.session.instanceId
       try {
         const body = await this.upstream.freebuffSession('GET', opts)
+        /**
+         * ⚠️ 上游对**账号级故障**的 GET 回执也是 200 + `{status:'banned'}` 这种
+         * 形态（见 upstream/client.js 里 403 的 country_blocked/banned 直通）。
+         * 以前这里无条件 `this._apply(body)`，于是控制台点一次「刷新」就会：
+         *   1) 把 session 覆盖成 `{status:'banned', instanceId: undefined}` ——
+         *      **活着的 instanceId 被抹掉**，那条已付费一小时的会话从此无法寻址，
+         *      既 DELETE 不掉（腾不出上游槽位）也追不回钱（退款的唯一凭据就是它）；
+         *   2) 记成 `lastProbe.ok = true` —— 探测明明失败了却显示成功；
+         *   3) 把健康判定从"账号是否封禁"退化成"还有没有本地会话"，
+         *      没会话的正常账号反而被判成"未就绪"。
+         * 所以账号级错误回执**只当探测结果**：保留会话现场、不入 _apply、
+         * 落 lastProbe 原因后抛出（调用方据此区分 ban / 风控 / IP 上限）。
+         */
+        const accountLevel = accountLevelSessionStatus(body?.status)
+        if (accountLevel) {
+          const probe = {
+            ok: false,
+            code: accountLevel,
+            status: null,
+            message: body?.message || null,
+          }
+          this._setLastProbe(probe)
+          this._clearPoll()
+          throw new UpstreamError(
+            `freebuff session probe: ${accountLevel}` +
+              (body?.message ? ` — ${body.message}` : ''),
+            { status: 403, code: accountLevel, body },
+          )
+        }
         this._apply(body)
         this._setLastProbe({ ok: true })
         if (this.hasLiveSlot()) this._armPoll()
@@ -1363,6 +1402,25 @@ export class SessionManager {
   }
 }
 
+
+/**
+ * 上游 session 回执里**账号级**的终态状态码（不是"这条会话怎么了"，而是
+ * "这个账号怎么了"）。这类回执到达时，会话现场必须原样保留——它们既不代表
+ * 当前会话已结束，也不携带新的 instanceId，用它覆盖 session 等于把唯一能
+ * 用来 DELETE 退款的句柄丢掉（见 refresh() 里的注释）。
+ *
+ * 名单与 app-context.js 的 ACCOUNT_COOLDOWN_CODES、_terminalSessionError 的
+ * statusMap 保持一致：banned / country_blocked 是 403 直通，rate_limited /
+ * spend_limited / ip_capped / free_mode_rate_limited 是 429 直通。
+ *
+ * @param {unknown} status
+ * @returns {string | null} 命中则返回规范化后的 code
+ */
+export function accountLevelSessionStatus(status) {
+  const s = typeof status === 'string' ? status.trim().toLowerCase() : ''
+  if (!s) return null
+  return ACCOUNT_LEVEL_SESSION_STATUSES.has(s) ? s : null
+}
 
 /**
  * Pull daily-session quota out of a Freebuff session payload.

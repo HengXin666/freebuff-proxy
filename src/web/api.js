@@ -23,6 +23,22 @@ import { dataFileAudit } from '../util/json-store.js'
 const SESSION_COOKIE = 'fb_session'
 
 /**
+ * 刷新（只读探测）时，哪些 code 意味着"账号级故障、必须落冷却"。
+ * 与 app-context.js 的 ACCOUNT_COOLDOWN_CODES 同源语义：这些 code 命中后
+ * 账号既不该被调度、也不该在控制台显示成正常。
+ * 注意**不含** model_unavailable（那是单模型级，不能拿它封整个账号）。
+ */
+const ACCOUNT_LEVEL_PROBE_CODES = new Set([
+  'banned',
+  'country_blocked',
+  'rate_limited',
+  'spend_limited',
+  'ip_capped',
+  'free_mode_rate_limited',
+  'premium_slot_taken',
+])
+
+/**
  * Control-plane HTTP API for the dashboard (login, users, accounts, login flows).
  *
  * @param {{
@@ -99,6 +115,53 @@ export function createWebApi(deps) {
   // 显式刷新上游探测（单账号检测 / 探测刷新按钮用）：跳过缓存强制 GET
   async function probeUpstreamSessionFresh() {
     return probeUpstreamSession(true)
+  }
+
+  /**
+   * 逐账号探测并把各自的 rateLimitsByModel **取并集**，得到一个"整个账号池此刻
+   * 被授予了哪些模型"的合并视图（多账号池里不同号被授予的模型不同，只看一个号
+   * 会漏）。结果写回 upstreamSessionCache，所以下游 /api/models、
+   * /api/models/upstream 立刻能看到新目录。
+   * 单个账号失败不影响其它账号：失败记进 failures，不整体报错。
+   */
+  async function probeAllAccountsSession() {
+    const rows = runtimes.list()
+    if (!rows.length) return { session: null, failures: [] }
+    const failures = []
+    /** @type {Map<string, any>} */
+    const limits = new Map()
+    let base = null
+    for (const row of rows) {
+      try {
+        const rt = runtimes.get(row.key)
+        const s = await rt.sessions.refresh()
+        if (!base) base = s
+        // ⚠️ refresh() 返回的是**本地 session 快照**（status/instanceId/expiresAt…），
+        // 不含上游的 rateLimitsByModel —— 额度在 quota.byModel 上（_apply 里由
+        // extractQuota 解析）。取错字段的表现是"永远 0 个模型"，正是这里踩到的。
+        const byModel = rt.sessions.getSnapshot()?.quota?.byModel || {}
+        for (const [id, info] of Object.entries(byModel)) {
+          if (!limits.has(id) || (info?.limit ?? 0) > (limits.get(id)?.limit ?? 0)) {
+            limits.set(id, info)
+          }
+        }
+      } catch (err) {
+        failures.push({
+          key: row.key,
+          email: row.email,
+          code: err?.code || null,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    if (!base && !limits.size) return { session: null, failures }
+    const session = {
+      ...(base || {}),
+      rateLimitsByModel: Object.fromEntries(limits),
+      model: base?.model || [...limits.keys()][0] || null,
+    }
+    upstreamSessionCache = { data: session, at: Date.now() }
+    return { session, failures }
   }
 
   async function readJson(req) {
@@ -318,6 +381,9 @@ export function createWebApi(deps) {
     if (method === 'GET' && route === '/api/models') {
       let accessTier = null
       let extraIds = []
+      // 沿用 60s 缓存：单次实时 GET 要走代理、往返 2-4s，而这是测试对话/模型管理
+      // 的首屏路径，必须秒开。要强制拿最新目录用「一键刷新」/「同步上游模型」，
+      // 它们走 probeAllAccountsSession() 与 probeUpstreamSessionFresh()。
       const session = await probeUpstreamSession()
       if (session?.accessTier === 'full' || session?.accessTier === 'limited') {
         accessTier = session.accessTier
@@ -482,6 +548,9 @@ export function createWebApi(deps) {
         sendJson(res, 200, {
           models,
           accessTier: session?.accessTier ?? null,
+          // 上游此刻真实给出的模型清单（多账号取并集）：前端据此区分
+          // "目录里有"与"上游此刻确实给额度"，而不是靠一个布尔开关。
+          upstreamModelIds: Object.keys(session?.rateLimitsByModel || {}),
           freebucks: session?.freebucks || null,
           note: '只读探测，不创建 session',
         })
@@ -647,8 +716,17 @@ export function createWebApi(deps) {
       for (const a of runtimes.list()) {
         try {
           const rt = runtimes.get(a.key)
-          await rt.sessions.refresh()
-          results.push({ key: a.key, email: a.email, ok: true })
+          const session = await rt.sessions.refresh()
+          // 额度在 quota.byModel（本地快照 session 上没有这个字段）
+          const limits = rt.sessions.getSnapshot()?.quota?.byModel || {}
+          results.push({
+            key: a.key,
+            email: a.email,
+            ok: true,
+            status: session?.status ?? null,
+            modelCount: Object.keys(limits).length,
+            models: Object.keys(limits),
+          })
         } catch (err) {
           results.push({
             key: a.key,
@@ -661,6 +739,70 @@ export function createWebApi(deps) {
         }
       }
       sendJson(res, 200, { ok: true, results, accounts: runtimes.list() })
+      return true
+    }
+
+    /**
+     * 一键刷新（控制台顶部按钮）——**只读**、但比 /probe 更彻底：
+     *   1) 逐账号 GET session → 刷新额度、探测状态（ban / 风控 / 限流 / 凭证失效）；
+     *   2) 顺手刷新上游模型目录（多账号并集），让"模型列表只有一个"这类
+     *      时滞问题一次刷新就消失；
+     *   3) 探测到账号级故障时落冷却（与调度同一套 code），所以刷新后
+     *      "能不能被调度"与"控制台显示什么"是一致的。
+     *
+     * ⚠️ 关键约束（用户明确要求）：刷新**只做只读探测**。
+     *   不做 admit、不 DELETE、不动 session 句柄——已购买的会话一小时
+     *   是实付的，刷新/警告都绝不能把它弄丢。句柄只在真实的
+     *   release / 换号 / 会话自然结束时变化（见 session-manager.refresh 的注释）。
+     */
+    if (method === 'POST' && route === '/api/accounts/refresh') {
+      const results = []
+      for (const row of runtimes.list()) {
+        try {
+          const rt = runtimes.get(row.key)
+          const session = await rt.sessions.refresh()
+          // 额度在 quota.byModel（本地快照 session 上没有这个字段）
+          const limits = rt.sessions.getSnapshot()?.quota?.byModel || {}
+          results.push({
+            key: row.key,
+            email: row.email,
+            ok: true,
+            status: session?.status ?? null,
+            modelCount: Object.keys(limits).length,
+          })
+        } catch (err) {
+          const code = err?.code ?? null
+          // 账号级故障落冷却：让"刷新后的显示"和"调度器的真实判断"同源。
+          // 只冷却、绝不释放：冷却到期自动恢复，会话句柄原样保留。
+          if (code && ACCOUNT_LEVEL_PROBE_CODES.has(code)) {
+            try {
+              runtimes.markCooldown(row.key, err, null)
+            } catch { /* 冷却失败不影响刷新结果 */ }
+          }
+          results.push({
+            key: row.key,
+            email: row.email,
+            ok: false,
+            code,
+            status: err?.status ?? null,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
+      let modelIds = []
+      try {
+        const { session } = await probeAllAccountsSession()
+        modelIds = Object.keys(session?.rateLimitsByModel || {})
+      } catch { /* 目录刷新失败不影响账号刷新结果 */ }
+      const failed = results.filter((r) => !r.ok)
+      sendJson(res, 200, {
+        ok: true,
+        results,
+        failures: failed.length,
+        accounts: runtimes.list(),
+        upstreamModelIds: modelIds,
+        note: '只读刷新：未创建 / 未释放任何会话，已购买的付费时段不受影响',
+      })
       return true
     }
 

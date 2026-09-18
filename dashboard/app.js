@@ -5,7 +5,26 @@
  */
 'use strict'
 
-const state = { me: null, accounts: [], users: [], models: [], flows: [], proxies: [], version: null, lowBalanceThreshold: 15 }
+const state = {
+  me: null,
+  accounts: [],
+  users: [],
+  models: [],
+  flows: [],
+  proxies: [],
+  version: null,
+  lowBalanceThreshold: 15,
+  /**
+   * 分区展开/折叠记忆（分区 id → 是否展开）。
+   * 局部刷新**不能**重置它：用户手动摊开"额度不足"看细节，一次刷新就折回去
+   * 等于把界面状态当垃圾扔掉（用户明确要求"不要重置当前分组展开和折叠的状态"）。
+   * 记录在内存里而不是读 DOM：分区可能因为这一轮没有任何账号而暂时消失，
+   * 消失期间也要记住用户的偏好，等账号回来时按原样展开。
+   */
+  acctSectionsOpen: {},
+  /** 上游此刻真实给出额度的模型 id（多账号并集），测试对话据此标注。 */
+  upstreamModelIds: [],
+}
 
 const $ = (sel, root = document) => root.querySelector(sel)
 const el = (tag, attrs = {}, children = []) => {
@@ -526,7 +545,11 @@ function renderOverviewHeader(data) {
       el('span', { class: 'muted' }, `上游 ${data.upstream.apiBase} · 模型 ${data.models} · 数据目录 ${data.dataDir}`),
     ]),
     el('div', { class: 'row' }, [
-      el('button', { onclick: probeAllAccounts }, [icon('refresh', 14), '探测刷新']),
+      // 主操作 = 一键刷新：额度 + 账号状态 + 上游模型目录，一次全刷（只读）。
+      el('button', { class: 'primary', onclick: (e) => oneClickRefresh(e.currentTarget) },
+        [icon('refresh', 14), '一键刷新']),
+      el('button', { onclick: (e) => probeAllAccounts(e.currentTarget), title: '只重新探测账号（不刷新模型目录）' },
+        [icon('activity', 14), '探测刷新']),
       state.me.role === 'admin'
         ? el('div', { class: 'row' }, [
             el('button', { onclick: () => openImportModal() }, [icon('box', 14), '导入账号']),
@@ -540,8 +563,11 @@ function renderOverviewHeader(data) {
 /** 统计卡片 */
 function renderStatCards(data) {
   const total = data.accounts.length
-  const available = data.accounts.filter((a) => a.available).length
-  const cooldown = data.accounts.filter((a) => a.cooldownUntil).length
+  // 可用 = 无账号级冷却 **且** 未封禁。以前只看 available，会把已封禁的号
+  // 算进"可用账号"里（banned 冷却 24h 到期后 available 又会变回 true）。
+  const banned = data.accounts.filter((a) => a.banned === true || a.bannedAt).length
+  const available = data.accounts.filter((a) => a.available && !(a.banned === true || a.bannedAt)).length
+  const cooldown = data.accounts.filter((a) => a.cooldownUntil && !a.banned).length
   const inFlight = data.accounts.reduce((n, a) => n + (a.inFlight || 0), 0)
   // 全局闸门占用：inFlight 贴着 limit 不动就是槽位泄漏（服务会"看着在跑
   // 却不接单"）。排队数 >0 说明已经在限流。
@@ -557,7 +583,10 @@ function renderStatCards(data) {
   const cards = [
     { label: '账号总数', value: total, cls: '' },
     { label: '可用账号', value: available, cls: 'green' },
-    { label: '冷却中', value: cooldown, cls: cooldown ? 'yellow' : 'green' },
+    { label: '已封禁', value: banned, cls: banned ? 'red' : 'green',
+      tip: '上游封禁 = 不可恢复，只能换号或等平台解封。与"冷却中"（限流/额度，到期自愈）区分开。' },
+    { label: '冷却中', value: cooldown, cls: cooldown ? 'yellow' : 'green',
+      tip: '暂时被上游拒付/限流（rate_limited / spend_limited / ip_capped / 风控）。冷却到期自动恢复；刷新不会动会话句柄，已购时段不受影响。' },
     {
       label: slots && slots.queued ? `在途请求（排队 ${slots.queued}）` : '在途请求',
       value: gateValue,
@@ -604,7 +633,13 @@ async function renderAccountsCard(data) {
       el('h3', { style: 'margin:0 0 2px' }, '账号池'),
       el('span', { class: 'muted' }, totalReq > 0 ? `负载均衡 · 共 ${totalReq} 次选号 · 热 session 优先复用` : '尚无请求记录'),
     ]),
-    el('button', { class: 'muted', onclick: () => refreshAccountsCard({ silent: false }) }, [icon('refresh', 13), '局部刷新']),
+    el('div', { class: 'row', style: 'gap:6px' }, [
+      el('button', { class: 'primary', onclick: (e) => oneClickRefresh(e.currentTarget) },
+        [icon('refresh', 13), '一键刷新']),
+      el('button', { class: 'muted', onclick: (e) => probeAllAccounts(e.currentTarget), title: '只重新探测账号（只读，不占额度）' },
+        [icon('activity', 13), '探测刷新']),
+      el('button', { class: 'muted', onclick: () => refreshAccountsCard({ silent: false }) }, [icon('refresh', 13), '局部刷新']),
+    ]),
   ])
   card.append(head)
 
@@ -674,9 +709,10 @@ function lowBalanceHit(a) {
 /** 把一个账号归类到唯一分区（最坏优先）。 */
 function classifyAccount(a) {
   const probe = a.lastProbe && a.lastProbe.ok === false ? a.lastProbe : null
-  const code = String(probe?.code || '').toLowerCase()
-  // 1) 封禁：探测明确 banned，或已记录过封禁时间
-  if (a.bannedAt || code.includes('banned')) return 'banned'
+  const code = String(probe?.code || a.cooldownCode || '').toLowerCase()
+  // 1) 封禁：探测明确 banned、账本记过 bannedAt、或后端已判 banned。
+  //    注意 CDN 兜底：country_blocked 是出口风控，不是账号封禁，刻意不归这里。
+  if (a.banned === true || a.bannedAt || code.includes('banned')) return 'banned'
   // 2) 额度不足：**与后端的两道闸门严格对齐**——
   //    ① Freebucks：今日池跑完（daily.remaining <= 0，且 limit > 0 才算真有池子）
   //       或余额买不起当前模型（balance < 单价）；
@@ -723,33 +759,101 @@ function classifyAccount(a) {
   return 'fresh'
 }
 
-function buildAccountsTable(accounts) {
+/** 账号 → 分区分组（一个号只落在一个分区里，最坏优先）。 */
+function groupAccounts(accounts) {
   const groups = new Map(ACCOUNT_SECTIONS.map((s) => [s.id, []]))
   for (const a of accounts) {
     const id = classifyAccount(a)
     ;(groups.get(id) || groups.get('fresh')).push(a)
   }
+  return groups
+}
+
+/**
+ * 分区的展开状态：**用户的显式操作优先**，其次才是章节默认值。
+ * 读 state 而不是读 DOM —— 分区可能因为这一轮没有任何账号而整个消失，
+ * 消失期间也必须记住用户摊开过它。
+ */
+function sectionOpen(section) {
+  const v = state.acctSectionsOpen[section.id]
+  return typeof v === 'boolean' ? v : Boolean(section.open)
+}
+
+/** 建一个分区外壳（details + summary + 表）。新节点按记忆/默认值决定展开。 */
+function buildAccountSection(section, rows) {
+  const table = el('div', { class: 'table-wrap' }, [
+    el('table', {}, [
+      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发', '时间轴（导入/更新/调度）', '额度（今日 · FB/h）', 'Freebucks', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
+      el('tbody', {}, rows.map((a, i) => buildAccountRow(a, i))),
+    ]),
+  ])
+  const details = el('details', {
+    class: 'acct-section',
+    'data-section': section.id,
+    ...(sectionOpen(section) ? { open: 'open' } : {}),
+  }, [
+    el('summary', {}, [
+      el('span', { class: `badge ${section.tone}` }, `${rows.length}`),
+      el('span', { style: 'margin-left:8px;font-weight:600' }, section.label),
+      el('span', { class: 'muted', style: 'margin-left:8px;font-size:12px' }, section.hint),
+    ]),
+    table,
+  ])
+  // 记住用户的手动展开/折叠：这是**唯一**的状态写入点，刷新不会覆盖它。
+  details.addEventListener('toggle', () => {
+    state.acctSectionsOpen[section.id] = details.open
+  })
+  return details
+}
+
+function buildAccountsTable(accounts) {
+  const groups = groupAccounts(accounts)
   const node = el('div', { style: 'margin-top:12px' })
   for (const section of ACCOUNT_SECTIONS) {
     const rows = groups.get(section.id) || []
     if (!rows.length) continue
-    const table = el('div', { class: 'table-wrap' }, [
-      el('table', {}, [
-        el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发', '时间轴（导入/更新/调度）', '额度（今日 · FB/h）', 'Freebucks', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
-        el('tbody', {}, rows.map((a, i) => buildAccountRow(a, i))),
-      ]),
-    ])
-    const details = el('details', { class: 'acct-section', ...(section.open ? { open: 'open' } : {}) }, [
-      el('summary', {}, [
-        el('span', { class: `badge ${section.tone}` }, `${rows.length}`),
-        el('span', { style: 'margin-left:8px;font-weight:600' }, section.label),
-        el('span', { class: 'muted', style: 'margin-left:8px;font-size:12px' }, section.hint),
-      ]),
-      table,
-    ])
-    node.append(details)
+    node.append(buildAccountSection(section, rows))
   }
   return node
+}
+
+/**
+ * **账号分区定点更新**（局部刷新的唯一入口）。
+ *
+ * 为什么不能像以前那样 `wrap.innerHTML = ''` 再整块重建：那等于把整个列表
+ * 换成一批全新的 <details>，一切**纯 UI 状态**随之归零 —— 用户手动摊开的分区
+ * 被折回去、滚动位置跳回顶部、正在看的行闪烁。用户明确要求刷新**不得重置**
+ * 分组的展开/折叠状态。
+ *
+ * 做法：复用现有的 <details> 外壳（连同它的 open 状态），只替换 <tbody> 的行；
+ * 用 append 移动节点来校正分区顺序（移动同一元素不会重置它的展开状态）。
+ * @returns {boolean} 是否命中容器（false = 容器不存在，调用方需整页回退）
+ */
+function applyAccountsSections(accounts) {
+  const host = $('#accounts-sections')
+  if (!host) return false
+  const groups = groupAccounts(accounts)
+  const keep = new Set()
+  for (const section of ACCOUNT_SECTIONS) {
+    const rows = groups.get(section.id) || []
+    if (!rows.length) continue
+    keep.add(section.id)
+    let node = host.querySelector(`details.acct-section[data-section="${section.id}"]`)
+    if (node) {
+      const tbody = node.querySelector('tbody')
+      if (tbody) tbody.replaceChildren(...rows.map((a, i) => buildAccountRow(a, i)))
+      const badge = node.querySelector('summary .badge')
+      if (badge) badge.textContent = String(rows.length)
+    } else {
+      node = buildAccountSection(section, rows)
+    }
+    // append 对已存在的节点 = 移动到新位置，不重建、不重置展开状态。
+    host.append(node)
+  }
+  for (const node of [...host.querySelectorAll('details.acct-section')]) {
+    if (!keep.has(node.dataset.section)) node.remove()
+  }
+  return true
 }
 
 function buildAccountRow(a, i) {
@@ -780,17 +884,30 @@ function buildAccountRow(a, i) {
   // 探测失败原因（country_blocked 强风控 / rate_limited / banned / 凭证无效…）
   const probeFail = a.lastProbe && a.lastProbe.ok === false ? a.lastProbe : null
   const probe = probeFail ? probeReason(probeFail.code, probeFail.message) : null
-  const statusDot = a.available
-    ? el('span', { class: 'status-dot ok' })
-    : el('span', { class: 'status-dot err' })
-  const statusText = a.available
-    ? '可用'
-    : (cd ? `冷却至 ${cd}` : '冷却中')
-  const statusBadge = probe
-    ? el('span', { class: 'badge err', style: 'display:inline-flex', title: probe.tip },
-        [statusDot, probe.label])
-    : el('span', { class: a.available ? 'badge ok' : 'badge err', style: 'display:inline-flex' },
-        [statusDot, statusText])
+  /**
+   * 状态徽章分三档（用户要求：刷新后至少能区分 ban 和正常）：
+   *   banned（红 · 不可恢复）/ unavailable（黄 · 暂时被拒，冷却到期自愈）/ ok（绿）。
+   * 判定优先用后端给的 banned/unavailable 字段（与调度器同一套 code），
+   * 老版本后端没有这两个字段时按 available 兜底，不会崩。
+   */
+  const banned = a.banned === true || Boolean(a.bannedAt)
+  const unavailable = banned || a.unavailable === true || a.available === false
+  const statusDot = el('span', { class: banned ? 'status-dot err' : unavailable ? 'status-dot warn' : 'status-dot ok' })
+  let statusLabel = banned ? '已封禁' : unavailable ? (cd ? `冷却至 ${cd}` : '不可用') : '可用'
+  let statusTip = banned
+    ? '上游已封禁该账号（不可自行恢复，只能换号或等平台解封）'
+    : unavailable
+      ? '上游暂时拒付/限流（冷却到期自动恢复；会话句柄保留，已购时段不受影响）'
+      : '正常：可参与调度'
+  let statusCls = banned ? 'badge err' : unavailable ? 'badge warn' : 'badge ok'
+  // 探测失败的**具体原因**比笼统的"不可用"更有信息量，覆盖之（但 ban 优先级最高）。
+  if (!banned && probe) {
+    statusLabel = probe.label
+    statusTip = probe.tip
+    statusCls = 'badge err'
+  }
+  const statusBadge = el('span', { class: statusCls, style: 'display:inline-flex', title: statusTip },
+    [statusDot, statusLabel])
   const hasSession = Boolean(a.session?.live)
   const ops = el('div', { class: 'row', style: 'gap:6px' }, [
     el('button', { class: 'icon muted', title: '检测该账号（只读拉取状态/模型列表，不占额度）', onclick: (e) => probeAccount(a, e.currentTarget) }, icon('activity', 14)),
@@ -866,9 +983,8 @@ async function refreshAccountsCard({ silent = true } = {}) {
         state.lowBalanceThreshold = s.lowBalanceThreshold
       }
     } catch { /* 沿用当前值 */ }
-    // 整体替换容器内部（不换容器本身，旧内容必然清空，不会残留分区）
-    wrap.innerHTML = ''
-    wrap.append(buildAccountsTable(data.accounts))
+    // **定点更新**：复用现有分区外壳（保住展开状态/滚动位置），只换行。
+    applyAccountsSections(data.accounts)
     wrap.classList.remove('refreshing')
     refreshSnapshotExtras(data)
     if (!silent) toast('账号状态已刷新')
@@ -913,12 +1029,9 @@ async function refreshOverviewAfterAccountChange() {
     const data = await api('/api/overview')
     state.accounts = data.accounts
     // 与 refreshAccountsCard 共用同一套定点更新（同一个 id 容器），
-    // 绝不再用 $('.table-wrap') 去选"第一个分区的表"。
-    const wrap = $('#accounts-sections')
-    if (wrap) {
-      wrap.innerHTML = ''
-      wrap.append(buildAccountsTable(data.accounts))
-    }
+    // 绝不再用 $('.table-wrap') 去选"第一个分区的表"，也不整块重建
+    // （整块重建会重置分区的展开/折叠状态）。
+    applyAccountsSections(data.accounts)
     refreshSnapshotExtras(data)
   } catch (err) {
     toast(err.message, true)
@@ -950,25 +1063,72 @@ async function probeAccount(a, btn) {
   }
 }
 
+/**
+ * 一键刷新（顶部主按钮）：账号额度 + 探测状态 + 上游模型目录，一次全刷。
+ *
+ * **只读**：不 admit、不 DELETE、不动任何 session 句柄。已付费的一小时
+ * 不受影响（后端 /api/accounts/refresh 里逐条注释了这条硬约束）。
+ *
+ * 全程局部更新：账号表分区外壳与展开状态、代理卡片、模型卡片都原地更新，
+ * 不整页重建 —— 刷新前后用户视线所在的滚动位置和折叠状态都不变。
+ */
+async function oneClickRefresh(btn) {
+  const restore = withButtonLoading(btn, '刷新中')
+  try {
+    const r = await api('/api/accounts/refresh', { method: 'POST' })
+    state.accounts = r.accounts || state.accounts
+    if (Array.isArray(r.upstreamModelIds)) state.upstreamModelIds = r.upstreamModelIds
+    const results = r.results || []
+    const failed = results.filter((x) => !x.ok)
+    const banned = failed.filter((x) => String(x.code || '').includes('banned'))
+    const soft = failed.length - banned.length
+    const parts = []
+    parts.push(`✅ ${results.length - failed.length} 个正常`)
+    if (banned.length) parts.push(`⛔ ${banned.length} 个已封禁`)
+    if (soft.length) parts.push(`⚠️ ${soft.length} 个异常（限流/风控/凭证）`)
+    parts.push(`模型 ${(r.upstreamModelIds || []).length} 个`)
+    toast(parts.join(' · ') + '（只读，已购时段不受影响）', failed.length > 0)
+    applyAccountsSections(state.accounts)
+    await applyOverviewAndModelCards()
+    refreshModelSettingsCard().catch(() => {})
+  } catch (err) {
+    toast(err.message, true)
+  } finally {
+    restore()
+  }
+}
+
 /** 全部账号探测（沿用原有逻辑 + 局部刷新） */
-async function probeAllAccounts() {
-  const btn = document.activeElement
+async function probeAllAccounts(btn = null) {
+  // 按钮由调用方显式传入（两个入口：页头「探测刷新」与账号卡「探测刷新」）。
+  // 不要去猜 activeElement：局部刷新后节点会被替换，猜到的往往是另一个按钮。
   const restore = withButtonLoading(btn, '探测中')
   try {
     const r = await api('/api/accounts/probe', { method: 'POST' })
     state.accounts = r.accounts
     const failed = (r.results || []).filter((x) => !x.ok)
     toast(failed.length ? `探测完成，${failed.length} 个失败（点击行内检测图标看详情）` : '探测完成（只读，不占额度）', !!failed.length)
-    const wrap = $('#accounts-sections')
-    if (wrap) {
-      wrap.innerHTML = ''
-      wrap.append(buildAccountsTable(r.accounts))
+    if (applyAccountsSections(r.accounts)) {
       refreshSnapshotExtras({ accounts: r.accounts })
     } else render()
   } catch (err) {
-    restore()
     toast(err.message, true)
+  } finally {
+    restore()
   }
+}
+
+/**
+ * 概览里**账号无关**的区块定点刷新：统计卡 + 负载均衡条 + 账号池计数 +
+ * 代理卡（空闲释放推荐值按账号池实时算）。全部原地更新，不碰账号分区。
+ */
+async function applyOverviewAndModelCards() {
+  try {
+    const data = await api('/api/overview')
+    state.accounts = data.accounts
+    refreshSnapshotExtras(data)
+  } catch { /* 拿不到就沿用当前快照 */ }
+  try { await renderProxySettings() } catch { /* 代理卡未挂载 */ }
 }
 
 /** 等待中的登录流程卡片 */
@@ -2561,23 +2721,62 @@ function openUserModal(u, view) {
 }
 
 /* ---------------- playground ---------------- */
-async function renderPlayground(view) {
-  view.innerHTML = ''
+/**
+ * 测试对话的模型下拉：**全量可用模型**，并且分级标注。
+ *
+ * 以前只留 `available !== false`，而 available 曾错误地由上游 accessTier 决定，
+ * 于是 accessTier=limited 时整张表只剩 1 个模型（用户反馈的"只有一个模型"）。
+ * 现在：
+ *   - 目录条目一律可用（available 只表示'能不能请求'，见 src/model.js）；
+ *   - 上游此刻真给了额度的模型（upstreamModelIds）标 ✅ 并排在最前；
+ *   - 被「模型管理」隐藏的（hidden）压根不会出现在 /api/models 里；
+ *   - 被一键屏蔽收费模型开关排除的 premium 模型也不在列表里。
+ * 拿不到上游目录时**不隐藏任何模型**：宁可多列，也不让用户以为只剩一个。
+ */
+async function loadPlaygroundModels() {
   let models = []
+  let upstreamIds = new Set(state.upstreamModelIds || [])
+  let note = ''
   try {
     const list = await api('/api/models')
-    models = list.data.filter((m) => m.available !== false)
-  } catch { /* ignore */ }
+    models = Array.isArray(list.data) ? list.data : []
+    if (Array.isArray(list.upstreamModelIds)) {
+      upstreamIds = new Set(list.upstreamModelIds)
+      state.upstreamModelIds = list.upstreamModelIds
+    }
+    if (!models.length) note = '上游目录为空：请确认账号已导入并完成一次探测'
+  } catch (err) {
+    note = '模型列表加载失败：' + err.message + '（可点总览页「一键刷新」后重试）'
+  }
+  // 排序：上游确有额度的在前（可直接用），其余按 id 稳定排序
+  const scored = models.map((m) => ({ ...m, hasQuota: upstreamIds.has(m.id) }))
+  scored.sort((a, b) => (Number(b.hasQuota) - Number(a.hasQuota)) || String(a.id).localeCompare(String(b.id)))
+  return { models: scored, note, upstreamCount: upstreamIds.size }
+}
+
+async function renderPlayground(view) {
+  view.innerHTML = ''
+  const { models, note, upstreamCount } = await loadPlaygroundModels()
 
   view.append(el('div', { class: 'row spread', style: 'margin-bottom:16px' }, [
     el('h2', { style: 'margin:0' }, '测试对话'),
     el('span', { class: 'muted' }, '经 /v1/chat/completions 真实转发（流式）'),
   ]))
+  const defaultModel = models.find((m) => m.id === 'deepseek/deepseek-v4-flash') || models[0]
   const card = el('div', { class: 'card' }, [
     el('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fit,minmax(220px,1fr))' }, [
       el('div', {}, [
-        el('label', {}, '模型'),
-        el('select', { id: 'pg-model' }, models.map((m) => el('option', { value: m.id, selected: m.id === 'deepseek/deepseek-v4-flash' }, m.id))),
+        el('label', {}, `模型（${models.length} 个可选${upstreamCount ? ` · 上游当前给额度 ${upstreamCount} 个` : ''}）`),
+        el('select', { id: 'pg-model' }, models.map((m) => el('option', {
+          value: m.id,
+          selected: defaultModel && m.id === defaultModel.id,
+        }, `${m.hasQuota ? '✅ ' : ''}${m.id}`))),
+        el('div', { class: 'row', style: 'margin-top:6px;gap:8px;align-items:center' }, [
+          el('button', { class: 'muted', style: 'padding:4px 10px;font-size:12px', onclick: (e) => reloadPlaygroundModels(e.currentTarget) },
+            [icon('refresh', 12), '刷新模型列表']),
+          el('span', { class: 'muted', style: 'font-size:11px' }, '✅ = 上游此刻给了该模型额度'),
+        ]),
+        note ? el('div', { class: 'muted', style: 'margin-top:4px;font-size:11px' }, note) : null,
       ]),
       el('div', {}, [
         el('label', {}, 'API Key（默认用你的）'),
@@ -2592,6 +2791,26 @@ async function renderPlayground(view) {
     el('div', { class: 'chat-log', id: 'pg-log', style: 'margin-top:12px' }, ''),
   ])
   view.append(card)
+}
+
+/** 就地重建模型下拉（只替换 select 的选项，不清空已输入的消息/日志）。 */
+async function reloadPlaygroundModels(btn) {
+  const restore = withButtonLoading(btn)
+  try {
+    const { models, upstreamCount } = await loadPlaygroundModels()
+    const sel = $('#pg-model')
+    if (!sel) return
+    const prev = sel.value
+    const defaultModel = models.find((m) => m.id === 'deepseek/deepseek-v4-flash') || models[0]
+    sel.replaceChildren(...models.map((m) => el('option', { value: m.id },
+      `${m.hasQuota ? '✅ ' : ''}${m.id}`)))
+    sel.value = models.some((m) => m.id === prev) ? prev : (defaultModel ? defaultModel.id : '')
+    toast(`模型列表已刷新（${models.length} 个${upstreamCount ? `，上游给额度 ${upstreamCount} 个` : ''}）`)
+  } catch (err) {
+    toast(err.message, true)
+  } finally {
+    restore()
+  }
 }
 
 async function sendChat() {

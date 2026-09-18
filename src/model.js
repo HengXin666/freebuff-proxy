@@ -286,11 +286,22 @@ export function buildModelsListResponse(opts = {}) {
   if (includeAllCatalog) {
     for (const m of FREEBUFF_AVAILABLE_MODELS) {
       if (skip(m.id)) continue
-      // When we know the live tier is limited, still list full-only models but
-      // mark them unavailable so Agents see the full Freebuff surface.
-      const tierOk =
-        !accessTier || m.accessTiers.includes(accessTier)
-      byId.set(m.id, toOpenAiModel(m, { available: tierOk, accessTier }))
+      /**
+       * `available` 的含义**只是**"现在能不能直接发请求"，不是"这个模型存不存在"。
+       *
+       * 2026-09-15 修：以前这里用 `accessTiers.includes(accessTier)` 判定，而内置
+       * catalog 的 15 条**全都没有 accessTiers 字段** → 一律回落成默认 `['full']` →
+       * 只要上游回一次 `accessTier: 'limited'`，整个内置目录就被染成
+       * `available: false`。下游把 /v1/models 当权威模型表的客户端 + 控制台
+       * 测试对话（原本只留 `available !== false`）于是**只看到剩余的一个**
+       * （extraIds 里上游给过额度的那个模型）——用户反馈的"只有一个模型"就是这个。
+       *
+       * 目录准入不等于实时配额：真正拦人的是价格/额度（freebucks 闸门）与
+       * agent 可用性，不是这个静态标记。所以**目录条目一律 available: true**，
+       * tier 信息只作为元数据透出（access_tiers / current_access_tier），由调用方
+       * 自己决定怎么展示。
+       */
+      byId.set(m.id, toOpenAiModel(m, { available: true, accessTier }))
     }
   }
 
