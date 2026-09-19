@@ -41,6 +41,12 @@ import {
   FREEBUFF_SYSTEM_OPENING,
 } from '../src/free-mode.js'
 import {
+  chooseHermesDelegateAlias,
+  restoreHermesDelegateInResponse,
+  rewriteHermesDelegateForUpstream,
+  rewriteHermesDelegateSseLine,
+} from '../src/tool-alias.js'
+import {
   detectForeignClient,
   isGenuineSignatureTool,
 } from '../src/upstream/foreign-client-signals.js'
@@ -64,6 +70,90 @@ import {
 } from '../src/upstream/client.js'
 
 configureLogger({ level: 'error' })
+
+// --- unit: Hermes delegate_task compatibility alias (issue #17) ---
+{
+  const clientBody = {
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'delegate_task',
+          description: 'delegate work',
+          parameters: {
+            type: 'object',
+            properties: { prompt: { type: 'string' } },
+          },
+        },
+      },
+    ],
+    tool_choice: {
+      type: 'function',
+      function: { name: 'delegate_task' },
+    },
+    messages: [
+      {
+        role: 'assistant',
+        tool_calls: [
+          {
+            id: 'call-1',
+            type: 'function',
+            function: { name: 'delegate_task', arguments: '{"prompt":"x"}' },
+          },
+        ],
+      },
+      { role: 'tool', name: 'delegate_task', tool_call_id: 'call-1', content: 'ok' },
+    ],
+  }
+  const alias = chooseHermesDelegateAlias(clientBody.tools)
+  assert.equal(alias, 'spawn_subagent')
+  const upstreamBody = rewriteHermesDelegateForUpstream(clientBody, alias)
+  assert.equal(upstreamBody.tools[0].function.name, alias)
+  assert.equal(upstreamBody.tool_choice.function.name, alias)
+  assert.equal(upstreamBody.messages[0].tool_calls[0].function.name, alias)
+  assert.equal(upstreamBody.messages[1].name, alias)
+  assert.equal(clientBody.tools[0].function.name, 'delegate_task', '不得修改客户端原对象')
+
+  const signedTools = ensureFreebuffToolSignature(upstreamBody.tools, true)
+  const verdict = detectForeignClient({ ...upstreamBody, tools: signedTools }, true)
+  assert.notEqual(verdict.signal, 'foreign_tool_names')
+  assert.deepEqual(verdict.foreignToolNames, [])
+
+  const restored = restoreHermesDelegateInResponse(
+    {
+      choices: [
+        {
+          message: {
+            tool_calls: [
+              { function: { name: alias, arguments: '{"prompt":"x"}' } },
+            ],
+          },
+          delta: {
+            tool_calls: [{ function: { name: alias, arguments: '' } }],
+          },
+        },
+      ],
+    },
+    alias,
+  )
+  assert.equal(restored.choices[0].message.tool_calls[0].function.name, 'delegate_task')
+  assert.equal(restored.choices[0].delta.tool_calls[0].function.name, 'delegate_task')
+
+  const sse = rewriteHermesDelegateSseLine(
+    'data: {"choices":[{"delta":{"tool_calls":[{"function":{"name":"spawn_subagent","arguments":""}}]}}]}\n',
+    alias,
+  )
+  assert.match(sse, /"name":"delegate_task"/)
+
+  // 已有同名工具时选择无冲突别名，不能覆盖客户端自己的 spawn_subagent。
+  assert.equal(
+    chooseHermesDelegateAlias([
+      { type: 'function', function: { name: 'delegate_task' } },
+      { type: 'function', function: { name: 'spawn_subagent' } },
+    ]),
+    'spawn_subagent_2',
+  )
+}
 
 const originalFetch = globalThis.fetch
 let calls = []
