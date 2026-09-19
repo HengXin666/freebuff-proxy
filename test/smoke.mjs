@@ -140,7 +140,7 @@ configureLogger({ level: 'error' })
   assert.equal(restored.choices[0].delta.tool_calls[0].function.name, 'delegate_task')
 
   const sse = rewriteHermesDelegateSseLine(
-    'data: {"choices":[{"delta":{"tool_calls":[{"function":{"name":"spawn_subagent","arguments":""}}]}}]}\\n',
+    'data: {"choices":[{"delta":{"tool_calls":[{"function":{"name":"spawn_subagent","arguments":""}}]}}]}\n',
     alias,
   )
   assert.match(sse, /"name":"delegate_task"/)
