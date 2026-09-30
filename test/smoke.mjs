@@ -6720,3 +6720,89 @@ server.close()
 globalThis.fetch = originalFetch
 fs.rmSync(tmpDir, { recursive: true, force: true })
 console.log('smoke ok')
+
+// 网页通道（/api/chat/stream）的转换层：这是 limited 档位下唯一能出内容的通道，
+// 转换错了就全盘皆错，所以逐项锁死。判据见
+// .agents/notes/proposed/architecture/2026-09-30-web-chat-stream-transport.md
+{
+  const {
+    toWebModelId,
+    fromWebModelId,
+    toWebChatRequest,
+    webChatHeaders,
+    consumeWebStream,
+  } = await import('../src/upstream/web-chat.js')
+  const {
+    openAiCompletion,
+    openAiChunk,
+    webEventToDelta,
+    sseFrame,
+    SSE_DONE,
+  } = await import('../src/upstream/web-chat-openai.js')
+
+  // 网页端模型 id 没有供应商前缀
+  assert.equal(toWebModelId('deepseek/deepseek-v4-flash'), 'deepseek-v4-flash')
+  assert.equal(toWebModelId('deepseek-v4-flash'), 'deepseek-v4-flash')
+  assert.equal(
+    fromWebModelId('deepseek-v4-flash', ['deepseek/deepseek-v4-flash']),
+    'deepseek/deepseek-v4-flash',
+  )
+
+  // 多轮靠服务端 threadId：只取最后一条 user 消息，历史不重发
+  const req = toWebChatRequest({
+    threadId: null,
+    messages: [
+      { role: 'system', content: 'S' },
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'A' },
+      { role: 'user', content: 'second' },
+    ],
+  })
+  assert.equal(req.content, 'second', '只取最后一条 user 消息')
+  assert.equal(req.threadId, null)
+
+  // cookie 名必须带 __Secure- 前缀（线上真值；无前缀与 Bearer 都是 401）
+  assert.equal(
+    webChatHeaders('tok').cookie,
+    '__Secure-next-auth.session-token=tok;',
+  )
+
+  // 事件 → OpenAI delta 的映射
+  assert.deepEqual(webEventToDelta({ type: 'delta', text: 'OK' }), { content: 'OK' })
+  assert.deepEqual(
+    webEventToDelta({ type: 'reasoning_delta', text: 'hmm' }),
+    { reasoning_content: 'hmm' },
+  )
+  assert.equal(webEventToDelta({ type: 'done' }), null, 'done 不产出 delta')
+  assert.equal(webEventToDelta({ type: 'meta', threadId: 't' }), null)
+
+  // SSE 帧格式
+  assert.equal(sseFrame({ a: 1 }), 'data: {"a":1}\n\n')
+  assert.equal(SSE_DONE, 'data: [DONE]\n\n')
+
+  // 流解析：跨 chunk 边界 + 未换行结尾的残留都要能处理
+  const enc = new TextEncoder()
+  const chunks = [
+    'data: {"type":"meta","threadId":"T1"}\n\ndata: {"type":"del',
+    'ta","text":"he"}\n\ndata: {"type":"delta","text":"llo"}\n\n',
+    'data: {"type":"done"}',
+  ].map((s) => enc.encode(s))
+  async function* gen() {
+    for (const c of chunks) yield c
+  }
+  const seen = []
+  const parsed = await consumeWebStream(gen(), (ev) => seen.push(ev.type))
+  assert.equal(parsed.threadId, 'T1', 'meta 里的 threadId 要被捕获')
+  assert.equal(parsed.text, 'hello', '跨 chunk 边界的 delta 要正确拼接')
+  // 最后一条没有换行结尾，由收尾逻辑补解析
+  assert.ok(seen.includes('done'), '未换行结尾的 done 也要被识别')
+
+  // 非流式响应形状
+  const comp = openAiCompletion({ model: 'm', text: 'OK' })
+  assert.equal(comp.object, 'chat.completion')
+  assert.equal(comp.choices[0].message.content, 'OK')
+  assert.equal(comp.choices[0].finish_reason, 'stop')
+  const ck = openAiChunk({ id: 'i', model: 'm', delta: { content: 'x' } })
+  assert.equal(ck.object, 'chat.completion.chunk')
+  assert.equal(ck.choices[0].delta.content, 'x')
+}

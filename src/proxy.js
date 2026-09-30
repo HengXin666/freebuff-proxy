@@ -208,7 +208,16 @@ export function createProxyHandler(ctx) {
       return
     }
 
+    // 网页通道：在选号/admit/agent-run **之前**接管。
+    // 它走 freebuff.com 的 /api/chat/stream（cookie 鉴权、thread 机制），
+    // 根本不需要也不应该触发 CLI 通道的会话准入（那会扣 Freebucks，
+    // 且在 limited 档位下必然 503）。放到 forwardCompletions 里太晚了 ——
+    // 外层的调度已经先失败。
     if (method === 'POST' && route === '/v1/chat/completions') {
+      if (shouldUseWebChannel(req)) {
+        await handleWebChannelChat(req, res)
+        return
+      }
       await handleChatCompletions(req, res)
       return
     }
@@ -1244,6 +1253,194 @@ export function createProxyHandler(ctx) {
       dropChatHold()
       chatGone.cleanup()
     }
+  }
+
+  /** 是否走网页通道（仅由控制台开关决定；默认关闭以保持既有行为）。 */
+  function shouldUseWebChannel(_req) {
+    return settingsStore?.get?.()?.webChannelEnabled === true
+  }
+
+  /** 网页通道的 thread 归属：客户端可用 x-freebuff-thread-id 指定以复用上下文。 */
+  function webThreadIdFor(req) {
+    const h = req.headers?.['x-freebuff-thread-id']
+    return typeof h === 'string' && h.trim() ? h.trim() : null
+  }
+
+  /**
+   * 网页通道的入口处理：选一个账号 → 打 freebuff.com 的 /api/chat/stream。
+   *
+   * 与 CLI 通道完全解耦：**不 admit 会话、不消耗 Freebucks、不占会话槽位**。
+   * 所以必须放在选号/admit 之前接管 —— 放进 forwardCompletions 就太晚了，
+   * 外层调度会先用 CLI 通道的准入把请求拒掉。
+   */
+  async function handleWebChannelChat(req, res) {
+    let body = null
+    try {
+      const raw = await readRequestBody(req)
+      body = raw ? JSON.parse(raw) : null
+    } catch {
+      body = null
+    }
+    if (!body || typeof body !== 'object') {
+      sendJson(res, 400, {
+        error: { message: '无效的 JSON 请求体', type: 'invalid_request_error' },
+      })
+      return
+    }
+
+    let rt = null
+    try {
+      rt = runtimes.getAny()
+    } catch {
+      rt = null
+    }
+    if (!rt) {
+      sendJson(res, 503, {
+        error: {
+          message: '没有可用的 Freebuff 账号',
+          type: 'freebuff_error',
+          code: 'no_available_account',
+        },
+      })
+      return
+    }
+
+    const stream = body.stream === true
+    const upstreamModel = requireModelId(body.model)
+    const { toWebModelId, toWebChatRequest, consumeWebStream } = await import(
+      './upstream/web-chat.js',
+    )
+    const {
+      openAiCompletion,
+      openAiChunk,
+      webEventToDelta,
+      sseFrame,
+      SSE_DONE,
+    } = await import('./upstream/web-chat-openai.js')
+
+    const webModel = toWebModelId(upstreamModel)
+    const { threadId, content } = toWebChatRequest({
+      threadId: webThreadIdFor(req),
+      messages: body.messages,
+    })
+    if (!content) {
+      sendJson(res, 400, {
+        error: {
+          message: '网页通道需要一条 user 消息',
+          type: 'invalid_request_error',
+        },
+      })
+      return
+    }
+
+    let upstreamRes
+    try {
+      upstreamRes = await rt.upstream.webChat({
+        threadId,
+        content,
+        model: webModel,
+        reasoningEffort: body.reasoning_effort || 'medium',
+        signal: reqToAbortSignal(req).signal,
+        timeoutMs: 60_000,
+      })
+    } catch (err) {
+      logger.warn('web channel request failed', {
+        model: webModel,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      sendJson(res, 502, {
+        error: {
+          message:
+            '网页通道请求失败: ' + (err instanceof Error ? err.message : String(err)),
+          type: 'proxy_error',
+        },
+      })
+      return
+    }
+
+    if (!upstreamRes.ok || !upstreamRes.body) {
+      const text = await safeText(upstreamRes)
+      let parsed = null
+      try {
+        parsed = text ? JSON.parse(text) : null
+      } catch {
+        parsed = null
+      }
+      sendJson(res, upstreamRes.status || 502, {
+        error: {
+          message:
+            (parsed && (parsed.message || parsed.error?.message)) ||
+            text ||
+            '网页通道返回错误',
+          type: 'freebuff_error',
+          code: (parsed && (parsed.code || parsed.error)) || null,
+        },
+      })
+      return
+    }
+
+    const id = 'chatcmpl-web-' + Date.now().toString(36)
+    const modelOut = body.model || upstreamModel
+    res.setHeader('x-freebuff-proxy-account', rt.email)
+    res.setHeader('x-freebuff-proxy-channel', 'web')
+
+    if (stream) {
+      res.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      })
+      let first = true
+      const result = await consumeWebStream(upstreamRes.body, (ev) => {
+        if (first) {
+          res.write(
+            sseFrame(
+              openAiChunk({ id, model: modelOut, delta: { role: 'assistant' } }),
+            ),
+          )
+          first = false
+        }
+        const delta = webEventToDelta(ev)
+        if (delta) res.write(sseFrame(openAiChunk({ id, model: modelOut, delta })))
+      })
+      if (first) {
+        res.write(
+          sseFrame(
+            openAiChunk({ id, model: modelOut, delta: { role: 'assistant' } }),
+          ),
+        )
+      }
+      res.write(
+        sseFrame(
+          openAiChunk({ id, model: modelOut, delta: {}, finishReason: 'stop' }),
+        ),
+      )
+      res.write(SSE_DONE)
+      res.end()
+      logger.info('web channel stream done', {
+        model: webModel,
+        threadId: result.threadId,
+        chars: result.text.length,
+      })
+      return
+    }
+
+    const result = await consumeWebStream(upstreamRes.body, () => {})
+    sendJson(
+      res,
+      200,
+      openAiCompletion({
+        id,
+        model: modelOut,
+        text: result.text,
+        reasoning: result.reasoning || undefined,
+      }),
+    )
+    logger.info('web channel completion done', {
+      model: webModel,
+      threadId: result.threadId,
+      chars: result.text.length,
+    })
   }
 
   function buildForwardBody(

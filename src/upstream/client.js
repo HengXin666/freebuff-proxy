@@ -2,6 +2,9 @@ import { freebuffAuthHeaders } from '../auth-store.js'
 import { logger } from '../util/log.js'
 import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from 'undici'
 import {
+  webChatHeaders,
+} from './web-chat.js'
+import {
   BUN_USER_AGENT,
   HEADER_COMPACT_SESSION as FREEBUFF_COMPACT_SESSION_HEADER,
   HEADER_INSTANCE_ID as FREEBUFF_INSTANCE_HEADER,
@@ -597,6 +600,40 @@ export function createUpstreamClient(config, token, opts = {}) {
         body: init.body,
         signal: init.signal,
         timeoutMs: init.timeoutMs,
+        includeAuth: false,
+      })
+    },
+
+    /**
+     * 网页通道：走 freebuff.com 的 /api/chat/stream（cookie 鉴权）。
+     *
+     * 与 raw() 的区别不仅是端点，而是**另一个 origin + 另一套鉴权形态**：
+     * CLI 通道打 codebuff.com 带 Bearer，网页通道打 freebuff.com 带
+     * `__Secure-next-auth.session-token` cookie。实测同一账号在同一出口 IP 下，
+     * limited 档位只有网页通道能出内容。
+     *
+     * @param {{ threadId?: string|null, content: string, model: string, reasoningEffort?: string, signal?: AbortSignal, timeoutMs?: number }} params
+     * @returns {Promise<Response>} 未消费的 SSE 响应（body 交给 consumeWebStream）
+     */
+    async webChat(params) {
+      const url = `${loginBase}/api/chat/stream`
+      const headers = {
+        ...webChatHeaders(token),
+        ...(params.reasoningEffort ? {} : {}),
+      }
+      return apiFetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          threadId: params.threadId || null,
+          content: params.content,
+          model: params.model,
+          reasoningEffort: params.reasoningEffort || 'medium',
+          images: [],
+          attachments: [],
+        }),
+        signal: params.signal,
+        timeoutMs: params.timeoutMs,
         includeAuth: false,
       })
     },

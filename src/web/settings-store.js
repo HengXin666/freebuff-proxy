@@ -9,6 +9,14 @@ const DEFAULT_SETTINGS = Object.freeze({
   // 判据与对照实验见
   // .agents/notes/implemented/bug-fix/2026-09-19-genuine-tool-signature.md
   freeToolSignatureEnabled: true,
+  // 是否走**网页通道**（freebuff.com 的 /api/chat/stream，cookie 鉴权）而不是
+  // CLI 通道（codebuff.com 的 /api/v1/chat/completions，Bearer）。
+  // 判据：accessTier: 'limited'（非 allowlist 国家 / 任何 VPN）下 CLI 通道对
+  // 全部 limited 目录模型返回 503，而**同一账号同一出口**走网页通道完全正常。
+  // 网页通道不消耗 Freebucks（走 thread 机制），也就不占用会话槽位。
+  // 默认关闭：先保持既有行为，验证充分后再作为 limited 档位的自动回落。
+  // 见 .agents/notes/proposed/architecture/2026-09-30-web-chat-stream-transport.md
+  webChannelEnabled: false,
   // 上游以 404 "No endpoints found" 拒掉带工具的请求时，是否去掉 tools 重发一次。
   // 开启 = 至少拿到文本回答；关闭 = 把 404 原样透传（下游 Responses 桥接层会把它
   // 崩成 CF 502 空体，客户端只见 "no body"）。
@@ -166,6 +174,12 @@ export class SettingsStore {
         throw new TypeError('blockPremiumModels must be a boolean')
       }
       this.settings.blockPremiumModels = next.blockPremiumModels
+    }
+    if (next?.webChannelEnabled !== undefined) {
+      if (typeof next.webChannelEnabled !== 'boolean') {
+        throw new TypeError('webChannelEnabled must be a boolean')
+      }
+      this.settings.webChannelEnabled = next.webChannelEnabled
     }
     if (next?.lowBalanceThreshold !== undefined) {
       if (
