@@ -942,6 +942,8 @@ export class AccountRuntimes {
     const order = this.candidateKeys(model, { skipKeys: opts.skipKeys })
     /** @type {Array<{ key: string, email?: string, code?: string, message: string }>} */
     const failures = []
+    /** 出口级故障（如地理封锁）的首条记录：出现即停止选号。 */
+    let fatalFailure = null
 
     // 全部账号都在冷却/无可用账号时，把冷却明细带进报错（而不是 "Tried 0"），
     // 让用户一眼看出每个账号冷却到几点、因为什么。
@@ -979,12 +981,22 @@ export class AccountRuntimes {
       try {
         rt = this.get(key)
       } catch (err) {
-        failures.push({
+        const rec = {
           key,
           email: emailByKey.get(key),
           code: err?.code,
           message: err instanceof Error ? err.message : String(err),
-        })
+          ...(err?.fatal === true ? { fatal: true } : {}),
+        }
+        failures.push(rec)
+        // 出口级故障（地理封锁）：所有账号共享同一出口，继续换号只会把每个
+        // 账号的 Freebucks 依次买断（一次 admit = 一整小时）却拿不到答案。
+        // 立即停止选号，把原因原样交给用户 —— 出路是换代理，不是换号。
+        // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+        if (err?.fatal === true) {
+          fatalFailure = rec
+          break
+        }
         continue
       }
 
@@ -1104,7 +1116,23 @@ export class AccountRuntimes {
         return rt
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        failures.push({ key, email: emailByKey.get(key), code: err?.code, message })
+        const rec = {
+          key,
+          email: emailByKey.get(key),
+          code: err?.code,
+          message,
+          ...(err?.fatal === true ? { fatal: true } : {}),
+        }
+        failures.push(rec)
+        // 出口级故障（地理封锁）：**出口**属性不是账号属性 —— 所有账号共享同一
+        // 出口，换号只会把每个账号的 Freebucks 依次买断（一次 admit = 一整小时）
+        // 却永远拿不到答案。也不该冷却账号（它不是账号的错）。
+        // 立即停止选号，把原因原样交给用户：出路是换代理，不是换号。
+        // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+        if (err?.fatal === true) {
+          fatalFailure = rec
+          break
+        }
         const wrap =
           err instanceof UpstreamError
             ? err
@@ -1126,6 +1154,21 @@ export class AccountRuntimes {
     // 两本账任一耗尽都算"额度用尽"（与分开的闸门一一对应）：
     //   freebucks_exhausted = 货币预算不够（上游真正的拒付判据）
     //   units_exhausted     = 时长预算用尽
+    // 出口级故障（地理封锁）：它是**出口**属性不是账号属性，换号无意义。
+    // 必须原样抛出（带 countryCode），让用户知道该换代理而不是去查账号。
+    // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+    if (fatalFailure) {
+      throw new UpstreamError(
+        'Upstream blocked this egress: ' + fatalFailure.message,
+        {
+          status: 403,
+          code: fatalFailure.code,
+          body: { model, failures: [fatalFailure] },
+          // 必须原样带上 fatal：外层据此立即收场，不再重试换号。
+          fatal: true,
+        },
+      )
+    }
     const EXHAUST_CODES = new Set(['freebucks_exhausted', 'units_exhausted'])
     const allExhausted =
       failures.length > 0 &&

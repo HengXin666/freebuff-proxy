@@ -728,6 +728,25 @@ export class SessionManager {
     logger.info('admitting freebuff session', { model })
     const body = await this.upstream.freebuffSession('POST', { model })
 
+    // 地理封锁：上游**照常建立会话并照常扣费**（一次 admit = 买断一整小时），
+    // 只是随后 chat 会被拒。所以窗口是真的存在且已付款 —— 必须先落盘
+    // （句柄可寻址：之后能 DELETE 腾槽位、能追退款），再把封锁抛给上层。
+    // 直接抛而不保存 = 把刚买的一小时变成无法寻址的孤儿，钱白扔。
+    // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+    if (body?.countryBlockReason && body.instanceId) {
+      this.admitCount += 1
+      this._apply({ ...body, status: 'active' })
+      this._armPoll()
+      logger.warn('admitted but egress country blocked; keeping paid session', {
+        model: body.model,
+        instanceId: body.instanceId,
+        expiresAt: body.expiresAt,
+        countryCode: body.countryCode ?? null,
+        reason: body.countryBlockReason,
+      })
+      throw this._terminalSessionError(body, model)
+    }
+
     if (body?.status === 'active' && body.instanceId) {
       this.admitCount += 1
       this._apply(body)
@@ -782,6 +801,12 @@ export class SessionManager {
         code: st,
         body: { ...body, requestedModel: model },
         retryAfterMs: body?.retryAfterMs,
+        // 地理封锁是**出口**属性，不是账号属性：所有账号共享同一出口，
+        // 换号只会把每个账号的额度依次买断（一次 admit = 一整小时 Freebucks）
+        // 却永远拿不到答案。标记后调度层立即终止选号并把原因交给用户，
+        // 出路是换代理（前端「代理设置」），不是换号。
+        // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+        fatal: st === 'country_blocked',
       },
     )
   }

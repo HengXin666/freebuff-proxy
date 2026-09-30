@@ -87,6 +87,8 @@ const ICONS = {
   box: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
   lock: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
   gauge: '<path d="M12 15l3.5-3.5"/><path d="M20.3 18a10 10 0 1 0-16.6 0"/>',
+  terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+  search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
   github: '<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/>',
 }
 function icon(name, size = 16) {
@@ -148,6 +150,32 @@ function toast(msg, isErr = false) {
   t.classList.add('show')
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => t.classList.remove('show'), 3200)
+}
+
+/** 复制文本到剪贴板（navigator.clipboard 不可用时回落 execCommand）。 */
+function copyText(text) {
+  const done = () => toast('已复制')
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done))
+    return
+  }
+  fallbackCopy(text, done)
+}
+
+function fallbackCopy(text, done) {
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.append(ta)
+    ta.select()
+    document.execCommand('copy')
+    ta.remove()
+    done()
+  } catch {
+    toast('复制失败，请手动选中文本', true)
+  }
 }
 
 let progressTimer = null
@@ -216,6 +244,7 @@ async function render() {
   if (route === 'users' && state.me.role === 'admin') await renderUsers(view)
   else if (route === 'playground') await renderPlayground(view)
   else if (route === 'system' && state.me.role === 'admin') await renderSystem(view)
+  else if (route === 'logs' && state.me.role === 'admin') await renderLogs(view)
   else if (route === 'me') await renderMe(view)
   else await renderOverview(view)
 }
@@ -343,6 +372,9 @@ function renderNav() {
     items.push(['users', '用户管理', 'users'])
     // 数据文件自检是排障工具，不是日常操作——从总览页搬出来，admin 专属独立页。
     items.push(['system', '系统', 'cpu'])
+    // 日志页：上游故障判据（如 countryBlockReason）只写进 stdout，用户以往
+    // 只能看到一串 503 却不知为何。这里让完整字段在页面上可读、可筛选、可展开。
+    items.push(['logs', '日志', 'terminal'])
   }
   items.push(['me', '我的', 'user'])
   const route = (location.hash || '#overview').slice(1) || 'overview'
@@ -421,6 +453,190 @@ async function renderOverview(view) {
    "哪些是派生数据（删了自动重建）、哪些是真源（删了就丢用户/丢会话句柄）"
    讲清楚。
    ================================================================ */
+/* ================================================================
+   LOGS — 进程内日志缓冲（admin 独立页）
+   起因是真实排障代价：上游把故障判据（countryBlockReason / banned /
+   rate_limited …）只写进 stdout，用户在容器里看不到，也不该被要求 docker
+   logs —— 于是前端只显示一串 503，用户只能猜。这里把缓冲里的**完整字段**
+   摊开：可按级别过滤、可按关键词搜、可展开整条 JSON、可复制。
+   ================================================================ */
+
+/** 日志页的视图状态（切走再回来保持筛选条件）。 */
+const logsView = {
+  level: 'all',
+  q: '',
+  auto: false,
+  expanded: new Set(),
+  timer: null,
+  lines: [],
+}
+
+function logsLevelTone(level) {
+  if (level === 'error') return 'err'
+  if (level === 'warn') return 'warn'
+  return ''
+}
+
+/** 一条日志：默认只给 ts/level/msg，点开才给完整字段（避免一眼全是噪音）。 */
+function buildLogRow(line, idx) {
+  const key = (line.ts || '') + '|' + idx
+  const open = logsView.expanded.has(key)
+  const ts = (line.ts || '').replace('T', ' ').replace('Z', '')
+  const extra = { ...line }
+  delete extra.ts
+  delete extra.level
+  delete extra.msg
+  const hasExtra = Object.keys(extra).length > 0
+
+  const row = el('div', { class: 'log-row' + (open ? ' open' : '') }, [
+    el('button', {
+      class: 'log-head',
+      onclick: () => {
+        if (open) logsView.expanded.delete(key)
+        else logsView.expanded.add(key)
+        renderLogsList()
+      },
+    }, [
+      el('span', { class: 'log-ts' }, ts),
+      el('span', { class: 'badge ' + logsLevelTone(line.level) }, line.level),
+      el('span', { class: 'log-msg' }, line.msg || ''),
+      hasExtra ? el('span', { class: 'muted', style: 'font-size:11px' }, open ? '▾' : '▸') : null,
+    ].filter(Boolean)),
+    open && hasExtra
+      ? el('div', { class: 'log-body' }, [
+          el('div', { class: 'row', style: 'justify-content:flex-end;margin-bottom:6px' }, [
+            el('button', {
+              class: 'muted',
+              style: 'font-size:11px',
+              onclick: (e) => {
+                e.stopPropagation()
+                copyText(JSON.stringify(line, null, 2))
+              },
+            }, [icon('copy', 11), '复制 JSON']),
+          ]),
+          el('pre', { class: 'log-pre' }, JSON.stringify(extra, null, 2)),
+        ])
+      : null,
+  ].filter(Boolean))
+  return row
+}
+
+function renderLogsList() {
+  const host = document.querySelector('#logs-list')
+  if (!host) return
+  const lines = logsView.lines
+  if (!lines.length) {
+    host.innerHTML = ''
+    host.append(el('div', { class: 'muted', style: 'padding:14px' },
+      '没有匹配的日志。缓冲只保留最近若干条（进程内，重启即清空）。'))
+    return
+  }
+  host.innerHTML = ''
+  // 新的在前：排障时关心的是刚刚发生了什么
+  for (let i = lines.length - 1; i >= 0; i--) {
+    host.append(buildLogRow(lines[i], i))
+  }
+}
+
+async function refreshLogs() {
+  const q = new URLSearchParams({ level: logsView.level, limit: '300' })
+  if (logsView.q.trim()) q.set('q', logsView.q.trim())
+  let data = null
+  try { data = await api('/api/logs?' + q.toString()) } catch { return }
+  logsView.lines = data?.lines || []
+  renderLogsList()
+  const meta = document.querySelector('#logs-meta')
+  if (meta) {
+    meta.textContent = `${logsView.lines.length} 条 · 服务端时间 ${(data?.serverTime || '').replace('T', ' ').replace('Z', '')}`
+  }
+}
+
+function stopLogsAuto() {
+  if (logsView.timer) {
+    clearInterval(logsView.timer)
+    logsView.timer = null
+  }
+}
+
+async function renderLogs(view) {
+  view.innerHTML = ''
+  view.append(el('h2', { style: 'margin:0 0 12px' }, '日志'))
+
+  const card = el('div', { class: 'card' })
+  card.append(el('div', { class: 'row spread' }, [
+    el('div', {}, [
+      el('h3', { style: 'margin:0 0 2px' }, '进程内日志'),
+      el('span', { class: 'muted', id: 'logs-meta' }, '加载中…'),
+    ]),
+    el('div', { class: 'row' }, [
+      el('button', {
+        class: logsView.auto ? '' : 'muted',
+        id: 'logs-auto-btn',
+        onclick: () => {
+          logsView.auto = !logsView.auto
+          const btn = document.querySelector('#logs-auto-btn')
+          if (btn) {
+            btn.className = logsView.auto ? '' : 'muted'
+            btn.textContent = logsView.auto ? '停止自动刷新' : '自动刷新'
+          }
+          if (logsView.auto) {
+            stopLogsAuto()
+            logsView.timer = setInterval(() => refreshLogs(), 3000)
+          } else {
+            stopLogsAuto()
+          }
+        },
+      }, [icon('refresh', 13), logsView.auto ? '停止自动刷新' : '自动刷新']),
+      el('button', { class: 'muted', onclick: () => refreshLogs() }, [icon('refresh', 13), '刷新']),
+    ]),
+  ]))
+
+  // 筛选条：级别 + 关键词（关键词直接命中完整 JSON，含上游原始字段）
+  const levelSel = el('select', {
+    id: 'logs-level',
+    onchange: (e) => { logsView.level = e.target.value; refreshLogs() },
+  }, [
+    ['all', '全部级别'],
+    ['info', 'info 及以上'],
+    ['warn', 'warn 及以上'],
+    ['error', '仅 error'],
+  ].map(([v, label]) => el('option', { value: v, selected: logsView.level === v ? 'selected' : null }, label)))
+
+  const searchInput = el('input', {
+    id: 'logs-q',
+    placeholder: '搜索（命中完整字段，如 country / banned / 503 / 邮箱）',
+    value: logsView.q,
+    oninput: (e) => { logsView.q = e.target.value },
+    onkeydown: (e) => { if (e.key === 'Enter') refreshLogs() },
+  })
+
+  card.append(el('div', { class: 'row', style: 'margin-top:10px;gap:8px;flex-wrap:wrap' }, [
+    levelSel,
+    searchInput,
+    el('button', { onclick: () => refreshLogs() }, [icon('search', 13), '搜索']),
+    el('button', {
+      class: 'muted',
+      onclick: () => {
+        logsView.q = ''
+        logsView.level = 'all'
+        logsView.expanded.clear()
+        const inp = document.querySelector('#logs-q')
+        if (inp) inp.value = ''
+        const sel = document.querySelector('#logs-level')
+        if (sel) sel.value = 'all'
+        refreshLogs()
+      },
+    }, '清除筛选'),
+  ]))
+
+  card.append(el('div', { class: 'muted', style: 'margin-top:8px;font-size:12px' },
+    '点任意一行展开完整字段（含上游原始判据），可一键复制。缓冲为进程内有界环形队列，重启即清空。'))
+
+  card.append(el('div', { id: 'logs-list', class: 'logs-list' }))
+  view.append(card)
+  await refreshLogs()
+}
+
 async function renderSystem(view) {
   view.innerHTML = ''
   view.append(el('h2', { style: 'margin:0 0 12px' }, '系统'))

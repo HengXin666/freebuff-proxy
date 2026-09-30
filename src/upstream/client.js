@@ -33,6 +33,10 @@ export class UpstreamError extends Error {
     this.code = extra.code
     this.body = extra.body
     this.retryAfterMs = extra.retryAfterMs
+    // 出口级故障（地理封锁）：调度层据此**立即停止换号** —— 它是出口属性，
+    // 换号只会把每个账号的额度依次买断却拿不到答案。
+    // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+    this.fatal = extra.fatal === true
   }
 }
 
@@ -417,6 +421,36 @@ export function createUpstreamClient(config, token, opts = {}) {
         (body.status === 'country_blocked' || body.status === 'banned')
       ) {
         return body
+      }
+      // 地理封锁夹在 200 回执里：会话照样建立（status: "active"、额度照扣），
+      // 但随后 chat 一律 503 且不带业务体。不归一化就只能归成 http_503，
+      // 表现为"所有账号轮流冷却换号"，而每次 admit 都买断一小时 Freebucks ——
+      // 烧真钱却永远拿不到答案。上游已经用明文给出了原因，读它即可。
+      // 判据与"为什么不硬失败/不归 banned"见
+      // .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+      if (body && body.countryBlockReason) {
+        logger.warn('upstream reported country block on session receipt', {
+          countryCode: body.countryCode ?? null,
+          reason: body.countryBlockReason,
+          instanceId: body.instanceId ?? null,
+        })
+        // ⚠️ 必须**保留原回执的会话字段**（instanceId / expiresAt / model …）：
+        // 上游是照常建立会话并照常扣费的（一次 admit = 买断一整小时），
+        // 只是随后 chat 会被拒。若这里把整个 body 换掉，那条已付费的会话
+        // 就再也无法寻址：DELETE 不掉（腾不出上游槽位）也追不回钱。
+        // 所以是"叠加封锁标记"而不是"替换回执" —— 窗口照旧存在。
+        // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+        return {
+          ...body,
+          status: 'country_blocked',
+          countryCode: body.countryCode ?? null,
+          countryBlockReason: body.countryBlockReason,
+          message:
+            'Upstream blocked this egress country (' +
+            (body.countryCode ?? 'unknown') +
+            '): ' +
+            body.countryBlockReason,
+        }
       }
       if (
         res.status === 409 &&

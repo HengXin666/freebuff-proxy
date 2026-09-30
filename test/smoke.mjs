@@ -248,6 +248,23 @@ globalThis.fetch = async (url, init = {}) => {
         429,
       )
     }
+    // 地理封锁：上游把它夹在 200 回执里（status 仍是 active、额度照扣），
+    // 随后 chat 一律 503。改前这个字段从未被读取 → 归成 http_503 → 冷却换号
+    // → 每个账号轮流买断一小时 Freebucks 却拿不到答案。
+    // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+    if (mockMode === 'country_block') {
+      return jsonRes({
+        status: 'active',
+        instanceId: `inst-${sessionPosts}`,
+        model,
+        admittedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + sessionExpiryMs).toISOString(),
+        remainingMs: sessionExpiryMs,
+        accessTier: 'limited',
+        countryCode: 'JP',
+        countryBlockReason: 'country_not_allowed',
+      })
+    }
     const rateLimit = {
       model,
       entitlementBreakdown: { base: 6, referral: 0, streak: 0 },
@@ -1666,6 +1683,96 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
+
+// 地理封锁夹在 200 回执里（status 仍 active + countryBlockReason）：
+// 必须报出明确原因（country_blocked + countryCode），且**绝不换号** ——
+// 它是出口属性，所有账号共享同一出口，换号只会把每个账号的 Freebucks
+// 依次买断一遍却拿不到答案。改前该字段从未被读取 → 归成 http_503 → 冷却换号。
+// 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+{
+  const cbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-country-'))
+  saveAccountUser(cbDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
+  saveAccountUser(cbDir, { id: 'b', email: 'b@example.com', authToken: 'token-b' })
+  const cbConfig = loadConfig()
+  cbConfig.server.host = '127.0.0.1'
+  cbConfig.server.port = 0
+  cbConfig.server.apiKeys = ['sk-test']
+  cbConfig.upstream.credentialsDir = cbDir
+  cbConfig.session.pollIntervalSec = 3600
+  const cbRuntimes = new AccountRuntimes(cbConfig)
+  const cbServer = await startServer({
+    config: cbConfig,
+    runtimes: cbRuntimes,
+    ...(() => {
+      const rt = cbRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const cbPort = cbServer.address().port
+  mockMode = 'country_block'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  const res = await fetch(`http://127.0.0.1:${cbPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  const cbBody = await res.json()
+  assert.equal(res.status, 403, JSON.stringify(cbBody))
+  assert.equal(
+    cbBody.error.code,
+    'country_blocked',
+    '地理封锁必须报出 country_blocked 而不是 http_503: ' + JSON.stringify(cbBody),
+  )
+  assert.ok(
+    JSON.stringify(cbBody).includes('JP'),
+    '必须把被拒的国家带上，否则用户无从知道该换哪个出口: ' + JSON.stringify(cbBody),
+  )
+  // 不换号：只应有一次 admit（换了号就会有第二次）
+  assert.equal(
+    sessionPosts,
+    1,
+    'country_blocked 是出口属性，换号只会白烧每个账号的额度; admit 次数=' + sessionPosts,
+  )
+  // 已付费的窗口必须还在：上游照常建会话照常扣费（一次 admit = 一整小时），
+  // 所以句柄必须可寻址 —— 否则 DELETE 不掉、退款也追不回，等于白扔一小时。
+  const cbAccounts = cbRuntimes.list()
+  const cbA = cbAccounts.find((x) => x.email === 'a@example.com')
+  assert.equal(
+    cbA?.session?.status,
+    'active',
+    '封锁不得抹掉已付费的会话窗口，否则那一小时白买: ' + JSON.stringify(cbA?.session),
+  )
+  // 控制台快照不暴露 instanceId（有意），真实状态要看 runtime 的 sessions
+  const cbRt = cbRuntimes.get('a')
+  const cbSnap = cbRt.sessions.getSnapshot()
+  assert.ok(
+    cbSnap?.instanceId,
+    '会话句柄（instanceId）必须保留，否则无法 DELETE 腾槽位/追退款: ' + JSON.stringify(cbSnap),
+  )
+  assert.equal(cbSnap?.status, 'active', '那条已付费一小时的会话必须仍然活着')
+  assert.ok(
+    cbRt.sessions.hasLiveSlot(),
+    '封锁不等于会话没了：槽位仍在，换出口后即可复用',
+  )
+  await cbRuntimes.shutdown()
+  cbServer.close()
+  fs.rmSync(cbDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
 
 // account_suspended（403，error 为字符串）必须归一为 banned：
 // 冷却该账号并**换号重试**，绝不能当客户端 4xx 把错误甩给用户。

@@ -16,7 +16,7 @@ import {
   readJsonFile,
   writeJsonFile,
 } from '../auth-store.js'
-import { logger } from '../util/log.js'
+import { logger, readLogBuffer } from '../util/log.js'
 import { requestSlotStats } from '../proxy.js'
 import { dataFileAudit } from '../util/json-store.js'
 
@@ -245,6 +245,36 @@ export function createWebApi(deps) {
           : '已断开全部 session，下次请求将自动重建；正在传输的连接可能被中断',
         accounts,
         failed,
+      })
+      return true
+    }
+
+    // 控制台「日志」页：直接读进程内环形缓冲，让用户不必 docker logs 就能
+    // 看到完整字段（上游判据如 countryBlockReason 只在这里才看得到）。
+    if (method === 'GET' && route === '/api/logs') {
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      const u = new URL(req.url || '/', 'http://localhost')
+      const q = u.searchParams
+      const level = q.get('level') || 'all'
+      const search = q.get('q') || ''
+      const limitRaw = Number(q.get('limit'))
+      const sinceTs = q.get('since') || null
+      const lines = readLogBuffer({
+        level,
+        q: search,
+        limit: Number.isFinite(limitRaw) ? limitRaw : 300,
+        sinceTs,
+      })
+      sendJson(res, 200, {
+        ok: true,
+        lines,
+        // 让前端知道缓冲里到底有多少、是否被裁掉（避免"以为看全了"）。
+        total: lines.length,
+        truncated: false,
+        serverTime: new Date().toISOString(),
       })
       return true
     }

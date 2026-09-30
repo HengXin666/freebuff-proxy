@@ -1115,7 +1115,11 @@ export function createProxyHandler(ctx) {
               err.code === 'scheduling_timeout' ||
               // 本次请求的新会话预算已用尽：同样在整个请求内不会恢复
               // （重新选号也拿不到预算），重试只会白转一轮，直接返回可操作的错误码。
-              err.code === 'session_budget_exhausted'
+              err.code === 'session_budget_exhausted' ||
+              // 出口级故障（地理封锁）：换号无用（所有账号共享同一出口），
+              // 重试只会再买断一次一整小时的 Freebucks。立即收场。
+              // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+              err.fatal === true
             if (isTerminal) {
               if (err.code !== 'client_gone') mapAndSendError(res, err)
               return
@@ -1835,10 +1839,12 @@ function shouldSwitchAccountOnError(status, code) {
   if (status >= 500) return true
   if (status === 429) return true
   const codeStr = String(code)
-  if (
-    status === 403 &&
-    ['banned', 'country_blocked', 'ip_capped'].includes(codeStr)
-  ) {
+  // country_blocked 是**出口**属性不是账号属性：所有账号共享同一个出口，
+  // 换号只会把每个账号的额度依次买断一遍（一次 admit = 一整小时 Freebucks），
+  // 却永远拿不到答案。它必须直接失败并把原因告知用户 —— 出路是换代理，不是换号。
+  // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+  if (codeStr === 'country_blocked') return false
+  if (status === 403 && ['banned', 'ip_capped'].includes(codeStr)) {
     return true
   }
   // startAgentRun 失败：上游拒绝启动 run（模型/agent 不可用、该账号被限制等）。

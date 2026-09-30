@@ -644,3 +644,77 @@ nav button.active {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ---------- logs (控制台「日志」页) ---------- */
+.logs-list {
+  margin-top: 10px;
+  max-height: 62vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg2);
+}
+.log-row {
+  border-bottom: 1px solid var(--border);
+}
+.log-row:last-child { border-bottom: none; }
+.log-row.open { background: var(--bg3); }
+.log-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.log-head:hover { background: var(--bg4); }
+.log-ts {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.log-msg {
+  flex: 1 1 auto;
+  word-break: break-word;
+  color: var(--text2);
+}
+.log-row.open .log-msg { color: var(--text); }
+.log-body { padding: 0 12px 12px; }
+.log-pre {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text2);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.logs-list select,
+.logs-list input,
+#logs-q {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12.5px;
+}
+#logs-q { flex: 1 1 240px; min-width: 180px; }
+#logs-q:focus, .logs-list select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
