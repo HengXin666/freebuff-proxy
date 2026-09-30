@@ -141,9 +141,25 @@ export function officialSessionHeaders(method, token, opts = {}) {
     // cli/src/utils/client-environment.ts）。缺它就不像官方客户端。
     [HEADER_CLIENT_ENV]: clientEnvironment(),
   }
+  // multi-session 协议：官方只在 instanceId 是 CLI claim（`cli:` 前缀）时发
+  // 这一整套头（cli/src/utils/freebuff-session-api.ts:186-200）。
+  // 服务端据此把请求认成 CLI 而不是 Desktop 标签。
+  if (isCliClaim(opts.instanceId)) {
+    headers[HEADER_MULTI_SESSION] = '1'
+    headers[HEADER_PURCHASE_CONTINUITY] = '1'
+    if (method === 'GET') {
+      headers[HEADER_HEARTBEAT] = '1'
+      if (!opts.compact) headers[HEADER_INCLUDE_UNUSED_RATE_LIMITS] = '1'
+    }
+  }
   const tz = localTimeZone()
   if (tz) headers[HEADER_TIMEZONE] = tz
-  if ((method === 'GET' || method === 'DELETE') && opts.instanceId) {
+  // 官方原文（cli/src/utils/freebuff-session-api.ts:201）：
+  //   if ((multiSession || method !== 'POST') && opts.instanceId)
+  //      headers[instance-id] = opts.instanceId
+  // 即：GET/DELETE 总是带；POST **只在 multiSession（cli claim）时**带 ——
+  // 那时它是客户端自己声明的 claim，服务端据此签发同一条（实测原样保留）。
+  if ((isCliClaim(opts.instanceId) || method !== 'POST') && opts.instanceId) {
     headers[HEADER_INSTANCE_ID] = opts.instanceId
   }
   if (method === 'GET' && opts.compact) {
@@ -215,6 +231,63 @@ export function officialApiKeyHeaders(token) {
  * （官方明确约束：never a raw environment value, path, or process name）。
  */
 export const HEADER_CLIENT_ENV = 'x-freebuff-env'
+
+/**
+ * 官方 CLI 的会话 claim 前缀（`cli:`）。
+ *
+ * 官方**客户端自己生成** instanceId：
+ *   cli/src/utils/freebuff-session-identity.ts
+ *     const CLI_MULTI_SESSION_PREFIX = FREEBUFF_CLI_CLAIM_PREFIX   // 'cli:'
+ *     newFreebuffCliInstanceId() => `cli:${randomUUID()}`
+ *   cli/src/hooks/use-freebuff-session.ts:576
+ *     let claimId = relaunch?.instanceId ?? newFreebuffCliInstanceId()
+ *
+ * 常量真源：common/src/constants/freebuff-desktop-sessions.ts
+ *   export const FREEBUFF_CLI_CLAIM_PREFIX = 'cli:'
+ *   "The server reads it to tell the CLI's claims from Desktop tabs"
+ *
+ * ⚠️ **实测确认**（2026-09-30，真账号）：POST admission 时自带
+ * `x-freebuff-instance-id: cli:<uuid>`，服务端**接受并原样保留**
+ * （返回的 instanceId 与传入的完全一致，带前缀）。
+ */
+export const CLI_CLAIM_PREFIX = 'cli:'
+
+/** 官方 multi-session 协议头（instanceId 带 cli: 前缀时才发）。 */
+export const HEADER_MULTI_SESSION = 'x-freebuff-multi-session'
+export const HEADER_PURCHASE_CONTINUITY = 'x-freebuff-purchase-continuity'
+export const HEADER_HEARTBEAT = 'x-freebuff-heartbeat'
+export const HEADER_INCLUDE_UNUSED_RATE_LIMITS =
+  'x-freebuff-include-unused-rate-limits'
+
+/**
+ * 生成一个官方形态的 CLI 会话 claim（`cli:<uuid>`）。
+ * @returns {string}
+ */
+export function newCliClaimId() {
+  const uuid =
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : fallbackUuid()
+  return CLI_CLAIM_PREFIX + uuid
+}
+
+function fallbackUuid() {
+  // crypto.randomUUID 不可用时的兜底（形态仍须是 uuidv4）
+  const hex = '0123456789abcdef'
+  let out = ''
+  for (let i = 0; i < 36; i++) {
+    if (i === 8 || i === 13 || i === 18 || i === 23) out += '-'
+    else if (i === 14) out += '4'
+    else if (i === 19) out += hex[(Math.random() * 4) | 8]
+    else out += hex[(Math.random() * 16) | 0]
+  }
+  return out
+}
+
+/** 判断 instanceId 是否是官方 CLI 形态的 claim（带 `cli:` 前缀）。 */
+export function isCliClaim(instanceId) {
+  return typeof instanceId === 'string' && instanceId.startsWith(CLI_CLAIM_PREFIX)
+}
 
 /** `codebuff_metadata` 里承载同一份描述符的键。 */
 export const META_CLIENT_ENV = 'freebuff_client_env'

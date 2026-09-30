@@ -1,5 +1,6 @@
 import { logger } from './util/log.js'
 import { UpstreamError, isTerminalCountryBlock } from './upstream/client.js'
+import { newCliClaimId } from './upstream/official-fingerprint.js'
 import { isFreeModel } from './model.js'
 
 /** 账号级故障状态码（回执反映账号处境，不反映某条会话的生死）。 */
@@ -725,8 +726,16 @@ export class SessionManager {
       await this._releaseUnlocked()
     }
 
-    logger.info('admitting freebuff session', { model })
-    const body = await this.upstream.freebuffSession('POST', { model })
+    // 官方 CLI **自己生成** claim（`cli:<uuid>`）并在 admission 时带给服务端，
+    // 而不是等服务端签发一个裸 uuid —— 服务端据此认出这是 CLI 的 claim
+    // （"The server reads it to tell the CLI's claims from Desktop tabs"）。
+    // 实测：传入 cli: 前缀后服务端**原样保留**在返回的 instanceId 里。
+    const claimId = newCliClaimId()
+    logger.info('admitting freebuff session', { model, claimId })
+    const body = await this.upstream.freebuffSession('POST', {
+      model,
+      instanceId: claimId,
+    })
 
     // 真封锁（terminal）：上游**照常建立会话并照常扣费**（一次 admit = 买断
     // 一整小时），只是随后 chat 会被拒。所以窗口是真的存在且已付款 —— 必须先

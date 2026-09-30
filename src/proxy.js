@@ -29,6 +29,7 @@ import {
   officialChatHeaders,
   clientEnvironment,
   META_CLIENT_ENV,
+  isCliClaim,
 } from './upstream/official-fingerprint.js'
 import {
   ENFORCED_FOREIGN_SIGNALS,
@@ -1327,6 +1328,13 @@ export function createProxyHandler(ctx) {
       // 头同一份字符串）。缺失 = 请求形态不像官方 CLI —— 上游会据此判定
       // 第三方客户端。常量与格式见 src/upstream/official-fingerprint.js。
       [META_CLIENT_ENV]: clientEnvironment(),
+      // 官方在 CLI claim（`cli:` 前缀）时额外声明这两项：
+      //   cli/src/utils/freebuff-session-identity.ts freebuffSessionMetadata()
+      //     { freebuff_instance_id, freebuff_multi_session: '1', surface: 'cli' }
+      // `surface: 'cli'` 就是服务端用来区分 native CLI 与 Desktop 标签的字段。
+      ...(isCliClaim(instanceId)
+        ? { freebuff_multi_session: '1', surface: 'cli' }
+        : {}),
       ...(existingMeta.trace_session_id
         ? {}
         : { trace_session_id: randomUUID() }),

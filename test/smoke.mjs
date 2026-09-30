@@ -1004,6 +1004,15 @@ function chat(body, headers = {}) {
     ['in', 'out', 'tp', 'term', 'ct', 'sz', 'ci', 'ssh', 'l', 'p', 'g', 'osc'],
     '描述符字段与顺序必须与官方一致, got ' + JSON.stringify(envKeys),
   )
+  // 官方 CLI 自生成 `cli:<uuid>` claim：服务端据此认出 CLI（而非 Desktop 标签）。
+  // 实测确认服务端接受并原样保留该前缀。
+  const admitInstance = admitCall.headers['x-freebuff-instance-id']
+  assert.ok(
+    /^cli:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(admitInstance || ''),
+    'admission 必须自带 cli: 前缀的 claim（官方 newFreebuffCliInstanceId）, got ' + admitInstance,
+  )
+  assert.equal(admitCall.headers['x-freebuff-multi-session'], '1', 'cli claim 必须带 multi-session 头')
+  assert.equal(admitCall.headers['x-freebuff-purchase-continuity'], '1', 'cli claim 必须带 purchase-continuity 头')
   // chat 的 codebuff_metadata 里也要有同一份描述符（官方两处都放）
   const chatMetaRaw = chatCall.body && JSON.parse(chatCall.body).codebuff_metadata
   assert.equal(
