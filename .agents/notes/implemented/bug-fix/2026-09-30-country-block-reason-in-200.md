@@ -66,7 +66,18 @@ Status: implemented
 
 ## Consequences
 
-- 会话回执只要带 `countryBlockReason`，就归一为 `country_blocked` 并**立即终止选号**，
+- ⚠️ **2026-09-30 修订：只有真封锁才归一。** 初版把所有 `countryBlockReason`
+  一律判成封锁，这是错的。官方源码
+  （`common/src/constants/freebuff-countries.ts`）写明：
+  "the union of the three full-access groups is the full-access allowlist;
+  **everywhere else, and any VPN, is limited access**"。
+  即 `anonymous_network` / `recent_limited_country` 落的是
+  `accessTier: 'limited'` —— **可用档位**（模型集合变小、Freebucks 25→20），
+  不是封锁。判成封锁 = 把可用账号判死并白烧额度。
+  现由 `isTerminalCountryBlock()` 区分：只有 `country_not_allowed` /
+  `anonymized_or_unknown_country` / `missing_client_ip` /
+  `unresolved_client_ip` / `ip_privacy_lookup_failed` 走终止路径。
+- 会话回执带**真封锁**时归一为 `country_blocked` 并**立即终止选号**，
   不再冷却账号、不再试下一个账号：出口级故障换号无意义，只会白烧额度。
 - **已付费的会话窗口必须保留**：上游是照常建会话、照常扣费的（一次 admit =
   买断一整小时），所以回执里带着 `instanceId` 时就先落盘再抛错。归一化只

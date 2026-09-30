@@ -265,6 +265,23 @@ globalThis.fetch = async (url, init = {}) => {
         countryBlockReason: 'country_not_allowed',
       })
     }
+    // limited 档位（VPN/代理/非 allowlist 国家）：**可用**，不是封锁。
+    // 官方源码：common/src/constants/freebuff-countries.ts —— "everywhere
+    // else, and any VPN, is limited access"。把它判成封锁会把可用账号判死。
+    if (mockMode === 'limited_tier') {
+      return jsonRes({
+        status: 'active',
+        instanceId: `inst-${sessionPosts}`,
+        model,
+        admittedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + sessionExpiryMs).toISOString(),
+        remainingMs: sessionExpiryMs,
+        accessTier: 'limited',
+        countryCode: 'JP',
+        countryBlockReason: 'anonymous_network',
+        ipPrivacySignals: ['vpn', 'hosting', 'anonymous'],
+      })
+    }
     const rateLimit = {
       model,
       entitlementBreakdown: { base: 6, referral: 0, streak: 0 },
@@ -971,6 +988,29 @@ function chat(body, headers = {}) {
   assert.equal(admitCall.headers['x-freebuff-wallet-spend-limit'], '0')
   assert.equal(admitCall.headers['x-freebuff-first-tab-discount'], '0')
   assert.ok(admitCall.headers['x-fb-timezone'], '准入请求应带本机时区')
+  // 客户端环境描述符（x-freebuff-env）：官方 CLI 在 session 请求上必带的
+  // 终端环境摘要。上游据此判断"是不是真 CLI"——缺它就不像官方客户端。
+  // 格式对齐官方 cli/src/utils/client-environment.ts formatClientEnvironment()。
+  const envDesc = admitCall.headers['x-freebuff-env']
+  assert.ok(envDesc, '准入请求必须带 x-freebuff-env（官方客户端环境描述符）')
+  assert.match(
+    envDesc,
+    /^v1;(in|out|tp|term|ct|sz|ci|ssh|l|p|g|osc)=/,
+    '描述符必须是 v1;key=value 形状, got ' + envDesc,
+  )
+  const envKeys = envDesc.split(';').slice(1).map((p) => p.split('=')[0])
+  assert.deepEqual(
+    envKeys,
+    ['in', 'out', 'tp', 'term', 'ct', 'sz', 'ci', 'ssh', 'l', 'p', 'g', 'osc'],
+    '描述符字段与顺序必须与官方一致, got ' + JSON.stringify(envKeys),
+  )
+  // chat 的 codebuff_metadata 里也要有同一份描述符（官方两处都放）
+  const chatMetaRaw = chatCall.body && JSON.parse(chatCall.body).codebuff_metadata
+  assert.equal(
+    chatMetaRaw?.freebuff_client_env,
+    envDesc,
+    'chat 的 codebuff_metadata.freebuff_client_env 必须与 x-freebuff-env 同一份',
+  )
   await fpRuntimes.shutdown()
   fpServer.close()
   fs.rmSync(fpDir, { recursive: true, force: true })
@@ -1683,6 +1723,64 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
+
+// limited 档位（accessTier: limited + anonymous_network）**不是封锁**：
+// 官方源码写明 "everywhere else, and any VPN, is limited access" —— 它只是
+// 模型集合变小、Freebucks 25→20，账号可用。判成封锁 = 把可用账号判死并白烧额度。
+{
+  const ltDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-limited-'))
+  saveAccountUser(ltDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
+  const ltConfig = loadConfig()
+  ltConfig.server.host = '127.0.0.1'
+  ltConfig.server.port = 0
+  ltConfig.server.apiKeys = ['sk-test']
+  ltConfig.upstream.credentialsDir = ltDir
+  ltConfig.session.pollIntervalSec = 3600
+  const ltRuntimes = new AccountRuntimes(ltConfig)
+  const ltServer = await startServer({
+    config: ltConfig,
+    runtimes: ltRuntimes,
+    ...(() => {
+      const rt = ltRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const ltPort = ltServer.address().port
+  mockMode = 'limited_tier'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  const res = await fetch(`http://127.0.0.1:${ltPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  const ltBody = await res.json()
+  assert.equal(res.status, 200, 'limited 档位必须可用，不是封锁: ' + JSON.stringify(ltBody))
+  const ltSnap = ltRuntimes.get('a').sessions.getSnapshot()
+  assert.equal(ltSnap?.status, 'active', 'limited 档位下会话必须正常建立')
+  assert.equal(
+    ltRuntimes.list().find((x) => x.email === 'a@example.com')?.available,
+    true,
+    'limited 档位的账号不能被判成不可用',
+  )
+  await ltRuntimes.shutdown()
+  ltServer.close()
+  fs.rmSync(ltDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
 
 // 地理封锁夹在 200 回执里（status 仍 active + countryBlockReason）：
 // 必须报出明确原因（country_blocked + countryCode），且**绝不换号** ——

@@ -1,5 +1,5 @@
 import { logger } from './util/log.js'
-import { UpstreamError } from './upstream/client.js'
+import { UpstreamError, isTerminalCountryBlock } from './upstream/client.js'
 import { isFreeModel } from './model.js'
 
 /** 账号级故障状态码（回执反映账号处境，不反映某条会话的生死）。 */
@@ -728,12 +728,19 @@ export class SessionManager {
     logger.info('admitting freebuff session', { model })
     const body = await this.upstream.freebuffSession('POST', { model })
 
-    // 地理封锁：上游**照常建立会话并照常扣费**（一次 admit = 买断一整小时），
-    // 只是随后 chat 会被拒。所以窗口是真的存在且已付款 —— 必须先落盘
-    // （句柄可寻址：之后能 DELETE 腾槽位、能追退款），再把封锁抛给上层。
+    // 真封锁（terminal）：上游**照常建立会话并照常扣费**（一次 admit = 买断
+    // 一整小时），只是随后 chat 会被拒。所以窗口是真的存在且已付款 —— 必须先
+    // 落盘（句柄可寻址：之后能 DELETE 腾槽位、能追退款），再把封锁抛给上层。
     // 直接抛而不保存 = 把刚买的一小时变成无法寻址的孤儿，钱白扔。
+    //
+    // ⚠️ 只对**真封锁**生效。anonymous_network / recent_limited_country 是
+    // limited 档位（可用），必须走下面正常的 active 分支，否则把可用账号判死。
     // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
-    if (body?.countryBlockReason && body.instanceId) {
+    if (
+      body?.countryBlockReason &&
+      isTerminalCountryBlock(body.countryBlockReason) &&
+      body.instanceId
+    ) {
       this.admitCount += 1
       this._apply({ ...body, status: 'active' })
       this._armPoll()

@@ -428,8 +428,16 @@ export function createUpstreamClient(config, token, opts = {}) {
       // 烧真钱却永远拿不到答案。上游已经用明文给出了原因，读它即可。
       // 判据与"为什么不硬失败/不归 banned"见
       // .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
-      if (body && body.countryBlockReason) {
-        logger.warn('upstream reported country block on session receipt', {
+      // 只把**真封锁**归一；limited 档位必须原样放行。
+      // 官方源码（common/src/constants/freebuff-countries.ts）写明：
+      //   "the union of the three full-access groups is the full-access
+      //    allowlist; everywhere else, and any VPN, is limited access."
+      // 即 JP + VPN 落在 accessTier: limited —— 那是**可用档位**（模型集合变小、
+      // Freebucks 25→20），不是封锁。真正的 terminal 是 country_blocked 状态本身。
+      // 把 anonymous_network 也判成封锁 = 把可用账号判死，且白烧额度。
+      // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+      if (body && isTerminalCountryBlock(body.countryBlockReason)) {
+        logger.warn('upstream reported terminal country block', {
           countryCode: body.countryCode ?? null,
           reason: body.countryBlockReason,
           instanceId: body.instanceId ?? null,
@@ -452,6 +460,18 @@ export function createUpstreamClient(config, token, opts = {}) {
             body.countryBlockReason,
         }
       }
+      // limited 档位（VPN/代理/非 allowlist 国家）：**可用**，但模型集合变小、
+      // Freebucks 从 25 降到 20。记一条 warn 让控制台「日志」页能看到，
+      // 绝不阻断 —— 判成封锁会把可用账号判死并白烧额度。
+      if (body && body.countryBlockReason && !isTerminalCountryBlock(body.countryBlockReason)) {
+        logger.warn('session admitted on limited tier (not blocked)', {
+          countryCode: body.countryCode ?? null,
+          reason: body.countryBlockReason,
+          ipPrivacySignals: body.ipPrivacySignals ?? null,
+          accessTier: body.accessTier ?? null,
+        })
+      }
+
       if (
         res.status === 409 &&
         body &&
@@ -629,6 +649,31 @@ export async function safeText(res, timeoutMs = 10_000) {
   } catch {
     return ''
   }
+}
+
+/**
+ * 哪些 countryBlockReason 是**真正的封锁**（terminal，账号在此出口下不可用）。
+ *
+ * 官方枚举（common/src/types/freebuff-session.ts FreebuffCountryBlockReason）：
+ *   country_not_allowed            → 国家不在 allowlist（terminal）
+ *   anonymized_or_unknown_country → 位置不可信，无法给 free mode（terminal）
+ *   missing_client_ip / unresolved_client_ip / ip_privacy_lookup_failed → 同理
+ *   anonymous_network             → **不是封锁**：只是被判为 VPN/代理，
+ *                                   落进 accessTier: limited（可用，模型集变小）
+ *   recent_limited_country        → **不是封锁**：账号近期从受限地区用过，
+ *                                   限制延续一段时间（可用）
+ *
+ * 判据来源：common/src/constants/freebuff-countries.ts
+ *   "everywhere else, and any VPN, is limited access"
+ */
+export function isTerminalCountryBlock(reason) {
+  return (
+    reason === 'country_not_allowed' ||
+    reason === 'anonymized_or_unknown_country' ||
+    reason === 'missing_client_ip' ||
+    reason === 'unresolved_client_ip' ||
+    reason === 'ip_privacy_lookup_failed'
+  )
 }
 
 const GATE_CODES = new Set([

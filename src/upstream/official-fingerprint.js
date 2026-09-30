@@ -137,6 +137,9 @@ export function officialSessionHeaders(method, token, opts = {}) {
   const headers = {
     Authorization: 'Bearer ' + token,
     [HEADER_FIRST_TAB_DISCOUNT]: opts.firstTabDiscount ? '1' : '0',
+    // 客户端环境描述符：官方在 session 与广告请求上都带（见
+    // cli/src/utils/client-environment.ts）。缺它就不像官方客户端。
+    [HEADER_CLIENT_ENV]: clientEnvironment(),
   }
   const tz = localTimeZone()
   if (tz) headers[HEADER_TIMEZONE] = tz
@@ -192,6 +195,109 @@ export function officialApiKeyHeaders(token) {
     Authorization: 'Bearer ' + token,
     [HEADER_API_KEY]: token,
   }
+}
+
+/**
+ * 官方 CLI 的**客户端环境描述符**（terminal-environment summary）。
+ *
+ * 这是上游判断"这是不是真 CLI"的核心指纹之一：官方把它作为
+ * `x-freebuff-env` 头发在 session / 广告请求上，并把同一份字符串放进
+ * `codebuff_metadata.freebuff_client_env`。缺它 = 请求形态不像官方客户端。
+ *
+ * 取值逐字对齐官方 CLI 源码
+ *   cli/src/utils/client-environment.ts → formatClientEnvironment()
+ * 常量真源
+ *   common/src/constants/freebuff-client-descriptor.ts
+ * 官方注释里的样例：
+ *   v1;in=1;out=1;tp=iterm;term=1;ct=1;sz=120x40;ci=0;ssh=0;l=1;p=shell;g=terminal;osc=1
+ *
+ * 只放存在性标志、尺寸与固定桶名 —— **绝不**放路径、进程名、环境变量原文
+ * （官方明确约束：never a raw environment value, path, or process name）。
+ */
+export const HEADER_CLIENT_ENV = 'x-freebuff-env'
+
+/** `codebuff_metadata` 里承载同一份描述符的键。 */
+export const META_CLIENT_ENV = 'freebuff_client_env'
+
+/** 终端程序桶（官方 TERMINAL_PROGRAMS 映射）。 */
+const TERMINAL_PROGRAMS = {
+  apple_terminal: 'apple_terminal',
+  'iterm.app': 'iterm',
+  iterm2: 'iterm',
+  vscode: 'vscode',
+  ghostty: 'ghostty',
+  wezterm: 'wezterm',
+  warpterminal: 'warp',
+  hyper: 'hyper',
+  tmux: 'tmux',
+  zed: 'zed',
+  tabby: 'tabby',
+  rio: 'rio',
+  mintty: 'mintty',
+  'jetbrains-jediterm': 'jetbrains',
+  kitty: 'kitty',
+  alacritty: 'alacritty',
+}
+
+function bucketTerminalProgram(value) {
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  if (!v) return 'none'
+  return TERMINAL_PROGRAMS[v] || 'other'
+}
+
+const flag = (v) => (v ? '1' : '0')
+
+function clampDimension(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(9999, Math.floor(value)))
+}
+
+/**
+ * 生成本进程的客户端环境描述符（对齐官方 formatClientEnvironment）。
+ *
+ * 本代理跑在容器/服务里，**没有真实终端**，所以按官方对"非交互环境"的
+ * 取值填：in/out = 0（非 TTY）、tp = none、l = 0、p/g = na（未查询）、
+ * osc = na。这是自洽的取值 —— 官方自己也有 `na` 桶表示"未查询/不适用"，
+ * 伪造成一个真实终端反而与运行环境矛盾。
+ *
+ * @param {{ env?: Record<string, string|undefined>, columns?: number, rows?: number }} [opts]
+ * @returns {string}
+ */
+export function formatClientEnvironment(opts = {}) {
+  const env = opts.env || {}
+  const ci =
+    env.CI === 'true' || env.CI === '1' || env.GITHUB_ACTIONS === 'true'
+  const fields = [
+    ['in', flag(false)],
+    ['out', flag(false)],
+    ['tp', bucketTerminalProgram(env.TERM_PROGRAM)],
+    ['term', flag(env.TERM)],
+    ['ct', flag(env.COLORTERM)],
+    ['sz', `${clampDimension(opts.columns)}x${clampDimension(opts.rows)}`],
+    ['ci', flag(ci)],
+    ['ssh', flag(env.SSH_TTY || env.SSH_CONNECTION)],
+    ['l', flag(false)],
+    ['p', 'na'],
+    ['g', 'na'],
+    ['osc', 'na'],
+  ]
+  return ['v1', ...fields.map(([k, v]) => `${k}=${v}`)].join(';')
+}
+
+/**
+ * 本进程的环境描述符（构建一次后缓存：官方也是 per-process 构建一次）。
+ * @type {string | null}
+ */
+let cachedClientEnv = null
+
+/** 取（并缓存）本进程的客户端环境描述符。 */
+export function clientEnvironment() {
+  if (!cachedClientEnv) {
+    cachedClientEnv = formatClientEnvironment({
+      env: typeof process !== 'undefined' ? process.env : {},
+    })
+  }
+  return cachedClientEnv
 }
 /**
  * 进程内生效的 CLI 版本号。启动时 = KNOWN_CLI_VERSION；refreshCliVersion() 成功后

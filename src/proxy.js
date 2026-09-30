@@ -27,6 +27,8 @@ import { freebuffAuthHeaders } from './auth-store.js'
 import {
   getCliVersion,
   officialChatHeaders,
+  clientEnvironment,
+  META_CLIENT_ENV,
 } from './upstream/official-fingerprint.js'
 import {
   ENFORCED_FOREIGN_SIGNALS,
@@ -1321,6 +1323,10 @@ export function createProxyHandler(ctx) {
       client_id: effectiveClientId,
       cost_mode: 'free',
       freebuff_instance_id: instanceId,
+      // 客户端环境描述符：官方把它放进 codebuff_metadata（与 x-freebuff-env
+      // 头同一份字符串）。缺失 = 请求形态不像官方 CLI —— 上游会据此判定
+      // 第三方客户端。常量与格式见 src/upstream/official-fingerprint.js。
+      [META_CLIENT_ENV]: clientEnvironment(),
       ...(existingMeta.trace_session_id
         ? {}
         : { trace_session_id: randomUUID() }),
