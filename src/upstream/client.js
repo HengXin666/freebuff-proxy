@@ -89,6 +89,22 @@ async function fetchWithAttemptTimeout(url, init, timeoutMs) {
  *   { kind: 'pool', agents: ProxyAgent[], urls: string[], indexFor(key) }   // 全局代理池
  * 优先级：账号显式 proxy > upstream.proxies（全局池） > upstream.proxy > HTTP(S)_PROXY env。
  */
+/**
+ * TLS 层对齐官方 CLI：ALPN 只 offer `http/1.1`。
+ *
+ * 真机抓包（mitmproxy 拦本地官方 CLI 进程）确认：
+ *   Bun/1.3.14 → TLSv1.3, alpn=http/1.1, cipher=TLS_AES_256_GCM_SHA384
+ * 而 undici 默认会同时 offer h2 与 http/1.1 —— 与官方客户端不同，
+ * 是一个可检测的 TLS 层差异。
+ *
+ * 注：Node 与 Bun 都用系统 OpenSSL 栈，cipher 本就一致（实测两侧都是
+ * TLS_AES_256_GCM_SHA384）。所以「Node 无法对齐指纹」只成立于**浏览器**
+ * 目标（GREASE 是保留数值，OpenSSL 名字字符串表达不了）；对齐 Bun 完全可行。
+ */
+const ALPN_TLS = Object.freeze({
+  requestTls: { ALPNProtocols: ['http/1.1'] },
+})
+
 function resolveProxy(config, accountProxy, accountId) {
   // 最后一道防线：代理值可能是脏数据（数字 / 对象 / 畸形 URL），直接喂给
   // `new ProxyAgent({uri})` 会抛 ERR_INVALID_URL —— 那发生在启动后的第一次
@@ -110,7 +126,7 @@ function resolveProxy(config, accountProxy, accountId) {
     return {
       kind: 'single',
       url: explicit,
-      agent: new ProxyAgent({ uri: explicit }),
+      agent: new ProxyAgent({ uri: explicit, ...ALPN_TLS }),
       indexFor: () => 0,
     }
   }
@@ -119,7 +135,7 @@ function resolveProxy(config, accountProxy, accountId) {
     return {
       kind: 'pool',
       urls: pool,
-      agents: pool.map((u) => new ProxyAgent({ uri: u })),
+      agents: pool.map((u) => new ProxyAgent({ uri: u, ...ALPN_TLS })),
       /** 稳定哈希：同一账号始终落到同一代理（保持 session IP 稳定） */
       indexFor: (key) => hashIndex(key, pool.length),
     }
@@ -131,7 +147,7 @@ function resolveProxy(config, accountProxy, accountId) {
     return {
       kind: 'single',
       url: '(env HTTP(S)_PROXY)',
-      agent: new EnvHttpProxyAgent(),
+      agent: new EnvHttpProxyAgent({ ...ALPN_TLS }),
       indexFor: () => 0,
     }
   }

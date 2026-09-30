@@ -17,6 +17,12 @@ const DEFAULT_SETTINGS = Object.freeze({
   // 默认关闭：先保持既有行为，验证充分后再作为 limited 档位的自动回落。
   // 见 .agents/notes/proposed/architecture/2026-09-30-web-chat-stream-transport.md
   webChannelEnabled: false,
+  // 是否上报官方 CLI 形态的遥测（POST codebuff.com/api/logs）。
+  // 官方 CLI 运行时会发 app_launched / fingerprint_generated / login_started
+  // 等生命周期事件；我们从不上报 = 服务端眼里一个"只发 chat、没有任何客户端
+  // 生命迹象"的连接。默认关闭：上报等于主动暴露，且端到端尚未验证。
+  // 见 .agents/notes/proposed/architecture/2026-09-30-cli-telemetry-reports.md
+  cliTelemetryEnabled: false,
   // 上游以 404 "No endpoints found" 拒掉带工具的请求时，是否去掉 tools 重发一次。
   // 开启 = 至少拿到文本回答；关闭 = 把 404 原样透传（下游 Responses 桥接层会把它
   // 崩成 CF 502 空体，客户端只见 "no body"）。
@@ -180,6 +186,12 @@ export class SettingsStore {
         throw new TypeError('webChannelEnabled must be a boolean')
       }
       this.settings.webChannelEnabled = next.webChannelEnabled
+    }
+    if (next?.cliTelemetryEnabled !== undefined) {
+      if (typeof next.cliTelemetryEnabled !== 'boolean') {
+        throw new TypeError('cliTelemetryEnabled must be a boolean')
+      }
+      this.settings.cliTelemetryEnabled = next.cliTelemetryEnabled
     }
     if (next?.lowBalanceThreshold !== undefined) {
       if (

@@ -8,6 +8,7 @@ import { loadConfig } from '../src/config.js'
 import { buildAppContext } from '../src/app-context.js'
 import { startServer } from '../src/server.js'
 import { refreshCliVersion } from '../src/upstream/official-fingerprint.js'
+import { reportCliLaunch } from '../src/upstream/cli-telemetry.js'
 import { configureLogger, logger } from '../src/util/log.js'
 import { UserStore } from '../src/web/user-store.js'
 import { WebSessionStore } from '../src/web/session-store.js'
@@ -328,6 +329,18 @@ async function main() {
     void refreshCliVersion()
       .then((version) => {
         logger.info('cli fingerprint version aligned', { version })
+        // 遥测上报（可选）：官方 CLI 起进程就会发 app_launched +
+        // fingerprint_generated。我们从不上报 = 服务端眼里一个"只发 chat、
+        // 没有任何客户端生命迹象"的连接。这里按真实时序补上。
+        // 判据与取舍见
+        // .agents/notes/proposed/architecture/2026-09-30-cli-telemetry-reports.md
+        if (settingsStore?.get?.().cliTelemetryEnabled === true) {
+          void reportCliLaunch({ fingerprintSuccess: true })
+            .then((n) => {
+              if (n > 0) logger.debug('cli telemetry reported', { records: n })
+            })
+            .catch(() => {})
+        }
       })
       .catch(() => {})
 
