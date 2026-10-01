@@ -1008,7 +1008,18 @@ function chat(body, headers = {}) {
   assert.ok(chatCall, '应发出 chat 请求')
   const ua = chatCall.headers['user-agent'] || chatCall.headers['User-Agent']
   assert.ok(ua, 'chat 必须带 user-agent')
-  assert.match(ua, /^ai-sdk\/openai-compatible\/\d+\.\d+\.\d+\/codebuff$/, 'UA 必须是官方 ai-sdk 形状 + 真实版本号, got ' + ua)
+  // chat UA 是**两段式**，逐字对齐真机抓包（官方 CLI 0.2.6，mitmproxy 实测）：
+  //   ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.25 runtime/browser
+  // 版本段是 0.0.0-test 而**不是**包版本号 —— 官方发布构建里 __PACKAGE_VERSION__
+  // 未注入，回退到该字面量（二进制原文：
+  //   Qo=typeof __PACKAGE_VERSION__<"u"?__PACKAGE_VERSION__:"0.0.0-test"
+  // ）。第二段我们此前整段漏了。见
+  // .agents/notes/implemented/bug-fix/2026-10-01-chat-ua-two-part.md
+  assert.equal(
+    ua,
+    'ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.25 runtime/browser',
+    'chat UA 必须与官方逐字一致, got ' + ua,
+  )
   assert.ok(!ua.includes('/1.0.0/'), 'UA 不得再是硬编码的 1.0.0（与真 CLI 版本不符）')
   // 已知偏差（未删）：官方 chat 只带 Authorization + user-agent，本代理仍带
   // x-codebuff-api-key —— raw() 统一注入 freebuffAuthHeaders，而本项目 token 由网页

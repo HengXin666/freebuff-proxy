@@ -30,19 +30,35 @@
 export const KNOWN_CLI_VERSION = '0.0.178'
 
 /**
- * 官方 chat/completions 的 UA（二进制原文）：
- *   headers:()=>({Authorization:`Bearer ${H}`,
- *     "user-agent":`ai-sdk/openai-compatible/${nc}/codebuff`})
- * 其中 nc = __PACKAGE_VERSION__（= CLI 版本号）。
+ * 官方 chat/completions 的 UA —— **两段式**，逐字对齐真机抓包。
+ *
+ * 实测（mitmproxy 抓官方 CLI 0.2.6）：
+ * ```
+ * ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.25 runtime/browser
+ * ```
+ *
+ * 两个此前搞错的点：
+ *
+ * 1. **版本是 `0.0.0-test`，不是真实 CLI 版本号。** 二进制原文：
+ *    `Qo=typeof __PACKAGE_VERSION__<"u"?__PACKAGE_VERSION__:"0.0.0-test"`
+ *    —— 官方发布构建里该变量未注入，于是回退到字面量 `0.0.0-test`。
+ *    我们此前发 `0.0.178`（包版本），反而与官方不一致。
+ * 2. **后面还有第二段**（ai-sdk 的 provider-utils 与 runtime 标记），我们整段漏了。
  *
  * 绝不能在中间插项目自有标记（freebuff-proxy 等）：上游按 UA 指纹代理客户端。
- * 旧实现硬编码 1.0.0，与真实 CLI 版本（0.0.178）不符 —— 见
- * .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md
- * @param {string} [version] CLI 版本号，默认 KNOWN_CLI_VERSION
+ * 见 .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md
+ * 与 .agents/notes/implemented/bug-fix/2026-10-01-chat-ua-two-part.md
+ * @param {string} [version] 覆盖版本段（默认对齐官方的 `0.0.0-test`）
  * @returns {string}
  */
-export function officialChatUserAgent(version = KNOWN_CLI_VERSION) {
-  return 'ai-sdk/openai-compatible/' + version + '/codebuff'
+export const OFFICIAL_CHAT_UA_VERSION = '0.0.0-test'
+export const OFFICIAL_CHAT_UA_SUFFIX =
+  'ai-sdk/provider-utils/3.0.25 runtime/browser'
+
+export function officialChatUserAgent(version = OFFICIAL_CHAT_UA_VERSION) {
+  return (
+    'ai-sdk/openai-compatible/' + version + '/codebuff ' + OFFICIAL_CHAT_UA_SUFFIX
+  )
 }
 
 /**

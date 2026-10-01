@@ -25,7 +25,6 @@ import {
 } from './util/http.js'
 import { freebuffAuthHeaders } from './auth-store.js'
 import {
-  getCliVersion,
   officialChatHeaders,
   clientEnvironment,
   META_CLIENT_ENV,
@@ -1725,8 +1724,10 @@ export function createProxyHandler(ctx) {
       // x-codebuff-api-key —— 那个头只出现在 session / agent-runs 等端点；多发就是
       // 多余的指纹面。常量真源见 src/upstream/official-fingerprint.js 与
       // .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md
+      // ⚠️ **不传 version**：官方 chat UA 的版本段是 `0.0.0-test`（发布构建里
+      // __PACKAGE_VERSION__ 未注入而回退），不是包版本号。传 getCliVersion()
+      // 会发成 `.../0.0.178/codebuff` —— 与官方不一致。用函数默认值。
       ...officialChatHeaders(upstream.token, {
-        version: getCliVersion(),
         // 官方 chat 带 x-freebuff-acting-user-id（真机抓包 13 个头里有它，
         // 其余 12 个是传输层）。我们此前没传 → 少一个指纹面。
         userId: upstream.accountId || undefined,
