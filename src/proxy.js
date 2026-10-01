@@ -1714,11 +1714,13 @@ export function createProxyHandler(ctx) {
     const headers = {
       ...filterRequestHeaders(req.headers),
       'content-type': 'application/json',
-      // 官方 CLI chat 的 Accept 是 `application/json, text/event-stream`
-      // （对齐 trefeon chat.go:105）。流式路径用官方值；非流式保持 application/json。
-      accept: stream
-        ? 'application/json, text/event-stream'
-        : req.headers.accept || 'application/json',
+      // 官方 CLI chat 的 Accept 是 `*/*` —— Bun fetch 的默认值。
+      //
+      // 真机抓包（官方 CLI 0.2.6，流式 chat ×2）实测两条**都是** `*/*`。
+      // 此前按 trefeon 的 chat.go:105 写成 `application/json, text/event-stream`
+      // —— 那是**另一个第三方实现**的选择，不是官方形态。真机证据优先。
+      // 见 .agents/notes/implemented/bug-fix/2026-10-01-chat-ua-two-part.md
+      accept: '*/*',
       // chat 头逐字对齐官方 codebuff provider 分支：**只有** Authorization +
       // user-agent（+可选 x-freebuff-acting-user-id）。官方 chat **不带**
       // x-codebuff-api-key —— 那个头只出现在 session / agent-runs 等端点；多发就是
