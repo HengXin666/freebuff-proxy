@@ -1783,6 +1783,15 @@ export function createProxyHandler(ctx) {
     }
 
     const status = upstreamRes.status
+    // 可观测性：上游 chat 非 2xx 时把**响应体**记下来。
+    // 503 这类错误不带业务体时最难排查 —— 没有它只能猜（见控制台「日志」页）。
+    if (!upstreamRes.ok) {
+      logger.warn('upstream chat non-ok', {
+        status,
+        model: upstreamModel,
+        body: String(upstreamErrText || '').slice(0, 800),
+      })
+    }
     const respHeaders = filterResponseHeaders(upstreamRes.headers)
     if (hermesDelegateAlias) {
       // 回程会改写 tool_calls 的 function.name，原 Content-Length 已不再可信。
