@@ -306,6 +306,30 @@ globalThis.fetch = async (url, init = {}) => {
     })
   }
   if (u.includes('/api/v1/freebuff/session') && method === 'GET') {
+    // 官方建会话路径：GET + cli: claim + multi-session 头 → 直接 active。
+    // 官方 CLI 0.2.6 全程只走这条路（18 次 GET + 1 次 DELETE /attempt），
+    // **从不打 /admission**。见
+    // .agents/notes/implemented/bug-fix/2026-10-01-cli-get-session-path.md
+    if (mockMode === 'get_claim_admit') {
+      const inst =
+        headers['x-freebuff-instance-id'] ||
+        headers['X-Freebuff-Instance-Id'] ||
+        ''
+      if (/^cli:/.test(inst)) {
+        return jsonRes({
+          status: 'active',
+          accessTier: 'limited',
+          instanceId: inst,
+          model: 'm-00032eaeec',
+          admittedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + sessionExpiryMs).toISOString(),
+          remainingMs: sessionExpiryMs,
+          countryCode: 'JP',
+          countryBlockReason: 'country_not_allowed',
+          verificationReason: 'region_locked',
+        })
+      }
+    }
     return jsonRes({
       status: 'none',
       accessTier: 'full',
@@ -1738,6 +1762,95 @@ for (const model of verifiedSpecialModels) {
 }
 
 
+// 官方建会话路径：GET /freebuff/session + cli: claim（**不是** POST /admission）。
+// 真机抓包：官方 CLI 0.2.6 全程 18 次 GET + 1 次 DELETE /attempt，
+// **从不打 /admission**。契约见
+// .agents/notes/implemented/bug-fix/2026-10-01-cli-get-session-path.md
+{
+  const gsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-getclaim-'))
+  saveAccountUser(gsDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
+  const gsConfig = loadConfig()
+  gsConfig.server.host = '127.0.0.1'
+  gsConfig.server.port = 0
+  gsConfig.server.apiKeys = ['sk-test']
+  gsConfig.upstream.credentialsDir = gsDir
+  gsConfig.session.pollIntervalSec = 3600
+  const gsRuntimes = new AccountRuntimes(gsConfig)
+  const gsServer = await startServer({
+    config: gsConfig,
+    runtimes: gsRuntimes,
+    ...(() => {
+      const rt = gsRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const gsPort = gsServer.address().port
+  mockMode = 'get_claim_admit'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+  const res = await fetch(`http://127.0.0.1:${gsPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  assert.equal(res.status, 200, await res.clone().text())
+  const sessCalls = calls.filter((c) => c.url.includes('/freebuff/session'))
+  // 找**带 claim 的那个** GET —— 启动探测时的 GET 还不带 claim，不能拿来断言
+  const getAdmit = sessCalls.find(
+    (c) =>
+      c.method === 'GET' &&
+      !c.url.includes('/admission') &&
+      (c.headers['x-freebuff-multi-session'] ||
+        c.headers['X-Freebuff-Multi-Session']),
+  )
+  assert.ok(
+    getAdmit,
+    '必须走官方 GET /freebuff/session 建会话（官方 CLI 从不打 /admission）: ' +
+      JSON.stringify(sessCalls.map((c) => c.method + ' ' + c.url.split('/api')[1])),
+  )
+  // undici 会把头名规范化成首字母大写，断言两种写法都认
+  const instHdr =
+    getAdmit.headers['x-freebuff-instance-id'] ||
+    getAdmit.headers['X-Freebuff-Instance-Id'] ||
+    ''
+  assert.ok(
+    /^cli:/.test(instHdr),
+    'GET 建会话必须自带 cli: claim, got ' + JSON.stringify(instHdr),
+  )
+  assert.equal(
+    getAdmit.headers['x-freebuff-multi-session'],
+    '1',
+    'cli claim 必须带 multi-session 头',
+  )
+  assert.equal(
+    getAdmit.headers['x-freebuff-model'],
+    undefined,
+    'GET 建会话不带 x-freebuff-model（模型由服务端回执给出）',
+  )
+  assert.equal(
+    sessionPosts,
+    0,
+    'GET 路径成功时不得再打 POST admission; sessionPosts=' + sessionPosts,
+  )
+  await gsRuntimes.shutdown()
+  gsServer.close()
+  fs.rmSync(gsDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
+
 // limited 档位（accessTier: limited + anonymous_network）**不是封锁**：
 // 官方源码写明 "everywhere else, and any VPN, is limited access" —— 它只是
 // 模型集合变小、Freebucks 25→20，账号可用。判成封锁 = 把可用账号判死并白烧额度。
@@ -1796,10 +1909,15 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// 地理封锁夹在 200 回执里（status 仍 active + countryBlockReason）：
-// 必须报出明确原因（country_blocked + countryCode），且**绝不换号** ——
-// 它是出口属性，所有账号共享同一出口，换号只会把每个账号的 Freebucks
-// 依次买断一遍却拿不到答案。改前该字段从未被读取 → 归成 http_503 → 冷却换号。
+// 【2026-10-01 金标准修正】`status: 'active'` 优先于 countryBlockReason。
+//
+// 真机抓包：官方 CLI 在完全相同的出口（JP / country_not_allowed /
+// region_locked）下，服务端返回的**就是** `status: "active"` + 可用
+// instanceId。也就是说 countryBlockReason 是**说明性字段**（解释为什么模型集
+// 变小），不是拒绝信号。
+//
+// 因此本条断言改为：active + terminal reason → **仍然可用（200）**。
+// 只有**没有 instanceId 的**终态才是真封锁（见下面第二个用例）。
 // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
 {
   const cbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-country-'))
@@ -1843,16 +1961,15 @@ for (const model of verifiedSpecialModels) {
     }),
   })
   const cbBody = await res.json()
-  assert.equal(res.status, 403, JSON.stringify(cbBody))
+  // 金标准：active + country_not_allowed = 可用（官方 CLI 实测拿到 active）
   assert.equal(
-    cbBody.error.code,
-    'country_blocked',
-    '地理封锁必须报出 country_blocked 而不是 http_503: ' + JSON.stringify(cbBody),
+    res.status,
+    200,
+    'status:active + countryBlockReason 必须可用（官方实测如此）: ' + JSON.stringify(cbBody),
   )
-  assert.ok(
-    JSON.stringify(cbBody).includes('JP'),
-    '必须把被拒的国家带上，否则用户无从知道该换哪个出口: ' + JSON.stringify(cbBody),
-  )
+  const cbActive = cbRuntimes.get('a').sessions.getSnapshot()
+  assert.equal(cbActive?.status, 'active', 'active 回执必须被采纳为活会话')
+  assert.ok(cbActive?.instanceId, '会话句柄必须保留')
   // 不换号：只应有一次 admit（换了号就会有第二次）
   assert.equal(
     sessionPosts,

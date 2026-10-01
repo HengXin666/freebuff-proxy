@@ -726,26 +726,59 @@ export class SessionManager {
       await this._releaseUnlocked()
     }
 
-    // 官方 CLI **自己生成** claim（`cli:<uuid>`）并在 admission 时带给服务端，
-    // 而不是等服务端签发一个裸 uuid —— 服务端据此认出这是 CLI 的 claim
+    // 官方 CLI **自己生成** claim（`cli:<uuid>`）并带给服务端，而不是等服务端
+    // 签发一个裸 uuid —— 服务端据此认出这是 CLI 的 claim
     // （"The server reads it to tell the CLI's claims from Desktop tabs"）。
-    // 实测：传入 cli: 前缀后服务端**原样保留**在返回的 instanceId 里。
+    //
+    // ⚠️ 2026-10-01 真机抓包修正：官方 CLI（0.2.6）**从不打 /admission**，
+    // 全程 18 次 `GET /api/v1/freebuff/session`（带 cli: claim +
+    // x-freebuff-multi-session: 1）+ 1 次 `DELETE .../session/attempt`。
+    // 而 GET 建会话**不带 x-freebuff-model** —— 模型由服务端在回执里给出
+    // （不透明句柄，如 `m-00032eaeec`）。
+    // 我们此前一直 POST /admission：那是官方不走的端点，被 503/409 拒。
+    // 见 .agents/notes/implemented/bug-fix/2026-10-01-cli-get-session-path.md
     const claimId = newCliClaimId()
     logger.info('admitting freebuff session', { model, claimId })
-    const body = await this.upstream.freebuffSession('POST', {
-      model,
-      instanceId: claimId,
-    })
+    // 先走官方路径（GET + claim）；失败且是"端点/方法不认"类错误时再回落 POST。
+    let body = null
+    try {
+      body = await this.upstream.freebuffSession('GET', { instanceId: claimId })
+    } catch (err) {
+      logger.warn('GET-claim admit failed; falling back to POST admission', {
+        code: err?.code,
+        status: err?.status,
+        claimId,
+      })
+      body = null
+    }
+    // GET 没给出可用会话（status none）或直接失败：回落官方旧路径 POST admission。
+    if (!body || body.status === 'none') {
+      body = await this.upstream.freebuffSession('POST', {
+        model,
+        instanceId: claimId,
+      })
+    }
 
-    // 真封锁（terminal）：上游**照常建立会话并照常扣费**（一次 admit = 买断
-    // 一整小时），只是随后 chat 会被拒。所以窗口是真的存在且已付款 —— 必须先
-    // 落盘（句柄可寻址：之后能 DELETE 腾槽位、能追退款），再把封锁抛给上层。
-    // 直接抛而不保存 = 把刚买的一小时变成无法寻址的孤儿，钱白扔。
+    // ⚠️ 2026-10-01 真机抓包修正（**重要**）：`status: 'active'` 必须优先。
     //
-    // ⚠️ 只对**真封锁**生效。anonymous_network / recent_limited_country 是
-    // limited 档位（可用），必须走下面正常的 active 分支，否则把可用账号判死。
+    // 官方 CLI 在完全相同的出口（countryCode: JP、
+    // countryBlockReason: 'country_not_allowed'、verificationReason:
+    // 'region_locked'）下，服务端返回的是 **`status: "active"`** ——
+    // 会话照常建立、照常可用：
+    //
+    //   {"status":"active","accessTier":"limited","instanceId":"cli:...",
+    //    "model":"m-00032eaeec","countryCode":"JP",
+    //    "countryBlockReason":"country_not_allowed",
+    //    "verificationReason":"region_locked"}
+    //
+    // 也就是说 `countryBlockReason` 是**说明性字段**（告诉客户端为什么模型集
+    // 变小了），而**不是拒绝信号**。此前我们把它当拒绝信号 → 明明拿到了可用
+    // 会话却主动抛错，把可用账号判死。
+    //
+    // 只有**没有 instanceId 的** terminal 封锁才该抛（那才是真拒绝）。
     // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
     if (
+      body?.status !== 'active' &&
       body?.countryBlockReason &&
       isTerminalCountryBlock(body.countryBlockReason) &&
       body.instanceId

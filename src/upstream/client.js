@@ -485,7 +485,18 @@ export function createUpstreamClient(config, token, opts = {}) {
       // Freebucks 25→20），不是封锁。真正的 terminal 是 country_blocked 状态本身。
       // 把 anonymous_network 也判成封锁 = 把可用账号判死，且白烧额度。
       // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
-      if (body && isTerminalCountryBlock(body.countryBlockReason)) {
+      // ⚠️ 2026-10-01 真机抓包修正（**重要**）：`status: 'active'` 时绝不归一。
+      //
+      // 官方 CLI 在完全相同的出口（JP / country_not_allowed / region_locked）
+      // 下，服务端返回的就是 `status: "active"` + 一个可用的 instanceId。
+      // 也就是说 countryBlockReason 是**说明性字段**（解释为什么模型集变小），
+      // 不是拒绝信号。把它当拒绝 → 明明拿到可用会话却主动判死。
+      // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+      if (
+        body &&
+        body.status !== 'active' &&
+        isTerminalCountryBlock(body.countryBlockReason)
+      ) {
         logger.warn('upstream reported terminal country block', {
           countryCode: body.countryCode ?? null,
           reason: body.countryBlockReason,
