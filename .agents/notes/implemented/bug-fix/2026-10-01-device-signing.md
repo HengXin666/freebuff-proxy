@@ -77,7 +77,15 @@ sig  match : true      ← 与官方抓包逐字节相同
 - 同输入同签名；path / body / fetchId **任一变化签名必变**（否则签名形同虚设）；
 - 注册作用域字符串形状。
 
-另：`x-freebuff-env` 的字段顺序断言已同步扩展到 16 个字段。
+另：`x-freebuff-env` 的字段顺序断言已同步扩展到 16 个字段。四个新字段逐条对齐
+官方 `cli/src/utils/client-environment.ts:361,377-380`：
+
+- `tzo` = `Boolean(env.TZ?.trim())` —— 注意官方对空白串判 0（`flag(env.TZ)`
+  会把 `"   "` 误判为 1，已修）；
+- `px` = `proxyBucketOf(env)`，只回 `none`/`loopback`/`remote`，
+  **不上报真实代理地址**；
+- `tls` = `NODE_TLS_REJECT_UNAUTHORIZED === '0' ? '0' : '1'`（默认 1）；
+- `ca` = 是否设了 `NODE_EXTRA_CA_CERTS`（默认 0）。
 
 ## Alternatives considered
 

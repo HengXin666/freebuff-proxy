@@ -390,7 +390,7 @@ export function formatClientEnvironment(opts = {}) {
     //   px  = 代理桶（none/loopback/remote）
     //   tls = 是否禁用了证书校验（默认 1 = 正常校验）
     //   ca  = 是否追加了自定义 CA
-    ['tzo', flag(env.TZ)],
+    ['tzo', flag(env.TZ && String(env.TZ).trim())],
     ['px', proxyBucketOf(env)],
     ['tls', env.NODE_TLS_REJECT_UNAUTHORIZED?.trim() === '0' ? '0' : '1'],
     ['ca', flag(env.NODE_EXTRA_CA_CERTS?.trim())],
