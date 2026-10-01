@@ -41,6 +41,14 @@ x-freebuff-device-ts:       1790842466957
 - chat 的业务相关头与官方一致（签名三头 + acting-user-id + catalog-fetch）。
 - `accountId` 的语义统一为「账号 user id」，代理池分配与指纹头共用。
 
+## 补充：purchase_capacity 不冷却账号
+
+实测该 409 状态的语义是**资源竞争**（一个账号 `slotLimit: 1`，付费槽位已被占），
+回执给出 `currentInstanceId` / `nextExpiryAt` 指明何时空出。它不是账号故障 ——
+冷却换号只会把别的账号也依次买断。已在 `shouldSwitchAccountOnError` 里让它
+（连同 `premium_slot_taken` / `purchase_in_use`）返回 false，并把官方 409 全集
+补进 `client.js` 的直通分支。
+
 ## Evidence
 
 - 官方聊天抓包 13 头清单（见上）。

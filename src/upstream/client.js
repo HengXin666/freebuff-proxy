@@ -611,7 +611,20 @@ export function createUpstreamClient(config, token, opts = {}) {
       if (
         res.status === 409 &&
         body &&
-        (body.status === 'model_locked' || body.status === 'model_unavailable')
+        (body.status === 'model_locked' ||
+          body.status === 'model_unavailable' ||
+          // 以下由真机抓包补齐（官方 409 全集，见二进制 PU$ 分支）：
+          //   premium_slot_taken / purchase_claim_released / purchase_in_use /
+          //   purchase_capacity / first_tab_discount_changed / consent_required
+          // purchase_capacity 实测语义：**该账号的付费槽位已被占**（一个账号
+          // slotLimit:1），回执带 currentInstanceId / nextExpiryAt 指明何时空出。
+          // 它不该被当成账号故障冷却 —— 等槽位空出即可。
+          body.status === 'premium_slot_taken' ||
+          body.status === 'purchase_claim_released' ||
+          body.status === 'purchase_in_use' ||
+          body.status === 'purchase_capacity' ||
+          body.status === 'first_tab_discount_changed' ||
+          body.status === 'consent_required')
       ) {
         return body
       }

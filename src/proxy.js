@@ -2127,6 +2127,15 @@ function shouldSwitchAccountOnError(status, code) {
   // 却永远拿不到答案。它必须直接失败并把原因告知用户 —— 出路是换代理，不是换号。
   // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
   if (codeStr === 'country_blocked') return false
+  // purchase_capacity：该账号的付费槽位已被占（一个账号 slotLimit:1）。
+  // 它是**资源竞争**不是账号故障 —— 冷却换号只会把别的账号也依次买断，
+  // 而回执已经给出 currentInstanceId 与 nextExpiryAt，等它空出即可。
+  // 实测语义见 .agents/notes/implemented/bug-fix/2026-10-01-admission-handle-and-403.md
+  if (codeStr === 'purchase_capacity') return false
+  // premium_slot_taken / purchase_in_use：同上，都是"槽位正在被用"。
+  if (codeStr === 'premium_slot_taken' || codeStr === 'purchase_in_use') {
+    return false
+  }
   if (status === 403 && ['banned', 'ip_capped'].includes(codeStr)) {
     return true
   }
