@@ -49,6 +49,11 @@ m-5a5d0e255e | GPT-6 Luna
 - **按 displayName 模糊匹配** —— 名字会变（"DeepSeek V4.1 Flash" vs 我们目录里的
   "DeepSeek V4 Flash 07/31"），且服务端目录本身是动态的，匹配规则注定脆。
 - **硬编码模型→句柄表** —— 句柄是服务端签名且随目录版本刷新，写死会立刻过期。
+- **recommendedKey 兜底**（本 note 初版曾建议）—— **已被证伪**：它把
+  `deepseek/deepseek-v4-flash` 静默映射到 MiMo（`m-00032eaeec`），制造了
+  "会话绑 MiMo + agent 用 deepseek" 的矛盾，是 chat 503 的直接原因。
+  正确机制是 legacyDigests（FNV-1a），见
+  [2026-10-01-legacy-model-digest-mapping.md](2026-10-01-legacy-model-digest-mapping.md)。
 
 ## Consequences
 

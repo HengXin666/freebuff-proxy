@@ -38,6 +38,38 @@ export function isModelHandle(value) {
 }
 
 /**
+ * 目录行的 legacy 摘要 —— 把**旧的模型 id** 映射到目录行的唯一钥匙。
+ *
+ * 逐字对齐官方 common/src/types/freebuff-model-catalog.ts
+ * `freebuffLegacyModelDigest()`：双 FNV-1a，命名空间字符串
+ * `freebuff-legacy-model:`，32 位无符号，输出 16 位小写 hex。
+ * 官方注释解释了为什么用摘要而不是直接列 id：
+ *   "so the catalog need not list model ids; the legacy ids themselves are
+ *    already public."
+ *
+ * ⚠️ 这不是 sha256（我此前猜错过一次）。**已用真机目录逐条验证**：
+ *   deepseek/deepseek-v4-flash → 1e303ac563a6f9cc  （行 m-096e75164d）
+ *   mimo/mimo-v2.5             → 5acfab992d88345c  （行 m-00032eaeec）
+ * 两条都与服务端返回的 legacyDigests 完全一致。
+ *
+ * @param {string} modelId
+ * @returns {string} 16 位小写 hex
+ */
+export function freebuffLegacyModelDigest(modelId) {
+  const input = `freebuff-legacy-model:${modelId}`
+  let h1 = 0x811c9dc5
+  let h2 = 0x01000193 ^ 0x5bd1e995
+  for (let i = 0; i < input.length; i++) {
+    const c = input.charCodeAt(i)
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0
+    h2 = Math.imul(h2 ^ c, 0x5bd1e995) >>> 0
+  }
+  return (
+    h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0')
+  )
+}
+
+/**
  * 一个账号持有的目录抓取结果。
  *
  * 句柄是**服务端签名**的，客户端无法自造；所以只能老老实实抓一次并缓存。
@@ -54,8 +86,14 @@ export class CatalogHolder {
     this.timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 20_000
     /** @type {string|null} */
     this.fetchId = null
-    /** @type {Map<string, string>} 模型 id → 句柄 */
+    /** @type {Map<string, string>} 目录 key（m-xxx）→ 句柄（fbm1.xxx） */
     this.handles = new Map()
+    /**
+     * @type {Map<string, string>} legacy 模型 id 的 FNV-1a 摘要 → 句柄。
+     * 官方目录不列模型 id，只给每行的 legacyDigests；这是把
+     * deepseek/deepseek-v4-flash 这类 id 映射到服务端行的唯一正确途径。
+     */
+    this.legacyIndex = new Map()
     /** 抓取失败后的退避截止时间。 */
     this.retryAfter = 0
     /** 进行中的抓取（避免并发重复抓）。 */
@@ -82,8 +120,22 @@ export class CatalogHolder {
    */
   handleFor(modelId) {
     if (typeof modelId !== 'string' || !modelId) return modelId
+    // 已是句柄：原样返回
     if (isModelHandle(modelId)) return modelId
-    return this.handles.get(modelId) || modelId
+    // 目录 key（m-xxx）：直接查
+    const byKey = this.handles.get(modelId)
+    if (byKey) return byKey
+    // **legacy 模型 id**（deepseek/deepseek-v4-flash 这类）：用 FNV-1a 摘要命中行。
+    // 这是官方设计的映射方式（目录不列 id，只给 legacyDigests）。
+    const legacy = this.legacyIndex?.get(freebuffLegacyModelDigest(modelId))
+    if (legacy) return legacy
+    // 都不命中：原样返回（调用方据此走 legacy 路径或报错）
+    return modelId
+  }
+
+  /** 该模型 id 是否在本次目录里（有对应行）。 */
+  hasModel(modelId) {
+    return this.handleFor(modelId) !== modelId
   }
 
   /** 目录相关的两个头（未持有时返回 {}，让调用方走 legacy）。 */
@@ -156,8 +208,28 @@ export class CatalogHolder {
         const key = m.key
         const handle = m.handle
         if (typeof handle === 'string' && isModelHandle(handle)) {
-          // key 是服务端标识；displayName 也建一条映射方便按名字查找
+          // key 是服务端标识
           if (typeof key === 'string') this.handles.set(key, handle)
+        }
+      }
+      // legacy 摘要索引：把**客户端请求的模型 id** 映射到服务端行。
+      //
+      // 官方不直接在目录里列模型 id，而是给每行一个 `legacyDigests` 数组
+      // （旧 id 的 FNV-1a 摘要）。我们用同一算法算请求 id 的摘要去命中行 ——
+      // 这是**唯一正确**的模型映射方式。
+      //
+      // ⚠️ 此前用 `recommendedKey` 兜底是错的：那会把
+      // deepseek/deepseek-v4-flash 映射到 m-00032eaeec（MiMo 2.6 Flash）——
+      // 会话绑 MiMo、agent 却是 deepseek，chat 必然 503。
+      // 实测正确映射：deepseek/deepseek-v4-flash → m-096e75164d（摘要 1e303ac563a6f9cc）。
+      this.legacyIndex = new Map()
+      for (const m of rows) {
+        if (!m || typeof m !== 'object') continue
+        const handle = m.handle
+        if (typeof handle !== 'string' || !isModelHandle(handle)) continue
+        const digests = Array.isArray(m.legacyDigests) ? m.legacyDigests : []
+        for (const d of digests) {
+          if (typeof d === 'string' && d) this.legacyIndex.set(d, handle)
         }
       }
       // 默认/推荐模型（会话回执与 recommendedKey 用的就是它）

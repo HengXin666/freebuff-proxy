@@ -460,22 +460,18 @@ export function createUpstreamClient(config, token, opts = {}) {
       if (opts.model && !isModelHandle(opts.model)) {
         await catalog.fetch().catch(() => false)
         modelForWire = catalog.handleFor(opts.model)
-        // 目录里查不到（目录行数随服务端版本变化，模型名未必在册）时，
-        // 用服务端**推荐**的 key —— 它一定在目录里、一定能翻成句柄。
-        // recommendedKey 是目录响应的顶层字段（实测 `m-00032eaeec`），
-        // 也正是官方会话回执里出现的那个 model。
-        if (
-          (!modelForWire || modelForWire === opts.model) &&
-          catalog.recommendedKey
-        ) {
-          const rec = catalog.handleFor(catalog.recommendedKey)
-          if (rec && isModelHandle(rec)) {
-            logger.info('model not in catalog; using recommended handle', {
-              requested: opts.model,
-              recommendedKey: catalog.recommendedKey,
-            })
-            modelForWire = rec
-          }
+        // ⚠️ 这里**不要**用 recommendedKey 兜底（曾用，已证伪）：
+        // 它会把 deepseek/deepseek-v4-flash 静默映射到服务端"推荐"的
+        // m-00032eaeec（MiMo 2.6 Flash）—— 会话绑 MiMo、agent 却是 deepseek，
+        // chat 必然 503（实测踩过）。
+        // 正确的映射是 legacyDigests（FNV-1a），已在 catalog.handleFor 里实现。
+        // 若请求的模型不在本次目录里，就如实保持原值 —— 让上游返回它自己的
+        // 判据（模型不可用），而不是我们替它猜一个。
+        if (modelForWire === opts.model) {
+          logger.warn('requested model not present in this catalog', {
+            requested: opts.model,
+            catalogRows: catalog.handles.size,
+          })
         }
       }
       let headers = {
