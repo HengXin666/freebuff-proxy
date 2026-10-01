@@ -4,6 +4,7 @@ import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from 'undici'
 import {
   webChatHeaders,
 } from './web-chat.js'
+import { DeviceSigner } from './device-signing.js'
 import {
   BUN_USER_AGENT,
   HEADER_COMPACT_SESSION as FREEBUFF_COMPACT_SESSION_HEADER,
@@ -262,6 +263,23 @@ export function createUpstreamClient(config, token, opts = {}) {
    */
   const fetchWithProxy = buildFetchWithProxy(proxyRes, poolIndex)
 
+  /**
+   * 设备签名器：上游判定「是不是注册过的真客户端」的核心判据。
+   * 真机抓包确认官方每个 catalog / session / completions 请求都带
+   * x-freebuff-device-{key,ts,sig} 三头；我们此前一个都没有。
+   * best-effort：拿不到签名就原样发（绝不阻塞请求）。
+   * 见 .agents/notes/implemented/bug-fix/2026-10-01-device-signing.md
+   */
+  const deviceSigner =
+    opts.deviceKeyPath && opts.accountId
+      ? new DeviceSigner({
+          storePath: opts.deviceKeyPath,
+          apiHost: apiBase,
+          accountId: opts.accountId,
+          token,
+        })
+      : null
+
   async function apiFetch(path, init = {}) {
     const url = path.startsWith('http') ? path : `${apiBase}${path}`
     const headers = {
@@ -277,6 +295,18 @@ export function createUpstreamClient(config, token, opts = {}) {
     // Login-issued tokens require x-codebuff-api-key (Bearer alone → 401).
     if (token && init.includeAuth !== false) {
       Object.assign(headers, freebuffAuthHeaders(token))
+    }
+    // 设备签名三头（x-freebuff-device-{key,ts,sig}）。best-effort：
+    // 没有密钥或注册失败时返回 {}，请求照旧发出（上游退回未签名路径）。
+    // ⚠️ 必须在 body 确定之后调用 —— 签名覆盖的是**实际发送的 body 字节**。
+    if (deviceSigner) {
+      const sigHeaders = await deviceSigner.headersFor({
+        method: init.method || 'GET',
+        url,
+        body: typeof init.body === 'string' ? init.body : null,
+        fetchId: init.fetchId ?? null,
+      })
+      Object.assign(headers, sigHeaders)
     }
     const controller = new AbortController()
     const timeoutMs = init.timeoutMs ?? config.limits.upstreamTimeoutSec * 1000

@@ -413,6 +413,13 @@ export class AccountRuntimes {
     const upstream = createUpstreamClient(this.config, user.authToken, {
       proxy: user.proxy || null,
       accountId: accountKey,
+      // 设备签名密钥落盘位置：与上游官方 CLI 同款（每账号一个文件）。
+      // 上游据此判定「是不是注册过的真客户端」——见 src/upstream/device-signing.js
+      deviceKeyPath: path.join(
+        this.config.server.dataDir,
+        'device-keys',
+        `${accountKey}.json`,
+      ),
     })
     const sessions = new SessionManager({
       upstream,

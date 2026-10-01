@@ -320,6 +320,37 @@ function bucketTerminalProgram(value) {
 
 const flag = (v) => (v ? '1' : '0')
 
+/**
+ * 代理桶（对齐官方 cli/src/utils/client-environment.ts proxyBucketOf）。
+ * 只看 6 个代理环境变量，取值 none / loopback / remote —— **不上报真实地址**。
+ */
+function proxyBucketOf(env) {
+  const one = (value) => {
+    const v = typeof value === 'string' ? value.trim() : ''
+    if (!v) return null
+    try {
+      const host = new URL(v).hostname
+      if (host === '127.0.0.1' || host === 'localhost' || host === '::1') {
+        return 'loopback'
+      }
+      return 'remote'
+    } catch {
+      return 'remote'
+    }
+  }
+  const buckets = [
+    env.HTTPS_PROXY,
+    env.https_proxy,
+    env.HTTP_PROXY,
+    env.http_proxy,
+    env.ALL_PROXY,
+    env.all_proxy,
+  ].map(one)
+  if (buckets.includes('loopback')) return 'loopback'
+  if (buckets.includes('remote')) return 'remote'
+  return 'none'
+}
+
 function clampDimension(value) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0
   return Math.max(0, Math.min(9999, Math.floor(value)))
@@ -353,6 +384,16 @@ export function formatClientEnvironment(opts = {}) {
     ['p', 'na'],
     ['g', 'na'],
     ['osc', 'na'],
+    // 后 4 个字段是官方较新版本才加的（真机抓包 2026-10-01 确认存在）。
+    // 语义逐条对齐 cli/src/utils/client-environment.ts:377-380：
+    //   tzo = TZ 覆盖了系统时区？（本进程不改 TZ → 0）
+    //   px  = 代理桶（none/loopback/remote）
+    //   tls = 是否禁用了证书校验（默认 1 = 正常校验）
+    //   ca  = 是否追加了自定义 CA
+    ['tzo', flag(env.TZ)],
+    ['px', proxyBucketOf(env)],
+    ['tls', env.NODE_TLS_REJECT_UNAUTHORIZED?.trim() === '0' ? '0' : '1'],
+    ['ca', flag(env.NODE_EXTRA_CA_CERTS?.trim())],
   ]
   return ['v1', ...fields.map(([k, v]) => `${k}=${v}`)].join(';')
 }
