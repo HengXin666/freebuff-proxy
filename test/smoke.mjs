@@ -7103,3 +7103,83 @@ console.log('smoke ok')
     'https://www.codebuff.com user:u1',
   )
 }
+
+// 目录协议（x-freebuff-catalog-protocol / -fetch）：服务端据此把请求认作
+// **目录客户端**并使用句柄（fbm1.xxx）而非 legacy 模型 id。官方原话：
+//   "Its presence is what tells the session endpoints to answer with catalog
+//    keys instead of model ids."
+// 没有它只能走 legacy 路径，在受限出口下被直接拒绝。契约见
+// .agents/notes/implemented/bug-fix/2026-10-01-catalog-protocol.md
+{
+  const {
+    CATALOG_PATH,
+    HEADER_CATALOG_PROTOCOL,
+    CATALOG_PROTOCOL_VERSION,
+    HEADER_CATALOG_FETCH,
+    MODEL_HANDLE_PREFIX,
+    isModelHandle,
+    CatalogHolder,
+  } = await import('../src/upstream/catalog-protocol.js')
+
+  assert.equal(CATALOG_PATH, '/api/v1/freebuff/models')
+  assert.equal(HEADER_CATALOG_PROTOCOL, 'x-freebuff-catalog-protocol')
+  assert.equal(CATALOG_PROTOCOL_VERSION, '1')
+  assert.equal(HEADER_CATALOG_FETCH, 'x-freebuff-catalog-fetch')
+  assert.equal(MODEL_HANDLE_PREFIX, 'fbm1.')
+
+  assert.equal(isModelHandle('fbm1.AAEAAUPe2Us'), true)
+  assert.equal(isModelHandle('deepseek/deepseek-v4-flash'), false)
+  assert.equal(isModelHandle(null), false)
+
+  // 未持有目录时不带头（走 legacy，可用性不受影响）
+  const h = new CatalogHolder({
+    apiHost: 'https://www.codebuff.com',
+    token: 't',
+    fetchImpl: async () => new Response('{}', { status: 500 }),
+  })
+  assert.equal(h.ready, false)
+  assert.deepEqual(h.headers(), {}, '未持有时必须返回空头，绝不假装已持有')
+  assert.equal(h.handleFor('m-1'), 'm-1', '无句柄时原样返回 id（legacy 路径）')
+
+  // 抓取失败：静默返回 false，并写退避（不反复打上游）
+  const ok1 = await h.fetch()
+  assert.equal(ok1, false, '抓取失败必须返回 false 而不是抛')
+  const ok2 = await h.fetch()
+  assert.equal(ok2, false, '退避期内不再抓')
+
+  // 成功的抓取：解析 rows（**不是** models/data）+ key/handle 配对
+  let called = 0
+  const h2 = new CatalogHolder({
+    apiHost: 'https://www.codebuff.com',
+    token: 't',
+    fetchImpl: async () => {
+      called += 1
+      return new Response(
+        JSON.stringify({
+          protocol: 1,
+          version: 'v0.g1.e82909.limited.5',
+          fetchId: 'fbf1.AAGZWM32cR3rz9Ux042',
+          recommendedKey: 'm-00032eaeec',
+          fallbackKey: 'm-00032eaeec',
+          rows: [
+            { key: 'm-00032eaeec', handle: 'fbm1.AAEAAUPe2Us', displayName: 'MiMo' },
+            { key: 'm-00032eaeeb', handle: 'fbm1.BBBBBUPe2Us', displayName: 'DS' },
+            { key: 'm-bad' },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    },
+  })
+  assert.equal(await h2.fetch(), true, '成功抓取返回 true')
+  assert.equal(h2.ready, true)
+  assert.equal(called, 1)
+  await h2.fetch()
+  assert.equal(called, 1, '已持有时不再重抓')
+  assert.equal(h2.handleFor('m-00032eaeec'), 'fbm1.AAEAAUPe2Us', 'id → 句柄映射正确')
+  assert.equal(h2.handleFor('m-unknown'), 'm-unknown', '未知 id 原样返回')
+  assert.equal(h2.recommendedKey, 'm-00032eaeec', '推荐 key 要被记录下来')
+  const hdrs = h2.headers()
+  assert.equal(hdrs[HEADER_CATALOG_PROTOCOL], '1')
+  assert.equal(hdrs[HEADER_CATALOG_FETCH], 'fbf1.AAGZWM32cR3rz9Ux042')
+}

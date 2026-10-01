@@ -5,6 +5,7 @@ import {
   webChatHeaders,
 } from './web-chat.js'
 import { DeviceSigner } from './device-signing.js'
+import { CatalogHolder, isModelHandle } from './catalog-protocol.js'
 import {
   BUN_USER_AGENT,
   HEADER_COMPACT_SESSION as FREEBUFF_COMPACT_SESSION_HEADER,
@@ -280,6 +281,15 @@ export function createUpstreamClient(config, token, opts = {}) {
         })
       : null
 
+  /**
+   * 目录持有者：先 GET /api/v1/freebuff/models 拿 fetchId 与模型句柄。
+   * 服务端据此把请求认作**目录客户端**（官方原话："Its presence is what tells
+   * the session endpoints to answer with catalog keys instead of model ids"）。
+   * 没有它就只能走 legacy 路径，在受限出口下会被直接拒绝。
+   * 见 .agents/notes/implemented/bug-fix/2026-10-01-catalog-protocol.md
+   */
+  const catalog = new CatalogHolder({ apiHost: apiBase, token })
+
   async function apiFetch(path, init = {}) {
     const url = path.startsWith('http') ? path : `${apiBase}${path}`
     const headers = {
@@ -296,6 +306,13 @@ export function createUpstreamClient(config, token, opts = {}) {
     if (token && init.includeAuth !== false) {
       Object.assign(headers, freebuffAuthHeaders(token))
     }
+    // 目录头（x-freebuff-catalog-protocol / -fetch）：服务端据此把请求认作
+    // 目录客户端并使用句柄而非 legacy 模型 id。best-effort：抓不到就不带，
+    // 走 legacy 路径（可用性不受影响）。
+    if (init.catalog !== false) {
+      const ok = await catalog.fetch().catch(() => false)
+      if (ok) Object.assign(headers, catalog.headers())
+    }
     // 设备签名三头（x-freebuff-device-{key,ts,sig}）。best-effort：
     // 没有密钥或注册失败时返回 {}，请求照旧发出（上游退回未签名路径）。
     // ⚠️ 必须在 body 确定之后调用 —— 签名覆盖的是**实际发送的 body 字节**。
@@ -304,9 +321,20 @@ export function createUpstreamClient(config, token, opts = {}) {
         method: init.method || 'GET',
         url,
         body: typeof init.body === 'string' ? init.body : null,
-        fetchId: init.fetchId ?? null,
+        // ⚠️ 签名载荷里的 fetchId 必须与 x-freebuff-catalog-fetch 头**完全一致**
+        // —— 它把请求绑定到签发句柄的那次目录抓取。传 null 会让签名与头不匹配，
+        // 服务端验签失败 → 等同于未签名（实测表现为照旧被拒）。
+        fetchId: catalog.ready ? catalog.fetchId : null,
       })
       Object.assign(headers, sigHeaders)
+    }
+    // 可观测性：把本次实际发出的指纹面记录下来，便于与官方抓包逐头对比。
+    if (init.logFingerprint) {
+      logger.info('outgoing request fingerprint', {
+        url: url.slice(0, 80),
+        method: init.method || 'GET',
+        headers: Object.keys(headers).sort(),
+      })
     }
     const controller = new AbortController()
     const timeoutMs = init.timeoutMs ?? config.limits.upstreamTimeoutSec * 1000
@@ -339,6 +367,12 @@ export function createUpstreamClient(config, token, opts = {}) {
     loginBase,
     token,
     proxyUrl,
+    /**
+     * 目录持有者：暴露给上层把模型 id 映射成服务端句柄。
+     * 官方 chat 的 model 字段用的是句柄（fbm1.xxx）而非 deepseek/deepseek-v4-flash。
+     * 句柄是服务端签名的，客户端造不出来，只能先抓目录。
+     */
+    catalog,
 
     async me(fields = ['id', 'email']) {
       const res = await apiFetch(`/api/v1/me?fields=${fields.join(',')}`, {
