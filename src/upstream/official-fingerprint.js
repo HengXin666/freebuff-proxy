@@ -147,6 +147,11 @@ export function officialSessionHeaders(method, token, opts = {}) {
   if (isCliClaim(opts.instanceId)) {
     headers[HEADER_MULTI_SESSION] = '1'
     headers[HEADER_PURCHASE_CONTINUITY] = '1'
+    // 官方在**非 GET** 的 cli claim 请求上带 attempt id（POST admission 实测有）。
+    const attempt = claimAttemptId(opts.instanceId)
+    if (attempt && method !== 'GET') {
+      headers[HEADER_DESKTOP_ATTEMPT_ID] = attempt
+    }
     if (method === 'GET') {
       headers[HEADER_HEARTBEAT] = '1'
       if (!opts.compact) headers[HEADER_INCLUDE_UNUSED_RATE_LIMITS] = '1'
@@ -255,6 +260,23 @@ export const CLI_CLAIM_PREFIX = 'cli:'
 /** 官方 multi-session 协议头（instanceId 带 cli: 前缀时才发）。 */
 export const HEADER_MULTI_SESSION = 'x-freebuff-multi-session'
 export const HEADER_PURCHASE_CONTINUITY = 'x-freebuff-purchase-continuity'
+/**
+ * Desktop 专用头，但**CLI 在多会话协议下也发**。
+ *
+ * 真机抓包（2026-10-01，从零建会话）：官方 POST /session/admission 带
+ *   x-freebuff-desktop-attempt-id: b4e28cef-827c-4584-a9b7-caf2d0062f09
+ * 而同一请求的 x-freebuff-instance-id 是 `cli:b4e28cef-827c-4584-a9b7-caf2d0062f09`
+ * —— 即 **claim 去掉 `cli:` 前缀**（对齐官方 freebuffCliAttemptId()）。
+ */
+export const HEADER_DESKTOP_ATTEMPT_ID = 'x-freebuff-desktop-attempt-id'
+
+/** claim 的裸 uuid（去掉 cli: 前缀），官方 freebuffCliAttemptId() 同义。 */
+export function claimAttemptId(instanceId) {
+  if (typeof instanceId !== 'string') return null
+  return instanceId.startsWith(CLI_CLAIM_PREFIX)
+    ? instanceId.slice(CLI_CLAIM_PREFIX.length)
+    : null
+}
 export const HEADER_HEARTBEAT = 'x-freebuff-heartbeat'
 export const HEADER_INCLUDE_UNUSED_RATE_LIMITS =
   'x-freebuff-include-unused-rate-limits'

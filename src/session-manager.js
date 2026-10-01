@@ -751,8 +751,46 @@ export class SessionManager {
       })
       body = null
     }
-    // GET 没给出可用会话（status none）或直接失败：回落官方旧路径 POST admission。
+    // GET 没给出可用会话：**再 GET 一次**（带 model 作为 hint）。
+    //
+    // 官方行为（真机抓包）：全程 18 次 GET、**零次 POST**，会话最终变成 active。
+    // 说明 GET 本身就是建会话路径，服务端会在某次 GET 上置为 active。
+    // 此前我们 status:none 就立刻回落 POST admission —— 而那是服务端会拒的
+    // 路径（实测 country_not_allowed），等于主动把自己送进死路。
     if (!body || body.status === 'none') {
+      // 官方建会话路径（真机抓包 2026-10-01，从零开始）：
+      //   GET /session ×3（轮询，返回 none）
+      //   → **POST /session/admission**（带 fbm1. 句柄的 x-freebuff-model）
+      //   → 200 active
+      // 所以我们此前 POST admission 的**方向是对的**，错的是 model 传了名字
+      // 而不是句柄（已在 client.js 里修正）。这里直接走 POST。
+      logger.info('GET returned none; POSTing admission with claim', {
+        model,
+        claimId,
+      })
+      try {
+        body = await this.upstream.freebuffSession('POST', {
+          model,
+          instanceId: claimId,
+        })
+      } catch (err) {
+        logger.warn('POST admission failed', {
+          code: err?.code,
+          status: err?.status,
+          claimId,
+        })
+      }
+    }
+    // 仍拿不到：最后再试一次 POST（等价重复，作为老部署兜底）。
+    //
+    // 说明：真机抓包确认官方建会话只走一次 POST /session/admission；
+    // 上面的 POST 失败后这里不会再成功，但保留一层兜底不影响保真度
+    // （与官方 session_admission_unavailable 的容错语义一致）。
+    if (!body || body.status === 'none') {
+      logger.warn('admission produced no session; retrying POST once', {
+        model,
+        claimId,
+      })
       body = await this.upstream.freebuffSession('POST', {
         model,
         instanceId: claimId,
@@ -911,8 +949,18 @@ export class SessionManager {
       // 上游同一个号同一时间只能有一个客户端在线：轮询 GET 若撞上在途
       // chat 会干扰/顶掉活跃会话（428 waiting_room_required），因此跳过。
       if (this._inFlight > 0) return this.session
-      const opts = {}
-      if (this.session?.instanceId) opts.instanceId = this.session.instanceId
+      // ⚠️ 2026-10-01 真机对比修正：官方 CLI **每个** GET 都带自生成的 cli claim
+      // （含 x-freebuff-multi-session / -purchase-continuity / -heartbeat），
+      // 即使当时没有活跃会话。我们此前只在"已有会话"时才带 instanceId，
+      // 没有会话就裸发 —— 抓包对比一栏就看出少了整整 5 个头：
+      //   x-freebuff-instance-id / -multi-session / -purchase-continuity /
+      //   -heartbeat / -compact-session
+      // 裸发的 GET 服务端只能按 legacy 处理，这是被拒的直接原因之一。
+      // 见 .agents/notes/implemented/bug-fix/2026-10-01-cli-get-session-path.md
+      const opts = {
+        instanceId: this.session?.instanceId || newCliClaimId(),
+        compact: true,
+      }
       try {
         const body = await this.upstream.freebuffSession('GET', opts)
         /**

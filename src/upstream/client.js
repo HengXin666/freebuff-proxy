@@ -446,9 +446,36 @@ export function createUpstreamClient(config, token, opts = {}) {
       // 但本项目 token 由网页登录签发，既有实现记录「只带 Bearer 会 401」，
       // 故这里**额外**保留该头（唯一的已知残留差异，理由与待验证项见
       // .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md）。
-      const headers = {
+      // ⚠️ admission 的 x-freebuff-model 必须是**目录句柄**（fbm1.xxx），
+      // 不是模型名。真机抓包（从零建会话）确认官方 POST /session/admission 带：
+      //   x-freebuff-model: fbm1.AAEAAUPe2Us...（句柄）
+      // 我们此前传 deepseek/deepseek-v4-flash —— 服务端认不出，直接拒。
+      // 句柄只能从目录拿（服务端签名），所以 POST 前必须先抓一次目录。
+      let modelForWire = opts.model
+      if (opts.model && !isModelHandle(opts.model)) {
+        await catalog.fetch().catch(() => false)
+        modelForWire = catalog.handleFor(opts.model)
+        // 目录里查不到（目录行数随服务端版本变化，模型名未必在册）时，
+        // 用服务端**推荐**的 key —— 它一定在目录里、一定能翻成句柄。
+        // recommendedKey 是目录响应的顶层字段（实测 `m-00032eaeec`），
+        // 也正是官方会话回执里出现的那个 model。
+        if (
+          (!modelForWire || modelForWire === opts.model) &&
+          catalog.recommendedKey
+        ) {
+          const rec = catalog.handleFor(catalog.recommendedKey)
+          if (rec && isModelHandle(rec)) {
+            logger.info('model not in catalog; using recommended handle', {
+              requested: opts.model,
+              recommendedKey: catalog.recommendedKey,
+            })
+            modelForWire = rec
+          }
+        }
+      }
+      let headers = {
         ...officialSessionHeaders(method, token, {
-          model: opts.model,
+          model: modelForWire,
           instanceId: opts.instanceId,
           compact: opts.compact,
           walletSpendLimit: opts.walletSpendLimit,
@@ -526,7 +553,17 @@ export function createUpstreamClient(config, token, opts = {}) {
       // 也就是说 countryBlockReason 是**说明性字段**（解释为什么模型集变小），
       // 不是拒绝信号。把它当拒绝 → 明明拿到可用会话却主动判死。
       // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+      // ⚠️ 关键：只看 **HTTP 403** 才当 terminal。
+      //
+      // 真机抓包（2026-10-01，从零建会话）证明：**正常的 GET 回执也带
+      // countryBlockReason**（status:'none' + countryBlockReason:'country_not_allowed'
+      // 是同一台机器的正常响应），官方随后照样用 POST admission 建成了会话。
+      // 也就是说这个字段是**纯说明性**的（解释模型集为何变小），出现在成功路径上。
+      // 此前我们"见到字段就判死"，把正常流程打断了 ——
+      // 表现就是 GET 之后再也走不到 POST admission。
+      // 真正的 terminal 判据是 HTTP 403。
       if (
+        res.status === 403 &&
         body &&
         body.status !== 'active' &&
         isTerminalCountryBlock(body.countryBlockReason)

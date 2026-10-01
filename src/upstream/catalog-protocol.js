@@ -68,11 +68,21 @@ export class CatalogHolder {
   }
 
   /**
-   * 把一个模型 id 映射成服务端句柄；没有对应句柄时原样返回（legacy 路径）。
+   * 把一个模型标识映射成服务端句柄；没有对应句柄时原样返回（legacy 路径）。
+   *
+   * 接受的输入：
+   *   - `m-xxxx`（目录 key）—— 会话回执里服务端给的就是这个，**主路径**；
+   *   - `fbm1.xxx`（已是句柄）—— 原样返回；
+   *   - `provider/name`（legacy 模型 id）—— 目录里没有该键，原样返回。
+   *
+   * 真机证据：官方 chat 的 model 字段是 `fbm1.AAEAAUPe2Us...`（句柄），
+   * 而会话回执给的是 `m-00032eaeec`（key）。所以必须做这层映射。
    * @param {string} modelId
    * @returns {string}
    */
   handleFor(modelId) {
+    if (typeof modelId !== 'string' || !modelId) return modelId
+    if (isModelHandle(modelId)) return modelId
     return this.handles.get(modelId) || modelId
   }
 

@@ -983,6 +983,9 @@ export function createProxyHandler(ctx) {
               // 服务端指派的 model（会话回执里的 m-xxx / fbm1.xxx）。
               // 用错会得到 session_model_mismatch —— 实测踩过。
               snap.model,
+              // 目录持有者：把 m-xxx（目录 key）翻成 fbm1.xxx（句柄）——
+              // 官方 chat 的 model 用的就是句柄（真机抓包确认）。
+              rt.upstream.catalog,
             )
             result = await forwardCompletions({
               req,
@@ -1507,12 +1510,19 @@ export function createProxyHandler(ctx) {
      * 见 .agents/notes/implemented/bug-fix/2026-10-01-session-model-binding.md
      */
     sessionModel,
+    catalog,
   ) {
     const { clientId: fallbackClientId } = newIds()
     const effectiveClientId = clientId || fallbackClientId
-    // 优先级：服务端指派的 model（句柄/key）> 请求的模型名。
-    const outgoingModel =
+    // 优先级：服务端指派的 model（m-xxx）> 请求的模型名；
+    // 再经目录翻成**句柄**（fbm1.xxx）—— 官方 chat 的 model 就是句柄。
+    // 真机证据：{"model":"fbm1.AAEAAUPe2Us...","codebuff_metadata":{...}}
+    const assigned =
       typeof sessionModel === 'string' && sessionModel ? sessionModel : upstreamModel
+    const outgoingModel =
+      catalog && typeof catalog.handleFor === 'function'
+        ? catalog.handleFor(assigned)
+        : assigned
     let body = stripFreebuffConversationState({
       ...clientBody,
       model: outgoingModel,
