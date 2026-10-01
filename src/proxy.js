@@ -1523,6 +1523,12 @@ export function createProxyHandler(ctx) {
       catalog && typeof catalog.handleFor === 'function'
         ? catalog.handleFor(assigned)
         : assigned
+    logger.info('chat forward model resolved', {
+      requested: upstreamModel,
+      sessionModel: sessionModel ?? null,
+      assigned,
+      outgoing: outgoingModel,
+    })
     let body = stripFreebuffConversationState({
       ...clientBody,
       model: outgoingModel,
