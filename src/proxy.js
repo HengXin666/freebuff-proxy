@@ -35,6 +35,7 @@ import {
   ENFORCED_FOREIGN_SIGNALS,
   detectForeignClient,
 } from './upstream/foreign-client-signals.js'
+import { withChatMetadataParity as chatMetadataParity } from './upstream/chat-metadata-parity.js'
 import {
   coerceUser,
   saveAccountUser,
@@ -1610,6 +1611,15 @@ export function createProxyHandler(ctx) {
       ...(existingMeta.trace_session_id
         ? {}
         : { trace_session_id: randomUUID() }),
+      // 官方 chat metadata 的另三个字段（真机抓包确认存在）：
+      //   freebuff_input_profile / repo_snapshot / llm_step_number
+      // 我们此前一个都没有。格式逐字对齐官方（见 chat-metadata-parity.js）。
+      ...chatMetadataParity(
+        {
+          messages: body.messages,
+          stepNumber: 1,
+        },
+      ),
     }
     // provider.data_collection=deny：官方 CLI 每次 chat 都带（拒绝数据采集），
     // 缺失反而与官方客户端不一致。客户端自带 provider 时保留其字段，补上 deny。
