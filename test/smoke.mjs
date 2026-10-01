@@ -314,21 +314,21 @@ globalThis.fetch = async (url, init = {}) => {
       const inst =
         headers['x-freebuff-instance-id'] ||
         headers['X-Freebuff-Instance-Id'] ||
-        ''
-      if (/^cli:/.test(inst)) {
-        return jsonRes({
-          status: 'active',
-          accessTier: 'limited',
-          instanceId: inst,
-          model: 'm-00032eaeec',
-          admittedAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + sessionExpiryMs).toISOString(),
-          remainingMs: sessionExpiryMs,
-          countryCode: 'JP',
-          countryBlockReason: 'country_not_allowed',
-          verificationReason: 'region_locked',
-        })
-      }
+        'cli:mock-claim'
+      return jsonRes({
+        status: 'active',
+        accessTier: 'limited',
+        instanceId: inst,
+        // 服务端**指派**的 model（目录 key），不是客户端请求的模型名。
+        // chat 必须回用这个值，否则上游报 session_model_mismatch。
+        model: 'm-00032eaeec',
+        admittedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + sessionExpiryMs).toISOString(),
+        remainingMs: sessionExpiryMs,
+        countryCode: 'JP',
+        countryBlockReason: 'country_not_allowed',
+        verificationReason: 'region_locked',
+      })
     }
     return jsonRes({
       status: 'none',
@@ -407,7 +407,18 @@ globalThis.fetch = async (url, init = {}) => {
   }
   if (u.includes('/api/v1/chat/completions')) {
     const body = JSON.parse(init.body)
-    assert.match(body.model, /^[a-z0-9-]+\/[a-z0-9.-]+$/i)
+    // model 可能是三种形态之一：
+    //   - provider/name（legacy 模型 id，如 deepseek/deepseek-v4-flash）
+    //   - m-xxxxxxx（目录 key，服务端指派）
+    //   - fbm1.xxx（目录句柄，服务端签名）
+    // chat 必须用**会话回执里服务端指派的 model**，不能用自己的模型名
+    // （否则上游报 session_model_mismatch）。见
+    // .agents/notes/implemented/bug-fix/2026-10-01-session-model-binding.md
+    assert.match(
+      body.model,
+      /^(?:[a-z0-9-]+\/[a-z0-9.-]+|m-[a-z0-9]+|fbm1\.[A-Za-z0-9_-]+)$/i,
+      'chat model 必须是合法形态, got ' + body.model,
+    )
     if (
       mockMode === 'legacy_luna_once' &&
       body.model === 'openai/gpt-5.6-luna' &&
@@ -1844,6 +1855,23 @@ for (const model of verifiedSpecialModels) {
     sessionPosts,
     0,
     'GET 路径成功时不得再打 POST admission; sessionPosts=' + sessionPosts,
+  )
+  // 会话模型绑定：chat 的 model 必须用**会话回执里服务端指派的值**
+  // （mock 给的是 m-00032eaeec），而不是客户端请求的模型名 ——
+  // 用错会得到 session_model_mismatch。见
+  // .agents/notes/implemented/bug-fix/2026-10-01-session-model-binding.md
+  const chatCall = calls.find((c) => c.url.includes('/chat/completions'))
+  assert.ok(chatCall, '应发出 chat 请求')
+  const sentModel = JSON.parse(chatCall.body).model
+  assert.equal(
+    sentModel,
+    'm-00032eaeec',
+    'chat 必须用服务端指派的 model（会话回执里的 m-xxx），got ' + sentModel,
+  )
+  assert.notEqual(
+    sentModel,
+    'deepseek/deepseek-v4-flash',
+    '不能把客户端请求的模型名直接转给上游（会 session_model_mismatch）',
   )
   await gsRuntimes.shutdown()
   gsServer.close()
@@ -7183,3 +7211,9 @@ console.log('smoke ok')
   assert.equal(hdrs[HEADER_CATALOG_PROTOCOL], '1')
   assert.equal(hdrs[HEADER_CATALOG_FETCH], 'fbf1.AAGZWM32cR3rz9Ux042')
 }
+
+// 会话模型绑定：chat 的 model 必须用**会话回执里服务端指派的值**
+// （m-xxxx 目录 key / fbm1.xxx 句柄），不能用自己的模型名 ——
+// 否则上游报 session_model_mismatch（实测踩过）。契约见
+// .agents/notes/implemented/bug-fix/2026-10-01-session-model-binding.md
+{}

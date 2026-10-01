@@ -980,6 +980,9 @@ export function createProxyHandler(ctx) {
               agentId,
               clientId,
               hermesDelegateAlias,
+              // 服务端指派的 model（会话回执里的 m-xxx / fbm1.xxx）。
+              // 用错会得到 session_model_mismatch —— 实测踩过。
+              snap.model,
             )
             result = await forwardCompletions({
               req,
@@ -1494,12 +1497,25 @@ export function createProxyHandler(ctx) {
     agentId,
     clientId,
     hermesDelegateAlias,
+    /**
+     * 服务端在会话回执里给出的 model 值。**必须用它**，不能用自己的模型名。
+     *
+     * 真机证据：官方 GET 建会话的回执是 `"model":"m-00032eaeec"`（目录 key），
+     * 或 `"model":"fbm1.AAEAAUPe2Us..."`（句柄）—— 都是**服务端指派**的，
+     * 与客户端请求的模型名无关。实测用 `deepseek/deepseek-v4-flash` 去 chat
+     * 会得到 `session_model_mismatch`（会话绑定的模型与请求的不符）。
+     * 见 .agents/notes/implemented/bug-fix/2026-10-01-session-model-binding.md
+     */
+    sessionModel,
   ) {
     const { clientId: fallbackClientId } = newIds()
     const effectiveClientId = clientId || fallbackClientId
+    // 优先级：服务端指派的 model（句柄/key）> 请求的模型名。
+    const outgoingModel =
+      typeof sessionModel === 'string' && sessionModel ? sessionModel : upstreamModel
     let body = stripFreebuffConversationState({
       ...clientBody,
-      model: upstreamModel,
+      model: outgoingModel,
     })
     // Hermes 的 delegate_task 命中上游 foreign_tool_names。只在客户端实际声明
     // 该工具时做窄范围双向别名；历史 tool_calls/tool message/tool_choice 同步改名，
