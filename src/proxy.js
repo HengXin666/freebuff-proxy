@@ -1333,6 +1333,10 @@ export function createProxyHandler(ctx) {
       return
     }
 
+    // 客户端断开的 abort 信号。**必须保留返回的 cleanup**：它是 keep-alive
+    // 连接的 socket 监听器，不摘会随请求次数累积（实测踩过 "This operation
+    // was aborted" 且监听器泄漏）。
+    const abortCtrl = reqToAbortSignal(req)
     let upstreamRes
     try {
       upstreamRes = await rt.upstream.webChat({
@@ -1340,10 +1344,11 @@ export function createProxyHandler(ctx) {
         content,
         model: webModel,
         reasoningEffort: body.reasoning_effort || 'medium',
-        signal: reqToAbortSignal(req).signal,
+        signal: abortCtrl.signal,
         timeoutMs: 60_000,
       })
     } catch (err) {
+      abortCtrl.cleanup()
       logger.warn('web channel request failed', {
         model: webModel,
         error: err instanceof Error ? err.message : String(err),
@@ -1366,6 +1371,7 @@ export function createProxyHandler(ctx) {
       } catch {
         parsed = null
       }
+      abortCtrl.cleanup()
       sendJson(res, upstreamRes.status || 502, {
         error: {
           message:
@@ -1391,41 +1397,78 @@ export function createProxyHandler(ctx) {
         connection: 'keep-alive',
       })
       let first = true
-      const result = await consumeWebStream(upstreamRes.body, (ev) => {
-        if (first) {
+      // 客户端可能在中途断开（Ctrl-C / 读到一半就走）。那时 res.write 会抛，
+      // 或 abort 会取消上游读取 —— 两者都必须走"优雅收尾"而不是冒成
+      // unhandled error（实测踩过 AbortError 冒到顶层）。
+      let clientGone = false
+      try {
+        const result = await consumeWebStream(upstreamRes.body, (ev) => {
+          if (clientGone) return
+          try {
+            if (first) {
+              res.write(
+                sseFrame(
+                  openAiChunk({ id, model: modelOut, delta: { role: 'assistant' } }),
+                ),
+              )
+              first = false
+            }
+            const delta = webEventToDelta(ev)
+            if (delta) {
+              res.write(sseFrame(openAiChunk({ id, model: modelOut, delta })))
+            }
+          } catch {
+            // 下游已断开：停止转发，但继续把上游读完以便它自行收尾
+            clientGone = true
+          }
+        })
+        if (!clientGone) {
+          if (first) {
+            res.write(
+              sseFrame(
+                openAiChunk({ id, model: modelOut, delta: { role: 'assistant' } }),
+              ),
+            )
+          }
           res.write(
             sseFrame(
-              openAiChunk({ id, model: modelOut, delta: { role: 'assistant' } }),
+              openAiChunk({ id, model: modelOut, delta: {}, finishReason: 'stop' }),
             ),
           )
-          first = false
+          res.write(SSE_DONE)
+          res.end()
         }
-        const delta = webEventToDelta(ev)
-        if (delta) res.write(sseFrame(openAiChunk({ id, model: modelOut, delta })))
-      })
-      if (first) {
-        res.write(
-          sseFrame(
-            openAiChunk({ id, model: modelOut, delta: { role: 'assistant' } }),
-          ),
-        )
+        logger.info('web channel stream done', {
+          model: webModel,
+          threadId: result.threadId,
+          chars: result.text.length,
+          clientGone,
+        })
+      } catch (err) {
+        // abort（客户端断开）是预期路径，不当错误
+        logger.info('web channel stream ended early', {
+          model: webModel,
+          reason: err instanceof Error ? err.message : String(err),
+        })
+      } finally {
+        abortCtrl.cleanup()
+        if (!res.writableEnded) {
+          try {
+            res.end()
+          } catch {
+            /* 已断开 */
+          }
+        }
       }
-      res.write(
-        sseFrame(
-          openAiChunk({ id, model: modelOut, delta: {}, finishReason: 'stop' }),
-        ),
-      )
-      res.write(SSE_DONE)
-      res.end()
-      logger.info('web channel stream done', {
-        model: webModel,
-        threadId: result.threadId,
-        chars: result.text.length,
-      })
       return
     }
 
-    const result = await consumeWebStream(upstreamRes.body, () => {})
+    let result
+    try {
+      result = await consumeWebStream(upstreamRes.body, () => {})
+    } finally {
+      abortCtrl.cleanup()
+    }
     sendJson(
       res,
       200,

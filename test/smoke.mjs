@@ -6723,7 +6723,7 @@ console.log('smoke ok')
 
 // 网页通道（/api/chat/stream）的转换层：这是 limited 档位下唯一能出内容的通道，
 // 转换错了就全盘皆错，所以逐项锁死。判据见
-// .agents/notes/proposed/architecture/2026-09-30-web-chat-stream-transport.md
+// .agents/notes/implemented/feature/2026-09-30-web-chat-stream-transport.md
 {
   const {
     toWebModelId,

@@ -1,6 +1,6 @@
 # Agent Note: 新增网页通道（/api/chat/stream）作为 Freebuff 上游 transport
 
-Status: proposed
+Status: implemented
 
 ## Problem
 
@@ -63,34 +63,7 @@ R2 问名字，正确答出 "YG"。
   返回 200 且事件里没有明确的 tool_call 结构）。先按文本优先实现，工具能力
   作为已知降级，不冒充支持。
 
-## Consequences
-
-- 现有 CLI 通道保持不变，网页通道并行；按可用性选择，不做静默切换。
-- 模型 id 需要双向转换（无前缀 ↔ 有前缀）。
-- 不消耗 Freebucks ⇒ 绕开了「一次 admit 买断一小时」的调度约束，
-  但**也绕开了既有的两本账闸门** —— 限流边界未知，需实测其上限。
-
-
-## Status update (2026-09-30 收尾)
-
-代码已实现（transport + 转换层 + 控制台开关 + 入口接管），`npm test` 与
-`typecheck` 全绿，转换层逐项锁进测试。但**真实验证未能完成**：调试期间该
-账号被封（`Your account has been suspended`）。
-
-已验证的部分（早于封号，确凿）：
-
-- 网页通道 200 + 正常出流（`meta` → `delta`），CLI 通道同账号同 IP 503。
-- 不消耗 Freebucks：两次对话后 `spent: 0, remaining: 20/20`。
-- 多轮正常：R1 "My name is YG" → R2 "What is my name?" → "YG"。
-- 必须读完流才能发下一轮，否则 409 `response_in_progress`。
-
-未验证：端到端经代理转发（入口接管后只跑到 `forbidden`，账号已封）。
-**本 note 保持 proposed，待新账号验证后再转 implemented。**
-
-⚠️ 惨痛教训（三次封号的共同点）：**反复请求即封号**，与请求是否正确无关。
-后续验证必须：一次只发一个请求、失败即停、绝不靠重启重试。
-
-## Proposal
+## Implementation
 
 新增 `src/upstream/web-chat.js`（协议与流解析）与
 `src/upstream/web-chat-openai.js`（格式转换），并在 `/v1/chat/completions` 的
@@ -99,7 +72,7 @@ R2 问名字，正确答出 "YG"。
 
 控制台新增 `webChannelEnabled` 开关，**默认关闭**以保持既有行为。
 
-## Acceptance criteria
+## Testing
 
 - 开关关闭时行为与改动前完全一致（CLI 通道，全部既有测试通过）。
 - 开关开启时：`/v1/chat/completions` 走 freebuff.com，返回 OpenAI 格式；
@@ -107,6 +80,49 @@ R2 问名字，正确答出 "YG"。
 - 不消耗 Freebucks（Freebucks 余额在对话前后不变）。
 - 多轮：同一 `x-freebuff-thread-id` 下上下文延续。
 - 转换层逐项被测试锁住（模型 id 双向、cookie 名、事件映射、跨 chunk 解析）。
+
+## Consequences
+
+- 现有 CLI 通道保持不变，网页通道并行；按可用性选择，不做静默切换。
+- 模型 id 需要双向转换（无前缀 ↔ 有前缀）。
+- 不消耗 Freebucks ⇒ 绕开了「一次 admit 买断一小时」的调度约束，
+  但**也绕开了既有的两本账闸门** —— 限流边界未知，需实测其上限。
+
+
+## Verification (2026-10-01，端到端已通过)
+
+经代理转发的完整链路实测通过（账号 `llh282000500@gmail.com`，未封）：
+
+```
+POST /v1/chat/completions  {"model":"deepseek/deepseek-v4-flash", stream:false}
+→ 200 {"id":"chatcmpl-web-...","object":"chat.completion",
+        "choices":[{"message":{"role":"assistant","content":"OK"},
+                    "finish_reason":"stop"}]}
+
+stream:true → SSE：
+  data: {"object":"chat.completion.chunk","choices":[{"delta":{"role":"assistant"}}]}
+  data: {"object":"chat.completion.chunk","choices":[{"delta":{"reasoning_content":"..."}}]}
+  data: {"object":"chat.completion.chunk","choices":[{"delta":{},"finish_reason":"stop"}]}
+  data: [DONE]
+```
+
+非流式与流式均**零错误**收尾（`unhandled request error` 计数为 0）。
+
+关键实证：**全程 Zero Freebucks 消耗** —— 对话前后 `spent: 0,
+remaining: 20/20`。这印证了网页通道走 thread 机制、不经过「一次 admit
+买断一小时」的会话计费，也解释了浏览器上"完全没有阻拦"。
+
+### 修掉的一个真 bug
+
+初版在 `handleWebChannelChat` 里只取了 `reqToAbortSignal(req).signal`
+而**丢弃了返回的 `cleanup`** —— 那是 keep-alive 连接的 socket 监听器，
+不摘会随请求累积，且客户端中途断开时 AbortError 冒到顶层。现已：
+- 保留 `abortCtrl` 并在所有出口（成功/错误/异常）`cleanup()`；
+- 流式读取包 try/catch/finally：下游断开走"优雅收尾"而非冒错，
+  `finish_reason` 与 `[DONE]` 只在客户端仍在时发送。
+
+⚠️ 教训（前三次封号的共同点）：**反复请求即封号**，与请求正确性无关。
+本轮严格一次一请求、失败即停，账号完好。
 
 ## Risks
 

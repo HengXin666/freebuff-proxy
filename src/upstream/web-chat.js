@@ -16,7 +16,7 @@
  * 与 `Authorization: Bearer` 都返回 401 "Please sign in to chat"。
  *
  * 判据与取舍见
- * .agents/notes/proposed/architecture/2026-09-30-web-chat-stream-transport.md
+ * .agents/notes/implemented/feature/2026-09-30-web-chat-stream-transport.md
  */
 import { logger } from '../util/log.js'
 

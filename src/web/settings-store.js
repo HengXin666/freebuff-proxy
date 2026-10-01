@@ -15,7 +15,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   // 全部 limited 目录模型返回 503，而**同一账号同一出口**走网页通道完全正常。
   // 网页通道不消耗 Freebucks（走 thread 机制），也就不占用会话槽位。
   // 默认关闭：先保持既有行为，验证充分后再作为 limited 档位的自动回落。
-  // 见 .agents/notes/proposed/architecture/2026-09-30-web-chat-stream-transport.md
+  // 见 .agents/notes/implemented/feature/2026-09-30-web-chat-stream-transport.md
   webChannelEnabled: false,
   // 是否上报官方 CLI 形态的遥测（POST codebuff.com/api/logs）。
   // 官方 CLI 运行时会发 app_launched / fingerprint_generated / login_started
