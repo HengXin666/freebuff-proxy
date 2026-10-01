@@ -368,6 +368,11 @@ export function createUpstreamClient(config, token, opts = {}) {
     token,
     proxyUrl,
     /**
+     * 账号 user id —— 官方 chat 的 x-freebuff-acting-user-id 用的就是它。
+     * 与 device-keys 注册作用域里的那个 id 同源（凭据文件的 id 字段）。
+     */
+    accountId: opts.accountId || null,
+    /**
      * 目录持有者：暴露给上层把模型 id 映射成服务端句柄。
      * 官方 chat 的 model 字段用的是句柄（fbm1.xxx）而非 deepseek/deepseek-v4-flash。
      * 句柄是服务端签名的，客户端造不出来，只能先抓目录。

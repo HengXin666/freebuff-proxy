@@ -1711,6 +1711,9 @@ export function createProxyHandler(ctx) {
       // .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md
       ...officialChatHeaders(upstream.token, {
         version: getCliVersion(),
+        // 官方 chat 带 x-freebuff-acting-user-id（真机抓包 13 个头里有它，
+        // 其余 12 个是传输层）。我们此前没传 → 少一个指纹面。
+        userId: upstream.accountId || undefined,
       }),
     }
 

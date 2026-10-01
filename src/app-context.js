@@ -412,7 +412,11 @@ export class AccountRuntimes {
 
     const upstream = createUpstreamClient(this.config, user.authToken, {
       proxy: user.proxy || null,
-      accountId: accountKey,
+      // ⚠️ accountId 用于两处，语义不同但都需要**账号 user id**：
+      //   1) 代理池稳定分配（同一账号固定出口）
+      //   2) 官方 chat 的 x-freebuff-acting-user-id（真机抓包确认是 user id）
+      // 用 user.id 而不是 accountKey —— accountKey 是凭据文件名（可能是邮箱）。
+      accountId: user.id || accountKey,
       // 设备签名密钥落盘位置：与上游官方 CLI 同款（每账号一个文件）。
       // 上游据此判定「是不是注册过的真客户端」——见 src/upstream/device-signing.js
       deviceKeyPath: path.join(
