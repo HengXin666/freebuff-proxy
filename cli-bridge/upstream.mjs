@@ -17,6 +17,35 @@
 
 const HOST = 'https://www.codebuff.com';
 
+/**
+ * 逐字节 dump：把每个上游请求的原始形态落盘，供与官方客户端抓包逐字节对比。
+ * FREEBUFF_DUMP_DIR 设置时启用。落盘内容 = 方法/路径/头部名值/体（Buffer hex + utf8）。
+ */
+const DUMP_DIR = process.env.FREEBUFF_DUMP_DIR || '';
+let dumpSeq = 0;
+async function dumpReq(label, method, url, headers, body) {
+  if (!DUMP_DIR) return;
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  await mkdir(DUMP_DIR, { recursive: true });
+  const n = String(++dumpSeq).padStart(3, '0');
+  const bodyBuf = body == null ? Buffer.alloc(0) : Buffer.from(String(body), 'utf8');
+  const headLines = Object.entries(headers)
+    .map(([k, v]) => `${k}: ${v}`)
+    .sort();
+  const rec = {
+    n, label, method, url,
+    path: new URL(url).pathname,
+    headers: Object.fromEntries(
+      Object.entries(headers).sort(([a], [b]) => a.localeCompare(b)),
+    ),
+    headerLinesSorted: headLines,
+    bodyBytes: bodyBuf.length,
+    bodyUtf8: bodyBuf.toString('utf8'),
+    bodyHex: bodyBuf.toString('hex'),
+  };
+  await writeFile(`${DUMP_DIR}/${n}-${label}.json`, JSON.stringify(rec, null, 2));
+}
+
 // ---- base64url / sha256（官方同款：complete hex，空 body = sha256("")）----
 function b64u(buf) {
   const bytes = new Uint8Array(buf);
@@ -91,13 +120,13 @@ class Bridge {
 
   async fetchCatalog() {
     const url = `${HOST}/api/v1/freebuff/models`;
-    const res = await fetch(url, {
-      headers: {
-        ...this.auth(),
-        'x-freebuff-catalog-protocol': '1',
-        ...(await this.signHeaders('GET', url, null, null)),
-      },
-    });
+    const h1 = {
+      ...this.auth(),
+      'x-freebuff-catalog-protocol': '1',
+      ...(await this.signHeaders('GET', url, null, null)),
+    };
+    await dumpReq('catalog', 'GET', url, h1, null);
+    const res = await fetch(url, { headers: h1 });
     if (!res.ok) throw new Error(`catalog ${res.status}: ${(await res.text()).slice(0, 200)}`);
     this.catalog = await res.json();
     this.fid = this.catalog.fetchId;
@@ -158,9 +187,7 @@ class Bridge {
     const inst = this.cfg.instanceId || `cli:${crypto.randomUUID()}`;
     let last = null;
     for (let i = 0; i <= retries; i++) {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
+      const hdrs = {
           ...this.auth(),
           'x-freebuff-catalog-protocol': '1',
           'x-freebuff-catalog-fetch': this.fid,
@@ -176,8 +203,9 @@ class Bridge {
             ? { 'x-freebuff-takeover-instance-id': takeoverInstanceId }
             : {}),
           ...(await this.signHeaders('POST', url, null, this.fid)),
-        },
-      });
+        };
+      await dumpReq(`admit-${i}`, 'POST', url, hdrs, null);
+      const res = await fetch(url, { method: 'POST', headers: hdrs });
       const body = await res.json().catch(() => null);
       last = { status: res.status, body, instanceId: inst, attempt: i };
       if (body?.status === 'active') return last;
@@ -198,18 +226,16 @@ class Bridge {
   async startRun(agentId = 'base3-free-catalog') {
     const url = `${HOST}/api/v1/agent-runs`;
     const payload = JSON.stringify({ action: 'START', agentId, ancestorRunIds: [] });
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...this.auth(),
-        'x-codebuff-api-key': this.cfg.token,
-        'x-freebuff-catalog-protocol': '1',
-        ...(this.fid ? { 'x-freebuff-catalog-fetch': this.fid } : {}),
-        ...(await this.signHeaders('POST', url, payload, this.fid)),
-      },
-      body: payload,
-    });
+    const hdrs = {
+      'content-type': 'application/json',
+      ...this.auth(),
+      'x-codebuff-api-key': this.cfg.token,
+      'x-freebuff-catalog-protocol': '1',
+      ...(this.fid ? { 'x-freebuff-catalog-fetch': this.fid } : {}),
+      ...(await this.signHeaders('POST', url, payload, this.fid)),
+    };
+    await dumpReq('startRun', 'POST', url, hdrs, payload);
+    const res = await fetch(url, { method: 'POST', headers: hdrs, body: payload });
     const body = await res.json().catch(() => null);
     return { status: res.status, body, runId: body?.runId ?? null };
   }
@@ -236,23 +262,21 @@ class Bridge {
       },
       tools,
     });
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...this.auth(),
-        'user-agent': 'ai-sdk/openai-compatible/0.0.0-test/codebuff',
-        'x-freebuff-acting-user-id': this.cfg.userId,
-        'x-freebuff-catalog-protocol': '1',
-        'x-freebuff-catalog-fetch': this.fid,
-        'x-freebuff-model': row.handle,
-        'x-freebuff-instance-id': instanceId,
-        'x-freebuff-client': 'desktop',
-        'x-freebuff-install-id': this.cfg.installId,
-        ...(await this.signHeaders('POST', url, body, this.fid)),
-      },
-      body,
-    });
+    const hdrs = {
+      'content-type': 'application/json',
+      ...this.auth(),
+      'user-agent': 'ai-sdk/openai-compatible/0.0.0-test/codebuff',
+      'x-freebuff-acting-user-id': this.cfg.userId,
+      'x-freebuff-catalog-protocol': '1',
+      'x-freebuff-catalog-fetch': this.fid,
+      'x-freebuff-model': row.handle,
+      'x-freebuff-instance-id': instanceId,
+      'x-freebuff-client': 'desktop',
+      'x-freebuff-install-id': this.cfg.installId,
+      ...(await this.signHeaders('POST', url, body, this.fid)),
+    };
+    await dumpReq('chat', 'POST', url, hdrs, body);
+    const res = await fetch(url, { method: 'POST', headers: hdrs, body });
     const text = await res.text();
     return { status: res.status, text };
   }

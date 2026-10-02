@@ -122,16 +122,24 @@ export async function loadConfig(override = {}) {
   } catch { /* 客户端未登录 */ }
 
   if (!cfg) {
-    // 回落：读 freebuff-proxy 的凭据
-    const dir = join(HERE, '..', 'freebuff-proxy', 'credentials');
+    // 回落：读主项目 data/credentials 与 credentials 两处
     const { readdir } = await import('node:fs/promises');
-    const files = (await readdir(dir)).filter((f) => f.endsWith('.json'));
+    const dirs = [join(HERE, '..', 'data', 'credentials'), join(HERE, '..', 'credentials')];
     const picked = [];
-    for (const f of files) {
+    for (const dir of dirs) {
+      let files = [];
       try {
-        const c = JSON.parse(await readFile(join(dir, f), 'utf8'));
-        if (c.authToken) picked.push(c);
-      } catch { /* skip */ }
+        files = (await readdir(dir)).filter((f) => f.endsWith('.json'));
+      } catch {
+        continue; // 目录不存在
+      }
+      for (const f of files) {
+        try {
+          const c = JSON.parse(await readFile(join(dir, f), 'utf8'));
+          if (c.authToken) picked.push(c);
+        } catch { /* skip */ }
+      }
+      if (picked.length > 0) break;
     }
     if (picked.length === 0) throw new Error('no credentials available');
     const c = picked[0];
