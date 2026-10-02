@@ -317,15 +317,15 @@ class Bridge {
       const body = await res.json().catch(() => null);
       last = { status: res.status, body, instanceId: inst, attempt: i };
       if (body?.status === 'active') return last;
-      // 首次撞到槽位占用：用回执给出的持有者 id 接管重试一次
-      if (!takeoverInstanceId && body?.currentInstanceId
-          && (body?.status === 'purchase_capacity' || body?.error === 'purchase_capacity')) {
+      // 槽位占用（capacity=排队 / in_use=正被持有着用）：两者都是瞬时的
+      const transient =
+        body?.status === 'purchase_capacity' || body?.error === 'purchase_capacity'
+        || body?.status === 'purchase_in_use' || body?.error === 'purchase_in_use';
+      if (!transient) return last;
+      // 首次撞到占用：用回执给出的持有者 id 接管重试一次
+      if (!takeoverInstanceId && body?.currentInstanceId) {
         return this.admit(row, { retries, takeoverInstanceId: body.currentInstanceId });
       }
-      // 只有瞬时排队才重试；banned / catalog_stale 等立即返回
-      const transient =
-        body?.error === 'purchase_capacity' || body?.status === 'purchase_capacity';
-      if (!transient) return last;
       if (i < retries) await new Promise((r) => setTimeout(r, 4000 * (i + 1)));
     }
     return last;
