@@ -30,6 +30,7 @@ import {
   clientEnvironment,
   META_CLIENT_ENV,
   isCliClaim,
+  HEADER_INSTANCE_ID,
 } from './upstream/official-fingerprint.js'
 import {
   ENFORCED_FOREIGN_SIGNALS,
@@ -1021,6 +1022,8 @@ export function createProxyHandler(ctx) {
               upstream: rt.upstream,
               // 会话剩余时间：用于把流 idle 超时收敛到会话过期附近，过期即掐
               sessionRemainingMs: snap.remainingMs,
+              // chat 必须带会话实例 id，否则上游 428（见 forwardCompletions）
+              instanceId: snap.instanceId,
               schedulingDeadline,
               upstreamModel,
             })
@@ -1501,6 +1504,11 @@ export function createProxyHandler(ctx) {
     upstream,
     sessionRemainingMs,
     /**
+     * 会话实例 id（admission 回执的 instanceId）。
+     * 用于 chat 请求的 x-freebuff-instance-id —— 缺失会导致 428，见下方 headers。
+     */
+    instanceId,
+    /**
      * 「首字节之前」的调度截止时间戳（含全局槽位/账号锁/上游首字节）。
      * 上游首字节也必须受它约束：不然账号锁等到位了，首字节又能再等 60s，
      * 总和照样冲过 Cloudflare 的 100s 悬崖。
@@ -1532,6 +1540,16 @@ export function createProxyHandler(ctx) {
         // 其余 12 个是传输层）。我们此前没传 → 少一个指纹面。
         userId: upstream.accountId || undefined,
       }),
+      // ⚠️ **必须带**：chat 请求不带会话实例 id，上游就不知道这个请求属于
+      // 哪条会话，直接回 428 `waiting_room_required`（"Your free session has
+      // ended"），而 admission 与 startAgentRun 都是 200 —— 表现为"会话建了
+      // 就没了"，极难归因。
+      //
+      // 2026-10-03 实测（cli-bridge）：补上这个头之后，428 立即消失、
+      // 转为模型侧的 503；去掉它则稳定 428。
+      // 常量真源 src/upstream/official-fingerprint.js HEADER_INSTANCE_ID。
+      // 详见 docs/reverse/12-waiting-room-slot-contention.md。
+      ...(instanceId ? { [HEADER_INSTANCE_ID]: instanceId } : {}),
     }
 
     // 风控：chat 调用前打散节奏（随机 [0, requestJitterMs)）。上游按请求
