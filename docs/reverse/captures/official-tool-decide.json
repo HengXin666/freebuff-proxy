@@ -1,0 +1,86 @@
+[
+ {
+  "type": "function",
+  "function": {
+   "name": "decide",
+   "description": "Record the decision for what this tab does next.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "read": {
+      "description": "One sentence: what state the work is actually in. Never shown to the user.",
+      "type": "string"
+     },
+     "decision": {
+      "type": "string",
+      "enum": [
+       "run",
+       "stop"
+      ]
+     },
+     "why": {
+      "description": "Shown to the user, sometimes as a tooltip. One short line: what happens next, or on a stop what is left for them. Not a justification.",
+      "type": "string"
+     },
+     "input": {
+      "description": "Exactly one next input for run; omitted for stop.",
+      "type": "object",
+      "properties": {
+       "skill": {
+        "description": "A skill name, when this input is a skill.",
+        "type": "string"
+       },
+       "label": {
+        "description": "A few words naming the task. Shown on the queue row.",
+        "type": "string"
+       },
+       "prompt": {
+        "description": "The prompt to send, when you write one. Goal and constraints, not implementation — the working agent can read the code and you cannot.",
+        "type": "string"
+       },
+       "purpose": {
+        "description": "Required only for a specific unmet requirement, known defect, or essential missing proof; otherwise refinement. Delivery is inferred from delivery skills.",
+        "type": "string",
+        "enum": [
+         "required",
+         "refinement"
+        ]
+       }
+      }
+     },
+     "declined": {
+      "description": "Shown to the user. What you turned down, a few words each.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "expectedGain": {
+      "description": "Forecast improvement to the final 0-10 correctness/quality score.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 3
+     },
+     "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+     },
+     "evidence": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    },
+    "required": [
+     "decision",
+     "why",
+     "expectedGain",
+     "confidence",
+     "evidence"
+    ]
+   }
+  }
+ }
+]

@@ -28,9 +28,10 @@ const HOST = 'https://www.codebuff.com';
  * （差异分析见 docs/reverse/14-captured-diff.md）。
  */
 let OFFICIAL_TOOLS = null;
+let OFFICIAL_DECIDE = null;
 let OFFICIAL_SYS = null;
 async function loadOfficialAssets() {
-  if (OFFICIAL_TOOLS && OFFICIAL_SYS) return { OFFICIAL_TOOLS, OFFICIAL_SYS };
+  if (OFFICIAL_TOOLS && OFFICIAL_SYS) return { OFFICIAL_TOOLS, OFFICIAL_DECIDE, OFFICIAL_SYS };
   const { readFile } = await import('node:fs/promises');
   const { dirname, join } = await import('node:path');
   // 本文件在 freebuff-proxy/cli-bridge/，抓包在 ../docs/reverse/captures/
@@ -39,11 +40,48 @@ async function loadOfficialAssets() {
   try {
     OFFICIAL_TOOLS = JSON.parse(await readFile(join(capDir, 'official-tools.json'), 'utf8'));
     OFFICIAL_SYS = JSON.parse(await readFile(join(capDir, 'official-system-prompts.json'), 'utf8'));
+    try {
+      OFFICIAL_DECIDE = JSON.parse(await readFile(join(capDir, 'official-tool-decide.json'), 'utf8'));
+    } catch {
+      OFFICIAL_DECIDE = null;
+    }
   } catch {
     OFFICIAL_TOOLS = [];
+    OFFICIAL_DECIDE = null;
     OFFICIAL_SYS = {};
   }
-  return { OFFICIAL_TOOLS, OFFICIAL_SYS };
+  return { OFFICIAL_TOOLS, OFFICIAL_DECIDE, OFFICIAL_SYS };
+}
+
+/**
+ * manager 层 system 的 mission 段是**动态的**：抓包提取的模板里嵌着
+ * 当时那条用户消息（USER_TURN_MARKER: create file /tmp/user-turn-proof.txt...）。
+ * 原样发出等于每次都告诉上游"我要建这个文件" —— 必须按当前请求替换。
+ *
+ * 模板尾部形态（抓包 line 14）：
+ *   ...固定前缀...
+
+{mission}
+
+Call the `decide` tool exactly once. ...
+ *
+ * @param {string} tpl manager 模板
+ * @param {string} mission 当前用户消息
+ */
+function renderManagerSystem(tpl, mission) {
+  let out = String(tpl || '');
+  // 替换 "Call the `decide` tool" 之前、最后一个空行之后的整段为当前 mission
+  const anchor = '\n\nCall the `decide` tool';
+  const ai = out.lastIndexOf(anchor);
+  if (ai > 0) {
+    // 找 anchor 之前最后一个空行，作为 mission 起点
+    const head = out.slice(0, ai);
+    const cut = head.lastIndexOf('\n\n');
+    if (cut > 0) {
+      out = head.slice(0, cut) + '\n\n' + String(mission || '') + out.slice(ai);
+    }
+  }
+  return out;
 }
 
 /**
@@ -240,7 +278,15 @@ class Bridge {
    */
   async admit(row, { retries = 4, takeoverInstanceId = null } = {}) {
     const url = `${HOST}/api/v1/freebuff/session/admission`;
-    const inst = this.cfg.instanceId || `cli:${crypto.randomUUID()}`;
+    // ⚠️ 官方是**裸 UUID**且**整场复用**（抓包 line 8/34/54 三次 admission
+    // 同为 e1be7199-...，line 38 metadata 也是它）。我们此前用 `cli:<uuid>`
+    // 且每次新建 —— review 指出这可能就是"购买全额退款作废"的诱因：
+    // 官方回执里 desktopRefunds 从未出现，我们每次都退。
+    // 见 docs/reverse/15-protocol-review.md E.1
+    if (!this.instanceId) {
+      this.instanceId = this.cfg.instanceId || crypto.randomUUID();
+    }
+    const inst = this.instanceId;
     let last = null;
     for (let i = 0; i <= retries; i++) {
       const hdrs = {
@@ -285,16 +331,26 @@ class Bridge {
     return last;
   }
 
-  async startRun(agentId = 'base3-free-catalog') {
+  /**
+   * agent-runs 的 agentId 按层用 **desktop 世代**（抓包真值）：
+   *   manager → freebuff-desktop-autorun        (line 11/58)
+   *   worker  → freebuff-desktop-thread-local-v3 (line 36)
+   * 我们此前用 CLI 世代的 base3-free-catalog —— 世代错配。
+   */
+  async startRun(agentId = null, layer = 'worker') {
+    agentId = agentId
+      || (layer === 'manager'
+        ? 'freebuff-desktop-autorun'
+        : 'freebuff-desktop-thread-local-v3');
     const url = `${HOST}/api/v1/agent-runs`;
     const payload = JSON.stringify({ action: 'START', agentId, ancestorRunIds: [] });
+    // ⚠️ 官方 agent-runs 只有 3 个业务头（line 11/58）：
+    //   content-type / authorization / x-freebuff-acting-user-id
+    // 不带 x-codebuff-api-key（全抓包 0 次）、不带 catalog 头、不带设备签名。
     const hdrs = {
       'content-type': 'application/json',
       ...this.auth(),
-      'x-codebuff-api-key': this.cfg.token,
-      'x-freebuff-catalog-protocol': '1',
-      ...(this.fid ? { 'x-freebuff-catalog-fetch': this.fid } : {}),
-      ...(await this.signHeaders('POST', url, payload, this.fid)),
+      'x-freebuff-acting-user-id': this.cfg.userId,
     };
     await dumpReq('startRun', 'POST', url, hdrs, payload);
     const res = await fetch(url, { method: 'POST', headers: hdrs, body: payload });
@@ -338,16 +394,32 @@ class Bridge {
     noSend = false,
   }) {
     const url = `${HOST}/api/v1/chat/completions`;
-    const { OFFICIAL_TOOLS, OFFICIAL_SYS } = await loadOfficialAssets();
+    const { OFFICIAL_TOOLS, OFFICIAL_DECIDE, OFFICIAL_SYS } = await loadOfficialAssets();
 
-    const useOfficial = layer === 'worker' && OFFICIAL_TOOLS.length > 0;
-    const outTools = useOfficial ? OFFICIAL_TOOLS : (tools || []);
+    // 按层用官方真实工具集：
+    //   manager → 官方 decide 定义（1 个，required 含 decision/why/expectedGain/
+    //             confidence/evidence）
+    //   worker  → 官方 37 个工具
+    // ⚠️ lookup_agent_info 在 desktop 世代**不存在**（37 工具里没有），
+    //    它是我们从 CLI 侧抄来的，必须删除。
+    let outTools = tools || [];
+    if (layer === 'manager' && OFFICIAL_DECIDE?.length) {
+      outTools = OFFICIAL_DECIDE;
+    } else if (layer === 'worker' && OFFICIAL_TOOLS.length > 0) {
+      outTools = OFFICIAL_TOOLS;
+    }
     const sysTpl = OFFICIAL_SYS?.[layer] || OFFICIAL_SYS?.worker;
 
     // system：官方模板渲染后置于首位（客户端消息里的 system 不再覆盖它）
     const rest = (messages || []).filter((m) => m && m.role !== 'system');
-    const outMessages = sysTpl
-      ? [{ role: 'system', content: renderWorkerSystem(sysTpl) }, ...rest]
+    const userText = (rest.find((m) => m.role === 'user')?.content) ?? '';
+    const sysText = !sysTpl
+      ? null
+      : layer === 'manager'
+        ? renderManagerSystem(sysTpl, typeof userText === 'string' ? userText : JSON.stringify(userText))
+        : renderWorkerSystem(sysTpl);
+    const outMessages = sysText
+      ? [{ role: 'system', content: sysText }, ...rest]
       : messages;
 
     const metadata = {
