@@ -31,16 +31,6 @@ export const LOCALE_LABELS = {
   en: 'English',
 }
 
-/**
- * 顶栏按钮上的**极短**标签（中 / EN）。
- * 用全名会把顶栏撑宽（原生下拉与按钮都按最长内容取值），所以按钮只放短码，
- * 全名放在 LOCALE_LABELS（title / aria-label）。
- */
-export const LOCALE_SHORT = {
-  'zh-CN': '中',
-  en: 'EN',
-}
-
 /** 字典：key → { 'zh-CN': ..., en: ... } */
 const DICT = {
   // ---- 通用 ----
@@ -70,12 +60,6 @@ const DICT = {
 
   // ---- 导航 / 顶栏 ----
   'nav.language': { 'zh-CN': '语言', en: 'Language' },
-  // 切换器按钮上的短标签：必须**极短**，否则顶栏被撑宽（原生 select 按最长
-  // option 撑开的宽度是这里踩过的坑）。用语种短码而非全名。
-  'nav.languageSwitchTo': {
-    'zh-CN': '切换到 English',
-    en: 'Switch to 简体中文',
-  },
   'nav.logout': { 'zh-CN': '退出登录', en: 'Log out' },
   'nav.overview': { 'zh-CN': '总览', en: 'Overview' },
   'nav.system': { 'zh-CN': '系统', en: 'System' },

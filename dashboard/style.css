@@ -178,13 +178,16 @@ h3 { font-size: 15px; font-weight: 600; }
 .hidden { display: none !important; }
 
 /* ---------- badges ---------- */
-/* 语言切换按钮：内容只有「图标 + 短码（中 / EN）」，天然很窄。
-   ⚠️ 不要用 <select>：原生下拉按最长 option（"简体中文"）撑开宽度，
-   会把顶栏顶出一条很宽的选项栏（实测踩过）。
-   min-width 只是防止两种语言切换时按钮宽度跳动。 */
-.locale-btn {
-  min-width: 56px;
-  justify-content: center;
+/* 语言切换下拉：宽度必须**钉死**。
+   原生 select 不设 width 时会按最长 option（"简体中文"）撑开，实测能顶到
+   780px —— 顶栏被顶出一条很宽的选项栏（用户反馈过）。
+   72px 够放 "简体中文" 的截断显示 + 箭头，且与相邻按钮视觉协调。 */
+.locale-select {
+  width: 72px;
+  height: 32px;
+  padding: 0 24px 0 10px;
+  font-size: 12px;
+  text-overflow: ellipsis;
 }
 
 .badge {

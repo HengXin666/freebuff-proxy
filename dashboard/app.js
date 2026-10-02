@@ -6,7 +6,7 @@
 'use strict'
 
 import {
-  t, getLocale, setLocale, initLocale, DEFAULT_LOCALE, LOCALES, LOCALE_LABELS, LOCALE_SHORT,
+  t, getLocale, setLocale, initLocale, DEFAULT_LOCALE, LOCALES, LOCALE_LABELS,
 } from './i18n.js'
 
 const state = {
@@ -223,7 +223,7 @@ function withButtonLoading(btn, busyText = '') {
  * - 其他情况（hash 切换 / 局部刷新回退）→ 只更新内容区 view，
  *   header/nav 骨架完全不动，不重置任何 UI 状态
  */
-async function render() {
+async function render(opts = {}) {
   const app = $('#app')
   if (!state.me) {
     app.innerHTML = ''
@@ -232,8 +232,12 @@ async function render() {
   }
   const route = (location.hash || '#overview').slice(1) || 'overview'
   // 骨架已存在且登录态没变 → 只更新内容区（标准 SPA 行为）
+  //
+  // ⚠️ force=true（切换语言时用）：**连 header / nav 一起重建**。
+  // 否则顶栏与导航会保留切换前的语言（它们不在这次重渲染范围内），
+  // 表现就是"内容变了、顶栏没变"，用户只能手动刷新页面。
   let view = app.querySelector('.view-enter, .view')
-  if (!app.querySelector('header') || !view) {
+  if (opts.force || !app.querySelector('header') || !view) {
     app.innerHTML = ''
     app.append(renderHeader())
     app.append(renderNav())
@@ -320,37 +324,34 @@ function renderHeader() {
 
 /** 版本号徽章 + GitHub 仓库链接（版本号由发版流水线硬编码进 version.json） */
 /**
- * 顶栏语言切换器：**图标 + 短码按钮**（点一下切到另一种语言），不是 <select>。
+ * 顶栏语言切换器：**下拉菜单**（select），显式限宽以免撑开顶栏。
  *
- * ⚠️ 为什么不用 <select>：原生下拉会按**最长 option** 撑开宽度（"简体中文" 比
- * "EN" 宽得多），顶栏因此被顶出一条很宽的选项栏，与相邻按钮完全不协调
- * （实测踩过：看起来像多了一整条工具栏）。
- * 只有两个语种时，"点一下切换" 也比下拉少一次操作。
+ * ⚠️ 为什么必须限宽：原生 select 未显式设 width 时会按**最长 option** 撑开
+ * （"简体中文" 远比 "EN" 宽），实测能把顶栏顶出一条 780px 的宽条 ——
+ * 与相邻 56px 的按钮完全不协调（用户反馈过"选项栏变得非常宽"）。
+ * 这里用 `.locale-select { width: 72px }` 钉死。
  *
- * 标签用短码（中 / EN）而非全名（简体中文 / English）：宽度与其他图标按钮一致。
- * 全名放在 title 提示里（鼠标悬停可见），并在 aria-label 里给完整语义。
- *
- * 切换后调用 render() **整页重渲染**：文案散布在每个区块里，逐块刷新必漏。
- * render() 只重画 DOM、不重新拉数据，所以在途请求不受影响、已买断的会话
- * 也不会被释放（刷新/重渲染都绝不能动 session —— 一次 admit 实付一小时）。
+ * 切换后 `render({ force: true })` **连 header/nav 一起重建**：只更新内容区的话
+ * 顶栏与导航会留着切换前的语言（表现为"内容变了、顶栏没变"，只能手动刷新）。
+ * 重渲染只重画 DOM、不重新拉数据 —— 不打断在途请求、不释放已买断的会话。
  * @returns {HTMLElement}
  */
 function buildLocaleSwitcher() {
   const cur = getLocale()
-  const next = LOCALES.find((l) => l !== cur) || DEFAULT_LOCALE
-  const label = LOCALE_SHORT[cur] || cur
-  return el('button', {
-    class: 'locale-btn',
-    title: t('nav.languageSwitchTo'),
-    'aria-label': `${t('nav.language')}: ${LOCALE_LABELS[cur] || cur}`,
-    onclick: () => {
-      setLocale(next)
+  return el('select', {
+    class: 'locale-select',
+    title: t('nav.language'),
+    'aria-label': t('nav.language'),
+    onchange: (e) => {
+      setLocale(e.target.value)
       // 同步 <html lang>：屏幕阅读器与浏览器拼写检查据此选语言
       const html = document.documentElement
       if (html) html.lang = getLocale()
-      render()
+      render({ force: true })
     },
-  }, [icon('globe', 14), label])
+  }, LOCALES.map((loc) =>
+    el('option', { value: loc, selected: loc === cur }, LOCALE_LABELS[loc] || loc),
+  ))
 }
 
 function versionBadge() {
@@ -1227,11 +1228,13 @@ function buildAccountRow(a, i) {
     el('td', { class: 'mono' }, `${a.inFlight || 0}/${a.concurrency || 1}`),
     accountTimeCell(a),
     el('td', {}, fmtQuota(a.quota, a.freebucks)),
-    // a.session.model 是**目录 key**（m-00032eaeec）；展示名由后端解析
-    // （modelDisplayName），拿不到就回落到 key —— 绝不显示空。
+    // a.session.model 是**目录 key**（m-00032eaeec）；可读名由后端解析并放在
+    // session.modelDisplayName（AccountRuntimes.list() 统一带上）。
+    // ⚠️ 之前写成 a.modelDisplayName（顶层）—— 字段不在顶层，永远取不到，
+    // 于是这一列一直回落成裸 key。拿到不到就回落到 key，绝不显示空。
     el('td', {}, fmtFreebucks(
       a.freebucks,
-      a.modelDisplayName || a.session?.model,
+      a.session?.modelDisplayName || a.session?.model,
       a.lastRefund,
     )),
     el('td', { class: 'mono' }, t('common.times', { n: a.requests || 0 })),
