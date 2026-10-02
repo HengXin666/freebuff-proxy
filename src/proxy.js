@@ -1540,16 +1540,17 @@ export function createProxyHandler(ctx) {
         // 其余 12 个是传输层）。我们此前没传 → 少一个指纹面。
         userId: upstream.accountId || undefined,
       }),
-      // ⚠️ **必须带**：chat 请求不带会话实例 id，上游就不知道这个请求属于
-      // 哪条会话，直接回 428 `waiting_room_required`（"Your free session has
-      // ended"），而 admission 与 startAgentRun 都是 200 —— 表现为"会话建了
-      // 就没了"，极难归因。
+      // ⚠️ **不要带** x-freebuff-instance-id。
       //
-      // 2026-10-03 实测（cli-bridge）：补上这个头之后，428 立即消失、
-      // 转为模型侧的 503；去掉它则稳定 428。
-      // 常量真源 src/upstream/official-fingerprint.js HEADER_INSTANCE_ID。
-      // 详见 docs/reverse/12-waiting-room-slot-contention.md。
-      ...(instanceId ? { [HEADER_INSTANCE_ID]: instanceId } : {}),
+      // 2026-10-03 抓包复核（docs/reverse/15-protocol-review.md）证明：
+      // 官方 chat 头部恒为 8 项，8 个样本逐个校验 diff 为空集，
+      // **没有** x-freebuff-instance-id / -client / -model /
+      // -catalog-protocol / -install-id —— 那些是 admission 用的。
+      // 实例标识只走 codebuff_metadata.freebuff_instance_id（已在）。
+      //
+      // 此前误判为"必须带"：当时补上后 428 消失，但那是巧合——
+      // 同批还改了别的。官方不带该头却正常，故不是因果。
+      // 见 docs/reverse/15-protocol-review.md P0-1。
     }
 
     // 风控：chat 调用前打散节奏（随机 [0, requestJitterMs)）。上游按请求

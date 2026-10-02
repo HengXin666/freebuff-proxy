@@ -1025,16 +1025,21 @@ function chat(body, headers = {}) {
   assert.ok(chatCall, '应发出 chat 请求')
   const ua = chatCall.headers['user-agent'] || chatCall.headers['User-Agent']
   assert.ok(ua, 'chat 必须带 user-agent')
-  // chat UA 是**两段式**，逐字对齐真机抓包（官方 CLI 0.2.6，mitmproxy 实测）：
-  //   ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.25 runtime/browser
+  // chat UA 是**两段式**，逐字对齐真机抓包。
   // 版本段是 0.0.0-test 而**不是**包版本号 —— 官方发布构建里 __PACKAGE_VERSION__
   // 未注入，回退到该字面量（二进制原文：
   //   Qo=typeof __PACKAGE_VERSION__<"u"?__PACKAGE_VERSION__:"0.0.0-test"
   // ）。第二段我们此前整段漏了。见
   // .agents/notes/implemented/bug-fix/2026-10-01-chat-ua-two-part.md
+  //
+  // ⚠️ 第三段随**客户端路线**而异，两条都是真机实测值：
+  //   CLI     0.2.6 → runtime/browser
+  //   desktop 0.0.156 → runtime/bun/1.4.2（orchestrator 是 bun 跑的）
+  // 本仓库走 desktop 路线，故断言取 bun 形态。
+  // 见 docs/reverse/14-captured-diff.md
   assert.equal(
     ua,
-    'ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.25 runtime/browser',
+    'ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.25 runtime/bun/1.4.2',
     'chat UA 必须与官方逐字一致, got ' + ua,
   )
   assert.ok(!ua.includes('/1.0.0/'), 'UA 不得再是硬编码的 1.0.0（与真 CLI 版本不符）')

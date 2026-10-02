@@ -37,6 +37,13 @@ export const KNOWN_CLI_VERSION = '0.0.178'
  * ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.25 runtime/browser
  * ```
  *
+ * ⚠️ 但 **desktop 客户端**的第三段是 `runtime/bun/1.4.2`，不是 browser：
+ * 2026-10-03 抓包（官方 desktop 经 HTTP_PROXY 走 mitm 解密，
+ * docs/reverse/captures/2026-10-03-official-client.jsonl）实测为
+ *   `.../codebuff ai-sdk/provider-utils/3.0.25 runtime/bun/1.4.2`
+ * 因为官方 orchestrator 本身就是 bun 跑的。
+ * 本仓库走 desktop 路线，故 OFFICIAL_CHAT_UA_SUFFIX 取 bun 形态。
+ *
  * 两个此前搞错的点：
  *
  * 1. **版本是 `0.0.0-test`，不是真实 CLI 版本号。** 二进制原文：
@@ -52,8 +59,17 @@ export const KNOWN_CLI_VERSION = '0.0.178'
  * @returns {string}
  */
 export const OFFICIAL_CHAT_UA_VERSION = '0.0.0-test'
+// ⚠️ 第三段是 **runtime/bun/1.4.2**，不是 runtime/browser。
+//
+// 真机抓包（2026-10-03，官方 desktop 客户端经 mitm 解密，
+// docs/reverse/captures/2026-10-03-official-client.jsonl）：
+//   User-Agent: ai-sdk/openai-compatible/0.0.0-test/codebuff
+//               ai-sdk/provider-utils/3.0.25 runtime/bun/1.4.2
+// 官方 orchestrator 就是 bun 跑的，所以 runtime 段是 bun 而非 browser。
+// 此前写成 browser 是按 CLI 侧抓包填的 —— 与 desktop 路线不符。
+// 见 docs/reverse/14-captured-diff.md
 export const OFFICIAL_CHAT_UA_SUFFIX =
-  'ai-sdk/provider-utils/3.0.25 runtime/browser'
+  'ai-sdk/provider-utils/3.0.25 runtime/bun/1.4.2'
 
 export function officialChatUserAgent(version = OFFICIAL_CHAT_UA_VERSION) {
   return (
