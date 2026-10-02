@@ -7,6 +7,37 @@
  * 用法: node scripts/screenshot-mock-upstream.mjs <port>
  */
 import http from 'node:http'
+import { freebuffLegacyModelDigest } from '../src/upstream/catalog-protocol.js'
+
+/**
+ * 目录 rows —— 与真实上游同构（key / handle / displayName / legacyDigests）。
+ * 有了它，总览的额度列才能把 m-xxx 显示成模型名（否则渲染成裸 key）。
+ */
+const CATALOG_ROWS = [
+  { name: 'DeepSeek V4.1 Flash', id: 'deepseek/deepseek-v4-flash' },
+  { name: 'MiMo 2.6 Flash', id: 'mimo/mimo-v2.5' },
+  { name: 'GPT-6 Luna', id: 'openai/gpt-5.6-luna' },
+  { name: 'GLM 5.3 Flash', id: 'z-ai/glm-5.3-flash' },
+  { name: 'Solar Pro 4', id: 'upstage/solar-pro4' },
+].map((r, i) => ({
+  key: 'm-demo000' + (i + 1),
+  handle: 'fbm1.demo-handle-' + (i + 1),
+  displayName: r.name,
+  legacyDigests: [freebuffLegacyModelDigest(r.id)],
+}))
+
+function catalogPayload() {
+  return {
+    protocol: 1,
+    version: 'v0.g1.demo',
+    issuedAt: now,
+    refreshAt: now + 30 * 60_000,
+    rows: CATALOG_ROWS,
+    recommendedKey: CATALOG_ROWS[0].key,
+    plansUrl: 'https://freebuff.com/plans',
+    fetchId: 'fbf1.demo-fetch-id',
+  }
+}
 
 const port = Number(process.argv[2] || 18999)
 const now = Date.now()
@@ -103,10 +134,12 @@ function sessionPayload(acct) {
       resetTimeZone: 'America/Los_Angeles',
       prices: PRICES,
     },
+    // ⚠️ 用**目录 key**（m-demo000x）而不是可读 id —— 真实上游回执就是这个口径。
+    // 控制台必须靠目录把它换算成模型名，否则渲染成裸 key（这正是要展示的修复点）。
     rateLimitsByModel: {
-      'deepseek/deepseek-v4-flash': rateLimitFor('deepseek/deepseek-v4-flash'),
-      'mimo/mimo-v2.5': rateLimitFor('mimo/mimo-v2.5'),
-      'upstage/solar-pro4': rateLimitFor('upstage/solar-pro4'),
+      'm-demo0001': rateLimitFor('deepseek/deepseek-v4-flash'),
+      'm-demo0002': rateLimitFor('mimo/mimo-v2.5'),
+      'm-demo0005': rateLimitFor('upstage/solar-pro4'),
     },
   }
   if (!active) return payload
@@ -136,6 +169,11 @@ const server = http.createServer((req, res) => {
     if (acct.banned) return json(res, payload, 403)
     if (req.method === 'DELETE') return json(res, { status: 'ended' })
     return json(res, payload)
+  }
+  // 目录：控制台用它把额度键（m-xxx）换算成模型名
+  if (p === '/api/v1/freebuff/models') {
+    if (!acct) return json(res, { error: 'unauthorized' }, 401)
+    return json(res, catalogPayload())
   }
   if (p === '/api/v1/agent-runs') {
     if (!acct) return json(res, { error: 'unauthorized' }, 401)
