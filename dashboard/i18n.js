@@ -434,8 +434,8 @@ const DICT = {
   },
   'system.toolFallback': { 'zh-CN': '工具请求兜底', en: 'Tool request fallback' },
   'system.toolFallbackHint': {
-    'zh-CN': '工具被拒时去掉工具重试（上游对 tools 做指纹比对，带工具会被回 404 No endpoints found；开着才能出文本回答，关掉则错误原样透传）',
-    en: 'Retry without tools when tools are rejected (upstream fingerprints tools and answers 404 No endpoints found; keep this on to still get a text answer, off passes the error through as-is)',
+    'zh-CN': '仅在明确接受无工具回答时开启：上游拒绝工具请求后会去掉 tools 重试；关闭时保留上游错误和工具请求语义。',
+    en: 'Enable only when a text-only answer is acceptable: retries without tools after an upstream rejection. When off, preserves the upstream error and tool-request semantics.',
   },
   'system.toolFallbackOn': { 'zh-CN': '工具兜底重试已开启', en: 'Tool fallback retry enabled' },
   'system.toolFallbackOff': { 'zh-CN': '工具兜底重试已关闭', en: 'Tool fallback retry disabled' },

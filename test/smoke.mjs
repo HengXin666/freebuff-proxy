@@ -916,13 +916,25 @@ function chat(body, headers = {}) {
 }
 
 
-// tool-schema rejection: 上游以 404 "No endpoints found" 拒掉带工具的请求时，
-// 代理必须**去掉 tools 再发一次**，而不是把 404 透传给下游。
-// 背景（2026-09-18 一手实测）：上游对 tools 做 tool-schema 指纹比对，任何非官方
-// 工具集一律 404（字面却说"模型不存在"）；下游 Responses 桥接层会把它崩成
-// Cloudflare 纯文本 502 → 客户端 SDK 报 "502 status code (no body)"，
-// 表现就是"所有模型全部空响应"。
+// 工具请求默认保持工具语义：上游拒绝时不得静默返回无工具回答。
 {
+  calls = []
+  completionAttempts = 0
+  mockMode = 'tool_schema_reject'
+  assert.equal(settingsStore.get().stripToolsOnSchemaRejection, false)
+  const res = await chat({
+    model: 'deepseek/deepseek-v4-flash',
+    messages: [{ role: 'user', content: 'hello' }],
+    tools: [{ type: 'function', function: { name: 'run_code', parameters: { type: 'object', properties: {} } } }],
+  })
+  assert.equal(res.status, 404)
+  assert.equal(calls.filter((c) => c.url.includes('/chat/completions')).length, 1)
+  assert.equal(res.headers.get('x-freebuff-proxy-tools-stripped'), null)
+}
+
+// 明确开启纯文本回退时，工具拒绝仍允许剥离 tools 重试。
+{
+  settingsStore.save({ stripToolsOnSchemaRejection: true })
   calls = []
   completionAttempts = 0
   mockMode = 'tool_schema_reject'
@@ -958,6 +970,7 @@ function chat(body, headers = {}) {
   assert.equal(second.tools, undefined, '第二次必须已剥离 tools')
   assert.equal(second.tool_choice, undefined)
   assert.equal(res.headers.get('x-freebuff-proxy-tools-stripped'), '1')
+  settingsStore.save({ stripToolsOnSchemaRejection: false })
 }
 
 // 不带 tools 的请求遇到同样 404 时**不得**重试（没有工具可去），原样返回 404。

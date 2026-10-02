@@ -1155,7 +1155,7 @@ export function createWebApi(deps) {
         freeToolSignatureEnabled:
           settingsStore?.get().freeToolSignatureEnabled !== false,
         stripToolsOnSchemaRejection:
-          settingsStore?.get().stripToolsOnSchemaRejection !== false,
+          settingsStore?.get?.()?.stripToolsOnSchemaRejection === true,
         accountMaxConcurrency: settingsStore?.get().accountMaxConcurrency ?? 2,
         // 账号调度模式（'sticky' 默认 / 'spread' 并发优先）+ 溢出排队上限。
         accountSchedulingMode:

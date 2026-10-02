@@ -1485,9 +1485,8 @@ async function renderProxySettings(view) {
   }
   if (signatureEnabled) toggleAttrs.checked = ''
   if (state.me.role !== 'admin') toggleAttrs.disabled = ''
-  // 上游以 tool-schema 指纹拒掉带工具的请求时，是否去掉 tools 重发一次。
-  // 开启 = 至少拿到文本回答；关闭 = 把 404 原样透传（下游会崩成 502 空体）。
-  const stripTools = settings.stripToolsOnSchemaRejection !== false
+  // 工具被拒时，仅在明确开启纯文本回退后才去掉 tools 重试。
+  const stripTools = settings.stripToolsOnSchemaRejection === true
   const stripAttrs = {
     id: 'strip-tools-on-reject',
     type: 'checkbox',
@@ -1745,7 +1744,7 @@ async function saveStripToolsSetting(event) {
     toast(enabled ? t('system.toolFallbackOn') : t('system.toolFallbackOff'))
     try {
       const s = await api('/api/settings')
-      const actual = s.stripToolsOnSchemaRejection !== false
+      const actual = s.stripToolsOnSchemaRejection === true
       input.checked = actual
       updateSwitchLabel(input)
     } catch { /* 忽略回读失败，仍保持可交互 */ }

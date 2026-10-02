@@ -1547,7 +1547,7 @@ export function createProxyHandler(ctx) {
     // .agents/notes/implemented/bug-fix/2026-09-18-tool-schema-rejection-strip.md
     const toolStripCapable =
       hasClientTools(forwardBody) &&
-      settingsStore?.get?.()?.stripToolsOnSchemaRejection !== false
+      settingsStore?.get?.()?.stripToolsOnSchemaRejection === true
     let requestBody = forwardBody
     let toolsStripped = false
     let upstreamRes

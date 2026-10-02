@@ -16,11 +16,10 @@ const DEFAULT_SETTINGS = Object.freeze({
   // 见 .agents/notes/proposed/architecture/2026-09-30-cli-telemetry-reports.md
   cliTelemetryEnabled: false,
   // 上游以 404 "No endpoints found" 拒掉带工具的请求时，是否去掉 tools 重发一次。
-  // 开启 = 至少拿到文本回答；关闭 = 把 404 原样透传（下游 Responses 桥接层会把它
-  // 崩成 CF 502 空体，客户端只见 "no body"）。
-  // 这是**未知判据变化**的最后一道兜底：签名工具已对齐已知判据，但上游改规则时
-  // 仍靠它保命。见 .agents/notes/implemented/bug-fix/2026-09-18-tool-schema-rejection-strip.md
-  stripToolsOnSchemaRejection: true,
+  // 默认保留工具语义：上游拒绝就返回错误，不把 agent 请求伪装成成功的纯文本回答。
+  // 明确开启时仍可回退到纯文本。见
+  // .agents/notes/implemented/bug-fix/2026-10-02-tool-request-fail-closed.md
+  stripToolsOnSchemaRejection: false,
   // 每个账号同一时间可并发的 SSE 响应流数（账号内并发），默认 2。
   // 账号调度是"粘性优先"（drain, not rotate）：并发请求先挤同一账号，超过该值
   // 才溢出到下一个账号；从不主动平摊到新账号（上游把轮换健康账号当农场特征，
