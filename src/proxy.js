@@ -1935,6 +1935,35 @@ function isToolSchemaRejection(status, text) {
 }
 
 /**
+ * 上游 **200 响应体内嵌**的 free_mode 错误码检测。
+ *
+ * 上游并不总是用 HTTP 状态码表达失败：它可能 200 回执、却在响应体里夹
+ * `free_mode_*` 错误串。只判 `upstreamRes.ok` 会把它当成成功，错误被静默吞掉。
+ * 第三方实现（lza6/Freebuff-2API `upstream_body_error`）对 200 也扫这类串，
+ * 本仓库此前只在 `!upstreamRes.ok` 分支解析错误体 —— 这是真缺口。
+ *
+ * 只做**识别与告警**，不改变任何转发行为：流式路径下响应体已被消费，
+ * 接入需要改 pipe 流程，属于行为改动，需单独验证。
+ *
+ * @param {string} text 响应体原文（已流式接收的完整文本）
+ * @returns {string | null} 命中的错误码
+ */
+export function upstreamBodyEmbeddedError(text) {
+  if (typeof text !== 'string' || !text) return null
+  const CODES = [
+    'free_mode_invalid_agent_model',
+    'free_mode_invalid_agent_hierarchy',
+    'free_mode_cli_required',
+    'free_mode_rate_limited',
+    'free_mode_capacity_deferred',
+    'account_suspended',
+    'model_unavailable',
+  ]
+  for (const c of CODES) if (text.includes(c)) return c
+  return null
+}
+
+/**
  * 上游 chat/completions 报错时是否应冷却当前账号并换号重试：
  * 429（限流/配额）、5xx（服务端故障）、403 账号级封禁（banned/country_blocked/ip_capped）、
  * free_mode_rate_limited 等账号级限流 code，以及 start_agent_run_failed（startAgentRun
