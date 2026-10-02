@@ -55,3 +55,7 @@ Thumbs.db
 # 本地 e2e 测试实例数据（fb-test 容器挂载）
 data-test/
 REVERSE_ENGINEERING_SUMMARY.md
+
+# bun 运行时（79MB，由 tools/fetch-bun.sh 从官方客户端获取）
+cli-bridge/bun
+cli-bridge/*.log
