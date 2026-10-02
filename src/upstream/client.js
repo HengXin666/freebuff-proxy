@@ -924,6 +924,64 @@ export function extractRateLimitError(body, status) {
 }
 
 /**
+ * chat 返回 503 时，判断是不是「该模型当日会话次数用尽」。
+ *
+ * 2026-10-02 实测（全新账号、25/25 Freebucks 满额）：完整链路
+ * catalog → admission(200 active) → agent-runs(200) 都成功，
+ * **唯独 chat 503 `The model is temporarily unavailable`**；
+ * 换了三个价格档（0/5/15）、多种身份组合，全部 503。
+ * 排除法走到最后，真因在 `rateLimitsByModel`：
+ *
+ *   m-00032eaeec recent=6 limit=6   ← 打满
+ *   m-096e75164d recent=6 limit=6
+ *   m-22ff70c712 recent=6 limit=6
+ *   resetAt = 2026-10-03T07:00:00.000Z（period: pacific_day）
+ *
+ * 即：limited 档**每模型每天 6 次会话**，与 Freebucks 是两本账 ——
+ * 503 后上游自动退款（balance 恒 25 不变），但**次数那本账不退**。
+ * 所以"额度看起来没少"是假象，而"模型暂时故障"是错误归因：
+ * 按模型故障去换模型重试，只会把下一个模型也打满。
+ *
+ * @param {any} quota  session 回执里的 rateLimitsByModel / rateLimit
+ * @param {string} [model] 目录 key（m-xxx）；不传时只看是否全满
+ * @returns {{ exhausted: boolean, resetAtMs: number | null, limit: number | null, recentCount: number | null }}
+ */
+export function dailySessionQuota(quota, model) {
+  const empty = { exhausted: false, resetAtMs: null, limit: null, recentCount: null }
+  if (!quota || typeof quota !== 'object') return empty
+  const byModel = quota.byModel
+  const rows = []
+  if (byModel && typeof byModel === 'object') {
+    if (model && byModel[model]) rows.push(byModel[model])
+    else for (const v of Object.values(byModel)) rows.push(v)
+  }
+  if (quota.rateLimit && typeof quota.rateLimit === 'object') {
+    rows.push(quota.rateLimit)
+  }
+  let limit = null
+  let recentCount = null
+  let resetAtMs = null
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue
+    if (typeof row.limit === 'number') {
+      limit = limit === null ? row.limit : Math.min(limit, row.limit)
+    }
+    if (typeof row.recentCount === 'number') {
+      recentCount =
+        recentCount === null ? row.recentCount : Math.max(recentCount, row.recentCount)
+    }
+    if (row.resetAt) {
+      const ms = Date.parse(row.resetAt)
+      if (Number.isFinite(ms)) resetAtMs = resetAtMs === null ? ms : Math.max(resetAtMs, ms)
+    }
+  }
+  if (limit === null || recentCount === null) return empty
+  // limit=0 表示免费档下该模型完全没有额度，同样视为不可用
+  const exhausted = limit <= 0 || recentCount >= limit
+  return { exhausted, resetAtMs, limit, recentCount }
+}
+
+/**
  * 上游把"账号生命周期终止"写成多个不同字面量，必须归一成一个 code。
  *
  * 2026-09-18 实测：免费模式对第三方客户端的封禁回的是
