@@ -5217,6 +5217,23 @@ server.close()
         ),
       `每个账号都应记为 freebucks_exhausted，got ${JSON.stringify(j.error.details)}`,
     )
+    // 真实端到端：对外响应**不得**出现任何账号标识。
+    // 这是 429 会原样转发给下游 Agent 客户端的载荷，带 email = 泄露整个账号池。
+    const dumped = JSON.stringify(j)
+    for (const email of ['a@example.com', 'b@example.com', 'c@example.com']) {
+      assert.ok(
+        !dumped.includes(email),
+        `错误响应泄露了账号邮箱 ${email}：${dumped.slice(0, 300)}`,
+      )
+    }
+    for (const f of j.error.details?.failures || []) {
+      assert.ok(!('email' in f), `failures 条目不得含 email，got ${JSON.stringify(f)}`)
+      assert.ok(!('key' in f), `failures 条目不得含 key，got ${JSON.stringify(f)}`)
+      assert.ok(!('message' in f), `failures 条目不得含 message，got ${JSON.stringify(f)}`)
+    }
+    // 聚合字段仍在（调用方据此判断"为什么全挂了"）
+    assert.ok(j.error.details?.reasons, '应给 reasons 聚合')
+    assert.equal(typeof j.error.details?.tried, 'number', '应给 tried 计数')
     assert.equal(
       sessionPosts,
       postsBefore,
@@ -7568,6 +7585,63 @@ console.log('smoke ok')
   )
   assert.equal(rts._modelDisplayName('m-unknown'), null, '未知 key 返回 null（调用方回落原值）')
   assert.equal(rts._modelDisplayName(null), null, '空输入返回 null')
+
+  await rts.shutdown()
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
+// 对外错误响应**绝不能**带账号标识（key / email / 逐条原始 message）。
+// 429 响应会被下游 Agent 客户端原样转发、落进别人的日志与报错堆栈；
+// 带上 email 等于把整个账号池的邮箱清单发给调用方（PII 泄露）。
+// 管理员要看明细请用控制台（登录后）或服务端日志。
+// 判据与取舍见 .agents/notes/implemented/bug-fix/2026-10-02-no-account-pii-in-errors.md
+{
+  const { maskEmail } = await import('../src/app-context.js')
+  // 脱敏：保留域名、掩码本地部分
+  assert.equal(maskEmail('alice@gmail.com'), 'a***e@gmail.com')
+  assert.equal(maskEmail('ab@gmail.com'), 'a*@gmail.com')
+  assert.equal(maskEmail('a@gmail.com'), '*@gmail.com')
+  assert.equal(maskEmail('loli@woa.qzz.io'), 'l***i@woa.qzz.io')
+  assert.equal(maskEmail(''), '')
+  assert.equal(maskEmail(null), '')
+  assert.equal(maskEmail('not-an-email'), '')
+  // 脱敏结果**不得**包含完整本地部分
+  const masked = maskEmail('alexrennie293@gmail.com')
+  assert.ok(!masked.includes('alexrennie293'), `脱敏后仍含完整本地部分: ${masked}`)
+  assert.ok(masked.includes('@gmail.com'), '域名应保留（排障要能区分账号）')
+}
+
+// 被封禁（banned）的账号**不得**再参与调度：不进候选、不 admit、不产生扣费。
+// banned 是账号生命周期终点（账本 bannedAt 或冷却 code=banned），只能换号/等解封；
+// 让它继续进候选 = 每次都白试一轮，且一次 admit 实付一整小时。
+// 用户反馈的 14 账号全挂场景里，banned 账号出现在 failures 中属于**已跳过**记录，
+// 不是"被调度过" —— 这里钉死的是它根本不进候选、不产生任何上游扣费动作。
+{
+  const { AccountRuntimes } = await import('../src/app-context.js')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-banned-'))
+  saveAccountUser(dir, { id: 'bk1', email: 'banned1@example.com', authToken: 't1' })
+  saveAccountUser(dir, { id: 'ok1', email: 'ok1@example.com', authToken: 't2' })
+  const cfg = loadConfig()
+  cfg.server.credentialsDir = dir
+  cfg.upstream.credentialsDir = dir
+  cfg.upstream.apiBase = 'http://127.0.0.1:1'
+  cfg.session.pollIntervalSec = 3600
+
+  const rts = new AccountRuntimes(cfg)
+  // 把 bk1 判为封禁
+  rts.markCooldown('bk1', { code: 'banned' }, 'deepseek/deepseek-v4-flash')
+
+  const order = rts.candidateKeys('deepseek/deepseek-v4-flash')
+  assert.ok(
+    !order.includes('bk1'),
+    `banned 账号不得进入候选列表，got ${JSON.stringify(order)}`,
+  )
+  assert.ok(order.includes('ok1'), '未封禁的账号应正常进候选')
+
+  // 控制台列表里仍要区分 banned（用户要能看出"这个号废了"）
+  const row = rts.list().find((x) => x.key === 'bk1')
+  assert.equal(row.banned, true, '列表应标记 banned')
+  assert.equal(row.status, 'banned')
 
   await rts.shutdown()
   fs.rmSync(dir, { recursive: true, force: true })

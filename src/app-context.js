@@ -178,6 +178,56 @@ class ChatMutex {
  * key = Freebuff 用户 id（优先），无 id（历史数据）回落邮箱。
  * GitHub / Google 登录同一邮箱但 id 不同 → 两个独立账号，互不覆盖。
  */
+/**
+ * 对外响应里的失败明细：**只保留 code**，去掉 key / email / message。
+ *
+ * 为什么：429 响应会被下游 Agent 客户端原样转发、落进别人的日志与报错堆栈。
+ * 带上 `email` 等于把整个账号池的邮箱清单发给调用方（PII 泄露）；
+ * 带上 `key`（凭据文件名/账号 id）等于泄露凭据目录结构。
+ * 管理员要看明细请用控制台（登录后）或服务端日志 —— 那里是完整且脱敏的。
+ *
+ * 保留 code 是因为**错误码分类**依赖它：全 `banned`、全 `freebucks_exhausted`、
+ * 全 `session_budget_exhausted` 会得出不同的顶层 code 与建议动作。
+ * @param {Array<{ code?: string }>} failures
+ * @returns {Array<{ code: string }>}
+ */
+function sanitizeFailuresForClient(failures) {
+  return (failures || []).map((f) => ({ code: f?.code || 'cooldown' }))
+}
+
+/**
+ * 失败原因聚合（code → 数量），给调用方一个"为什么全挂了"的可读概览。
+ * @param {Array<{ code?: string }>} failures
+ * @returns {Record<string, number>}
+ */
+function countReasons(failures) {
+  const out = {}
+  for (const f of failures || []) {
+    const code = f?.code || 'cooldown'
+    out[code] = (out[code] || 0) + 1
+  }
+  return out
+}
+
+/**
+ * 邮箱脱敏：保留域名、掩码本地部分（`a***e@gmail.com`）。
+ * 日志与 UI 展示用 —— 排障要能区分"哪个号"，但不能白给完整地址。
+ * @param {string} [email]
+ * @returns {string}
+ */
+export function maskEmail(email) {
+  const str = typeof email === 'string' ? email : ''
+  const at = str.lastIndexOf('@')
+  if (at <= 0 || at === str.length - 1) return ''
+  const local = str.slice(0, at)
+  const domain = str.slice(at + 1).toLowerCase()
+  const runes = [...local]
+  if (runes.length === 0) return '*@' + domain
+  if (runes.length === 1) return '*@' + domain
+  if (runes.length === 2) return runes[0] + '*@' + domain
+  return runes[0] + '***' + runes[runes.length - 1] + '@' + domain
+}
+
 export class AccountRuntimes {
   /**
    * @param {import('./config.js').ProxyConfig} config
@@ -1205,7 +1255,15 @@ export class AccountRuntimes {
         {
           status: 403,
           code: fatalFailure.code,
-          body: { model, failures: [fatalFailure] },
+          // 出口级故障：原因要让用户看懂（该换代理而非换号），但仍不给
+          // 账号标识 —— 它是出口的属性，与具体哪个账号无关。
+          body: {
+            model,
+            failures: [{ code: fatalFailure.code }],
+            reasons: countReasons([fatalFailure]),
+            tried: 1,
+            egress: true,
+          },
           // 必须原样带上 fatal：外层据此立即收场，不再重试换号。
           fatal: true,
         },
@@ -1233,23 +1291,41 @@ export class AccountRuntimes {
         {
           status: 429,
           code: 'session_budget_exhausted',
-          body: { model, failures },
+          body: {
+            model,
+            failures: sanitizeFailuresForClient(failures),
+            reasons: countReasons(failures),
+            tried: failures.length,
+            banned: failures.filter((f) => f.code === 'banned').length,
+          },
           retryAfterMs: this.earliestCooldownMs(),
         },
       )
     }
     if (allExhausted) {
-      const cheapest = failures.map((f) => f.message).join('; ')
+      // ⚠️ 顶层 message 也**不能**拼 failures 的原始 message：那条 message 里
+      // 可能带邮箱/账号标识，而 message 是下游最先看到、最容易被整段转发的字段。
+      // 这里只给聚合概览（几个账号、什么类型），明细看 details.reasons。
+      const summary = Object.entries(countReasons(failures))
+        .map(([c, n]) => `${c}×${n}`)
+        .join(', ')
       // 两个闸门都命中时用更中性的 freebucks_exhausted 保持兼容（既有调用方/测试
       // 认这个码）；只有全是 units 用尽时才报 units_exhausted。
       const onlyUnits = failures.every((f) => f.code === 'units_exhausted')
       const code = onlyUnits ? 'units_exhausted' : 'freebucks_exhausted'
       throw new UpstreamError(
-        `No Freebuff account can afford model ${model} (${onlyUnits ? 'session units' : 'Freebucks'} exhausted). ${cheapest}`,
+        `No Freebuff account can afford model ${model} (${onlyUnits ? 'session units' : 'Freebucks'} exhausted). ${failures.length} account(s) tried (${summary}).` +
+          ` Retry after ${new Date(Date.now() + this.earliestCooldownMs()).toISOString()}.`,
         {
           status: 429,
           code,
-          body: { model, failures },
+          body: {
+            model,
+            failures: sanitizeFailuresForClient(failures),
+            reasons: countReasons(failures),
+            tried: failures.length,
+            banned: failures.filter((f) => f.code === 'banned').length,
+          },
           retryAfterMs: this.earliestCooldownMs(),
         },
       )
@@ -1259,7 +1335,13 @@ export class AccountRuntimes {
       {
         status: 429,
         code: 'no_available_account',
-        body: { model, failures },
+        body: {
+          model,
+          failures: sanitizeFailuresForClient(failures),
+          reasons: countReasons(failures),
+          tried: failures.length,
+          banned: failures.filter((f) => f.code === 'banned').length,
+        },
         retryAfterMs: this.earliestCooldownMs(),
       },
     )
