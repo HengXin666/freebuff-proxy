@@ -155,6 +155,40 @@ docker compose up -d --build
 
 ---
 
+## 上游请求链路（legacy / official）
+
+上游请求的形态可以在**控制台 → 设置 → 「上游请求链路」**切换，立即生效。
+
+| 通道 | 是什么 | 状态 |
+|------|--------|------|
+| **official** | 照抄官方客户端抓包真值：官方 37 工具、官方 system 模板、desktop 世代 agent、分层 provider | ✅ **默认，推荐** |
+| legacy | 旧的自拼形态（CLI 开场白 + 自编签名工具 + `base3-free-catalog`） | 回退保留 |
+
+**为什么默认 official**：它是**照抄而非猜测**——字段直接取自官方客户端真实流量，
+可逐字段核对；实测拿到 **HTTP 200 + 工具调用**；且消除了 legacy 里
+"CLI 开场白配 desktop 会话"这种自己跟自己矛盾的身份/世代错配。
+
+**架构：RPC 委托，不是两份实现。**
+官方形态的实现**只有一份**，在 `cli-bridge/`（用官方同款 bun 执行）：
+
+```
+主服务（Node）                     副仓库（cli-bridge, bun）
+  持有 instanceId / runId      →     desktop 世代 startRun
+  通道判定                           官方形态构造 + 发送 chat
+  透传响应                     ←     原始响应
+```
+
+主服务不复制那份逻辑，只传参数、拿响应透传。副仓库不可用时自动降级为 legacy 形态。
+
+**客户端带自定义工具时**：合并而非替换 —— 官方 37 个在前（满足工具指纹）
++ 客户端工具按名去重追加（只发官方会让自定义工具静默消失）。客户端没声明
+工具时不发工具集。注意代理**不执行**工具，只把上游的 `tool_call` 原样返回，
+由客户端自己执行。
+
+细节见 **[两条链路选型与工具转换](docs/reverse/18-channel-guide-and-tool-mapping.md)**。
+
+---
+
 ## 文档
 
 主页只保留上手所需的内容，深入细节都在 `docs/`：
@@ -171,6 +205,7 @@ docker compose up -d --build
 | **[命令与本地开发](docs/development.md)** | npm 脚本、本地启动、CLI 登录、冒烟测试 |
 | **[截图生成](docs/screenshots.md)** | README 截图怎么用 mock 上游 + 无头 Chromium 复现（含打码） |
 | **[配置参考](docs/configuration.md)** | 每一项配置的唯一来源总表 |
+| **[协议逆向](docs/reverse/00-overview.md)** | 官方客户端协议逆向（BFS 分层）：设备签名、会话准入、chat 与工具、思考强度、抓包归档与逐字段 diff |
 
 ---
 
@@ -204,9 +239,15 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 ## 限制（官方免费层现实）
 
 - 2026-09 起免费层改为 **Freebucks** 计量：每个模型有单价（N Freebucks/小时），
-  **admit 一次就按整小时单价买断**——之后用 3 秒还是 59 分钟扣的一样多，**提前 DELETE 不退**。
-  每日池太平洋午夜重置（每账号每天约 25 Freebucks ≈ Flash 的 1 小时，具体以上游 `freebucks` 返回为准）。
-  代理的空闲释放 / 新会话预算 / 失败即释放，目的是**少开会话**（空闲释放本身只是释放上游会话槽位，不省钱）。
+  **admit 一次就按整小时单价买断**——之后用 3 秒还是 59 分钟扣的一样多；
+  提前 `DELETE` 会把**未用部分按实际占用时长退回**（见上文「计费与定价」，
+  该页旧版写的"提前 DELETE 不退"是证据不足的误判，已反转）。
+  每日池太平洋午夜重置（每账号每天约 25 Freebucks，走代理时为 20）。
+- **每模型每日会话次数有限**：limited 档实测 **6 次/模型/天**。用满后该模型
+  会 503 且购买被退款作废，需等次日重置 —— 这也是**多账号池是刚需**的原因。
+  验证前先看 `rateLimitsByModel`（`recentCount` vs `limit`，控制台「额度」列可见）。
+- 并发槽位 `slotLimit: 1`：与官方客户端**互斥** —— 官方客户端正在用同一个账号时，
+  本服务会拿到 `purchase_in_use` / `purchase_capacity`。
 - Luna 等 premium：大约每天 6×1 小时 session（共享 premium 池）。
 - Flash：CLI full 访问下次数较松，仍有 spend / IP / 容量限制。
 - 同账号由另一个客户端重新 admit 可能触发 `superseded`；同一 `instanceId` 内的并发 chat 流可正常共用。
