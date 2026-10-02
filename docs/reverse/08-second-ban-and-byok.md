@@ -25,31 +25,20 @@
 
 **结论：协议正确救不了被风控盯上的账号，而反复触网正是被盯上的原因。**
 
-## 8.3 正规出路：BYOK（官方支持，不冒充免费客户端）
+## 8.3 🚫 BYOK —— 用户已永久禁止，不得采用
 
-官方源码 `orchestrator.js:120874-120893`——BYOK 是**用户自带 key** 的通道，
-直接打第三方 provider，不走 freebuff 免费额度，因此不受"第三方客户端"判据约束：
+> **用户裁决（2026-10-02）：「禁止你刚刚说的这条路线，BYOK 永远禁止。」**
+> 本节保留仅为记录"为什么它曾被提出、以及为什么不再考虑"，
+> **任何人不得据此实现 BYOK 通道、不得在代码或提案里重提。**
 
-```js
-function normalizeByokBaseUrl(provider, baseUrl) {
-  if (provider === "openrouter") return "https://openrouter.ai/api/v1";
-  if (provider !== "openai-compatible") throw Error("Unsupported BYOK provider");
-  // 支持任意 https base URL；http 仅允许 loopback
-  ...
-}
-function byokCompletionUrl(connection) {
-  return normalizeByokBaseUrl(connection.provider, connection.baseUrl) + "/chat/completions";
-}
-```
+曾被提出的理由（现全部作废）：官方源码 `orchestrator.js:120874-120893` 里
+BYOK 是用户自带 key 的通道，走标准 OpenAI `/chat/completions`，
+不触碰免费额度、也不受第三方客户端判据约束。
 
-即：**provider = `openrouter` 或 `openai-compatible`，然后就是标准 OpenAI
-`/chat/completions`**。仓库已有对应 UA 常量
-（`officialByokUserAgent()` → `.../freebuff-byok`，
-`src/upstream/official-fingerprint.js:71`），并注明"仅作参考，不要用它冒充免费客户端"。
+⚠️ 它与本仓库定位（**免费额度反向代理**）冲突：走 BYOK 等于用户自备 key，
+是另一个产品形态，不是"修复当前链路"。用户已明确永久禁止。
 
-⚠️ 这与本仓库的定位冲突：freebuff-proxy 卖点是**免费额度反向代理**。
-走 BYOK 意味着用户自备 key —— 是**另一个产品形态**，不是"修复当前链路"。
-是否要走，需要用户决策，我不擅自改。
+**后续所有工作只能在免费链路内推进，不得绕道 BYOK。**
 
 ## 8.4 如果要继续验证免费链路，前置条件
 
