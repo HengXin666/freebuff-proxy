@@ -7,7 +7,10 @@ import { spawn } from 'node:child_process'
 import { loadConfig } from '../src/config.js'
 import { buildAppContext } from '../src/app-context.js'
 import { startServer } from '../src/server.js'
-import { refreshCliVersion } from '../src/upstream/official-fingerprint.js'
+import {
+  getCliVersion,
+  refreshCliVersion,
+} from '../src/upstream/official-fingerprint.js'
 import { reportCliLaunch } from '../src/upstream/cli-telemetry.js'
 import { configureLogger, logger } from '../src/util/log.js'
 import { UserStore } from '../src/web/user-store.js'
@@ -341,6 +344,23 @@ async function main() {
             })
             .catch(() => {})
         }
+        // 周期对齐：CLI 版本随官方发版变化，写死一个过时值本身是可用指纹。
+        // 每 6h 拉一次 npm latest；版本变了就 warn（一眼看出该跟进官方）。
+        // unref：定时器绝不挡进程退出。
+        const versionSweeper = setInterval(() => {
+          const before = getCliVersion()
+          void refreshCliVersion()
+            .then((next) => {
+              if (next && next !== before) {
+                logger.warn('cli fingerprint version changed upstream; realigned', {
+                  from: before,
+                  to: next,
+                })
+              }
+            })
+            .catch(() => {})
+        }, 6 * 60 * 60 * 1000)
+        if (versionSweeper.unref) versionSweeper.unref()
       })
       .catch(() => {})
 
