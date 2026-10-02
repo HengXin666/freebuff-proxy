@@ -26,7 +26,7 @@ const DEFAULTS = {
     dataDir: './data',
   },
   upstream: {
-    apiBase: 'https://codebuff.com',
+    apiBase: 'https://www.codebuff.com',
     loginBase: 'https://freebuff.com',
     /** null → <dataDir>/credentials (legacy ./credentials kept as fallback) */
     credentialsDir: null,

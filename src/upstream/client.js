@@ -243,8 +243,15 @@ export function createProxyFetch(config, opts = {}) {
  *   proxy: 账号显式代理覆盖；accountId: 用于全局代理池的稳定分配（如账号邮箱）
  */
 export function createUpstreamClient(config, token, opts = {}) {
-
   const apiBase = config.upstream.apiBase
+  
+  logger.info('createUpstreamClient called', {
+    hasDeviceKeyPath: !!opts.deviceKeyPath,
+    hasAccountId: !!opts.accountId,
+    deviceKeyPath: opts.deviceKeyPath,
+    accountId: opts.accountId,
+    apiBase,
+  })
   const loginBase = config.upstream.loginBase
   const proxyRes = resolveProxy(config, opts.proxy, opts.accountId)
   const poolIndex = proxyRes.kind === 'pool'
@@ -270,6 +277,8 @@ export function createUpstreamClient(config, token, opts = {}) {
    * x-freebuff-device-{key,ts,sig} 三头；我们此前一个都没有。
    * best-effort：拿不到签名就原样发（绝不阻塞请求）。
    * 见 .agents/notes/implemented/bug-fix/2026-10-01-device-signing.md
+   *
+   * ⚠️ 注册请求本身**不能**依赖签名（鸡蛋问题），但必须经过代理。
    */
   const deviceSigner =
     opts.deviceKeyPath && opts.accountId
@@ -278,8 +287,21 @@ export function createUpstreamClient(config, token, opts = {}) {
           apiHost: apiBase,
           accountId: opts.accountId,
           token,
+          fetchImpl: fetchWithProxy, // 注册请求经过代理但不签名
         })
       : null
+  
+  if (deviceSigner) {
+    logger.info('device signer created', {
+      accountId: opts.accountId,
+      storePath: opts.deviceKeyPath,
+    })
+  } else {
+    logger.warn('device signer NOT created', {
+      hasDeviceKeyPath: !!opts.deviceKeyPath,
+      hasAccountId: !!opts.accountId,
+    })
+  }
 
   /**
    * 目录持有者：先 GET /api/v1/freebuff/models 拿 fetchId 与模型句柄。
@@ -287,8 +309,35 @@ export function createUpstreamClient(config, token, opts = {}) {
    * the session endpoints to answer with catalog keys instead of model ids"）。
    * 没有它就只能走 legacy 路径，在受限出口下会被直接拒绝。
    * 见 .agents/notes/implemented/bug-fix/2026-10-01-catalog-protocol.md
+   *
+   * ⚠️ 目录抓取必须带设备签名（否则 401）。传入带签名的 fetch 实现。
    */
-  const catalog = new CatalogHolder({ apiHost: apiBase, token })
+  const catalog = new CatalogHolder({
+    apiHost: apiBase,
+    token,
+    fetchImpl: async (url, init) => {
+      const headers = { ...(init?.headers || {}) }
+      // 设备签名（目录请求也需要签名）
+      if (deviceSigner) {
+        const sigHeaders = await deviceSigner.headersFor({
+          method: init?.method || 'GET',
+          url,
+          body: init?.body || null,
+          fetchId: null, // 目录抓取时还没有 fetchId
+        })
+        logger.info('catalog fetch: adding device signature', {
+          hasKey: !!sigHeaders['x-freebuff-device-key'],
+          hasSig: !!sigHeaders['x-freebuff-device-sig'],
+          keyId: sigHeaders['x-freebuff-device-key'],
+          url,
+        })
+        Object.assign(headers, sigHeaders)
+      } else {
+        logger.warn('catalog fetch: NO device signer available')
+      }
+      return fetchWithProxy(url, { ...init, headers })
+    },
+  })
 
   async function apiFetch(path, init = {}) {
     const url = path.startsWith('http') ? path : `${apiBase}${path}`
