@@ -368,8 +368,11 @@ try {
       if (!run.runId) {
         out.ok = false;
       } else {
+        // ⚠️ 参数名必须是 instanceId（chat 的解构键名）。
+        // 此前写成 inst，导致 x-freebuff-instance-id 缺失 →
+        // 上游不知道请求属于哪个会话 → 428 waiting_room_required。
         const c = await bridge.chat({
-          row, inst, runId: run.runId,
+          row, instanceId: inst, runId: run.runId,
           messages: input.messages, tools: input.tools, stream: input.stream,
         });
         out.chat = c;
