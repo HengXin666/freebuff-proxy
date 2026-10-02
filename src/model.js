@@ -179,6 +179,22 @@ export function mergeCatalogWithBuiltin(builtin, cached) {
 /** @type {FreebuffModelInfo[]} catalog 里的模型（含已暂停/退役的，保留 id 可识别） */
 const CATALOG_MODELS = /** @type {any} */ (loadCatalog())
 
+/**
+ * 目录协议下的**统一 agent id**。
+ *
+ * 官方在 catalog 模式下不再按模型选 agent —— 所有目录模型共用一个 root agent。
+ * 二进制原文：
+ *   UK = "base3-free-catalog"
+ *   Ps$(H){ return WD().row(H)?.key === H ? UK : cCH(H) }
+ * 即：会话模型是目录 key 时返回 UK，否则才走 `cCH`（按 base2/base3 推导）。
+ *
+ * 抓包实测：官方 chat 走目录协议时，agent-run 的 START 是
+ * `{"action":"START","agentId":"base3-free-catalog","ancestorRunIds":[]}`。
+ *
+ * 见 .agents/notes/implemented/bug-fix/2026-10-01-catalog-agent.md
+ */
+export const CATALOG_UNIFIED_AGENT_ID = 'base3-free-catalog'
+
 /** 内置 catalog 的 model → agent 映射（base2 主 agent / base3 孪生）。 */
 const CATALOG_AGENT_BY_MODEL = new Map()
 const CATALOG_FALLBACK_BY_MODEL = new Map()

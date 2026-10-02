@@ -95,6 +95,17 @@ export class SettingsStore {
         this.settings.stripToolsOnSchemaRejection =
           raw.stripToolsOnSchemaRejection
       }
+      // ⚠️ 这两个布尔开关**必须**在这里读回：它们能经 save() 写进
+      // settings.json，但漏读的话重启后一律回落到 DEFAULT_SETTINGS 的 false ——
+      // 表现为「控制台打开了开关、重启就自己关了」。webChannelEnabled 尤其致命：
+      // limited 档位下 CLI 通道必然 503，网页通道是唯一可用路径，而开关失效时
+      // 请求会照旧走 CLI 通道，症状与"开关没用"无法区分。
+      if (typeof raw?.webChannelEnabled === 'boolean') {
+        this.settings.webChannelEnabled = raw.webChannelEnabled
+      }
+      if (typeof raw?.cliTelemetryEnabled === 'boolean') {
+        this.settings.cliTelemetryEnabled = raw.cliTelemetryEnabled
+      }
       if (Number.isInteger(raw?.accountMaxConcurrency)) {
         this.settings.accountMaxConcurrency = clampConcurrency(
           raw.accountMaxConcurrency,

@@ -461,10 +461,14 @@ globalThis.fetch = async (url, init = {}) => {
     assert.equal(body.messages[0].role, 'system')
     // base3 世代 root（base3-free-*）用 base3 规范开场（对齐 trefeon PR #207）：
     // "a base3 run must open with the BASE3 canonical identity, not base2's"。
-    // luna 系在本项目强制 base3，故其请求以 base3 开场是正确行为。
-    // chat 请求 body 里没有 agentId 字段（agentId 只在 agent-runs START），
-    // 这里按模型推断：luna 系 = base3 run。
-    const isBase3Run = /luna/.test(body.model)
+    // 世代判定不能按模型名猜 —— 真实来源是 agentId，而 chat body 里没有它。
+    // 目录模式（会话模型是 m-xxx / fbm1.xxx）下官方**统一**用
+    // base3-free-catalog，故必然以 base3 开场；见
+    // .agents/notes/implemented/bug-fix/2026-10-01-catalog-agent.md
+    // 真机证据：官方 chat 的 system 开场就是
+    //   "You are Buffy, the coding agent behind Codebuff."
+    const isBase3Run =
+      /luna/.test(body.model) || /^(m-|fbm1\.)/.test(String(body.model))
     const msg0 = String(body.messages[0].content)
     assert.ok(
       isBase3Run
@@ -6497,6 +6501,20 @@ server.close()
   assert.equal(userStore.loadStatus, 'ok', 'users.json 正常时必须报 ok')
   const settingsStore = new SettingsStore(settingsPath)
   assert.equal(settingsStore.get().accountMaxConcurrency, 3, 'settings.json 必须能读回设置')
+
+  // 布尔开关的**往返**回归：save() 能写盘、load() 就必须读回。
+  // 漏读的表现是"控制台打开开关、重启后自己关了"，而 webChannelEnabled 在
+  // limited 档位下是唯一可用通道 —— 开关静默失效会伪装成"网页通道没用"。
+  {
+    const rtPath = path.join(tmpDir, 'settings-roundtrip.json')
+    const w = new SettingsStore(rtPath)
+    w.save({ webChannelEnabled: true, cliTelemetryEnabled: true })
+    const r = new SettingsStore(rtPath).get()
+    assert.equal(r.webChannelEnabled, true, 'webChannelEnabled 写盘后必须能读回')
+    assert.equal(r.cliTelemetryEnabled, true, 'cliTelemetryEnabled 写盘后必须能读回')
+    const fresh = new SettingsStore(path.join(tmpDir, 'settings-fresh.json')).get()
+    assert.equal(fresh.webChannelEnabled, false, '未配置时 webChannelEnabled 默认关闭')
+  }
   const proxyStore = new ProxyStore(proxiesPath)
   assert.equal(proxyStore.loadStatus, 'invalid', '损坏的 proxies.json 必须报 invalid')
   assert.deepEqual(proxyStore.list(), [], '损坏的代理池按空处理（不抛）')

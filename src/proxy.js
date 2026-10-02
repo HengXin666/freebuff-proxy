@@ -3,6 +3,7 @@ import {
   buildModelsListResponse,
   modelIdsFromSession,
   agentIdForModel,
+  CATALOG_UNIFIED_AGENT_ID,
   agentFallbackForModel,
   isModelAllowed,
 } from './model.js'
@@ -931,7 +932,29 @@ export function createProxyHandler(ctx) {
             // output 限制会截断长思考链），回退 base3 孪生 agent 再试一次。
             // agentOverride：本请求上一次尝试因 free_mode_legacy_luna_agent 失败
             // 后置为 base3 孪生（上游退役旧 agent 时换 session 没用，必须换 agent）。
-            const agentId = agentOverride || agentIdForModel(upstreamModel, customModels())
+            // ⚠️ 目录协议下的 agent 选择（真机抓包 + 二进制双重证据）：
+            //
+            // 官方 chat 走目录协议时，agent-run 用的是**统一的**
+            // `base3-free-catalog`，而不是 `base2-free-<model>`。
+            // 二进制原文：
+            //   UK = "base3-free-catalog"
+            //   Ps$(H){ return WD().row(H)?.key === H ? UK : cCH(H) }
+            // 即：**当会话模型是目录 key（m-xxx）时 → 用 catalog agent**；
+            // 否则才按 legacy 规则推导 base2/base3。
+            //
+            // 抓包实测：官方 START agentId=base3-free-catalog（目录模式下唯一值）。
+            // 我们此前发 base2-free-deepseek-flash —— 与官方不一致。
+            // 见 .agents/notes/implemented/bug-fix/2026-10-01-catalog-agent.md
+            const sessionModelId = snap.model
+            const isCatalogMode =
+              typeof sessionModelId === 'string' &&
+              (sessionModelId.startsWith('m-') ||
+                sessionModelId.startsWith('fbm1.'))
+            const agentId =
+              agentOverride ||
+              (isCatalogMode
+                ? CATALOG_UNIFIED_AGENT_ID
+                : agentIdForModel(upstreamModel, customModels()))
             try {
               runId = await rt.upstream.startAgentRun({ agentId })
               clientId = newIds().clientId
@@ -942,10 +965,13 @@ export function createProxyHandler(ctx) {
                   agentErr.code === 'free_mode_invalid_agent_model') &&
                 agentErr.status === 403
               ) {
-                const fbAgentId = agentFallbackForModel(
-                  upstreamModel,
-                  customModels(),
-                )
+                // 目录模式下主 agent 是 base3-free-catalog；兜底**必须同代**，
+                // 否则回退成 base2-free 会跨世代（系统消息开场白按 base3 写，
+                // agent 却是 base2 → 上游按世代校验必然拒绝）。
+                // 见 .agents/notes/implemented/bug-fix/2026-10-01-catalog-agent.md
+                const fbAgentId = isCatalogMode
+                  ? CATALOG_UNIFIED_AGENT_ID
+                  : agentFallbackForModel(upstreamModel, customModels())
                 if (fbAgentId !== agentId) {
                   logger.warn('primary agent rejected; falling back', {
                     agentId,
@@ -1555,8 +1581,11 @@ export function createProxyHandler(ctx) {
     // 以 404 失败、下游桥接层再崩成 502 空体，即 issue#15「所有模型空响应」。
     // 判据与实测见
     // .agents/notes/implemented/bug-fix/2026-09-19-genuine-tool-signature.md
+    // ⚠️ 必须 `?.get()?.`：只写 `?.get().` 时，settingsStore 存在而 get() 返回
+    // undefined（store 尚未就绪/读盘降级）会抛 TypeError，直接打断带工具的
+    // 转发链路 —— 与同文件 blockPremiumModels 的写法保持一致。
     const freeToolSignatureEnabled =
-      settingsStore?.get().freeToolSignatureEnabled !== false
+      settingsStore?.get?.()?.freeToolSignatureEnabled !== false
     body.tools = ensureFreebuffToolSignature(
       body.tools,
       freeToolSignatureEnabled,

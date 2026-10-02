@@ -69,3 +69,12 @@ m-5a5d0e255e | GPT-6 Luna
   chat 503。
 - 目录实拉 12 行，无 `deepseek/deepseek-v4-flash`，deepseek 系只有 `m-096e75164d`。
 - 账号全程 `banned: false`；额度 20/25（本轮消耗 10，来自探测建立的会话）。
+
+⚠️ **2026-10-01 实测修正**：本 note 原文把 chat 503 归因为模型错配，
+「修好映射即可消除」这一推论**已被推翻** —— 映射修好后（会话 `m-096e75164d`、
+句柄 `fbm1.AAEAAUPeE7tq…`、agent `base3-free-catalog` 与开场白同代、tools 判据
+`signal: null`）chat 仍然 503，且随后换模型再 admit 直接被判 `banned`（24h）。
+即 `The model is temporarily unavailable` 是**不携带原因的通用文案**，
+不是模型映射的判据。映射机制本身（会话模型权威）依然成立，被推翻的只是
+那条归因推论。见
+[2026-10-01-chat-503-not-model-mapping.md](2026-10-01-chat-503-not-model-mapping.md)。
