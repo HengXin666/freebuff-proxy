@@ -65,3 +65,15 @@ Status: implemented
 - `scripts/check-i18n.mjs`：红线实现（含各条检查的注释说明）
 - CI：`.github/workflows/docker-image.yml` 的 `i18n` job
 - 本轮同时修的模型名显示：`.agents/notes/implemented/bug-fix/2026-10-02-catalog-key-display-name-bridge.md`
+
+## Addendum: 语言切换器不能用 `<select>`（顶栏被撑宽）
+
+初版用原生 `<select>` 做语言切换，**实测宽度 780px**（同页面普通按钮 56px）—— 顶栏被顶出一条很宽的选项栏，正是用户反馈的"选项栏变得非常宽"。
+根因：原生下拉在没显式限宽时按内容/容器撑开，而 option 是全名（"简体中文" / "English"）。
+
+改为 **`globe` 图标 + 短码按钮**（`中` / `EN`），点一下切到另一种语言；全名放进 `title` 与 `aria-label`。
+实测 **56px，与相邻普通按钮完全一致**。
+
+短码与全名都在 `dashboard/i18n.js`（`LOCALE_SHORT` / `LOCALE_LABELS`）：短码是 UI 文案的一部分，但红线只扫 `app.js`，放字典里也能和 `LOCALE_LABELS`（故意不翻译）挨在一起说明。
+
+只有两个语种时"点一下切换"比下拉少一次操作；语种变多（>2）时应改回下拉，但需显式 `width` 限死。

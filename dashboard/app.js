@@ -6,7 +6,7 @@
 'use strict'
 
 import {
-  t, getLocale, setLocale, initLocale, DEFAULT_LOCALE, LOCALES, LOCALE_LABELS,
+  t, getLocale, setLocale, initLocale, DEFAULT_LOCALE, LOCALES, LOCALE_LABELS, LOCALE_SHORT,
 } from './i18n.js'
 
 const state = {
@@ -320,7 +320,15 @@ function renderHeader() {
 
 /** 版本号徽章 + GitHub 仓库链接（版本号由发版流水线硬编码进 version.json） */
 /**
- * 顶栏语言切换器（zh-CN / en）。
+ * 顶栏语言切换器：**图标 + 短码按钮**（点一下切到另一种语言），不是 <select>。
+ *
+ * ⚠️ 为什么不用 <select>：原生下拉会按**最长 option** 撑开宽度（"简体中文" 比
+ * "EN" 宽得多），顶栏因此被顶出一条很宽的选项栏，与相邻按钮完全不协调
+ * （实测踩过：看起来像多了一整条工具栏）。
+ * 只有两个语种时，"点一下切换" 也比下拉少一次操作。
+ *
+ * 标签用短码（中 / EN）而非全名（简体中文 / English）：宽度与其他图标按钮一致。
+ * 全名放在 title 提示里（鼠标悬停可见），并在 aria-label 里给完整语义。
  *
  * 切换后调用 render() **整页重渲染**：文案散布在每个区块里，逐块刷新必漏。
  * render() 只重画 DOM、不重新拉数据，所以在途请求不受影响、已买断的会话
@@ -329,20 +337,20 @@ function renderHeader() {
  */
 function buildLocaleSwitcher() {
   const cur = getLocale()
-  return el('select', {
-    class: 'locale-select',
-    title: t('nav.language'),
-    'aria-label': t('nav.language'),
-    onchange: (e) => {
-      setLocale(e.target.value)
+  const next = LOCALES.find((l) => l !== cur) || DEFAULT_LOCALE
+  const label = LOCALE_SHORT[cur] || cur
+  return el('button', {
+    class: 'locale-btn',
+    title: t('nav.languageSwitchTo'),
+    'aria-label': `${t('nav.language')}: ${LOCALE_LABELS[cur] || cur}`,
+    onclick: () => {
+      setLocale(next)
       // 同步 <html lang>：屏幕阅读器与浏览器拼写检查据此选语言
       const html = document.documentElement
       if (html) html.lang = getLocale()
       render()
     },
-  }, LOCALES.map((loc) =>
-    el('option', { value: loc, selected: loc === cur }, LOCALE_LABELS[loc] || loc),
-  ))
+  }, [icon('globe', 14), label])
 }
 
 function versionBadge() {

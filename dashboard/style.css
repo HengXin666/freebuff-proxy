@@ -178,19 +178,14 @@ h3 { font-size: 15px; font-weight: 600; }
 .hidden { display: none !important; }
 
 /* ---------- badges ---------- */
-/* 顶栏语言切换器：贴齐按钮高度，避免比相邻按钮高/矮一截 */
-.locale-select {
-  height: 30px;
-  padding: 0 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border2);
-  background: rgba(255, 255, 255, .02);
-  color: var(--text2);
-  font-size: 12px;
-  cursor: pointer;
+/* 语言切换按钮：内容只有「图标 + 短码（中 / EN）」，天然很窄。
+   ⚠️ 不要用 <select>：原生下拉按最长 option（"简体中文"）撑开宽度，
+   会把顶栏顶出一条很宽的选项栏（实测踩过）。
+   min-width 只是防止两种语言切换时按钮宽度跳动。 */
+.locale-btn {
+  min-width: 56px;
+  justify-content: center;
 }
-.locale-select:hover { color: var(--text); border-color: var(--border); }
-.locale-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .badge {
   display: inline-flex;
