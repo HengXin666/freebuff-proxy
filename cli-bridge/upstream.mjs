@@ -240,6 +240,17 @@ class Bridge {
     return { status: res.status, body, runId: body?.runId ?? null };
   }
 
+  /**
+   * 复用一个**已存在的会话**发 chat：不建会话、不扣费。
+   *
+   * 用途：把「建会话」与「说话」两个环节分开定位 ——
+   * 若复用客户端已建成的会话能拿到 200，则问题出在 admission；
+   * 若仍 428/503，则问题出在 chat 请求本身。
+   */
+  async reuseChat({ row, instanceId, runId, messages, tools, stream = false }) {
+    return this.chat({ row, instanceId, runId, messages, tools, stream });
+  }
+
   /** chat：model 用 handle；run_id 在 codebuff_metadata 里。 */
   async chat({ row, instanceId, runId, messages, tools, stream = false }) {
     const url = `${HOST}/api/v1/chat/completions`;
@@ -319,6 +330,24 @@ try {
       tools: input.tools,
       stream: input.stream,
     });
+  } else if (act === 'reuse') {
+    // 复用已有会话：只做 startRun + chat，绝不 admission
+    const row = bridge.catalog.rows.find((r) => r.key === input.modelKey)
+      || bridge.catalog.rows.find((r) => r.handle === input.modelKey)
+      || bridge.catalog.rows[0];
+    out.model = { key: row.key, name: row.displayName };
+    const run = await bridge.startRun(input.agentId);
+    out.startRun = { status: run.status, runId: run.runId };
+    if (!run.runId) {
+      out.ok = false;
+    } else {
+      const c = await bridge.reuseChat({
+        row, instanceId: input.instanceId, runId: run.runId,
+        messages: input.messages, tools: input.tools, stream: input.stream,
+      });
+      out.chat = c;
+      out.ok = c.status === 200;
+    }
   } else if (act === 'release') {
     out.result = await bridge.release(input.instanceId);
   } else if (act === 'full') {
