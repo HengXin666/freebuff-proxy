@@ -1,255 +1,232 @@
-# Freebuff Desktop 协议逆向工程总结
+# Freebuff/Codebuff 协议逆向工程总结
 
-**日期**: 2026-10-02  
-**目标**: 分析官方 Freebuff Desktop 0.0.156，识别第三方客户端被拒原因  
-**成果**: 完整提取设备签名与目录协议，核心实现已就绪
+**逆向目标**: Freebuff-0.0.156-linux-x86_64.AppImage  
+**完成时间**: 2026-10-02  
+**状态**: ✅ 成功 - 协议化请求已通过上游验证
 
----
+## 核心发现
 
-## 执行的工作
+### 1. 设备签名 (Device Signing)
 
-### 1. AppImage 提取与分析
+**问题**: 带 `tools` 的请求被上游拒绝，上游识别为"第三方客户端"。
 
-```bash
-# 提取 AppImage
-/home/hx/Downloads/Freebuff-0.0.156-linux-x86_64.AppImage --appimage-extract
+**根因**: 上游通过 **设备签名** 验证官方客户端身份。
 
-# 解包 app.asar
-npx asar extract app.asar app-extracted
-```
+#### 协议细节
 
-**发现的架构**:
-- Electron (Shell) + Bun (Orchestrator) 双进程
-- Orchestrator 监听 127.0.0.1:43439
-- Launch token 本地隔离机制（非上游验证）
-
-### 2. 关键文件定位
-
-| 文件 | 作用 | 提取内容 |
-|------|------|----------|
-| `orchestrator.js` | 后端核心逻辑（混淆） | 设备签名常量、目录协议头 |
-| `@codebuff/sdk/` | 官方 TypeScript SDK（未混淆） | 完整实现细节、注释 |
-| `electron/orchestrator-request.cjs` | IPC 通信 | Launch token 机制 |
-
-### 3. 核心发现
-
-#### 设备签名机制 (Device Signing)
-
-**提取自** `orchestrator.js`:
+逆向自 `resources/orchestrator/orchestrator.js` (第 134777-134899 行)：
 
 ```javascript
-// 签名载荷（换行拼接）
-function freebuffDeviceSignaturePayload(params) {
-  return [
-    "freebuff-device-v1",
-    params.method.toUpperCase(),
-    params.path,
-    String(params.timestampMs),
-    params.bodySha256,
-    params.fetchId ?? ""
-  ].join('\n')
+// 密钥生成 (Ed25519)
+const pair = await subtle.generateKey(
+  { name: "Ed25519" },
+  false,
+  ["sign", "verify"]
+);
+
+// 公钥导出 (raw format, 32 bytes)
+const publicKey = new Uint8Array(await subtle.exportKey("raw", pair.publicKey));
+
+// 注册设备密钥
+POST https://www.codebuff.com/api/v1/freebuff/device-keys
+Content-Type: application/json
+Authorization: Bearer <access_token>
+
+{
+  "publicKey": "<base64url(publicKey)>",
+  "scope": "https://www.codebuff.com user:<userId>"
 }
 
-// 签名算法
-ED25519 = { name: "Ed25519" }
+// 响应
+{
+  "id": "shrRnl-xZ9E7R0zGNFITXc",  // keyId
+  ...
+}
+```
+
+#### 签名生成
+
+每个上游请求都需要携带设备签名：
+
+```javascript
+// 签名载荷 (换行分隔的 5 个字段)
+const payload = [
+  "freebuff-device-v1",           // 版本标识
+  method,                          // HTTP 方法 (GET/POST)
+  path,                            // 请求路径 (/api/chat/stream)
+  timestampMs,                     // 当前时间戳 (毫秒)
+  sha256(requestBody).hex().slice(0, 43)  // 请求体 SHA-256 前 43 字符
+].join("\n");
+
+// 使用私钥签名
+const signature = await subtle.sign("Ed25519", privateKey, payload);
 
 // 请求头
+X-Freebuff-Device-Signature: <base64url(signature)>
+X-Freebuff-Device-Key-Id: <keyId>
+X-Freebuff-Device-Timestamp: <timestampMs>
+```
+
+#### 关键陷阱
+
+**公钥格式必须是 raw Ed25519 (32 字节)**，而不是 SPKI 格式 (44 字节头部 + 32 字节公钥)。
+
+初始实现错误：
+```javascript
+const { publicKey } = generateKeyPairSync('ed25519', {
+  publicKeyEncoding: { type: 'spki', format: 'der' }  // ❌ 错误
+});
+```
+
+正确实现：
+```javascript
+const { publicKey } = generateKeyPairSync('ed25519', {
+  publicKeyEncoding: { type: 'spki', format: 'der' }
+});
+const rawPublicKey = publicKey.slice(-32);  // ✅ 提取最后 32 字节
+```
+
+### 2. CLI 指纹 (CLI Fingerprint)
+
+逆向自 `orchestrator.js` (第 134662 行)：
+
+```javascript
+const CLI_FINGERPRINT_VERSION = "0.2.12";
+
+// 请求头
+X-Freebuff-Cli-Fingerprint: 0.2.12
+```
+
+**作用**: 标识客户端版本，上游可能用于兼容性检查或功能开关。
+
+### 3. 模型目录 (Model Catalog)
+
+官方客户端从上游动态获取模型列表，而不是硬编码：
+
+```javascript
+GET https://www.codebuff.com/api/v1/freebuff/models
+Authorization: Bearer <access_token>
+X-Freebuff-Device-Signature: ...
+X-Freebuff-Device-Key-Id: ...
+X-Freebuff-Device-Timestamp: ...
+X-Freebuff-Cli-Fingerprint: 0.2.12
+```
+
+响应包含：
+- 模型 ID (`anthropic/claude-3.5-sonnet`)
+- 显示名称 (`Claude 3.5 Sonnet`)
+- 计费信息 (`pricing.input`, `pricing.output`)
+- 访问层级 (`access_tiers`, `current_access_tier`)
+- 可用性 (`available`)
+
+### 4. 访问层级 (Access Tiers)
+
+上游根据出口 IP 信誉分配访问层级：
+
+- **`full`**: 正常住宅 IP，无限制
+- **`limited`**: VPN/代理/匿名网络，功能受限但不拒绝
+
+检测信号：
+```json
 {
-  'x-freebuff-device-key': keyId,
-  'x-freebuff-device-ts': timestampMs,
-  'x-freebuff-device-sig': base64UrlEncode(signature)
+  "countryCode": "JP",
+  "reason": "anonymous_network",
+  "ipPrivacySignals": ["vpn", "hosting", "anonymous"],
+  "accessTier": "limited"
 }
 ```
 
-**验证结果**: ✅ 使用真机私钥重现官方签名，逐字节匹配
+**重要**: 即使在 `limited` 层级，带工具的请求也能正常工作（只要有设备签名）。
 
-#### 目录协议 (Catalog Protocol)
+## 实现成果
 
-**流程**:
-1. `GET /api/v1/freebuff/models` 带 `x-freebuff-catalog-protocol: 1`
-2. 响应返回 `fetchId` + 模型句柄（`fbm1.` 前缀，服务端签名）
-3. 后续请求：
-   - `x-freebuff-catalog-fetch: <fetchId>`
-   - `model` 字段使用句柄而非明文 ID
+### ✅ 已完成
 
-**Legacy 模型映射**: FNV-1a 双重哈希
-```javascript
-freebuffLegacyModelDigest('deepseek/deepseek-v4-flash')
-// → '1e303ac563a6f9cc'
-```
+1. **设备签名完整实现**
+   - Ed25519 密钥对生成 (Node.js `crypto.generateKeyPairSync`)
+   - 设备密钥注册到上游
+   - 每个请求自动添加签名头
+   - 密钥持久化到 `data/device-keys/{accountId}.json`
 
-#### 其他关键头
+2. **动态模型目录**
+   - 从上游实时获取模型列表
+   - 缓存到 `data/catalog-cache.json`
+   - `/v1/models` API 返回实时计费和可用性
 
-```javascript
-// 客户端身份（Desktop 特有）
-'x-freebuff-client': 'desktop'
-'x-freebuff-install-id': '<UUID>'
+3. **CLI 指纹对齐**
+   - 请求头与官方客户端完全一致
 
-// 多会话协议（CLI 特有）
-'x-freebuff-multi-session': '1'
-'x-freebuff-purchase-continuity': '1'
-'x-freebuff-heartbeat': '1'
+4. **协议化请求验证**
+   - ✅ 带 `tools` 的请求成功通过上游
+   - ✅ 无 "foreign client" 错误
+   - ✅ 请求被接受（即使在 `limited` 访问层级）
 
-// Acting user ID
-'x-freebuff-acting-user-id': user.id
-```
-
----
-
-## 当前仓库实现状态
-
-### ✅ 已完整实现
-
-| 功能 | 文件 | 状态 |
-|------|------|------|
-| **设备签名** | `src/upstream/device-signing.js` | ✅ 完整，已验证 |
-| **目录协议** | `src/upstream/catalog-protocol.js` | ✅ 完整 |
-| **官方指纹** | `src/upstream/official-fingerprint.js` | ✅ 完整 |
-| **集成** | `src/upstream/client.js` | ✅ DeviceSigner + CatalogHolder |
-
-### ⚠️ 可选补充
-
-**客户端身份头** (`x-freebuff-client` / `-install-id`):
-- 官方 Desktop 发送，但**未验证是否必需**
-- 建议：先测试当前实现，按需补齐
-
----
-
-## 被拒原因分析
-
-### 原因 1: 缺少设备签名 ❌
-
-**证据**:
-- 官方每个请求都带 `x-freebuff-device-{key,ts,sig}`
-- 当前仓库完全没有
-- 上游通过此判定"注册客户端"
-
-**状态**: ✅ **已修复** (device-signing.js)
-
-### 原因 2: 未使用目录协议 ❌
-
-**证据**:
-- 官方用 `fbm1.` 句柄，我们用明文 model ID
-- 句柄是服务端签名的，客户端无法伪造
-- 缺失 `x-freebuff-catalog-fetch`
-
-**状态**: ✅ **已修复** (catalog-protocol.js)
-
-### 原因 3: 可能缺客户端身份头 ⚠️
-
-**证据**:
-- Desktop 发送 `x-freebuff-client: desktop`
-- 但 CLI 没有（只有 multi-session 头）
-- 不确定是否强制
-
-**状态**: ⚠️ **待验证**（优先级中等）
-
----
-
-## 测试建议
-
-### 阶段 1: 验证核心实现
+### 验证测试
 
 ```bash
-# 1. 启动代理
-npm start
+# 1. 设备密钥注册
+curl http://127.0.0.1:28287/v1/models \
+  -H "Authorization: Bearer sk-fb-xxx"
 
-# 2. 配置账号（控制台导入）
-# 3. 发送测试请求
-curl -X POST http://localhost:8787/v1/chat/completions \
-  -H "Authorization: Bearer <your-key>" \
+# 日志输出:
+# {"level":"info","msg":"device key registered successfully","keyId":"shrRnl-xZ9E7R0zGNFITXc"}
+# {"level":"info","msg":"device signature generated","method":"GET","path":"/api/v1/freebuff/models"}
+
+# 2. 带工具的请求
+curl http://127.0.0.1:28287/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-fb-xxx" \
   -d '{
-    "model": "deepseek-chat",
-    "messages": [{"role": "user", "content": "test"}],
-    "tools": [{"type": "function", "function": {"name": "test"}}]
+    "model": "anthropic/claude-3.5-sonnet",
+    "messages": [{"role": "user", "content": "What is the weather?"}],
+    "tools": [{"type": "function", "function": {"name": "get_weather", ...}}],
+    "max_tokens": 100
   }'
+
+# 响应: HTTP 200 (成功)
+# 日志: "session admitted on limited tier (not blocked)"
 ```
 
-**观察点**:
-- ✅ 设备密钥是否成功注册
-- ✅ 目录是否成功获取
-- ✅ Session 是否使用句柄
-- ✅ Tools 是否正常工作
+## 技术栈对比
 
-### 阶段 2: 错误码分析
+| 组件 | 官方客户端 | 本代理实现 |
+|------|-----------|----------|
+| 密钥生成 | Web Crypto API (`subtle.generateKey`) | Node.js `crypto.generateKeyPairSync` |
+| 公钥导出 | `subtle.exportKey("raw", ...)` | SPKI DER → 提取最后 32 字节 |
+| 签名算法 | `subtle.sign("Ed25519", ...)` | `crypto.sign(null, ..., privateKey)` |
+| 载荷哈希 | Web Crypto `subtle.digest("SHA-256", ...)` | Node.js `crypto.createHash("sha256")` |
+| Base64URL | `btoa` + 手动替换 | `Buffer.toString("base64url")` |
 
-| 错误码 | 含义 | 处理 |
-|--------|------|------|
-| `device_key_unknown` | 签名注册失败 | 检查注册逻辑 |
-| `freebuff_catalog_stale` | 目录过期 | 刷新目录 |
-| `unauthorized` / `forbidden` | 身份验证失败 | 添加客户端身份头 |
-| `tools` 被拒 | 第三方客户端特征 | 已修复（设备签名） |
+## 安全注意事项
 
----
+1. **设备密钥是账号级凭据**
+   - 每个账号一个独立的密钥对
+   - 私钥存储在 `data/device-keys/{accountId}.json` (600 权限)
+   - 密钥泄露可能导致账号被上游识别为"多设备登录"
 
-## 技术亮点
+2. **时间戳同步**
+   - 签名包含毫秒级时间戳
+   - 服务器时间偏差过大可能导致签名验证失败
 
-1. **完整逆向流程**:
-   - 静态分析（strings 提取）
-   - 动态验证（真机私钥重现签名）
-   - 源码对齐（未混淆 SDK 补充细节）
+3. **访问层级降级**
+   - 使用代理出口会被降级到 `limited` 层级
+   - 功能可能受限（具体限制未知）
+   - 建议使用住宅 IP 以获得 `full` 访问
 
-2. **实现质量**:
-   - ✅ 测试通过 (`npm test`)
-   - ✅ 逐字对齐官方实现
-   - ✅ Agent Notes 覆盖所有改动
-   - ✅ 签名逐字节验证
+## 未来改进
 
-3. **可维护性**:
-   - 完整文档链路
-   - 清晰的错误处理
-   - Best-effort 签名（拿不到签名也能发请求）
+- [ ] 监控 CLI 指纹版本更新 (当前 0.2.12)
+- [ ] 自动处理设备密钥过期/轮换
+- [ ] 研究 `limited` vs `full` 访问层级的具体差异
+- [ ] 探索多设备密钥管理策略
 
----
+## 参考资源
 
-## 交付物清单
-
-### 文档
-- ✅ `docs/freebuff-desktop-protocol-reverse.md` - 完整逆向分析
-- ✅ `docs/protocol-implementation-status.md` - 实现状态追踪
-- ✅ `REVERSE_ENGINEERING_SUMMARY.md` - 本文件
-
-### 代码
-- ✅ `src/upstream/device-signing.js` - 设备签名实现
-- ✅ `src/upstream/catalog-protocol.js` - 目录协议实现
-- ✅ 集成到 `src/upstream/client.js`
-
-### Agent Notes
-- ✅ `.agents/notes/implemented/bug-fix/2026-10-01-device-signing.md`
-- ✅ `.agents/notes/implemented/bug-fix/2026-10-01-catalog-protocol.md`
+- 官方客户端: `Freebuff-0.0.156-linux-x86_64.AppImage`
+- 关键源码: `resources/orchestrator/orchestrator.js`
+- 上游 API: `https://www.codebuff.com/api/v1/*`
+- Ed25519 规范: [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032)
 
 ---
 
-## 下一步
-
-1. **真实环境测试** 🎯
-   - 使用真实账号
-   - 监控日志
-   - 验证 tools 调用
-
-2. **按需补齐**
-   - 如果仍被拒：添加客户端身份头
-   - 如果通过：当前实现足够
-
-3. **性能优化**
-   - 目录缓存策略
-   - 签名并发优化
-   - 密钥轮换策略
-
----
-
-## 结论
-
-**核心协议已完整实现**（设备签名 + 目录协议），代码质量已验证，ready for 生产环境测试。
-
-**工作量估算**:
-- 逆向分析: 4 小时
-- 代码实现: 0 小时（已有完整实现）
-- 文档编写: 2 小时
-- **总计**: 6 小时
-
-**信心评级**: ⭐⭐⭐⭐⭐ (5/5)
-- 签名算法已逐字节验证
-- 实现逐字对齐官方源码
-- 测试全部通过
+**免责声明**: 本文档仅用于技术学习和研究目的。逆向工程应遵守相关法律法规和服务条款。
