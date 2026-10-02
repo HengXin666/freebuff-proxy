@@ -116,22 +116,26 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点�
 
 ## 版本管理（硬性，发版必读）
 
-1. **唯一版本真源 = `package.json` 的 `version` 字段**。本地开发/测试以它为准。
-2. **每次发版必须先 bump 版本号**，流程固定为：
+0. **「发版」= 打 `v*` tag + 发布 GitHub Release**（用户明确约定）。
+   只 bump 版本号不打 tag、或只打 tag 不发 release，都不算发版完成。
+   完整发版流程：
    ```bash
-   npm version patch|minor|major   # 自动 bump package.json + git commit + 打 v* tag
-   git push origin main --tags
+   npm version patch|minor|major              # bump package.json + commit + 打 v* tag
+   git push origin main --tags                # 推提交与 tag（触发 CI 构建推送镜像）
+   gh release create vX.Y.Z --title "..." --notes-file -   # 发布 release
    ```
-   **禁止**：bump 版本与打 tag 分开做、或跳过 `npm version` 直接手动改 version 后打 tag——
-   两者不一致会被流水线门禁拦下。
-3. **流水线强制门禁**：CI 的 `check-version` job 校验 git tag（`v*`）与 package.json 版本必须一致，
+   Release notes 必须写清**修了什么、为什么、升级方式**；涉及协议/判据变化的附实测证据。
+
+1. **唯一版本真源 = `package.json` 的 `version` 字段**。本地开发/测试以它为准。
+   **禁止**跳过 `npm version` 直接手动改 version 后打 tag——两者不一致会被门禁拦下。
+2. **流水线强制门禁**：CI 的 `check-version` job 校验 git tag（`v*`）与 package.json 版本必须一致，
    不一致直接 fail。这就是「发版必须更新版本号」的硬保障，不需要人工提醒。
-4. **镜像内版本号由流水线硬编码**：`build-push` 在 docker build 前跑
+3. **镜像内版本号由流水线硬编码**：`build-push` 在 docker build 前跑
    `node scripts/inject-version.mjs --version <tag版本> --repo <仓库>`，
    生成 `dashboard/version.json`（含 version + repo + commit sha）写进镜像。
    前端 header 的 `vX.Y.Z` 徽章就是读它——**镜像里显示什么版本完全由流水线决定**，
    与本地文件无关；本地没有 version.json 时前端 fallback 显示 `dev`。
-5. `dashboard/version.json` 是构建产物（.gitignore 已忽略），**禁止手工编辑/提交**；
+4. `dashboard/version.json` 是构建产物（.gitignore 已忽略），**禁止手工编辑/提交**；
    要改版本只能走 `npm version` + 重新构建。
 
 ## 测试与验证（提交前必须全过）
