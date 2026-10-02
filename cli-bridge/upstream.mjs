@@ -371,6 +371,26 @@ class Bridge {
 
   /** chat：model 用 handle；run_id 在 codebuff_metadata 里。 */
   /**
+   * trace_session_id：一个 run 一个，不是每请求随机
+   * （line 14 与 26 同为 a43f616d-...；line 38/42/45/56 同为 6b5550f5-...）。
+   */
+  _traceFor(runId) {
+    if (!this._runState || this._runState.runId !== runId) {
+      this._runState = { runId, traceSessionId: crypto.randomUUID(), step: 0 };
+    }
+    return this._runState.traceSessionId;
+  }
+
+  /** llm_step_number：同一 run 内单调递增，返回递增后的值。 */
+  _stepFor(runId) {
+    if (!this._runState || this._runState.runId !== runId) {
+      this._runState = { runId, traceSessionId: crypto.randomUUID(), step: 0 };
+    }
+    this._runState.step += 1;
+    return this._runState.step;
+  }
+
+  /**
    * chat —— 逐字段照抄官方抓包（worker 层形态）。
    *
    * 官方真值（docs/reverse/captures/2026-10-03-official-client.jsonl）：
@@ -424,11 +444,12 @@ class Bridge {
 
     const metadata = {
       run_id: runId,
-      client_id: Math.random().toString(36).slice(2, 15),
+      // 官方固定 11 位 base36（line 14 0mrb3znwuim / 38 92jgxqouweo / 60 2qgozlgk45r）
+      client_id: (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)).slice(0, 11),
       cost_mode: 'free',
       freebuff_instance_id: instanceId,
       freebuff_multi_session: '1',
-      trace_session_id: crypto.randomUUID(),
+      trace_session_id: this._traceFor(runId),
       repo_snapshot: JSON.stringify({
         gitAvailable: false,
         repositoryVisibility: 'unknown',
@@ -438,7 +459,8 @@ class Bridge {
         changedFileCount: 0,
         changedFileScanTruncated: false,
       }),
-      llm_step_number: '1',
+      // 官方同 run 内递增（line 38=1 → 42=2 → 45=3 → 56=4），字符串形态
+      llm_step_number: String(this._stepFor(runId)),
     };
     if (reasoningEffort) metadata.freebuff_reasoning_effort = reasoningEffort;
 
