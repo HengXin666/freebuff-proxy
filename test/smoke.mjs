@@ -6528,17 +6528,33 @@ server.close()
   assert.equal(settingsStore.get().accountMaxConcurrency, 3, 'settings.json 必须能读回设置')
 
   // 布尔开关的**往返**回归：save() 能写盘、load() 就必须读回。
-  // 漏读的表现是"控制台打开开关、重启后自己关了"，而 webChannelEnabled 在
-  // limited 档位下是唯一可用通道 —— 开关静默失效会伪装成"网页通道没用"。
+  // 漏读的表现是"控制台打开开关、重启后自己关了"，症状与"开关没用"无法区分。
   {
     const rtPath = path.join(tmpDir, 'settings-roundtrip.json')
     const w = new SettingsStore(rtPath)
-    w.save({ webChannelEnabled: true, cliTelemetryEnabled: true })
+    w.save({ cliTelemetryEnabled: true })
     const r = new SettingsStore(rtPath).get()
-    assert.equal(r.webChannelEnabled, true, 'webChannelEnabled 写盘后必须能读回')
     assert.equal(r.cliTelemetryEnabled, true, 'cliTelemetryEnabled 写盘后必须能读回')
     const fresh = new SettingsStore(path.join(tmpDir, 'settings-fresh.json')).get()
-    assert.equal(fresh.webChannelEnabled, false, '未配置时 webChannelEnabled 默认关闭')
+    assert.equal(fresh.cliTelemetryEnabled, false, '未配置时 cliTelemetryEnabled 默认关闭')
+  }
+  // 网页通道开关（webChannelEnabled）**必须已彻底移除**：用户明确要求永远只走
+  // CLI 通道（真正的 agent 接口）—— 网页通道的请求体没有 tools 字段，工具调用
+  // 在它上面根本无法工作。留着开关会让人误以为还有第二条路。
+  {
+    const fresh = new SettingsStore(path.join(tmpDir, 'settings-noweb.json')).get()
+    assert.ok(
+      !('webChannelEnabled' in fresh),
+      'webChannelEnabled 必须从设置里移除（只走 CLI 通道）',
+    )
+    // 旧 settings.json 里残留该键也不得让它复活
+    const legacyPath = path.join(tmpDir, 'settings-legacy.json')
+    fs.writeFileSync(legacyPath, JSON.stringify({ webChannelEnabled: true }))
+    const legacy = new SettingsStore(legacyPath).get()
+    assert.ok(
+      !('webChannelEnabled' in legacy),
+      '旧配置残留 webChannelEnabled 也不得被读回',
+    )
   }
   const proxyStore = new ProxyStore(proxiesPath)
   assert.equal(proxyStore.loadStatus, 'invalid', '损坏的 proxies.json 必须报 invalid')

@@ -1176,9 +1176,6 @@ export function createWebApi(deps) {
           2,
         // 「低额度」分组阈值（FB）。纯前端分组，不参与调度；0 = 关闭分组。
         lowBalanceThreshold: settingsStore?.get().lowBalanceThreshold ?? 15,
-        // 网页通道开关：limited 档位下 CLI 通道 503，网页通道可用。
-        // 见 .agents/notes/implemented/feature/2026-09-30-web-chat-stream-transport.md
-        webChannelEnabled: settingsStore?.get().webChannelEnabled === true,
         // 遥测上报开关：官方 CLI 会发 app_launched 等生命周期事件，我们默认不发。
         cliTelemetryEnabled: settingsStore?.get().cliTelemetryEnabled === true,
       })
@@ -1307,16 +1304,6 @@ export function createWebApi(deps) {
           return true
         }
         patch.maxNewSessionsPerRequest = body.maxNewSessionsPerRequest
-      }
-      // 网页通道开关：limited 档位下 CLI 通道 503，网页通道（freebuff.com
-      // /api/chat/stream）正常。见
-      // .agents/notes/implemented/feature/2026-09-30-web-chat-stream-transport.md
-      if (body.webChannelEnabled !== undefined) {
-        if (typeof body.webChannelEnabled !== 'boolean') {
-          sendJson(res, 400, { error: 'webChannelEnabled 必须是布尔值' })
-          return true
-        }
-        patch.webChannelEnabled = body.webChannelEnabled
       }
       if (body.cliTelemetryEnabled !== undefined) {
         if (typeof body.cliTelemetryEnabled !== 'boolean') {

@@ -9,14 +9,6 @@ const DEFAULT_SETTINGS = Object.freeze({
   // 判据与对照实验见
   // .agents/notes/implemented/bug-fix/2026-09-19-genuine-tool-signature.md
   freeToolSignatureEnabled: true,
-  // 是否走**网页通道**（freebuff.com 的 /api/chat/stream，cookie 鉴权）而不是
-  // CLI 通道（codebuff.com 的 /api/v1/chat/completions，Bearer）。
-  // 判据：accessTier: 'limited'（非 allowlist 国家 / 任何 VPN）下 CLI 通道对
-  // 全部 limited 目录模型返回 503，而**同一账号同一出口**走网页通道完全正常。
-  // 网页通道不消耗 Freebucks（走 thread 机制），也就不占用会话槽位。
-  // 默认关闭：先保持既有行为，验证充分后再作为 limited 档位的自动回落。
-  // 见 .agents/notes/implemented/feature/2026-09-30-web-chat-stream-transport.md
-  webChannelEnabled: false,
   // 是否上报官方 CLI 形态的遥测（POST codebuff.com/api/logs）。
   // 官方 CLI 运行时会发 app_launched / fingerprint_generated / login_started
   // 等生命周期事件；我们从不上报 = 服务端眼里一个"只发 chat、没有任何客户端
@@ -95,14 +87,9 @@ export class SettingsStore {
         this.settings.stripToolsOnSchemaRejection =
           raw.stripToolsOnSchemaRejection
       }
-      // ⚠️ 这两个布尔开关**必须**在这里读回：它们能经 save() 写进
-      // settings.json，但漏读的话重启后一律回落到 DEFAULT_SETTINGS 的 false ——
-      // 表现为「控制台打开了开关、重启就自己关了」。webChannelEnabled 尤其致命：
-      // limited 档位下 CLI 通道必然 503，网页通道是唯一可用路径，而开关失效时
-      // 请求会照旧走 CLI 通道，症状与"开关没用"无法区分。
-      if (typeof raw?.webChannelEnabled === 'boolean') {
-        this.settings.webChannelEnabled = raw.webChannelEnabled
-      }
+      // ⚠️ 这个布尔开关**必须**在这里读回：它能经 save() 写进 settings.json，
+      // 但漏读的话重启后一律回落到 DEFAULT_SETTINGS 的 false —— 表现为
+      // 「控制台打开了开关、重启就自己关了」，症状与"开关没用"无法区分。
       if (typeof raw?.cliTelemetryEnabled === 'boolean') {
         this.settings.cliTelemetryEnabled = raw.cliTelemetryEnabled
       }
@@ -191,12 +178,6 @@ export class SettingsStore {
         throw new TypeError('blockPremiumModels must be a boolean')
       }
       this.settings.blockPremiumModels = next.blockPremiumModels
-    }
-    if (next?.webChannelEnabled !== undefined) {
-      if (typeof next.webChannelEnabled !== 'boolean') {
-        throw new TypeError('webChannelEnabled must be a boolean')
-      }
-      this.settings.webChannelEnabled = next.webChannelEnabled
     }
     if (next?.cliTelemetryEnabled !== undefined) {
       if (typeof next.cliTelemetryEnabled !== 'boolean') {

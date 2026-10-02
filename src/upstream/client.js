@@ -1,9 +1,6 @@
 import { freebuffAuthHeaders } from '../auth-store.js'
 import { logger } from '../util/log.js'
 import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from 'undici'
-import {
-  webChatHeaders,
-} from './web-chat.js'
 import { DeviceSigner } from './device-signing.js'
 import { CatalogHolder, isModelHandle } from './catalog-protocol.js'
 import {
@@ -806,28 +803,6 @@ export function createUpstreamClient(config, token, opts = {}) {
      * @param {{ threadId?: string|null, content: string, model: string, reasoningEffort?: string, signal?: AbortSignal, timeoutMs?: number }} params
      * @returns {Promise<Response>} 未消费的 SSE 响应（body 交给 consumeWebStream）
      */
-    async webChat(params) {
-      const url = `${loginBase}/api/chat/stream`
-      const headers = {
-        ...webChatHeaders(token),
-        ...(params.reasoningEffort ? {} : {}),
-      }
-      return apiFetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          threadId: params.threadId || null,
-          content: params.content,
-          model: params.model,
-          reasoningEffort: params.reasoningEffort || 'medium',
-          images: [],
-          attachments: [],
-        }),
-        signal: params.signal,
-        timeoutMs: params.timeoutMs,
-        includeAuth: false,
-      })
-    },
 
     /**
      * 释放本 client 持有的出网资源（undici ProxyAgent / EnvHttpProxyAgent）。
