@@ -1,0 +1,24 @@
+{
+  "n": "004",
+  "label": "startRun",
+  "method": "POST",
+  "url": "https://www.codebuff.com/api/v1/agent-runs",
+  "path": "/api/v1/agent-runs",
+  "headers": {
+    "Authorization": "Bearer 16d60fd4-26ea-4358-aa13-5fa33f94f0b3",
+    "content-type": "application/json",
+    "x-codebuff-api-key": "16d60fd4-26ea-4358-aa13-5fa33f94f0b3",
+    "x-freebuff-catalog-fetch": "fbf1.AAE1ccruF7H-IyAOIroUHRVYnlE1k7Sq0p-hmaisXISgF61ezQdI82I7fWB80WP08nASqPMiSOgyoHY68UM4IPM7cWKZ3twND39pFbFQNxUHV5kGzHe7FXkgfMYaEdpqg906NLM1glpa54p8cO-_U_HFVEHdpA",
+    "x-freebuff-catalog-protocol": "1"
+  },
+  "headerLinesSorted": [
+    "Authorization: Bearer 16d60fd4-26ea-4358-aa13-5fa33f94f0b3",
+    "content-type: application/json",
+    "x-codebuff-api-key: 16d60fd4-26ea-4358-aa13-5fa33f94f0b3",
+    "x-freebuff-catalog-fetch: fbf1.AAE1ccruF7H-IyAOIroUHRVYnlE1k7Sq0p-hmaisXISgF61ezQdI82I7fWB80WP08nASqPMiSOgyoHY68UM4IPM7cWKZ3twND39pFbFQNxUHV5kGzHe7FXkgfMYaEdpqg906NLM1glpa54p8cO-_U_HFVEHdpA",
+    "x-freebuff-catalog-protocol: 1"
+  ],
+  "bodyBytes": 69,
+  "bodyUtf8": "{\"action\":\"START\",\"agentId\":\"base3-free-catalog\",\"ancestorRunIds\":[]}",
+  "bodyHex": "7b22616374696f6e223a225354415254222c226167656e744964223a2262617365332d667265652d636174616c6f67222c22616e636573746f7252756e496473223a5b5d7d"
+}

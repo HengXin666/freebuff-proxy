@@ -1,0 +1,36 @@
+{
+  "n": "002",
+  "label": "admit-0",
+  "method": "POST",
+  "url": "https://www.codebuff.com/api/v1/freebuff/session/admission",
+  "path": "/api/v1/freebuff/session/admission",
+  "headers": {
+    "Authorization": "Bearer 16d60fd4-26ea-4358-aa13-5fa33f94f0b3",
+    "x-freebuff-catalog-fetch": "fbf1.AAEXqJRH0TKDvknVuzlhDs0Xs0bPsGEtcJVxQNdSkuEtEYFsm8NVB0tbDygz5_A2tcMMnlg34TRsNeASWBvv_U3x8LkD-_EPJY6Da8vPj_owe8wjfhF46GhnmIvs8ms_C0WiRKOgobKHc71rCDWkr6rIPefklg",
+    "x-freebuff-catalog-protocol": "1",
+    "x-freebuff-client": "desktop",
+    "x-freebuff-first-tab-discount": "0",
+    "x-freebuff-install-id": "5a989c7b-c374-41bb-aecc-ba47e4a3a2b3",
+    "x-freebuff-instance-id": "cli:29437303-5d85-420e-a1e8-0d4a53b60cac",
+    "x-freebuff-model": "fbm1.AAEAAUPj-uhowGiLulUzWXZDUEjFy_a6laBiBZsIyASR9WQYqUMBngd-IzyMaXN9cq5pqaff4x4YdH1S7boUD35CY5eywTOs2w3KGTznYJJ0x-w",
+    "x-freebuff-multi-session": "1",
+    "x-freebuff-purchase-continuity": "1",
+    "x-freebuff-wallet-spend-limit": "0"
+  },
+  "headerLinesSorted": [
+    "Authorization: Bearer 16d60fd4-26ea-4358-aa13-5fa33f94f0b3",
+    "x-freebuff-catalog-fetch: fbf1.AAEXqJRH0TKDvknVuzlhDs0Xs0bPsGEtcJVxQNdSkuEtEYFsm8NVB0tbDygz5_A2tcMMnlg34TRsNeASWBvv_U3x8LkD-_EPJY6Da8vPj_owe8wjfhF46GhnmIvs8ms_C0WiRKOgobKHc71rCDWkr6rIPefklg",
+    "x-freebuff-catalog-protocol: 1",
+    "x-freebuff-client: desktop",
+    "x-freebuff-first-tab-discount: 0",
+    "x-freebuff-install-id: 5a989c7b-c374-41bb-aecc-ba47e4a3a2b3",
+    "x-freebuff-instance-id: cli:29437303-5d85-420e-a1e8-0d4a53b60cac",
+    "x-freebuff-model: fbm1.AAEAAUPj-uhowGiLulUzWXZDUEjFy_a6laBiBZsIyASR9WQYqUMBngd-IzyMaXN9cq5pqaff4x4YdH1S7boUD35CY5eywTOs2w3KGTznYJJ0x-w",
+    "x-freebuff-multi-session: 1",
+    "x-freebuff-purchase-continuity: 1",
+    "x-freebuff-wallet-spend-limit: 0"
+  ],
+  "bodyBytes": 0,
+  "bodyUtf8": "",
+  "bodyHex": ""
+}

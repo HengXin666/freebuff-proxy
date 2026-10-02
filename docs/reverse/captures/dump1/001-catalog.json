@@ -1,0 +1,18 @@
+{
+  "n": "001",
+  "label": "catalog",
+  "method": "GET",
+  "url": "https://www.codebuff.com/api/v1/freebuff/models",
+  "path": "/api/v1/freebuff/models",
+  "headers": {
+    "Authorization": "Bearer 16d60fd4-26ea-4358-aa13-5fa33f94f0b3",
+    "x-freebuff-catalog-protocol": "1"
+  },
+  "headerLinesSorted": [
+    "Authorization: Bearer 16d60fd4-26ea-4358-aa13-5fa33f94f0b3",
+    "x-freebuff-catalog-protocol: 1"
+  ],
+  "bodyBytes": 0,
+  "bodyUtf8": "",
+  "bodyHex": ""
+}

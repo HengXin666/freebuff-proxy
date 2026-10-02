@@ -1,0 +1,33 @@
+{
+  "n": "004",
+  "label": "chat",
+  "method": "POST",
+  "url": "https://www.codebuff.com/api/v1/chat/completions",
+  "path": "/api/v1/chat/completions",
+  "headers": {
+    "Authorization": "Bearer 16d60fd4-26ea-4358-aa13-5fa33f94f0b3",
+    "content-type": "application/json",
+    "user-agent": "ai-sdk/openai-compatible/0.0.0-test/codebuff",
+    "x-freebuff-acting-user-id": "42b2597d-e5f8-4b58-b301-9f5102eb2dcc",
+    "x-freebuff-catalog-fetch": "fbf1.AAEXqJRH0TKDvknVuzlhDs0Xs0bPsGEtcJVxQNdSkuEtEYFsm8NVB0tbDygz5_A2tcMMnlg34TRsNeASWBvv_U3x8LkD-_EPJY6Da8vPj_owe8wjfhF46GhnmIvs8ms_C0WiRKOgobKHc71rCDWkr6rIPefklg",
+    "x-freebuff-catalog-protocol": "1",
+    "x-freebuff-client": "desktop",
+    "x-freebuff-install-id": "5a989c7b-c374-41bb-aecc-ba47e4a3a2b3",
+    "x-freebuff-model": "fbm1.AAEAAUPj-uhowGiLulUzWXZDUEjFy_a6laBiBZsIyASR9WQYqUMBngd-IzyMaXN9cq5pqaff4x4YdH1S7boUD35CY5eywTOs2w3KGTznYJJ0x-w"
+  },
+  "headerLinesSorted": [
+    "Authorization: Bearer 16d60fd4-26ea-4358-aa13-5fa33f94f0b3",
+    "content-type: application/json",
+    "user-agent: ai-sdk/openai-compatible/0.0.0-test/codebuff",
+    "x-freebuff-acting-user-id: 42b2597d-e5f8-4b58-b301-9f5102eb2dcc",
+    "x-freebuff-catalog-fetch: fbf1.AAEXqJRH0TKDvknVuzlhDs0Xs0bPsGEtcJVxQNdSkuEtEYFsm8NVB0tbDygz5_A2tcMMnlg34TRsNeASWBvv_U3x8LkD-_EPJY6Da8vPj_owe8wjfhF46GhnmIvs8ms_C0WiRKOgobKHc71rCDWkr6rIPefklg",
+    "x-freebuff-catalog-protocol: 1",
+    "x-freebuff-client: desktop",
+    "x-freebuff-install-id: 5a989c7b-c374-41bb-aecc-ba47e4a3a2b3",
+    "x-freebuff-instance-id: undefined",
+    "x-freebuff-model: fbm1.AAEAAUPj-uhowGiLulUzWXZDUEjFy_a6laBiBZsIyASR9WQYqUMBngd-IzyMaXN9cq5pqaff4x4YdH1S7boUD35CY5eywTOs2w3KGTznYJJ0x-w"
+  ],
+  "bodyBytes": 1452,
+  "bodyUtf8": "{\"model\":\"fbm1.AAEAAUPj-uhowGiLulUzWXZDUEjFy_a6laBiBZsIyASR9WQYqUMBngd-IzyMaXN9cq5pqaff4x4YdH1S7boUD35CY5eywTOs2w3KGTznYJJ0x-w\",\"messages\":[{\"role\":\"system\",\"content\":\"You are Buffy, the coding agent behind Codebuff.\\n\\nYou help the user with coding and technical questions. Be concise and accurate.\\n\"},{\"role\":\"user\",\"content\":\"Create a file /tmp/bridge-proof.txt with the text hello-from-freebuff. Use the write_file tool.\"}],\"stream\":false,\"codebuff_metadata\":{\"run_id\":\"fd3111e5-a73a-4a0d-acf5-6eaaad45e9ce\",\"client_id\":\"a7w734we02p\",\"cost_mode\":\"free\",\"freebuff_multi_session\":\"1\",\"surface\":\"desktop\",\"trace_session_id\":\"96ae59e8-584c-4579-aaea-2ef44e977609\",\"freebuff_client_env\":\"v1;in=1;out=1;tp=iterm;term=1;ct=1;sz=120x40;ci=0;ssh=0;l=1;p=shell;g=terminal;osc=1\"},\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"lookup_agent_info\",\"description\":\"Protocol compatibility marker. Do not call this function.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"agentId\":{\"type\":\"string\",\"description\":\"Agent ID\"}},\"required\":[\"agentId\"]}}},{\"type\":\"function\",\"function\":{\"name\":\"decide\",\"description\":\"Protocol compatibility marker. Do not call this function.\",\"parameters\":{\"type\":\"object\",\"properties\":{}}}},{\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"description\":\"Write content to a file at the given path.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"]}}}]}",
+  "bodyHex": "7b226d6f64656c223a2266626d312e414145414155506a2d75686f7747694c756c557a57585a4455456a46795f61366c614269425a7349794153523957515971554d426e67642d497a794d61584e396371357071616666347834596448315337626f55443335435935657977544f733277334b47547a6e594a4a30782d77222c226d65737361676573223a5b7b22726f6c65223a2273797374656d222c22636f6e74656e74223a22596f75206172652042756666792c2074686520636f64696e67206167656e7420626568696e6420436f6465627566662e5c6e5c6e596f752068656c70207468652075736572207769746820636f64696e6720616e6420746563686e6963616c207175657374696f6e732e20426520636f6e6369736520616e642061636375726174652e5c6e227d2c7b22726f6c65223a2275736572222c22636f6e74656e74223a2243726561746520612066696c65202f746d702f6272696467652d70726f6f662e74787420776974682074686520746578742068656c6c6f2d66726f6d2d66726565627566662e20557365207468652077726974655f66696c6520746f6f6c2e227d5d2c2273747265616d223a66616c73652c22636f6465627566665f6d65746164617461223a7b2272756e5f6964223a2266643331313165352d613733612d346130642d616366352d366561616164343565396365222c22636c69656e745f6964223a226137773733347765303270222c22636f73745f6d6f6465223a2266726565222c2266726565627566665f6d756c74695f73657373696f6e223a2231222c2273757266616365223a226465736b746f70222c2274726163655f73657373696f6e5f6964223a2239366165353965382d353834632d343537392d616165612d326566343465393737363039222c2266726565627566665f636c69656e745f656e76223a2276313b696e3d313b6f75743d313b74703d697465726d3b7465726d3d313b63743d313b737a3d3132307834303b63693d303b7373683d303b6c3d313b703d7368656c6c3b673d7465726d696e616c3b6f73633d31227d2c22746f6f6c73223a5b7b2274797065223a2266756e6374696f6e222c2266756e6374696f6e223a7b226e616d65223a226c6f6f6b75705f6167656e745f696e666f222c226465736372697074696f6e223a2250726f746f636f6c20636f6d7061746962696c697479206d61726b65722e20446f206e6f742063616c6c20746869732066756e6374696f6e2e222c22706172616d6574657273223a7b2274797065223a226f626a656374222c2270726f70657274696573223a7b226167656e744964223a7b2274797065223a22737472696e67222c226465736372697074696f6e223a224167656e74204944227d7d2c227265717569726564223a5b226167656e744964225d7d7d7d2c7b2274797065223a2266756e6374696f6e222c2266756e6374696f6e223a7b226e616d65223a22646563696465222c226465736372697074696f6e223a2250726f746f636f6c20636f6d7061746962696c697479206d61726b65722e20446f206e6f742063616c6c20746869732066756e6374696f6e2e222c22706172616d6574657273223a7b2274797065223a226f626a656374222c2270726f70657274696573223a7b7d7d7d7d2c7b2274797065223a2266756e6374696f6e222c2266756e6374696f6e223a7b226e616d65223a2277726974655f66696c65222c226465736372697074696f6e223a22577269746520636f6e74656e7420746f20612066696c652061742074686520676976656e20706174682e222c22706172616d6574657273223a7b2274797065223a226f626a656374222c2270726f70657274696573223a7b2270617468223a7b2274797065223a22737472696e67227d2c22636f6e74656e74223a7b2274797065223a22737472696e67227d7d2c227265717569726564223a5b2270617468222c22636f6e74656e74225d7d7d7d5d7d"
+}
