@@ -1580,6 +1580,9 @@ export function createProxyHandler(ctx) {
           headers,
           body: JSON.stringify(requestBody),
           signal: abortCtrl.signal,
+          // 官方 chat 只带 catalog-fetch，不带 catalog-protocol
+          // （8 个样本头部集合逐个校验 diff 为空集）
+          catalogFetchOnly: true,
           // 响应头等待上限收紧到 body idle 同量级（默认 120s，带 30s 下限）：
           // chat 是流式接口，正常秒级出响应头；网络波动（TCP 黑洞）时若等
           // upstreamTimeoutSec（默认 600s）才 abort，账号 chat 锁会被占死

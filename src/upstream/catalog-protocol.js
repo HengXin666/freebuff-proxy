@@ -173,6 +173,20 @@ export class CatalogHolder {
   }
 
   /**
+   * 只给 `x-freebuff-catalog-fetch`，**不给** `-protocol`。
+   *
+   * 官方 chat 头部恒为 8 项（抓包 8 个样本 diff 为空集）：
+   *   Authorization / Content-Type / 三段 UA / acting-user-id /
+   *   catalog-fetch / device-key / device-sig / device-ts
+   * **没有** catalog-protocol —— 它只出现在 catalog 与 admission 上。
+   * 见 docs/reverse/15-protocol-review.md P0-1。
+   */
+  fetchOnlyHeaders() {
+    if (!this.ready) return {}
+    return { [HEADER_CATALOG_FETCH]: this.fetchId }
+  }
+
+  /**
    * 抓一次目录。best-effort：失败返回 false 并退避，**绝不抛**。
    * @param {{ force?: boolean }} [opts]
    * @returns {Promise<boolean>}

@@ -357,7 +357,13 @@ export function createUpstreamClient(config, token, opts = {}) {
     // 走 legacy 路径（可用性不受影响）。
     if (init.catalog !== false) {
       const ok = await catalog.fetch().catch(() => false)
-      if (ok) Object.assign(headers, catalog.headers())
+      // chat 只带 catalog-fetch（官方 8 头里没有 catalog-protocol）
+      if (ok) {
+        Object.assign(
+          headers,
+          init.catalogFetchOnly ? catalog.fetchOnlyHeaders() : catalog.headers(),
+        )
+      }
     }
     // 设备签名三头（x-freebuff-device-{key,ts,sig}）。best-effort：
     // 没有密钥或注册失败时返回 {}，请求照旧发出（上游退回未签名路径）。
@@ -789,6 +795,8 @@ export function createUpstreamClient(config, token, opts = {}) {
         signal: init.signal,
         timeoutMs: init.timeoutMs,
         includeAuth: false,
+        // chat 走这里：官方 chat 只带 catalog-fetch，不带 catalog-protocol
+        catalogFetchOnly: init.catalogFetchOnly === true,
       })
     },
 
