@@ -30,6 +30,22 @@ jobs:
       - run: npm test
       - run: npm run typecheck
 
+  # 多语言红线：控制台文案一旦有人图快直接写中文字面量，多语言会**静默退化**
+  # —— 中文用户看不出问题，英文用户看到一块中文，且 review 极难发现。
+  # 这里用机器钉死三条线：
+  #   1) dashboard/app.js 不得出现硬编码 CJK 字面量（注释/调试输出除外）
+  #   2) 各语种词条 key 必须与基准语种一致（不许缺、不许多个）
+  #   3) 代码里 t('key') 用到的 key 必须在字典里存在
+  i18n:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check i18n red lines
+        run: node scripts/check-i18n.mjs
+
   # 镜像启动门禁：真实构建 + 真实起容器 + 真实打健康检查。
   #
   # 为什么单独有这一关：上面的 test 用 mock 上游、**不启动容器**，所以"新镜像 +
@@ -67,7 +83,7 @@ jobs:
         id: verify
 
   build-push:
-    needs: [test, image-boot]
+    needs: [test, image-boot, i18n]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:

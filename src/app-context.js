@@ -275,6 +275,29 @@ export class AccountRuntimes {
     this._restoreAccountState()
   }
 
+  /**
+   * 目录 key（m-00032eaeec）→ 人类可读显示名（MiMo 2.6 Flash）。
+   *
+   * 上游回执侧（session.model / rateLimitsByModel / prices）用的全是目录 key，
+   * 控制台要显示人能认的名字。目录行自带 displayName，抓目录时就缓存在
+   * CatalogHolder.displayNames 里；取不到就返回 null（调用方回落原 key，
+   * 绝不因为取不到名字就让整行渲染失败）。
+   * @param {string} key
+   * @returns {string | null}
+   */
+  _modelDisplayName(key) {
+    if (typeof key !== 'string' || !key) return null
+    for (const rt of this.byKey.values()) {
+      try {
+        const name = rt?.upstream?.catalog?.displayNameForKey?.(key)
+        if (name) return name
+      } catch {
+        // 单个 runtime 取不到就换下一个
+      }
+    }
+    return null
+  }
+
   list() {
     const now = Date.now()
     return listAccounts(this.dir).map((a) => {
@@ -356,6 +379,14 @@ export class AccountRuntimes {
           ? {
               status: snap.status,
               model: snap.model,
+              // 回执里的 model 是**目录 key**（m-00032eaeec）；控制台要显示
+              // 人能认的名字（MiMo 2.6 Flash）。这个字段只用于展示 ——
+              // 请求/寻址仍必须用 snap.model（key 本身）。
+              // 桥接依据见
+              // .agents/notes/implemented/bug-fix/2026-10-02-catalog-key-display-name-bridge.md
+              modelDisplayName: snap.model
+                ? this._modelDisplayName(snap.model)
+                : null,
               remainingMs: snap.remainingMs,
               live: snap.live,
               // 付费时段的终点：一次 admit = 买断一小时，控制台据此区分

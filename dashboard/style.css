@@ -178,6 +178,20 @@ h3 { font-size: 15px; font-weight: 600; }
 .hidden { display: none !important; }
 
 /* ---------- badges ---------- */
+/* 顶栏语言切换器：贴齐按钮高度，避免比相邻按钮高/矮一截 */
+.locale-select {
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border2);
+  background: rgba(255, 255, 255, .02);
+  color: var(--text2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.locale-select:hover { color: var(--text); border-color: var(--border); }
+.locale-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 .badge {
   display: inline-flex;
   align-items: center;

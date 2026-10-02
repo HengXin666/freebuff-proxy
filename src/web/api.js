@@ -670,17 +670,10 @@ export function createWebApi(deps) {
     }
 
     // ---- accounts (any logged-in user can view; manage = admin) ----
+    // 注：session.modelDisplayName（目录 key → 可读名）由 AccountRuntimes.list()
+    // 统一带上，所有出口（本路由 / overview / probe / refresh）自动生效。
     if (method === 'GET' && route === '/api/accounts') {
-      // 回执里的 session.model 是**目录 key**（m-00032eaeec），控制台要显示
-      // 人能认的名字（MiMo 2.6 Flash）。这里额外给一份可读名，原字段保留
-      // （它是调度/寻址用的真值，不能被展示名覆盖）。
-      const data = runtimes.list().map((a) => ({
-        ...a,
-        modelDisplayName: a?.session?.model
-          ? modelDisplayName(a.session.model)
-          : null,
-      }))
-      sendJson(res, 200, { object: 'list', data })
+      sendJson(res, 200, { object: 'list', data: runtimes.list() })
       return true
     }
 

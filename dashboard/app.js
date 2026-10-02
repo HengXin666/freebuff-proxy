@@ -5,6 +5,10 @@
  */
 'use strict'
 
+import {
+  t, getLocale, setLocale, initLocale, DEFAULT_LOCALE, LOCALES, LOCALE_LABELS,
+} from './i18n.js'
+
 const state = {
   me: null,
   accounts: [],
@@ -50,8 +54,8 @@ const el = (tag, attrs = {}, children = []) => {
       // 图标请一律用 icon()，它已经统一补好自闭合斜杠。
       // 新增图标若忘了写斜杠，这里给开发者留一条可见的线索。
       if (/<(rect|circle|ellipse|line|polyline|polygon)[^<>]*[^/]>/i.test(c)) {
-        console.warn('[dashboard] HTML 片段里有未自闭合的 SVG 形状标签，'
-          + '可能吞掉相邻节点；请改用 icon() 或补上" /"', c)
+        // 文案必须留在 console.warn 所在行：红线只豁免 console.* 那一行
+        console.warn('[dashboard] HTML 片段里有未自闭合的 SVG 形状标签，可能吞掉相邻节点；请改用 icon() 或补上" /"', c)
       }
       node.insertAdjacentHTML('beforeend', c)
     } else {
@@ -135,7 +139,7 @@ async function api(path, opts = {}) {
   if (res.status === 401 && !path.startsWith('/api/auth/login')) {
     state.me = null
     render()
-    throw new Error(body?.error || '未登录')
+    throw new Error(body?.error || t('login.notSignedIn'))
   }
   if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`)
   return body
@@ -154,7 +158,7 @@ function toast(msg, isErr = false) {
 
 /** 复制文本到剪贴板（navigator.clipboard 不可用时回落 execCommand）。 */
 function copyText(text) {
-  const done = () => toast('已复制')
+  const done = () => toast(t('common.copied'))
   if (navigator.clipboard?.writeText) {
     navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done))
     return
@@ -174,7 +178,7 @@ function fallbackCopy(text, done) {
     ta.remove()
     done()
   } catch {
-    toast('复制失败，请手动选中文本', true)
+    toast(t('toast.copyFailSelect'), true)
   }
 }
 
@@ -253,21 +257,21 @@ function renderLogin() {
   const wrap = el('div', { class: 'login-wrap' }, [
     el('div', { class: 'brand' }, [icon('bolt', 22), 'Freebuff Proxy', versionBadge()]),
     el('div', { class: 'card' }, [
-      el('label', {}, '用户名'),
+      el('label', {}, t('login.username')),
       el('input', { id: 'login-user', autocomplete: 'username', placeholder: 'admin' }),
-      el('label', {}, '密码'),
+      el('label', {}, t('login.password')),
       el('input', { id: 'login-pass', type: 'password', autocomplete: 'current-password' }),
       el('div', { style: 'margin-top:18px' }),
-      el('button', { class: 'primary', style: 'width:100%;justify-content:center', onclick: doLogin }, [icon('lock', 15), '登 录']),
+      el('button', { class: 'primary', style: 'width:100%;justify-content:center', onclick: doLogin }, [icon('lock', 15), t('login.submit')]),
     ]),
-    el('div', { class: 'hint' }, '首次部署的管理员账号/密码会打印在 docker compose logs 里'),
+    el('div', { class: 'hint' }, t('login.firstDeployHint')),
   ])
   return wrap
 }
 
 async function doLogin() {
   const btn = $('.login-wrap button.primary')
-  const restore = withButtonLoading(btn, '登录中')
+  const restore = withButtonLoading(btn, t('login.submitting'))
   try {
     const res = await api('/api/auth/login', {
       method: 'POST',
@@ -277,7 +281,7 @@ async function doLogin() {
       }),
     })
     state.me = res.user
-    toast('登录成功')
+    toast(t('login.success'))
     render()
   } catch (err) {
     restore()
@@ -290,15 +294,18 @@ function renderHeader() {
   if (state.me.role === 'admin') {
     buttons.push(el('button', {
       onclick: reconnectAll,
-      title: '比重启更轻量：释放全部 session、清理死任务，下个请求自动重建（不重启进程）',
-    }, [icon('refresh', 14), '全部断开重连']))
+      title: t('nav.reconnectTip'),
+    }, [icon('refresh', 14), t('nav.reconnect')]))
     buttons.push(el('button', {
       class: 'danger',
       onclick: restartService,
-      title: '彻底解决连接卡死等问题：重启整个代理服务（约几秒）',
-    }, [icon('cpu', 14), '重启服务']))
+      title: t('nav.restartTip'),
+    }, [icon('cpu', 14), t('nav.restart')]))
   }
-  buttons.push(el('button', { onclick: logout }, [icon('logout', 14), '退出']))
+  buttons.push(el('button', { onclick: logout }, [icon('logout', 14), t('nav.logout')]))
+  // 语言切换：改语种后**整页重渲染**（文案散布在各处，逐个区块刷新容易漏）。
+  // 只重画 DOM，不重新拉数据 —— 不打断在途请求、不释放已购会话。
+  buttons.push(buildLocaleSwitcher())
   return el('header', {}, [
     el('h1', {}, [icon('bolt', 18), 'Freebuff Proxy', versionBadge()]),
     el('div', { class: 'spacer' }),
@@ -312,6 +319,32 @@ function renderHeader() {
 }
 
 /** 版本号徽章 + GitHub 仓库链接（版本号由发版流水线硬编码进 version.json） */
+/**
+ * 顶栏语言切换器（zh-CN / en）。
+ *
+ * 切换后调用 render() **整页重渲染**：文案散布在每个区块里，逐块刷新必漏。
+ * render() 只重画 DOM、不重新拉数据，所以在途请求不受影响、已买断的会话
+ * 也不会被释放（刷新/重渲染都绝不能动 session —— 一次 admit 实付一小时）。
+ * @returns {HTMLElement}
+ */
+function buildLocaleSwitcher() {
+  const cur = getLocale()
+  return el('select', {
+    class: 'locale-select',
+    title: t('nav.language'),
+    'aria-label': t('nav.language'),
+    onchange: (e) => {
+      setLocale(e.target.value)
+      // 同步 <html lang>：屏幕阅读器与浏览器拼写检查据此选语言
+      const html = document.documentElement
+      if (html) html.lang = getLocale()
+      render()
+    },
+  }, LOCALES.map((loc) =>
+    el('option', { value: loc, selected: loc === cur }, LOCALE_LABELS[loc] || loc),
+  ))
+}
+
 function versionBadge() {
   const v = state.version || { version: 'dev' }
   const repoUrl = v.repo || 'https://github.com/HengXin666/freebuff-proxy'
@@ -319,7 +352,7 @@ function versionBadge() {
     href: repoUrl,
     target: '_blank',
     rel: 'noopener',
-    title: `开源仓库（版本 v${v.version}${v.commit ? ' · commit ' + v.commit.slice(0, 7) : ''}）`,
+    title: t('nav.repoTip', { version: v.version, commit: v.commit ? ' · commit ' + v.commit.slice(0, 7) : '' }),
     style: 'display:inline-flex;align-items:center;gap:4px;text-decoration:none;margin-left:4px',
   }, el('span', { class: 'badge', style: 'cursor:pointer' }, [
     icon('github', 12),
@@ -328,12 +361,12 @@ function versionBadge() {
 }
 
 async function reconnectAll() {
-  if (!confirm('确定要全部断开重连吗？\n\n将释放所有账号的 session（正在传输的 SSE 可能被中断），下一个请求会自动重建新 session。')) return
+  if (!confirm(t('system.reconnectConfirm'))) return
   const restore = withButtonLoading(document.activeElement)
   try {
     const r = await api('/api/system/reconnect', { method: 'POST' })
     const failed = (r.accounts || []).filter((x) => !x.ok)
-    toast(failed.length ? `已断开重连，${failed.length} 个账号失败` : '已全部断开重连，下个请求自动重建')
+    toast(failed.length ? t('system.reconnectPartial', { n: failed.length }) : t('system.reconnectDone'))
     refreshOverviewAfterAccountChange()
   } catch (err) {
     restore()
@@ -342,41 +375,41 @@ async function reconnectAll() {
 }
 
 async function restartService() {
-  if (!confirm('确定要重启服务吗？\n\n重启会中断当前所有连接约几秒，期间请勿发送新请求。')) return
+  if (!confirm(t('system.restartConfirm'))) return
   try {
     await api('/api/system/restart', { method: 'POST' })
   } catch (err) {
     toast(err.message, true)
     return
   }
-  toast('正在重启服务…')
+  toast(t('system.restarting'))
   const deadline = Date.now() + 90_000
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 2000))
     try {
       const res = await fetch('/healthz', { cache: 'no-store' })
       if (res.ok) {
-        toast('服务已重启完成')
+        toast(t('system.restartDone'))
         render()
         return
       }
     } catch { /* 服务尚未就绪，继续等待 */ }
   }
-  toast('等待重启超时，请刷新页面确认服务状态', true)
+  toast(t('system.restartTimeout'), true)
   render()
 }
 
 function renderNav() {
-  const items = [['overview', '总览', 'gauge'], ['playground', '测试对话', 'chat']]
+  const items = [['overview', t('nav.overview'), 'gauge'], ['playground', t('nav.playground'), 'chat']]
   if (state.me.role === 'admin') {
-    items.push(['users', '用户管理', 'users'])
+    items.push(['users', t('nav.usersManagement'), 'users'])
     // 数据文件自检是排障工具，不是日常操作——从总览页搬出来，admin 专属独立页。
-    items.push(['system', '系统', 'cpu'])
+    items.push(['system', t('nav.system'), 'cpu'])
     // 日志页：上游故障判据（如 countryBlockReason）只写进 stdout，用户以往
     // 只能看到一串 503 却不知为何。这里让完整字段在页面上可读、可筛选、可展开。
-    items.push(['logs', '日志', 'terminal'])
+    items.push(['logs', t('nav.logs'), 'terminal'])
   }
-  items.push(['me', '我的', 'user'])
+  items.push(['me', t('nav.me'), 'user'])
   const route = (location.hash || '#overview').slice(1) || 'overview'
   return el('nav', {}, items.map(([key, label, ic]) =>
     el('button', {
@@ -512,7 +545,7 @@ function buildLogRow(line, idx) {
                 e.stopPropagation()
                 copyText(JSON.stringify(line, null, 2))
               },
-            }, [icon('copy', 11), '复制 JSON']),
+            }, [icon('copy', 11), t('logs.copyJson')]),
           ]),
           el('pre', { class: 'log-pre' }, JSON.stringify(extra, null, 2)),
         ])
@@ -528,7 +561,7 @@ function renderLogsList() {
   if (!lines.length) {
     host.innerHTML = ''
     host.append(el('div', { class: 'muted', style: 'padding:14px' },
-      '没有匹配的日志。缓冲只保留最近若干条（进程内，重启即清空）。'))
+      t('logs.empty')))
     return
   }
   host.innerHTML = ''
@@ -547,7 +580,10 @@ async function refreshLogs() {
   renderLogsList()
   const meta = document.querySelector('#logs-meta')
   if (meta) {
-    meta.textContent = `${logsView.lines.length} 条 · 服务端时间 ${(data?.serverTime || '').replace('T', ' ').replace('Z', '')}`
+    meta.textContent = t('logs.meta', {
+      n: logsView.lines.length,
+      time: (data?.serverTime || '').replace('T', ' ').replace('Z', ''),
+    })
   }
 }
 
@@ -560,13 +596,13 @@ function stopLogsAuto() {
 
 async function renderLogs(view) {
   view.innerHTML = ''
-  view.append(el('h2', { style: 'margin:0 0 12px' }, '日志'))
+  view.append(el('h2', { style: 'margin:0 0 12px' }, t('nav.logs')))
 
   const card = el('div', { class: 'card' })
   card.append(el('div', { class: 'row spread' }, [
     el('div', {}, [
-      el('h3', { style: 'margin:0 0 2px' }, '进程内日志'),
-      el('span', { class: 'muted', id: 'logs-meta' }, '加载中…'),
+      el('h3', { style: 'margin:0 0 2px' }, t('logs.inProcessTitle')),
+      el('span', { class: 'muted', id: 'logs-meta' }, t('common.loading')),
     ]),
     el('div', { class: 'row' }, [
       el('button', {
@@ -577,7 +613,7 @@ async function renderLogs(view) {
           const btn = document.querySelector('#logs-auto-btn')
           if (btn) {
             btn.className = logsView.auto ? '' : 'muted'
-            btn.textContent = logsView.auto ? '停止自动刷新' : '自动刷新'
+            btn.textContent = logsView.auto ? t('logs.stopAuto') : t('logs.auto')
           }
           if (logsView.auto) {
             stopLogsAuto()
@@ -586,8 +622,8 @@ async function renderLogs(view) {
             stopLogsAuto()
           }
         },
-      }, [icon('refresh', 13), logsView.auto ? '停止自动刷新' : '自动刷新']),
-      el('button', { class: 'muted', onclick: () => refreshLogs() }, [icon('refresh', 13), '刷新']),
+      }, [icon('refresh', 13), logsView.auto ? t('logs.stopAuto') : t('logs.auto')]),
+      el('button', { class: 'muted', onclick: () => refreshLogs() }, [icon('refresh', 13), t('common.refresh')]),
     ]),
   ]))
 
@@ -596,15 +632,15 @@ async function renderLogs(view) {
     id: 'logs-level',
     onchange: (e) => { logsView.level = e.target.value; refreshLogs() },
   }, [
-    ['all', '全部级别'],
-    ['info', 'info 及以上'],
-    ['warn', 'warn 及以上'],
-    ['error', '仅 error'],
+    ['all', t('logs.levelAll')],
+    ['info', t('logs.levelInfo')],
+    ['warn', t('logs.levelWarn')],
+    ['error', t('logs.levelError')],
   ].map(([v, label]) => el('option', { value: v, selected: logsView.level === v ? 'selected' : null }, label)))
 
   const searchInput = el('input', {
     id: 'logs-q',
-    placeholder: '搜索（命中完整字段，如 country / banned / 503 / 邮箱）',
+    placeholder: t('logs.searchPlaceholder'),
     value: logsView.q,
     oninput: (e) => { logsView.q = e.target.value },
     onkeydown: (e) => { if (e.key === 'Enter') refreshLogs() },
@@ -613,7 +649,7 @@ async function renderLogs(view) {
   card.append(el('div', { class: 'row', style: 'margin-top:10px;gap:8px;flex-wrap:wrap' }, [
     levelSel,
     searchInput,
-    el('button', { onclick: () => refreshLogs() }, [icon('search', 13), '搜索']),
+    el('button', { onclick: () => refreshLogs() }, [icon('search', 13), t('common.search')]),
     el('button', {
       class: 'muted',
       onclick: () => {
@@ -626,11 +662,11 @@ async function renderLogs(view) {
         if (sel) sel.value = 'all'
         refreshLogs()
       },
-    }, '清除筛选'),
+    }, t('logs.clearFilters')),
   ]))
 
   card.append(el('div', { class: 'muted', style: 'margin-top:8px;font-size:12px' },
-    '点任意一行展开完整字段（含上游原始判据），可一键复制。缓冲为进程内有界环形队列，重启即清空。'))
+    t('logs.expandHint')))
 
   card.append(el('div', { id: 'logs-list', class: 'logs-list' }))
   view.append(card)
@@ -639,7 +675,7 @@ async function renderLogs(view) {
 
 async function renderSystem(view) {
   view.innerHTML = ''
-  view.append(el('h2', { style: 'margin:0 0 12px' }, '系统'))
+  view.append(el('h2', { style: 'margin:0 0 12px' }, t('nav.system')))
   await renderDataFilesCard(view)
 }
 
@@ -652,47 +688,45 @@ async function renderDataFilesCard(view) {
   const dirty = files.filter((f) => (f.droppedEntries || 0) > 0)
   const pending = files.reduce((n, f) => n + (f.openHandles || 0), 0)
   const summary = [
-    invalid.length ? `${invalid.length} 个损坏` : null,
-    dirty.length ? `${dirty.length} 个含非法条目（已自动丢弃）` : null,
-    pending ? `${pending} 条上游会话待结算` : null,
-  ].filter(Boolean).join(' · ') || '全部正常'
+    invalid.length ? t('system.filesBroken', { n: invalid.length }) : null,
+    dirty.length ? t('system.filesDirty', { n: dirty.length }) : null,
+    pending ? t('system.filesPending', { n: pending }) : null,
+  ].filter(Boolean).join(' · ') || t('common.ok')
   const card = el('div', { id: 'data-files-card', class: 'card' })
   card.append(el('div', { class: 'row spread' }, [
     el('div', {}, [
-      el('h3', { style: 'margin:0 0 2px' }, '数据文件自检'),
-      el('span', { class: 'muted' }, `${data.dir} · 共 ${files.length} 个 JSON（${summary}）`),
+      el('h3', { style: 'margin:0 0 2px' }, t('system.dataSelfCheck')),
+      el('span', { class: 'muted' }, t('system.dataDirSummary', { dir: data.dir, n: files.length, summary })),
     ]),
-    el('button', { class: 'muted', onclick: () => refreshDataFilesCard() }, [icon('refresh', 13), '刷新']),
+    el('button', { class: 'muted', onclick: () => refreshDataFilesCard() }, [icon('refresh', 13), t('common.refresh')]),
   ]))
   if (invalid.length) {
     card.append(el('div', { class: 'muted', style: 'margin-top:8px;color:var(--red)' },
-      '⚠ 损坏的文件会让对应功能降级（配置回落默认值 / 账号履历丢失 / 会话退款索引丢失）。'
-      + '停服后把文件移走再启动即可自动重建；下面的命令可直接照做。'))
+      t('system.invalidHint')))
   }
   if (dirty.length) {
     card.append(el('div', { class: 'muted', style: 'margin-top:8px;color:var(--yellow,#e0a800)' },
-      '⚠ 有文件里混进了结构非法的记录（null / 缺关键字段）。这类文件**本身没坏**，'
-      + '新版本会逐条丢弃并留证，不影响启动——但请核对丢掉的原文，必要时从备份恢复。'))
+      t('system.dirtyHint')))
   }
   const rows = files.map((f) => {
     const dirtyCount = f.droppedEntries || 0
     const pending = f.openHandles || 0
     const badge = f.status === 'invalid'
-      ? el('span', { class: 'badge err' }, '损坏')
+      ? el('span', { class: 'badge err' }, t('system.statusBroken'))
       : f.status === 'missing'
-        ? el('span', { class: 'badge' }, '尚未生成')
+        ? el('span', { class: 'badge' }, t('system.statusMissing'))
         : dirtyCount
-          ? el('span', { class: 'badge err' }, `脏条目 ×${dirtyCount}`)
+          ? el('span', { class: 'badge err' }, t('system.statusDirtyCount', { n: dirtyCount }))
           : pending
-            ? el('span', { class: 'badge' }, `待结算 ×${pending}`)
-            : el('span', { class: 'badge ok' }, '正常')
+            ? el('span', { class: 'badge' }, t('system.statusPendingCount', { n: pending }))
+            : el('span', { class: 'badge ok' }, t('common.ok'))
     const desc = f.status === 'invalid'
       ? f.reason
       : dirtyCount
-        ? `${f.droppedReason || '含非法条目'}${f.droppedBackup ? '；原文: ' + f.droppedBackup.split('/').pop() : ''}`
+        ? `${f.droppedReason || t('system.descDirty')}${f.droppedBackup ? t('system.descBackup', { name: f.droppedBackup.split('/').pop() }) : ''}`
         : pending
-          ? `${pending} 条上游会话句柄尚未结算（每条都占着对应账号的会话槽位；启动扫尾 / 释放流程会继续 DELETE，不是故障、无需手工删文件）`
-          : f.reason || (f.status === 'missing' ? '首次启动会自动创建' : '—')
+          ? t('system.descPendingHandles', { n: pending })
+          : f.reason || (f.status === 'missing' ? t('system.descAutoCreate') : t('common.none'))
     return el('tr', {}, [
       el('td', { class: 'mono', style: 'font-size:12px' }, f.name + (f.critical ? ' ⚠' : '')),
       el('td', {}, badge),
@@ -701,14 +735,14 @@ async function renderDataFilesCard(view) {
         // 真源文件（users.json / sessions.json）不能照抄 mv：sessions.json 里
         // 可能还挂着没结算的会话句柄，删掉就永久失去寻址能力（槽位一直占着）。
         ? (f.critical
-            ? el('span', { class: 'muted' }, '先备份再移走（真源文件，删了就找不回）')
+            ? el('span', { class: 'muted' }, t('system.actionBackupThenMove'))
             : codeCopyButton(`mv ${f.file} ${f.file}.broken`))
-        : el('span', { class: 'muted' }, dirtyCount ? '无需处置（已自动丢弃）' : '—')),
+        : el('span', { class: 'muted' }, dirtyCount ? t('system.actionNoneNeeded') : t('common.none'))),
     ])
   })
   card.append(el('div', { class: 'table-wrap', style: 'margin-top:10px' }, [
     el('table', { style: 'font-size:12px' }, [
-      el('thead', {}, el('tr', {}, ['文件', '状态', '说明', '处置'].map((t) => el('th', {}, t)))),
+      el('thead', {}, el('tr', {}, [t('system.colFile'), t('common.status'), t('system.colDesc'), t('system.colAction')].map((h) => el('th', {}, h)))),
       el('tbody', {}, rows),
     ]),
   ]))
@@ -720,13 +754,13 @@ function codeCopyButton(cmd) {
   return el('div', { class: 'row', style: 'gap:6px' }, [
     el('code', { class: 'mono', style: 'font-size:11px' }, cmd),
     el('button', {
-      class: 'icon', title: '复制这条命令',
+      class: 'icon', title: t('system.copyCommand'),
       onclick: async () => {
         try {
           await navigator.clipboard.writeText(cmd)
-          toast('已复制处置命令')
+          toast(t('toast.commandCopied'))
         } catch {
-          toast('复制失败，请手动选中', true)
+          toast(t('toast.copyFailSelectShort'), true)
         }
       },
     }, icon('copy', 12)),
@@ -757,19 +791,23 @@ function skeletonOverview() {
 function renderOverviewHeader(data) {
   return el('div', { class: 'row spread', style: 'margin-bottom:16px' }, [
     el('div', {}, [
-      el('h2', { style: 'margin:0 0 4px' }, `账号池（${data.accountCount}）`),
-      el('span', { class: 'muted' }, `上游 ${data.upstream.apiBase} · 模型 ${data.models} · 数据目录 ${data.dataDir}`),
+      el('h2', { style: 'margin:0 0 4px' }, t('overview.poolTitle', { n: data.accountCount })),
+      el('span', { class: 'muted' }, t('overview.poolSubtitle', {
+        apiBase: data.upstream.apiBase,
+        models: data.models,
+        dataDir: data.dataDir,
+      })),
     ]),
     el('div', { class: 'row' }, [
       // 主操作 = 一键刷新：额度 + 账号状态 + 上游模型目录，一次全刷（只读）。
       el('button', { class: 'primary', onclick: (e) => oneClickRefresh(e.currentTarget) },
-        [icon('refresh', 14), '一键刷新']),
-      el('button', { onclick: (e) => probeAllAccounts(e.currentTarget), title: '只重新探测账号（不刷新模型目录）' },
-        [icon('activity', 14), '探测刷新']),
+        [icon('refresh', 14), t('overview.oneClickRefresh')]),
+      el('button', { onclick: (e) => probeAllAccounts(e.currentTarget), title: t('overview.probeOnlyTip') },
+        [icon('activity', 14), t('overview.probeRefresh')]),
       state.me.role === 'admin'
         ? el('div', { class: 'row' }, [
-            el('button', { onclick: () => openImportModal() }, [icon('box', 14), '导入账号']),
-            el('button', { class: 'primary', onclick: () => openAddAccount() }, [icon('plus', 14), '添加账号']),
+            el('button', { onclick: () => openImportModal() }, [icon('box', 14), t('account.import')]),
+            el('button', { class: 'primary', onclick: () => openAddAccount() }, [icon('plus', 14), t('overview.addAccount')]),
           ])
         : null,
     ]),
@@ -797,28 +835,26 @@ function renderStatCards(data) {
   const reusePct =
     admits + reuses > 0 ? Math.round((reuses / (admits + reuses)) * 100) : null
   const cards = [
-    { label: '账号总数', value: total, cls: '' },
-    { label: '可用账号', value: available, cls: 'green' },
-    { label: '已封禁', value: banned, cls: banned ? 'red' : 'green',
-      tip: '上游封禁 = 不可恢复，只能换号或等平台解封。与"冷却中"（限流/额度，到期自愈）区分开。' },
-    { label: '冷却中', value: cooldown, cls: cooldown ? 'yellow' : 'green',
-      tip: '暂时被上游拒付/限流（rate_limited / spend_limited / ip_capped / 风控）。冷却到期自动恢复；刷新不会动会话句柄，已购时段不受影响。' },
+    { label: t('overview.statTotal'), value: total, cls: '' },
+    { label: t('overview.statAvailable'), value: available, cls: 'green' },
+    { label: t('overview.statBanned'), value: banned, cls: banned ? 'red' : 'green',
+      tip: t('overview.statBannedTip') },
+    { label: t('overview.statCooling'), value: cooldown, cls: cooldown ? 'yellow' : 'green',
+      tip: t('overview.statCoolingTip') },
     {
-      label: slots && slots.queued ? `在途请求（排队 ${slots.queued}）` : '在途请求',
+      label: slots && slots.queued ? t('overview.statInFlightQueued', { n: slots.queued }) : t('overview.statInFlight'),
       value: gateValue,
       cls: gateFull ? 'red' : '',
     },
     {
       // 复用率越高 = 越少重复买整小时。hover 给出原始次数，便于核对。
-      label: '会话复用率',
-      value: reusePct != null ? `${reusePct}%` : '—',
+      label: t('overview.statReuseRate'),
+      value: reusePct != null ? `${reusePct}%` : t('common.none'),
       cls: reusePct != null && reusePct > 0 ? 'green' : '',
       tip:
         reusePct != null
-          ? `买过 ${admits} 条会话，复用 ${reuses} 次。\n` +
-            '一次 admit = 买断一小时，复用发生在这小时内 → 边际成本 0。\n' +
-            '复用率 = 省掉的重买比例。'
-          : '还没有请求记录：有请求后这里会显示复用（省钱）比例。',
+          ? t('overview.statReuseTip', { admits, reuses })
+          : t('overview.statReuseEmpty'),
     },
   ]
   return el('div', { class: 'stat-grid' }, cards.map((c, i) =>
@@ -834,10 +870,10 @@ async function renderAccountsCard(data) {
   const card = el('div', { class: 'card', style: 'margin-top:12px' })
   if (!data.accounts.length) {
     card.append(
-      el('p', { style: 'margin:0 0 10px' }, '还没有 Freebuff 账号。'),
+      el('p', { style: 'margin:0 0 10px' }, t('account.emptyNoFreebuff')),
       state.me.role === 'admin'
-        ? el('button', { class: 'primary', onclick: () => openAddAccount() }, [icon('plus', 14), '立即添加第一个账号'])
-        : el('p', { class: 'muted' }, '请联系管理员添加账号。'),
+        ? el('button', { class: 'primary', onclick: () => openAddAccount() }, [icon('plus', 14), t('overview.addFirstAccount')])
+        : el('p', { class: 'muted' }, t('overview.askAdminForAccount')),
     )
     return card
   }
@@ -846,15 +882,17 @@ async function renderAccountsCard(data) {
   const totalReq = data.accounts.reduce((n, a) => n + (a.requests || 0), 0)
   const head = el('div', { class: 'row spread' }, [
     el('div', {}, [
-      el('h3', { style: 'margin:0 0 2px' }, '账号池'),
-      el('span', { class: 'muted' }, totalReq > 0 ? `负载均衡 · 共 ${totalReq} 次选号 · 热 session 优先复用` : '尚无请求记录'),
+      el('h3', { style: 'margin:0 0 2px' }, t('overview.accountPool')),
+      el('span', { class: 'muted' }, totalReq > 0
+        ? t('overview.loadBalance', { n: totalReq })
+        : t('overview.noRequestsYet')),
     ]),
     el('div', { class: 'row', style: 'gap:6px' }, [
       el('button', { class: 'primary', onclick: (e) => oneClickRefresh(e.currentTarget) },
-        [icon('refresh', 13), '一键刷新']),
-      el('button', { class: 'muted', onclick: (e) => probeAllAccounts(e.currentTarget), title: '只重新探测账号（只读，不占额度）' },
-        [icon('activity', 13), '探测刷新']),
-      el('button', { class: 'muted', onclick: () => refreshAccountsCard({ silent: false }) }, [icon('refresh', 13), '局部刷新']),
+        [icon('refresh', 13), t('overview.oneClickRefresh')]),
+      el('button', { class: 'muted', onclick: (e) => probeAllAccounts(e.currentTarget), title: t('overview.probeReadOnlyTip') },
+        [icon('activity', 13), t('overview.probeRefresh')]),
+      el('button', { class: 'muted', onclick: () => refreshAccountsCard({ silent: false }) }, [icon('refresh', 13), t('common.refresh')]),
     ]),
   ])
   card.append(head)
@@ -866,7 +904,7 @@ async function renderAccountsCard(data) {
       const pct = Math.round((a.requests / totalReq) * 100)
       bar.append(el('div', {
         style: `flex:${pct};background:${colorFor(a.email)}`,
-        title: `${a.email} ${pct}%（${a.requests}/${totalReq}）`,
+        title: t('overview.shareBarTip', { email: a.email, pct, req: a.requests, total: totalReq }),
       }))
     }
     card.append(bar)
@@ -886,14 +924,29 @@ async function renderAccountsCard(data) {
  *
  * 顺序即优先级：封禁 > 额度不足 > 警告 > 正在调度 > 从未使用。判定按"最坏优先"，
  * 一个号只出现在一个分区里（否则"已封禁"还会同时出现在"额度不足"里，看着像有救）。
+ *
+ * label/hint 用 getter 而不是求值好的字面量：这个常量在模块加载时就定型，
+ * 若此刻取文案，切换语言后分区标题会一直停在旧语种（要刷新页面才变）。
  */
 const ACCOUNT_SECTIONS = [
-  { id: 'banned', label: '已被封禁', hint: '上游已封号，不会再被调度', tone: 'err' },
-  { id: 'exhausted', label: '额度不足', hint: 'Freebucks 买不起当前模型，等池子刷新或加号', tone: 'err' },
-  { id: 'warning', label: '出现警告', hint: '限流 / 风控 / 探测失败，但还没封号', tone: 'warn' },
-  { id: 'lowbalance', label: '低额度', hint: '余额已接近见底——仍会被正常调度，只是提前提醒你该补号了', tone: 'warn' },
-  { id: 'active', label: '正在调度', hint: '有活跃会话或已被选中过', tone: 'ok', open: true },
-  { id: 'fresh', label: '从未使用', hint: '还没被调度过（干净号，尽量别浪费）', tone: 'idle' },
+  { id: 'banned', tone: 'err',
+    get label() { return t('account.section.banned.label') },
+    get hint() { return t('account.section.banned.hint') } },
+  { id: 'exhausted', tone: 'err',
+    get label() { return t('account.section.exhausted.label') },
+    get hint() { return t('account.section.exhausted.hint') } },
+  { id: 'warning', tone: 'warn',
+    get label() { return t('account.section.warning.label') },
+    get hint() { return t('account.section.warning.hint') } },
+  { id: 'lowbalance', tone: 'warn',
+    get label() { return t('account.section.lowbalance.label') },
+    get hint() { return t('account.section.lowbalance.hint') } },
+  { id: 'active', tone: 'ok', open: true,
+    get label() { return t('account.section.active.label') },
+    get hint() { return t('account.section.active.hint') } },
+  { id: 'fresh', tone: 'idle',
+    get label() { return t('account.section.fresh.label') },
+    get hint() { return t('account.section.fresh.hint') } },
 ]
 
 /**
@@ -999,7 +1052,18 @@ function sectionOpen(section) {
 function buildAccountSection(section, rows) {
   const table = el('div', { class: 'table-wrap' }, [
     el('table', {}, [
-      el('thead', {}, el('tr', {}, ['账号', '状态', 'Session', '并发', '时间轴（导入/更新/调度）', '额度（今日 · FB/h）', 'Freebucks', '请求', '冷却', '操作'].map((t) => el('th', {}, t)))),
+      el('thead', {}, el('tr', {}, [
+        t('account.email'),
+        t('common.status'),
+        t('account.session'),
+        t('account.concurrency'),
+        t('account.timeline'),
+        t('account.quotaHeader'),
+        t('account.freebucks'),
+        t('account.requests'),
+        t('account.cooldown'),
+        t('common.actions'),
+      ].map((h) => el('th', {}, h)))),
       el('tbody', {}, rows.map((a, i) => buildAccountRow(a, i))),
     ]),
   ])
@@ -1082,18 +1146,20 @@ function buildAccountRow(a, i) {
   const reuseRate =
     admits + reuses > 0 ? Math.round((reuses / (admits + reuses)) * 100) : null
   const countsTip =
-    `买过 ${admits} 条会话（每条实付一整小时），复用 ${reuses} 次` +
-    (reuseRate != null ? ` · 复用率 ${reuseRate}%` : '') +
-    '。复用发生在已买断的一小时内，不再产生任何扣费。'
+    t('account.countsTip', { admits, reuses }) +
+    (reuseRate != null ? t('account.countsRate', { rate: reuseRate }) : '') +
+    t('account.countsTipTail')
   const sessNode = el('div', {}, [
+    // 这里显示的是**给人看的模型名**：a.session.model 是目录 key
+    // （m-00032eaeec），必须换成可读名（MiMo 2.6 Flash）。
     el('div', {}, a.session?.live
-      ? `${a.session.model} · ${fmtMs(a.session.remainingMs)}`
-      : (a.session?.status === 'none' ? '无活跃' : (a.session?.status || '—'))),
+      ? `${modelLabel(a)} · ${fmtMs(a.session.remainingMs)}`
+      : (a.session?.status === 'none' ? t('account.noActiveSession') : (a.session?.status || '—'))),
     admits + reuses > 0
       ? el('div', { class: 'muted', style: 'font-size:11px', title: countsTip },
           reuseRate != null
-            ? `买 ${admits} · 复用 ${reuses}（省 ${reuseRate}%）`
-            : `买 ${admits}`)
+            ? t('account.boughtReuse', { admits, reuses, rate: reuseRate })
+            : t('account.bought', { admits }))
       : '',
   ])
   const sess = sessNode
@@ -1109,12 +1175,16 @@ function buildAccountRow(a, i) {
   const banned = a.banned === true || Boolean(a.bannedAt)
   const unavailable = banned || a.unavailable === true || a.available === false
   const statusDot = el('span', { class: banned ? 'status-dot err' : unavailable ? 'status-dot warn' : 'status-dot ok' })
-  let statusLabel = banned ? '已封禁' : unavailable ? (cd ? `冷却至 ${cd}` : '不可用') : '可用'
-  let statusTip = banned
-    ? '上游已封禁该账号（不可自行恢复，只能换号或等平台解封）'
+  let statusLabel = banned
+    ? t('account.bannedShort')
     : unavailable
-      ? '上游暂时拒付/限流（冷却到期自动恢复；会话句柄保留，已购时段不受影响）'
-      : '正常：可参与调度'
+      ? (cd ? t('account.coolingUntil', { until: cd }) : t('account.unavailable'))
+      : t('model.available')
+  let statusTip = banned
+    ? t('account.statusTipBanned')
+    : unavailable
+      ? t('account.statusTipUnavailable')
+      : t('account.statusTipOk')
   let statusCls = banned ? 'badge err' : unavailable ? 'badge warn' : 'badge ok'
   // 探测失败的**具体原因**比笼统的"不可用"更有信息量，覆盖之（但 ban 优先级最高）。
   if (!banned && probe) {
@@ -1126,23 +1196,23 @@ function buildAccountRow(a, i) {
     [statusDot, statusLabel])
   const hasSession = Boolean(a.session?.live)
   const ops = el('div', { class: 'row', style: 'gap:6px' }, [
-    el('button', { class: 'icon muted', title: '检测该账号（只读拉取状态/模型列表，不占额度）', onclick: (e) => probeAccount(a, e.currentTarget) }, icon('activity', 14)),
+    el('button', { class: 'icon muted', title: t('account.probeTitle'), onclick: (e) => probeAccount(a, e.currentTarget) }, icon('activity', 14)),
     hasSession
-      ? el('button', { class: 'icon', title: '关闭这个上游会话（立即早退 DELETE，停止按占用时长计费；有回复在传输时会先等它结束）', onclick: (e) => closeAccountSession(a, e.currentTarget) }, icon('x', 14))
+      ? el('button', { class: 'icon', title: t('account.closeSessionTitle'), onclick: (e) => closeAccountSession(a, e.currentTarget) }, icon('x', 14))
       : null,
     state.me.role === 'admin'
-      ? el('button', { class: 'icon muted', title: '解除冷却', onclick: () => clearCooldown(a.key) }, icon('zap', 14))
+      ? el('button', { class: 'icon muted', title: t('account.clearCooldownTitle'), onclick: () => clearCooldown(a.key) }, icon('zap', 14))
       : null,
-    el('button', { class: 'icon muted', title: '查看/复制凭证', onclick: () => openCredentialModal(a) }, icon('key', 14)),
+    el('button', { class: 'icon muted', title: t('account.credentialButtonTitle'), onclick: () => openCredentialModal(a) }, icon('key', 14)),
     state.me.role === 'admin'
-      ? el('button', { class: 'icon danger', title: '删除账号', onclick: () => removeAccount(a.key, a.email) }, icon('trash', 14))
+      ? el('button', { class: 'icon danger', title: t('account.deleteTitle'), onclick: () => removeAccount(a.key, a.email) }, icon('trash', 14))
       : null,
   ])
   return el('tr', { class: 'row-in', style: `animation-delay:${Math.min(i * 40, 400)}ms` }, [
     el('td', {}, [
       a.email,
       a.id && a.id !== a.email ? el('div', { class: 'muted', style: 'font-size:11px' }, `ID ${a.id}`) : '',
-      a.lastUsed ? el('span', { class: 'badge ok', style: 'margin-left:6px' }, '最近使用') : '',
+      a.lastUsed ? el('span', { class: 'badge ok', style: 'margin-left:6px' }, t('account.lastUsed')) : '',
     ]),
     el('td', {}, statusBadge),
     el('td', { class: 'mono', style: 'font-size:12px' }, sess),
@@ -1156,7 +1226,7 @@ function buildAccountRow(a, i) {
       a.modelDisplayName || a.session?.model,
       a.lastRefund,
     )),
-    el('td', { class: 'mono' }, `${a.requests || 0} 次`),
+    el('td', { class: 'mono' }, t('common.times', { n: a.requests || 0 })),
     el('td', {}, cd ? el('span', { class: 'badge warn' }, a.cooldownCode || 'cooldown') : el('span', { class: 'muted' }, '—')),
     el('td', {}, ops),
   ])
@@ -1168,23 +1238,23 @@ function buildAccountRow(a, i) {
  */
 function probeReason(code, message) {
   const c = String(code || '').toLowerCase()
-  const msg = message || c || '未知原因'
+  const msg = message || c || t('account.unknownReason')
   if (c.includes('country_blocked') || c.includes('countryblocked')) {
-    return { label: '出口风控', tip: `国家/出口 IP 风控：${msg}` }
+    return { label: t('account.probeCountryBlocked'), tip: t('account.probeCountryBlockedTip', { msg }) }
   }
   if (c.includes('banned')) {
-    return { label: '已封禁', tip: `账号被封禁：${msg}` }
+    return { label: t('account.bannedShort'), tip: t('account.probeBannedTip', { msg }) }
   }
   if (c.includes('ip_capped')) {
-    return { label: 'IP 上限', tip: `IP 达上限：${msg}` }
+    return { label: t('account.probeIpCapped'), tip: t('account.probeIpCappedTip', { msg }) }
   }
   if (/rate_limited|spend_limited|free_mode_rate_limited/.test(c)) {
-    return { label: '限流', tip: `账号限流/额度：${msg}` }
+    return { label: t('account.probeRateLimited'), tip: t('account.probeRateLimitedTip', { msg }) }
   }
   if (c.includes('unauthorized') || c.includes('invalid') || c.includes('401')) {
-    return { label: '凭证无效', tip: `凭据失效（需重新登录）：${msg}` }
+    return { label: t('account.probeInvalidCred'), tip: t('account.probeInvalidCredTip', { msg }) }
   }
-  return { label: '探测失败', tip: msg }
+  return { label: t('account.probeFailed'), tip: msg }
 }
 
 /**
@@ -1209,7 +1279,7 @@ async function refreshAccountsCard({ silent = true } = {}) {
     applyAccountsSections(data.accounts)
     wrap.classList.remove('refreshing')
     refreshSnapshotExtras(data)
-    if (!silent) toast('账号状态已刷新')
+    if (!silent) toast(t('account.refreshed'))
   } catch (err) {
     wrap.classList.remove('refreshing')
     toast(err.message, true)
@@ -1232,13 +1302,13 @@ function refreshSnapshotExtras(data) {
       const pct = Math.round((a.requests / totalReq) * 100)
       barHost.append(el('div', {
         style: `flex:${pct};background:${colorFor(a.email)}`,
-        title: `${a.email} ${pct}%（${a.requests}/${totalReq}）`,
+        title: t('overview.balanceBarTitle', { email: a.email, pct, used: a.requests, total: totalReq }),
       }))
     }
   }
   const h2 = $('#app h2')
-  if (h2 && h2.textContent.startsWith('账号池') && data.accountCount != null) {
-    h2.textContent = `账号池（${data.accountCount}）`
+  if (h2 && h2.textContent.startsWith(t('overview.accountPool')) && data.accountCount != null) {
+    h2.textContent = t('overview.accountPoolCount', { n: data.accountCount })
   }
 }
 
@@ -1272,16 +1342,16 @@ async function probeAccount(a, btn) {
       const models = Object.entries(limits)
         .map(([id, info]) => `${shortModel(id)} ${fmtNum(info?.recentCount)}/${info?.limit ?? '?'}`)
         .join(' · ')
-      toast(`✅ ${a.email} 可用 · ${modelCount} 个模型${models ? '：' + models : ''}`)
+      toast(t('account.probeOk', { email: a.email, n: modelCount }) + (models ? t('account.probeModelList', { list: models }) : ''))
       await refreshAccountsCard()
     } else {
-      const code = r.code || sess?.status || sess?.error || r.error || '未知'
+      const code = r.code || sess?.status || sess?.error || r.error || t('account.unknownReason')
       const reason = probeReason(code, r.error || r.message)
-      toast(`⚠️ ${a.email} 检测异常：${reason.label} — ${String(reason.tip).slice(0, 140)}`, true)
+      toast(t('account.probeAbnormal', { email: a.email, label: reason.label, tip: String(reason.tip).slice(0, 140) }), true)
     }
   } catch (err) {
     restore()
-    toast(`检测失败: ${err.message}`, true)
+    toast(t('account.probeFail', { msg: err.message }), true)
   }
 }
 
@@ -1295,7 +1365,7 @@ async function probeAccount(a, btn) {
  * 不整页重建 —— 刷新前后用户视线所在的滚动位置和折叠状态都不变。
  */
 async function oneClickRefresh(btn) {
-  const restore = withButtonLoading(btn, '刷新中')
+  const restore = withButtonLoading(btn, t('common.refreshing'))
   try {
     const r = await api('/api/accounts/refresh', { method: 'POST' })
     state.accounts = r.accounts || state.accounts
@@ -1305,11 +1375,11 @@ async function oneClickRefresh(btn) {
     const banned = failed.filter((x) => String(x.code || '').includes('banned'))
     const soft = failed.length - banned.length
     const parts = []
-    parts.push(`✅ ${results.length - failed.length} 个正常`)
-    if (banned.length) parts.push(`⛔ ${banned.length} 个已封禁`)
-    if (soft.length) parts.push(`⚠️ ${soft.length} 个异常（限流/风控/凭证）`)
-    parts.push(`模型 ${(r.upstreamModelIds || []).length} 个`)
-    toast(parts.join(' · ') + '（只读，已购时段不受影响）', failed.length > 0)
+    parts.push(t('account.refreshOk', { n: results.length - failed.length }))
+    if (banned.length) parts.push(t('account.refreshBanned', { n: banned.length }))
+    if (soft.length) parts.push(t('account.refreshAbnormal', { n: soft.length }))
+    parts.push(t('account.refreshModels', { n: (r.upstreamModelIds || []).length }))
+    toast(parts.join(' · ') + t('account.refreshReadOnly'), failed.length > 0)
     applyAccountsSections(state.accounts)
     await applyOverviewAndModelCards()
     refreshModelSettingsCard().catch(() => {})
@@ -1324,12 +1394,14 @@ async function oneClickRefresh(btn) {
 async function probeAllAccounts(btn = null) {
   // 按钮由调用方显式传入（两个入口：页头「探测刷新」与账号卡「探测刷新」）。
   // 不要去猜 activeElement：局部刷新后节点会被替换，猜到的往往是另一个按钮。
-  const restore = withButtonLoading(btn, '探测中')
+  const restore = withButtonLoading(btn, t('account.probing'))
   try {
     const r = await api('/api/accounts/probe', { method: 'POST' })
     state.accounts = r.accounts
     const failed = (r.results || []).filter((x) => !x.ok)
-    toast(failed.length ? `探测完成，${failed.length} 个失败（点击行内检测图标看详情）` : '探测完成（只读，不占额度）', !!failed.length)
+    toast(failed.length
+      ? t('account.probeDoneFail', { n: failed.length })
+      : t('account.probeDone'), !!failed.length)
     if (applyAccountsSections(r.accounts)) {
       refreshSnapshotExtras({ accounts: r.accounts })
     } else render()
@@ -1361,10 +1433,10 @@ async function renderFlowsCard(view) {
   const activeFlows = state.flows.filter((f) => f.status === 'pending')
   if (!activeFlows.length) return
   view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
-    el('h3', { style: 'margin:0 0 8px' }, '等待中的登录'),
+    el('h3', { style: 'margin:0 0 8px' }, t('account.pendingLogins')),
     ...activeFlows.map((f) => el('div', { class: 'row spread', style: 'padding:8px 0;border-bottom:1px solid var(--border)' }, [
-      el('span', { class: 'muted', style: 'display:inline-flex;align-items:center;gap:6px' }, [icon('globe', 14), `发起于 ${new Date(f.createdAt).toLocaleString()}`]),
-      el('button', { onclick: () => openLoginFlow(f) }, [icon('globe', 14), '打开登录链接']),
+      el('span', { class: 'muted', style: 'display:inline-flex;align-items:center;gap:6px' }, [icon('globe', 14), t('account.startedAt', { time: new Date(f.createdAt).toLocaleString() })]),
+      el('button', { onclick: () => openLoginFlow(f) }, [icon('globe', 14), t('account.openLoginLink')]),
     ])),
   ]))
 }
@@ -1415,24 +1487,24 @@ async function renderProxySettings(view) {
   if (state.me.role !== 'admin') stripAttrs.disabled = ''
   view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
     el('div', {}, [
-      el('h3', { style: 'margin:0 0 2px' }, '免费额度策略'),
-      el('span', { class: 'muted' }, '工具签名兼容（补齐官方真签名工具，避免被上游判作第三方客户端而降级）'),
+      el('h3', { style: 'margin:0 0 2px' }, t('system.freeQuotaPolicy')),
+      el('span', { class: 'muted' }, t('system.toolSignatureHint')),
     ]),
     el('label', { class: 'switch', for: 'free-tool-signature' }, [
       el('input', toggleAttrs),
       el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
-      el('span', { class: 'switch-status' }, signatureEnabled ? '已开启' : '已关闭'),
+      el('span', { class: 'switch-status' }, signatureEnabled ? t('common.on') : t('common.off')),
     ]),
   ]))
   view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
     el('div', {}, [
-      el('h3', { style: 'margin:0 0 2px' }, '工具请求兜底'),
-      el('span', { class: 'muted' }, '工具被拒时去掉工具重试（上游对 tools 做指纹比对，带工具会被回 404 No endpoints found；开着才能出文本回答，关掉则错误原样透传）'),
+      el('h3', { style: 'margin:0 0 2px' }, t('system.toolFallback')),
+      el('span', { class: 'muted' }, t('system.toolFallbackHint')),
     ]),
     el('label', { class: 'switch', for: 'strip-tools-on-reject' }, [
       el('input', stripAttrs),
       el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
-      el('span', { class: 'switch-status' }, stripTools ? '已开启' : '已关闭'),
+      el('span', { class: 'switch-status' }, stripTools ? t('common.on') : t('common.off')),
     ]),
   ]))
 
@@ -1442,26 +1514,26 @@ async function renderProxySettings(view) {
   view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
       el('div', {}, [
-        el('h3', { style: 'margin:0 0 2px' }, '账号调度'),
-        el('span', { class: 'muted' }, '粘性优先 = 请求集中到尽可能少的账号（换号 = 新买一条 Freebucks 计费行，能复用就复用）；并发优先 = 账号满员就换号，不再让请求在一个号上干等。两种模式都优先复用同模型热 session、都让从未用过的账号排最后。'),
+        el('h3', { style: 'margin:0 0 2px' }, t('system.scheduling')),
+        el('span', { class: 'muted' }, t('system.schedulingHint')),
       ]),
     ]),
     el('div', { class: 'row', style: 'margin-top:12px;gap:24px;flex-wrap:wrap' }, [
       el('div', {}, [
-        el('label', { style: 'margin:0 0 4px' }, '调度模式'),
+        el('label', { style: 'margin:0 0 4px' }, t('system.schedulingMode')),
         el('div', { class: 'row' }, [
           el('select', {
             id: 'scheduling-mode',
             style: 'width:210px',
             ...(state.me.role === 'admin' ? {} : { disabled: '' }),
           }, [
-            el('option', { value: 'sticky', ...(schedMode === 'sticky' ? { selected: '' } : {}) }, '粘性优先（最少换号，默认）'),
-            el('option', { value: 'spread', ...(schedMode === 'spread' ? { selected: '' } : {}) }, '并发优先（满员即换号）'),
+            el('option', { value: 'sticky', ...(schedMode === 'sticky' ? { selected: '' } : {}) }, t('system.modeSticky')),
+            el('option', { value: 'spread', ...(schedMode === 'spread' ? { selected: '' } : {}) }, t('system.modeSpread')),
           ]),
         ]),
       ]),
       el('div', {}, [
-        el('label', { style: 'margin:0 0 4px' }, '每账号并发（单账号同时几路流）'),
+        el('label', { style: 'margin:0 0 4px' }, t('system.accountConcurrency')),
         el('div', { class: 'row' }, [
           el('input', {
             id: 'account-concurrency',
@@ -1475,7 +1547,7 @@ async function renderProxySettings(view) {
         ]),
       ]),
       el('div', {}, [
-        el('label', { style: 'margin:0 0 4px' }, '溢出排队上限（毫秒，仅并发优先）'),
+        el('label', { style: 'margin:0 0 4px' }, t('system.overflowWait')),
         el('div', { class: 'row' }, [
           el('input', {
             id: 'overflow-wait-ms',
@@ -1490,10 +1562,10 @@ async function renderProxySettings(view) {
         ]),
       ]),
       state.me.role === 'admin'
-        ? el('div', { style: 'align-self:flex-end' }, el('button', { class: 'primary', onclick: saveLoadBalanceSettings }, '保存并生效'))
+        ? el('div', { style: 'align-self:flex-end' }, el('button', { class: 'primary', onclick: saveLoadBalanceSettings }, t('common.saveApply')))
         : null,
     ]),
-    el('div', { class: 'muted', id: 'scheduling-hint', style: 'margin-top:8px' }, schedulingHint(schedMode, concurrency, overflowWaitMs) + (state.me.role !== 'admin' ? '（管理员可调）' : '')),
+    el('div', { class: 'muted', id: 'scheduling-hint', style: 'margin-top:8px' }, schedulingHint(schedMode, concurrency, overflowWaitMs) + (state.me.role !== 'admin' ? t('system.adminOnly') : '')),
   ]))
 
   const idleReleaseSec = settings.idleReleaseSec ?? 600
@@ -1504,31 +1576,31 @@ async function renderProxySettings(view) {
   view.append(el('div', { class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
       el('div', {}, [
-        el('h3', { style: 'margin:0 0 2px' }, '额度保护（买断一小时，用满它）'),
-        el('span', { class: 'muted' }, '上游 2026-09 改版：一笔会话**同时**扣两本账——session_units（时长额度，recentCount/limit，小数）与 Freebucks（单价 N FB/小时，按整小时预扣）。两者是**并行的两道闸门**，任一不足都会被上游拒掉。'),
+        el('h3', { style: 'margin:0 0 2px' }, t('system.quotaProtection')),
+        el('span', { class: 'muted' }, t('system.twoLedgers')),
       ]),
     ]),
     el('div', { class: 'muted', style: 'margin-top:6px;line-height:1.6' }, [
-      el('b', {}, '一次 admit = 买断一小时'),
-      '：POST 当场扣满整小时单价（实测 Freebucks 5 → 0，回执带 expiresAt）。所以这一小时内继续发请求的',
-      el('b', {}, '边际成本是 0'),
-      '，而 DELETE 之后那一小时就作废、重开 = 重新买一整小时。',
-      el('b', {}, '因此付费时段内不再因空闲释放'),
-      '——只有必须腾槽位给别的模型时才早退。空闲自动释放改成「付费时段结束之后」的时长。',
+      el('b', {}, t('system.admitBuysHour')),
+      t('system.admitBody1'),
+      el('b', {}, t('system.admitMarginalZero')),
+      t('system.admitBody2'),
+      el('b', {}, t('system.admitNoIdleRelease')),
+      t('system.admitBody3'),
     ]),
     el('div', { class: 'muted', style: 'margin-top:6px;line-height:1.6' }, [
-      '早退 DELETE 的退款**两本账不对称**（一手实测）：',
-      el('b', {}, 'session_units 当场按实际占用比例退还'),
-      '（实测 1.1 → 0.2，小数、无取整）；',
-      el('b', {}, 'Freebucks 只回 freebucksRefundPending'),
-      '，实测 25s 后早退、重放 DELETE ×2、观察 2 分钟**仍未到账**。而实测 24 个「账号 × 模型」组合里',
-      el('b', {}, '22 个是 Freebucks 先见底'),
-      '，所以早退等于拿稀缺的账去省不稀缺的账。',
+      t('system.refundAsymmetric'),
+      el('b', {}, t('system.refundUnits')),
+      t('system.refundUnitsBody'),
+      el('b', {}, t('system.refundFreebucks')),
+      t('system.refundFreebucksBody'),
+      el('b', {}, t('system.refundFreebucksFirst')),
+      t('system.refundConclusion'),
     ]),
-    el('div', { class: 'muted', style: 'margin-top:6px' }, '依据：docs/freebucks-strategy.html、docs/account-scheduling-and-refund.md §3（2026-09-14 结论）、docs/evidence/ledger-session-units-vs-freebucks.json'),
+    el('div', { class: 'muted', style: 'margin-top:6px' }, t('system.refundSources')),
     el('div', { class: 'row', style: 'margin-top:12px;gap:24px;flex-wrap:wrap' }, [
       el('div', {}, [
-        el('label', { style: 'margin:0 0 4px' }, '空闲自动释放（秒，0 = 关闭；最小 5）'),
+        el('label', { style: 'margin:0 0 4px' }, t('system.idleRelease')),
         el('div', { class: 'row' }, [
           el('input', {
             id: 'idle-release-sec',
@@ -1542,7 +1614,7 @@ async function renderProxySettings(view) {
         ]),
       ]),
       el('div', {}, [
-        el('label', { style: 'margin:0 0 4px' }, '低额度分组阈值（FB，0 = 关闭）'),
+        el('label', { style: 'margin:0 0 4px' }, t('system.lowBalanceThreshold')),
         el('div', { class: 'row' }, [
           el('input', {
             id: 'low-balance-threshold',
@@ -1556,7 +1628,7 @@ async function renderProxySettings(view) {
         ]),
       ]),
       el('div', {}, [
-        el('label', { style: 'margin:0 0 4px' }, '单请求新会话上限（个）'),
+        el('label', { style: 'margin:0 0 4px' }, t('system.maxNewSessions')),
         el('div', { class: 'row' }, [
           el('input', {
             id: 'max-new-sessions',
@@ -1568,22 +1640,22 @@ async function renderProxySettings(view) {
             ...(state.me.role === 'admin' ? {} : { disabled: '' }),
           }),
           state.me.role === 'admin'
-            ? el('button', { class: 'primary', onclick: saveQuotaProtectionSettings }, '保存并生效')
+            ? el('button', { class: 'primary', onclick: saveQuotaProtectionSettings }, t('common.saveApply'))
             : null,
         ]),
       ]),
     ]),
     el('div', { class: 'muted', id: 'idle-release-hint', style: 'margin-top:8px' },
       idleReleaseSec > 0
-        ? `当前：会话空闲 ${idleReleaseSec}s 后释放（付费时段内不释放，买断的一小时用满）· 一个请求最多新建 ${maxNewSessions || '不限'} 个上游会话`
-        : `当前：空闲不释放（会话留到自然过期，最省 admit；代价是换模型要等释放）· 一个请求最多新建 ${maxNewSessions || '不限'} 个上游会话`),
+        ? t('system.idleReleaseHintOn', { sec: idleReleaseSec, max: maxNewSessions || t('common.unlimited') })
+        : t('system.idleReleaseHintOff', { max: maxNewSessions || t('common.unlimited') })),
     el('div', { id: 'idle-release-advice', style: 'margin-top:10px;padding:10px;border-radius:8px;background:rgba(255,196,0,.08);border:1px solid rgba(255,196,0,.25)' }, [
-      el('div', { style: 'font-weight:600;margin-bottom:4px' }, '推荐值（按当前账号池实时算）'),
+      el('div', { style: 'font-weight:600;margin-bottom:4px' }, t('system.adviceTitle')),
       el('div', { class: 'muted', id: 'idle-release-advice-text' }, advice.why),
       el('div', { class: 'advice-actions' }, [
         state.me.role === 'admin' && advice.sec !== idleReleaseSec
-          ? el('button', { class: 'primary', style: 'margin-top:8px', onclick: () => applyIdleReleaseAdvice(advice.sec) }, `采用推荐值 ${advice.sec}s`)
-          : el('div', { class: 'muted', style: 'margin-top:6px' }, advice.sec === idleReleaseSec ? '✅ 当前设置已与推荐值一致' : '（管理员可一键采用）'),
+          ? el('button', { class: 'primary', style: 'margin-top:8px', onclick: () => applyIdleReleaseAdvice(advice.sec) }, t('system.adviceApply', { sec: advice.sec }))
+          : el('div', { class: 'muted', style: 'margin-top:6px' }, advice.sec === idleReleaseSec ? t('system.adviceInSync') : t('system.adviceAdminHint')),
       ]),
     ]),
   ]))
@@ -1591,31 +1663,31 @@ async function renderProxySettings(view) {
   const card = el('div', { id: 'proxy-card', class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
       el('div', {}, [
-        el('h3', { style: 'margin:0 0 2px' }, '代理设置（全局代理池）'),
-        el('span', { class: 'muted' }, '填一个或多个代理，保存立即生效；账号出口由系统内部分配（同一账号固定同一出口），无需逐个配置'),
+        el('h3', { style: 'margin:0 0 2px' }, t('proxy.cardTitle')),
+        el('span', { class: 'muted' }, t('proxy.cardHint')),
       ]),
-      el('button', { class: 'primary', onclick: saveProxyPool }, [icon('globe', 14), '保存并生效']),
+      el('button', { class: 'primary', onclick: saveProxyPool }, [icon('globe', 14), t('common.saveApply')]),
     ]),
     el('textarea', {
       id: 'proxy-pool',
       rows: 3,
       class: 'mono',
       style: 'margin-top:8px',
-      placeholder: '一行一个代理，例如：\nhttp://user:pass@172.17.0.1:7890\nsocks5://127.0.0.1:1080\n（留空保存 = 清除全局池，走环境变量/直连）',
+      placeholder: t('proxy.poolPlaceholder'),
     }, (data.proxies || []).join('\n')),
     el('div', { class: 'row', style: 'margin-top:8px' }, [
       el('input', {
         id: 'proxy-test-url',
-        placeholder: '测试单个代理，如 http://172.17.0.1:2334',
+        placeholder: t('proxy.testPlaceholder'),
         class: 'mono',
         style: 'flex:1',
       }),
-      el('button', { onclick: () => runProxyTest($('#proxy-test-url').value.trim() || null) }, [icon('zap', 14), '测试']),
-      el('button', { class: 'muted', onclick: () => runProxyTest(null) }, '测试已配置'),
+      el('button', { onclick: () => runProxyTest($('#proxy-test-url').value.trim() || null) }, [icon('zap', 14), t('common.test')]),
+      el('button', { class: 'muted', onclick: () => runProxyTest(null) }, t('proxy.testConfigured')),
     ]),
     el('div', { id: 'proxy-test-result', style: 'margin-top:8px' }),
     data.effective && data.effective.length
-      ? el('div', { class: 'muted', style: 'margin-top:8px' }, `当前生效代理：${data.effective.map(shortProxy).join('、')}`)
+      ? el('div', { class: 'muted', style: 'margin-top:8px' }, t('proxy.effectiveList', { list: data.effective.map(shortProxy).join('、') }))
       : null,
   ])
   view.append(card)
@@ -1632,8 +1704,8 @@ async function saveFreeToolSignatureSetting(event) {
     })
     toast(
       enabled
-        ? '工具签名兼容已开启（转发时会补齐官方签名工具）'
-        : '工具签名兼容已关闭（带工具的请求可能被判第三方并降级）',
+        ? t('system.toolSignatureOn')
+        : t('system.toolSignatureOff'),
     )
     // 从服务端回读一次，把开关还原为可交互状态并同步到真实值，避免按钮被永久禁用
     try {
@@ -1659,7 +1731,7 @@ async function saveStripToolsSetting(event) {
       method: 'POST',
       body: JSON.stringify({ stripToolsOnSchemaRejection: enabled }),
     })
-    toast(enabled ? '工具兜底重试已开启' : '工具兜底重试已关闭')
+    toast(enabled ? t('system.toolFallbackOn') : t('system.toolFallbackOff'))
     try {
       const s = await api('/api/settings')
       const actual = s.stripToolsOnSchemaRejection !== false
@@ -1683,7 +1755,7 @@ async function saveBlockPremiumSetting(event) {
       method: 'POST',
       body: JSON.stringify({ blockPremiumModels: enabled }),
     })
-    toast(enabled ? '已屏蔽收费模型（列表与调度已排除）' : '已显示收费模型')
+    toast(enabled ? t('system.blockPremiumOn') : t('system.blockPremiumOff'))
     try {
       const s = await api('/api/settings')
       const actual = s.blockPremiumModels !== false
@@ -1704,7 +1776,7 @@ function updateSwitchLabel(input) {
   const track = input.closest('.switch')
   if (!track) return
   const statusEl = track.querySelector('.switch-status')
-  if (statusEl) statusEl.textContent = input.checked ? '已开启' : '已关闭'
+  if (statusEl) statusEl.textContent = input.checked ? t('common.on') : t('common.off')
 }
 
 /**
@@ -1730,7 +1802,7 @@ function updateSwitchLabel(input) {
 function idleReleaseAdvice(accounts) {
   const pool = accounts.length
   if (!pool) {
-    return { sec: 60, why: '还没有账号，先给默认值 1 分钟。导入账号后这里会按真实模型分布重新计算。' }
+    return { sec: 60, why: t('system.adviceNoAccounts') }
   }
   const liveModels = new Set(
     accounts.map((a) => a.session && a.session.live && a.session.model).filter(Boolean),
@@ -1741,16 +1813,16 @@ function idleReleaseAdvice(accounts) {
   let why
   if (distinct === 0) {
     sec = 60
-    why = `当前 ${pool} 个账号都没有活跃会话，无从判断模型分布，先用默认值 1 分钟。有会话后会自动重算。`
+    why = t('system.adviceNoSessions', { pool })
   } else if (ratio >= 0.8) {
     sec = 60
-    why = `${pool} 个账号上正在跑 ${distinct} 种不同模型（模型数已接近账号数），会话槽位很紧：保持 1 分钟，让换模型时能尽快拿到槽位；同时早退会把未用时长退回来。`
+    why = t('system.adviceTight', { pool, distinct })
   } else if (ratio <= 0.5) {
     sec = 300
-    why = `${pool} 个账号上只跑 ${distinct} 种模型（模型集中在少数账号，热会话复用充分），可以放宽到 5 分钟：减少 admit 往返，又不会让空闲会话挂太久白计费。`
+    why = t('system.adviceRelaxed', { pool, distinct })
   } else {
     sec = 120
-    why = `${pool} 个账号上正在跑 ${distinct} 种模型，分布适中，2 分钟是兼顾「少 admit 往返」和「不为空闲时长付费」的平衡点。`
+    why = t('system.adviceBalanced', { pool, distinct })
   }
   return { sec, why }
 }
@@ -1766,10 +1838,10 @@ function renderIdleReleaseAdvice() {
   if (state.me && state.me.role === 'admin' && advice.sec !== cur) {
     row.append(
       el('button', { class: 'primary', style: 'margin-top:8px', onclick: () => applyIdleReleaseAdvice(advice.sec) },
-        `采用推荐值 ${advice.sec}s`),
+        t('system.adviceApply', { sec: advice.sec })),
     )
   } else if (advice.sec === cur) {
-    row.append(el('div', { class: 'muted', style: 'margin-top:6px' }, '✅ 当前设置已与推荐值一致'))
+    row.append(el('div', { class: 'muted', style: 'margin-top:6px' }, t('system.adviceInSync')))
   }
 }
 
@@ -1784,12 +1856,12 @@ async function applyIdleReleaseAdvice(sec) {
     })
     const input = $('#idle-release-sec')
     if (input) input.value = sec
-    toast(`已采用推荐值：空闲 ${sec}s 后释放 · 单请求最多 ${b || '不限'} 个新会话`)
+    toast(t('system.adviceApplied', { sec, max: b || t('common.unlimited') }))
     const hint = $('#idle-release-hint')
     if (hint) {
       hint.textContent = sec > 0
-        ? `当前：会话空闲 ${sec}s 后释放（付费时段内不释放，买断的一小时用满）· 一个请求最多新建 ${b || '不限'} 个上游会话`
-        : `当前：空闲不释放（会话留到自然过期，最省 admit；代价是换模型要等释放）· 一个请求最多新建 ${b || '不限'} 个上游会话`
+        ? t('system.idleReleaseHintOn', { sec, max: b || t('common.unlimited') })
+        : t('system.idleReleaseHintOff', { max: b || t('common.unlimited') })
     }
     renderIdleReleaseAdvice()
   } catch (err) {
@@ -1798,11 +1870,11 @@ async function applyIdleReleaseAdvice(sec) {
 }
 
 function schedulingHint(mode, concurrency, overflowWaitMs) {
-  const cap = `每账号 ${concurrency} 路并发`
+  const cap = t('system.schedCap', { n: concurrency })
   if (mode === 'spread') {
-    return `当前：并发优先 · ${cap}。账号满员就立刻换到下一个有空闲槽位的账号（最多先等 ${overflowWaitMs} ms），不会再出现"设了并发 2 却只开 1 个号"。已用过的账号仍优先于从未用过的账号。`
+    return t('system.schedSpread', { cap, wait: overflowWaitMs })
   }
-  return `当前：粘性优先 · ${cap}。并发请求先挤同一账号（超过上限就在该账号排队，超时才溢出到下一个），最少换号 = 最少新建计费会话。想让并发铺开多个账号，把模式改成「并发优先」。`
+  return t('system.schedSticky', { cap })
 }
 
 async function saveLoadBalanceSettings() {
@@ -1834,14 +1906,14 @@ async function saveLoadBalanceSettings() {
     if (waitEl) waitEl.value = realWait
     toast(
       realMode === 'spread'
-        ? `调度已更新：并发优先 · 每账号 ${realConc} 路（满员即换号）`
-        : `调度已更新：粘性优先 · 每账号 ${realConc} 路（先排队，超时才换号）`,
+        ? t('system.schedSavedSpread', { n: realConc })
+        : t('system.schedSavedSticky', { n: realConc }),
     )
     const hint = $('#scheduling-hint')
     if (hint) {
       hint.textContent =
         schedulingHint(realMode, realConc, realWait) +
-        (state.me.role !== 'admin' ? '（管理员可调）' : '')
+        (state.me.role !== 'admin' ? t('system.adminOnly') : '')
     }
   } catch (err) {
     toast(err.message, true)
@@ -1868,15 +1940,15 @@ async function saveQuotaProtectionSettings() {
     })
     state.lowBalanceThreshold = lb
     toast(v > 0
-      ? `额度保护已更新：空闲 ${v}s 后释放（付费时段内不释放）· 单请求最多 ${b || '不限'} 个新会话`
-      : `已关闭空闲释放（会话留到自然过期）· 单请求最多 ${b || '不限'} 个新会话`)
+      ? t('system.quotaSavedOn', { sec: v, max: b || t('common.unlimited') })
+      : t('system.quotaSavedOff', { max: b || t('common.unlimited') }))
     // 阈值变了要重画账号分区（低额度分组可能刚被打开/关闭）
     try { await refreshAccountsCard() } catch { /* 表未挂载时忽略 */ }
     const hint = $('#idle-release-hint')
     if (hint) {
       hint.textContent = v > 0
-        ? `当前：会话空闲 ${v}s 后释放（付费时段内不释放，买断的一小时用满）· 一个请求最多新建 ${b || '不限'} 个上游会话`
-        : `当前：空闲不释放（会话留到自然过期，最省 admit；代价是换模型要等释放）· 一个请求最多新建 ${b || '不限'} 个上游会话`
+        ? t('system.idleReleaseHintOn', { sec: v, max: b || t('common.unlimited') })
+        : t('system.idleReleaseHintOff', { max: b || t('common.unlimited') })
     }
     renderIdleReleaseAdvice()
   } catch (err) {
@@ -1890,16 +1962,19 @@ async function saveProxyPool() {
   const proxies = textarea.value.split('\n').map((x) => x.trim()).filter(Boolean)
   try {
     const r = await api('/api/proxy', { method: 'POST', body: JSON.stringify({ proxies }) })
-    toast(r.note || '已保存')
+    toast(r.note || t('toast.saved'))
     // 局部刷新「当前生效代理」文字，不重建页面
     try {
       const pdata = await api('/api/proxy')
       const eff = pdata.effective || []
-      const effNode = [...document.querySelectorAll('#proxy-card .muted')].find((n) => n.textContent.includes('当前生效代理'))
+      // 按「生效代理」这一固定语义锚点找节点：文案本身已随语种变化
+      const effNode = [...document.querySelectorAll('#proxy-card .muted')].find(
+        (n) => n.textContent.includes(t('proxy.effectivePrefix')),
+      )
       if (effNode) {
         effNode.textContent = eff.length
-          ? `当前生效代理：${eff.map(shortProxy).join('、')}`
-          : '当前未配置代理（直连）'
+          ? t('proxy.effectiveList', { list: eff.map(shortProxy).join(t('common.listSep')) })
+          : t('proxy.notConfiguredDirect')
       }
     } catch { /* ignore */ }
   } catch (err) {
@@ -1911,7 +1986,7 @@ async function runProxyTest(proxy) {
   const box = $('#proxy-test-result')
   if (!box) return
   box.innerHTML = ''
-  box.append(el('span', { class: 'muted', style: 'display:inline-flex;align-items:center;gap:6px' }, [el('span', { class: 'spinner' }), '测试中…（最多 ~12s/个）']))
+  box.append(el('span', { class: 'muted', style: 'display:inline-flex;align-items:center;gap:6px' }, [el('span', { class: 'spinner' }), t('proxy.testing')]))
   try {
     const r = await api('/api/proxy/test', {
       method: 'POST',
@@ -1919,13 +1994,13 @@ async function runProxyTest(proxy) {
     })
     box.innerHTML = ''
     if (!r.results.length) {
-      box.append(el('div', { class: 'muted' }, r.note || '当前未配置代理（直连）'))
+      box.append(el('div', { class: 'muted' }, r.note || t('proxy.notConfiguredDirect')))
       return
     }
     for (const res of r.results) {
       const head = res.ok
-        ? el('span', { class: 'badge ok' }, [icon('check', 11), '可用'])
-        : el('span', { class: 'badge err' }, [icon('x', 11), '不可用'])
+        ? el('span', { class: 'badge ok' }, [icon('check', 11), t('proxy.usable')])
+        : el('span', { class: 'badge err' }, [icon('x', 11), t('proxy.unusable')])
       const lines = [
         el('div', {}, [
           head,
@@ -1934,27 +2009,27 @@ async function runProxyTest(proxy) {
       ]
       if (res.ok) {
         lines.push(el('div', { class: 'muted' }, [
-          `出口 IP: ${res.ip || '?'}`,
-          res.country ? `（${res.country}）` : '',
-          ` · 延迟 ${res.latencyMs}ms`,
-          ` · 上游状态 ${res.codebuffStatus ?? '?'}`,
+          t('proxy.egressIp', { ip: res.ip || '?' }),
+          res.country ? t('proxy.countryParen', { country: res.country }) : '',
+          t('proxy.latencyMs', { ms: res.latencyMs }),
+          t('proxy.upstreamStatus', { status: res.codebuffStatus ?? '?' }),
         ].join('')))
       } else {
-        lines.push(el('div', { class: 'muted', style: 'color:var(--red)' }, `失败: ${res.error || '连接失败'}（${res.latencyMs}ms）`))
+        lines.push(el('div', { class: 'muted', style: 'color:var(--red)' }, t('proxy.testFailedRow', { msg: res.error || t('proxy.connectFailed'), ms: res.latencyMs })))
         if (res.hint) lines.push(el('div', { class: 'muted', style: 'margin-top:4px' }, res.hint))
       }
       box.append(el('div', { style: 'padding:8px 0;border-bottom:1px solid var(--border)' }, lines))
     }
   } catch (err) {
     box.innerHTML = ''
-    box.append(el('div', { class: 'muted', style: 'color:var(--red)' }, `测试失败: ${err.message}`))
+    box.append(el('div', { class: 'muted', style: 'color:var(--red)' }, t('proxy.testFailed', { msg: err.message })))
   }
 }
 
 function fmtMs(ms) {
-  if (ms == null) return '—'
+  if (ms == null) return t('common.none')
   const m = Math.floor(ms / 60000)
-  return `${m} 分钟`
+  return t('dur.minutes', { n: m })
 }
 
 /**
@@ -1965,11 +2040,11 @@ function fmtDurationMs(ms) {
   const n = Number(ms)
   if (!Number.isFinite(n) || n <= 0) return '0'
   const s = Math.floor(n / 1000)
-  if (s < 60) return `${s} 秒`
+  if (s < 60) return t('dur.seconds', { n: s })
   const m = Math.floor(s / 60)
-  if (m < 60) return `${m} 分 ${s % 60} 秒`
+  if (m < 60) return t('dur.minutesSeconds', { m, s: s % 60 })
   const h = Math.floor(m / 60)
-  return `${h} 时 ${m % 60} 分`
+  return t('dur.hoursMinutesShort', { h, m: m % 60 })
 }
 
 /** 时间戳 → 短格式（月-日 时:分），无值时 '—'。 */
@@ -1993,22 +2068,22 @@ function accountTimeCell(a) {
   const total = fmtDurationMs(a.scheduledMs)
   const running =
     a.currentSchedulingMs > 0
-      ? `本轮 ${fmtDurationMs(a.currentSchedulingMs)}`
+      ? t('account.round', { dur: fmtDurationMs(a.currentSchedulingMs) })
       : a.lastScheduledAt
-        ? `上次 ${fmtTime(a.lastScheduledAt)}`
-        : '未调度'
+        ? t('account.last', { time: fmtTime(a.lastScheduledAt) })
+        : t('account.notScheduled')
   const title = [
-    `导入：${a.importedAt ? new Date(a.importedAt).toLocaleString() : '未知'}`,
-    `凭证更新：${a.credentialUpdatedAt ? new Date(a.credentialUpdatedAt).toLocaleString() : '从未更新'}`,
-    `累计调度：${fmtDurationMs(a.scheduledMs)}`,
+    t('account.importedAt', { at: a.importedAt ? new Date(a.importedAt).toLocaleString() : t('common.unknown') }),
+    t('account.credentialUpdatedAt', { at: a.credentialUpdatedAt ? new Date(a.credentialUpdatedAt).toLocaleString() : t('account.neverUpdated') }),
+    t('account.totalScheduled', { dur: fmtDurationMs(a.scheduledMs) }),
     a.schedulingSince
-      ? `本轮自：${new Date(a.schedulingSince).toLocaleString()}`
+      ? t('account.roundSince', { at: new Date(a.schedulingSince).toLocaleString() })
       : null,
   ].filter(Boolean).join('\n')
   return el('td', { class: 'mono acct-time', style: 'font-size:11px', title }, [
-    el('div', {}, `导入 ${imported}`),
-    el('div', { class: 'muted' }, updated ? `更新 ${updated}` : '更新 —'),
-    el('div', { class: a.currentSchedulingMs > 0 ? '' : 'muted' }, `调度 ${total}`),
+    el('div', {}, t('account.importedShort', { at: imported })),
+    el('div', { class: 'muted' }, updated ? t('account.updatedShort', { at: updated }) : t('account.updatedShort', { at: t('common.none') })),
+    el('div', { class: a.currentSchedulingMs > 0 ? '' : 'muted' }, t('account.scheduledShort', { dur: total })),
     el('div', { class: 'muted', style: 'font-size:10px' }, running),
   ])
 }
@@ -2062,12 +2137,12 @@ async function renderModelSettings(view) {
   const card = el('div', { id: 'models-card', class: 'card', style: 'margin-top:12px' }, [
     el('div', { class: 'row spread' }, [
       el('div', {}, [
-        el('h3', { style: 'margin:0 0 2px' }, '模型管理'),
-        el('span', { class: 'muted' }, '内置目录 + 上游实时 + 自定义覆盖。上游新模型不用等发版——点「同步上游模型」自动拉取并更新 agent，或手动添加。'),
+        el('h3', { style: 'margin:0 0 2px' }, t('model.management')),
+        el('span', { class: 'muted' }, t('model.syncHint')),
       ]),
       isAdmin
         ? el('div', { class: 'row' }, [
-            el('button', { class: 'primary', onclick: syncUpstreamModels }, [icon('refresh', 14), '同步上游模型']),
+            el('button', { class: 'primary', onclick: syncUpstreamModels }, [icon('refresh', 14), t('model.syncUpstream')]),
           ])
         : null,
     ]),
@@ -2075,41 +2150,40 @@ async function renderModelSettings(view) {
       el('label', { class: 'switch', for: 'block-premium' }, [
         el('input', blockToggleAttrs),
         el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
-        el('span', { class: 'switch-status' }, blockPremium ? '已开启' : '已关闭'),
+        el('span', { class: 'switch-status' }, blockPremium ? t('common.on') : t('common.off')),
       ]),
-      el('span', { class: 'muted', style: 'font-size:12px' },
-        `屏蔽收费模型（pool=premium 如 gpt-5.6-luna / kimi / -max：免费账号用不了，从列表与调度彻底排除，避免占额度/触风控）`),
+      el('span', { class: 'muted', style: 'font-size:12px' }, t('model.blockPremium')),
     ]),
     upstream.accessTier
       ? el('div', { class: 'muted', style: 'margin-top:6px;font-size:12px' },
-          `上游实时目录（${upstream.models.length} 个）· 当前 accessTier: ${upstream.accessTier}`)
+          t('model.upstreamCatalog', { n: upstream.models.length, tier: upstream.accessTier }))
       : null,
     el('div', { class: 'table-wrap', style: 'margin-top:10px;max-height:280px;overflow:auto' }, [
       el('table', { style: 'font-size:12px' }, [
         el('thead', {}, el('tr', {}, [
-          el('th', {}, '模型 id'),
-          el('th', {}, '显示名'),
-          el('th', {}, '池'),
-          el('th', {}, '额度（今日 · FB/h）'),
-          el('th', {}, 'agent (base2)'),
-          el('th', {}, '兜底 agent (base3)'),
-          el('th', {}, '来源'),
-          isAdmin ? el('th', {}, '操作') : null,
+          el('th', {}, t('model.id')),
+          el('th', {}, t('model.displayName')),
+          el('th', {}, t('model.pool')),
+          el('th', {}, t('model.quotaHeader')),
+          el('th', {}, t('model.agentBase2')),
+          el('th', {}, t('model.fallbackAgentBase3')),
+          el('th', {}, t('model.source')),
+          isAdmin ? el('th', {}, t('common.actions')) : null,
         ])),
         el('tbody', {}, rows.map((m) => el('tr', {}, [
           el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.id),
           el('td', {}, m.display_name || m.displayName || '—'),
           el('td', {}, el('span', { class: 'badge', class: poolBadgeClass(m.pool) }, poolLabel(m.pool))),
           el('td', {}, fmtModelPrice(m)),
-          el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.agentId || m.agent_id || '—'),
-          el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.fallbackAgentId || m.fallback_agent_id || '—'),
+          el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.agentId || m.agent_id || t('common.none')),
+          el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.fallbackAgentId || m.fallback_agent_id || t('common.none')),
           el('td', {}, m.source === 'upstream'
-            ? el('span', { class: 'badge ok' }, '上游')
-            : el('span', { class: 'badge' }, '内置')),
+            ? el('span', { class: 'badge ok' }, t('model.sourceUpstream'))
+            : el('span', { class: 'badge' }, t('model.sourceBuiltin'))),
           isAdmin
             ? el('td', {}, el('button', {
                 class: 'icon danger',
-                title: '删除该模型（从列表与调度中移除）',
+                title: t('model.deleteTitle'),
                 onclick: () => removeCustomModel(m.id),
               }, icon('trash', 13)))
             : null,
@@ -2117,24 +2191,23 @@ async function renderModelSettings(view) {
       ]),
     ]),
     el('div', { style: 'margin-top:14px' }, [
-      el('label', { class: 'muted' }, '自定义模型（添加/编辑即自动保存，留空字段自动推导）'),
+      el('label', { class: 'muted' }, t('model.customLabel')),
       el('div', { id: 'custom-models-editor', style: 'margin-top:6px' }, buildCustomModelRows(data.models || [])),
       el('div', { class: 'row', style: 'margin-top:8px' }, [
         isAdmin
-          ? el('button', { onclick: () => addCustomModelRow() }, [icon('plus', 13), '添加模型'])
+          ? el('button', { onclick: () => addCustomModelRow() }, [icon('plus', 13), t('model.add')])
           : null,
-        el('span', { class: 'muted', style: 'font-size:12px' },
-          '同 id 会覆盖内置目录的显示名 / 池 / agent；agent 留空时按命名规则自动推导（base2-free-<模型名>）'),
+        el('span', { class: 'muted', style: 'font-size:12px' }, t('model.overrideHint')),
       ]),
     ]),
     ...(isAdmin && (data.hidden || []).length
       ? [el('div', { id: 'hidden-models-area', style: 'margin-top:14px;padding-top:12px;border-top:1px solid var(--border)' }, [
-          el('label', { class: 'muted' }, `已删除的模型（${data.hidden.length}）— 点击可恢复，恢复后重新出现在列表并可调度`),
+          el('label', { class: 'muted' }, t('model.hiddenArea', { n: data.hidden.length })),
           el('div', { class: 'hidden-badges row', style: 'margin-top:6px;gap:6px;flex-wrap:wrap' }, (data.hidden || []).map((id) =>
             el('span', { class: 'badge', style: 'display:inline-flex;align-items:center;gap:6px' }, [
               el('code', { style: 'font-family:var(--mono);font-size:11px' }, id),
               el('button', {
-                class: 'icon', title: '恢复该模型',
+                class: 'icon', title: t('model.restoreTitle'),
                 onclick: () => restoreCustomModel(id),
               }, icon('refresh', 12)),
             ]),
@@ -2163,11 +2236,11 @@ async function syncUpstreamModels() {
   try {
     upstream = await api('/api/models/upstream')
   } catch (err) {
-    toast('拉取上游失败: ' + err.message, true)
+    toast(t('model.fetchFail', { msg: err.message }), true)
     return
   }
   if (!upstream.models?.length) {
-    toast('上游暂无可用模型', true)
+    toast(t('model.noneUpstream'), true)
     return
   }
   try {
@@ -2203,10 +2276,10 @@ async function syncUpstreamModels() {
       body: JSON.stringify({ models: merged }),
     })
     // save() 会把写回的自定义条目自动解除 hidden——被隐藏的内置模型同步后自然拉回
-    toast(`已同步上游（自定义 ${r.models.length} 条，内置按 catalog 为准）`)
+    toast(t('model.syncDone', { n: r.models.length }))
     refreshModelSettingsCard()
   } catch (err) {
-    toast('同步失败: ' + err.message, true)
+    toast(t('model.syncFail', { msg: err.message }), true)
   }
 }
 
@@ -2214,7 +2287,7 @@ async function syncUpstreamModels() {
  * 重新「同步上游」会按最新上游拉回，不会永久丢失。
  * （用户手动添加的自定义模型在下方编辑器里删，那个是彻底移除。） */
 async function removeCustomModel(id, source) {
-  if (!confirm(`确定隐藏模型 ${id}？\n（内置模型隐藏后可恢复；重新同步上游会按最新列表拉回）`)) return
+  if (!confirm(t('model.hideConfirm', { id }))) return
   // 乐观 UI：点击瞬间先从表格移除该行、插入恢复区（不等待任何网络请求）
   const row = [...document.querySelectorAll('#models-card tbody tr')].find(
     (r) => (r.querySelector('td') || {}).textContent === id,
@@ -2227,7 +2300,7 @@ async function removeCustomModel(id, source) {
       method: 'POST',
       body: JSON.stringify({ id }),
     })
-    toast(`已隐藏模型 ${id}`)
+    toast(t('model.hidden', { id }))
   } catch (err) {
     // 失败：把行加回表格（用本地重建），并撤销恢复区，反馈错误
     toast(err.message, true)
@@ -2237,13 +2310,13 @@ async function removeCustomModel(id, source) {
 
 /** 彻底移除一个用户手动添加的自定义模型（回退内置目录，不会在同步时回来）。 */
 async function removeCustomOnlyModel(id) {
-  if (!confirm(`确定移除自定义模型 ${id}？\n（这是彻底删除，将回退到内置目录）`)) return
+  if (!confirm(t('model.removeConfirm', { id }))) return
   try {
     const r = await api('/api/models/custom/remove', {
       method: 'POST',
       body: JSON.stringify({ id }),
     })
-    toast(`已移除自定义模型 ${id}`)
+    toast(t('model.removed', { id }))
     refreshModelSettingsCard()
   } catch (err) {
     toast(err.message, true)
@@ -2254,7 +2327,7 @@ async function removeCustomOnlyModel(id) {
 async function restoreCustomModel(id) {
   // 乐观：先从恢复区移除徽章，再后台请求
   const badge = [...document.querySelectorAll('#models-card .badge')].find(
-    (b) => b.querySelector('.icon[title="恢复该模型"]') && b.textContent.includes(id),
+    (b) => b.querySelector(`.icon[title="${t('model.restoreTitle')}"]`) && b.textContent.includes(id),
   )
   if (badge) badge.remove()
   try {
@@ -2262,7 +2335,7 @@ async function restoreCustomModel(id) {
       method: 'POST',
       body: JSON.stringify({ id }),
     })
-    toast(`已恢复模型 ${id}`)
+    toast(t('model.restored', { id }))
     // 立即重建模型表卡（无需等重拉上游——本地已知恢复）
     refreshModelSettingsCard()
   } catch (err) {
@@ -2276,7 +2349,7 @@ function addRestoreBadge(card, id) {
   let area = card.querySelector('#hidden-models-area')
   if (!area) {
     area = el('div', { id: 'hidden-models-area', style: 'margin-top:14px;padding-top:12px;border-top:1px solid var(--border)' }, [
-      el('label', { class: 'muted' }, '已删除的模型 — 点击可恢复'),
+      el('label', { class: 'muted' }, t('model.hiddenAreaShort')),
       el('div', { class: 'hidden-badges row', style: 'margin-top:6px;gap:6px;flex-wrap:wrap' }, []),
     ])
     card.append(area)
@@ -2284,11 +2357,11 @@ function addRestoreBadge(card, id) {
   const label = area.querySelector('.muted')
   if (label) {
     const n = area.querySelectorAll('.badge').length
-    label.textContent = `已删除的模型（${n}）— 点击可恢复，恢复后重新出现在列表并可调度`
+    label.textContent = t('model.hiddenArea', { n })
   }
   area.querySelector('.hidden-badges').append(el('span', { class: 'badge', style: 'display:inline-flex;align-items:center;gap:6px' }, [
     el('code', { style: 'font-family:var(--mono);font-size:11px' }, id),
-    el('button', { class: 'icon', title: '恢复该模型', onclick: () => restoreCustomModel(id) }, icon('refresh', 12)),
+    el('button', { class: 'icon', title: t('model.restoreTitle'), onclick: () => restoreCustomModel(id) }, icon('refresh', 12)),
   ]))
 }
 
@@ -2296,7 +2369,7 @@ function addRestoreBadge(card, id) {
 function buildCustomModelRows(models) {
   const wrap = el('div', { class: 'cm-rows' })
   if (!models.length) {
-    wrap.append(el('div', { class: 'muted', style: 'padding:8px 0;font-size:12px' }, '还没有自定义模型——点「添加模型」开始'))
+    wrap.append(el('div', { class: 'muted', style: 'padding:8px 0;font-size:12px' }, t('model.emptyCustom')))
     return wrap
   }
   for (const m of models) wrap.append(customModelRow(m))
@@ -2306,13 +2379,13 @@ function buildCustomModelRows(models) {
 function customModelRow(m = {}) {
   const id = el('input', {
     class: 'mono',
-    placeholder: 'z-ai/glm-5.3-flash',
+    placeholder: t('model.idPlaceholder'),
     value: m.id || '',
     'data-f': 'id',
     style: 'flex:2;min-width:120px',
   })
   const name = el('input', {
-    placeholder: '显示名（可选）',
+    placeholder: t('model.displayNamePlaceholder'),
     value: m.displayName || m.display_name || '',
     'data-f': 'displayName',
     style: 'flex:1.2;min-width:90px',
@@ -2321,30 +2394,30 @@ function customModelRow(m = {}) {
     'data-f': 'pool',
     style: 'flex:1;min-width:90px',
   }, ['', 'daily', 'premium', 'referral', 'limited_offer'].map((p) =>
-    el('option', { value: p, selected: (m.pool || '') === p }, p ? poolLabel(p) : '池（默认）')))
+    el('option', { value: p, selected: (m.pool || '') === p }, p ? poolLabel(p) : t('model.poolDefault'))))
   const agent = el('input', {
     class: 'mono',
-    placeholder: 'base2-free-…（留空自动推导）',
+    placeholder: t('model.agentPlaceholder'),
     value: m.agentId || m.agent_id || '',
     'data-f': 'agentId',
     style: 'flex:2;min-width:140px',
   })
   const fbAgent = el('input', {
     class: 'mono',
-    placeholder: 'base3-free-…（兜底，可选）',
+    placeholder: t('model.fallbackAgentPlaceholder'),
     value: m.fallbackAgentId || m.fallback_agent_id || '',
     'data-f': 'fallbackAgentId',
     style: 'flex:2;min-width:140px',
   })
   const del = el('button', {
     class: 'icon danger',
-    title: '删除该模型（从列表与调度中移除）',
+    title: t('model.deleteTitle'),
     onclick: () => {
       const id = row.querySelector('[data-f="id"]')?.value?.trim()
       row.remove()
       const editor = $('#custom-models-editor')
       if (editor && !editor.querySelector('.cm-row')) {
-        editor.append(el('div', { class: 'muted', style: 'padding:8px 0;font-size:12px' }, '还没有自定义模型——点「添加模型」开始'))
+        editor.append(el('div', { class: 'muted', style: 'padding:8px 0;font-size:12px' }, t('model.emptyCustom')))
       }
       // 移除这条自定义模型（彻底删除，回退内置目录；同步不会把它加回来）
       autoSaveCustomModels()
@@ -2385,7 +2458,7 @@ async function autoSaveCustomModels() {
       body: JSON.stringify({ models }),
     })
   } catch (err) {
-    toast('保存模型失败: ' + err.message, true)
+    toast(t('model.saveFail', { msg: err.message }), true)
   }
 }
 
@@ -2416,17 +2489,18 @@ function poolBadgeClass(pool) {
   return 'badge'
 }
 
-/** 池类型中文显示 */
+/** 池类型显示名（走 i18n；GLM 5.3 是模型名，两个语种同文） */
 const POOL_LABELS = {
-  premium: '高级',
-  daily: '每日',
-  referral: '邀请',
-  limited_offer: '限时',
-  glm_v53_flash: 'GLM 5.3',
+  premium: 'model.poolPremium',
+  daily: 'model.poolDaily',
+  referral: 'model.poolReferral',
+  limited_offer: 'model.poolLimitedOffer',
+  glm_v53_flash: 'model.poolGlmV53Flash',
 }
 function poolLabel(pool) {
-  if (!pool) return '—'
-  return POOL_LABELS[pool] || pool
+  if (!pool) return t('common.none')
+  const key = POOL_LABELS[pool]
+  return key ? t(key) : pool
 }
 
 /**
@@ -2450,32 +2524,37 @@ function fmtFreebucks(fb, currentModel, lastRefund) {
   const balanceMin = minutes(fb.balance)
   const dailyMin = fb.daily ? minutes(fb.daily.remaining) : null
   const tip = [
-    `余额 ${fmtNum(fb.balance)} Freebucks`,
-    balanceMin != null ? `≈ 可用 ${fmtDuration(balanceMin)}（${currentModel} 单价 ${fmtNum(price)}/h）` : null,
-    fb.daily
-      ? `每日池 剩余 ${fmtNum(fb.daily.remaining)}/${fmtNum(fb.daily.limit)} Freebucks` +
-        (dailyMin != null ? ` ≈ ${fmtDuration(dailyMin)}` : '') +
-        `（重置 ${reset ? reset.toLocaleString() : '太平洋午夜'}）`
+    t('quota.balanceAmount', { amount: fmtNum(fb.balance) }),
+    balanceMin != null
+      ? t('quota.availablePrice', { dur: fmtDuration(balanceMin), model: currentModel, price: fmtNum(price) })
       : null,
-    `计费方式：一次 admit = 买断一小时（整小时单价当场预扣，回执带 expiresAt）`,
-    `付费时段内可无限复用，边际成本 0；早退 DELETE 只回 pending，实测未到账`,
-    fb.wallet && fb.wallet.balance ? `钱包 ${fmtNum(fb.wallet.balance)}` : null,
-    fb.quotaExempt ? '服务端配额豁免' : null,
+    fb.daily
+      ? t('quota.dailyPoolLeft', { left: fmtNum(fb.daily.remaining), limit: fmtNum(fb.daily.limit) }) +
+        (dailyMin != null ? t('quota.approx', { dur: fmtDuration(dailyMin) }) : '') +
+        t('quota.resetAtParen', { at: reset ? reset.toLocaleString() : t('quota.pacificMidnight') })
+      : null,
+    t('quota.billingExpiresAt'),
+    t('quota.reusableNotCredited'),
+    fb.wallet && fb.wallet.balance ? t('quota.walletAmount', { amount: fmtNum(fb.wallet.balance) }) : null,
+    fb.quotaExempt ? t('quota.exempt') : null,
     lastRefund && lastRefund.refund != null
-      ? `上次早退回执：Freebucks 退回 ${fmtNum(lastRefund.refund)}（期望 ${lastRefund.expected != null ? fmtNum(lastRefund.expected) : '—'}）`
+      ? t('quota.lastRefund', {
+          refund: fmtNum(lastRefund.refund),
+          expected: lastRefund.expected != null ? fmtNum(lastRefund.expected) : t('common.none'),
+        })
       : null,
   ].filter(Boolean).join('\n')
   const low = price != null && !fb.quotaExempt && Number(fb.balance) < price
   return el('div', { class: 'mono', style: 'font-size:12px', title: tip }, [
-    el('span', { class: low ? 'badge err' : 'badge ok' }, `${fmtNum(fb.balance)} FB`),
-    price != null ? el('span', { class: 'muted' }, ` · ${fmtNum(price)}/h`) : null,
+    el('span', { class: low ? 'badge err' : 'badge ok' }, t('quota.balanceShort', { amount: fmtNum(fb.balance) })),
+    price != null ? el('span', { class: 'muted' }, t('quota.priceShort', { price: fmtNum(price) })) : null,
     balanceMin != null
-      ? el('span', { class: 'muted' }, ` · ≈${fmtDuration(balanceMin)}`)
+      ? el('span', { class: 'muted' }, t('quota.approxShort', { dur: fmtDuration(balanceMin) }))
       : null,
     fb.daily
       ? el('div', { class: 'muted', style: 'font-size:11px' },
-          `今日剩余 ${fmtNum(fb.daily.remaining)}/${fmtNum(fb.daily.limit)} FB` +
-          (dailyMin != null ? `（≈${fmtDuration(dailyMin)}）` : ''))
+          t('quota.todayLeftShort', { left: fmtNum(fb.daily.remaining), limit: fmtNum(fb.daily.limit) }) +
+          (dailyMin != null ? t('quota.approxParen', { dur: fmtDuration(dailyMin) }) : ''))
       : null,
   ])
 }
@@ -2483,12 +2562,12 @@ function fmtFreebucks(fb, currentModel, lastRefund) {
 /** 把分钟数渲染成人读时长：<1 分钟给秒，否则给「X 分」「X 小时 Y 分」。 */
 function fmtDuration(minutes) {
   const m = Number(minutes)
-  if (!Number.isFinite(m) || m <= 0) return '0 分钟'
-  if (m < 1) return `${Math.max(1, Math.round(m * 60))} 秒`
-  if (m < 60) return `${Math.round(m)} 分钟`
+  if (!Number.isFinite(m) || m <= 0) return t('dur.minutes', { n: 0 })
+  if (m < 1) return t('dur.seconds', { n: Math.max(1, Math.round(m * 60)) })
+  if (m < 60) return t('dur.minutes', { n: Math.round(m) })
   const h = Math.floor(m / 60)
   const rest = Math.round(m - h * 60)
-  return rest ? `${h} 小时 ${rest} 分` : `${h} 小时`
+  return rest ? t('dur.hoursMinutes', { h, m: rest }) : t('dur.hours', { h })
 }
 
 function fmtNum(n) {
@@ -2519,7 +2598,7 @@ function quotaBadgeClass(m) {
 function fmtQuota(quota, fb) {
   const byModel = quota?.byModel || {}
   if (!Object.keys(byModel).length) {
-    return el('span', { class: 'muted', title: '尚无额度数据：账号首次 admit（发起对话/创建 session）后上游才会返回；可点行内「检测」查看' }, '—')
+    return el('span', { class: 'muted', title: t('quota.noDataTip') }, t('common.none'))
   }
   // 计费口径（2026-09）：上游按**会话实际占用时长**结算 Freebucks，每模型单价
   // 由 freebucks.prices 给出（N FB/小时）。所以这里显示 FB，不再显示「次数」。
@@ -2544,18 +2623,18 @@ function fmtQuota(quota, fb) {
     const tip = [
       model,
       hasPrice
-        ? `单价 ${fmtNum(price)} FB/小时（一次 admit 买断一小时，时段内复用不额外计费）`
-        : '上游未返回该模型单价（freebucks.prices 无此模型）',
+        ? t('quota.priceTip', { price: fmtNum(price) })
+        : t('quota.noPriceTip'),
       minutes != null
-        ? `今日池余额 ${fmtNum(poolLeft)} FB → ≈ 可用 ${fmtDuration(minutes)}`
+        ? t('quota.poolLeftTip', { left: fmtNum(poolLeft), dur: fmtDuration(minutes) })
         : null,
       Number.isFinite(q.limit)
-        ? `上游另有请求额度 ${fmtNum(q.recentCount)}/${q.limit}（${q.poolLabel || 'Daily'}）`
+        ? t('quota.requestQuotaTip', { used: fmtNum(q.recentCount), limit: q.limit, pool: q.poolLabel || t('quota.dailyPool') })
         : null,
-      q.resetAt ? `重置 ${fmtReset(q.resetAt, q.resetTimeZone)} · ${fmtCountdown(q.resetAt)}` : null,
+      q.resetAt ? t('quota.resetLine', { at: fmtReset(q.resetAt, q.resetTimeZone), in: fmtCountdown(q.resetAt) }) : null,
     ].filter(Boolean).join('\n')
     const label = hasPrice
-      ? (price > 0 ? `${fmtNum(price)} FB/h` : '免费')
+      ? (price > 0 ? t('quota.pricePerHour', { price: fmtNum(price) }) : t('quota.free'))
       : '—'
     // 池空时不要再输出「≈0 分钟」这种噪音；直接说明池子已空更清楚。
     const exhausted = poolLeft != null && poolLeft <= 0 && hasPrice && price > 0
@@ -2567,7 +2646,7 @@ function fmtQuota(quota, fb) {
       el('span', { class: 'muted' }, `${shortModel(model)} `),
       label,
       exhausted
-        ? el('span', { class: 'muted' }, ' · 池空')
+        ? el('span', { class: 'muted' }, t('quota.poolEmpty'))
         : (minutes != null && minutes >= 1
             ? el('span', { class: 'muted' }, ` · ≈${fmtDuration(minutes)}`)
             : null),
@@ -2578,7 +2657,7 @@ function fmtQuota(quota, fb) {
   return el('div', {}, [
     el('div', {}, chips),
     reset ? el('div', { class: 'muted', style: 'margin-top:2px' }, [
-      `重置 ${fmtReset(reset, resetTz)} · ${fmtCountdown(reset)}`,
+      t('quota.resetLine', { at: fmtReset(reset, resetTz), in: fmtCountdown(reset) }),
     ]) : null,
   ])
 }
@@ -2593,9 +2672,11 @@ function fmtModelPrice(m) {
   const hasPrice = Number.isFinite(price)
   const tip = [
     m.id,
-    hasPrice ? `单价 ${fmtNum(price)} FB/小时（按会话实际占用时长结算）` : '上游未返回该模型单价',
-    m.limit != null ? `上游请求额度 ${fmtNum(m.recentCount)}/${m.limit}（${poolLabel(m.pool)}）` : null,
-    m.resetAt ? `重置 ${fmtReset(m.resetAt, m.resetTimeZone)} · ${fmtCountdown(m.resetAt)}` : null,
+    hasPrice
+      ? t('quota.priceTipBilling', { price: fmtNum(price) })
+      : t('quota.noPriceShort'),
+    m.limit != null ? t('quota.requestQuotaTip', { used: fmtNum(m.recentCount), limit: m.limit, pool: poolLabel(m.pool) }) : null,
+    m.resetAt ? t('quota.resetLine', { at: fmtReset(m.resetAt, m.resetTimeZone), in: fmtCountdown(m.resetAt) }) : null,
   ].filter(Boolean).join('\n')
   if (!hasPrice) {
     return m.limit != null
@@ -2604,7 +2685,7 @@ function fmtModelPrice(m) {
   }
   const cls = price <= 0 ? 'ok' : (price >= 50 ? 'err' : price >= 25 ? 'warn' : 'ok')
   return el('span', { class: `badge ${cls}`, title: tip },
-    price > 0 ? `${fmtNum(price)} FB/h` : '免费')
+    price > 0 ? t('quota.pricePerHour', { price: fmtNum(price) }) : t('quota.free'))
 }
 
 function firstReset(byModel) {
@@ -2640,7 +2721,7 @@ function fmtReset(iso, timeZone) {
         hour12: false,
       }).formatToParts(d)
       const get = (type) => (parts.find((p) => p.type === type) || {}).value || '00'
-      return `${local}（上游 ${get('month')}-${get('day')} ${get('hour')}:${get('minute')} ${tzShort(timeZone)}）`
+      return t('quota.resetLocalWithUpstream', { local, upstream: `${get('month')}-${get('day')} ${get('hour')}:${get('minute')} ${tzShort(timeZone)}` })
     } catch {
       // fall through to local only
     }
@@ -2653,15 +2734,15 @@ function fmtCountdown(iso) {
   if (!iso) return ''
   const ms = new Date(iso).getTime() - Date.now()
   if (!Number.isFinite(ms)) return ''
-  if (ms <= 0) return '即将重置'
+  if (ms <= 0) return t('quota.resetSoon')
   const totalMin = Math.floor(ms / 60000)
   const h = Math.floor(totalMin / 60)
   const m = totalMin % 60
   if (h >= 24) {
     const d = Math.floor(h / 24)
-    return `${d} 天 ${h % 24} 小时后`
+    return t('dur.daysHoursAfter', { d, h: h % 24 })
   }
-  return `${h} 小时 ${m} 分后`
+  return t('dur.hoursMinutesAfter', { h, m })
 }
 
 /** IANA 时区名 → 简短标识（America/Los_Angeles → LA）。 */
@@ -2685,6 +2766,35 @@ function shortModel(model) {
   return m[m.length - 1] || model
 }
 
+/**
+ * 展示用的模型名：优先后端解析好的可读名（modelDisplayName），
+ * 其次把目录 key（m-00032eaeec）换成显示名，最后才回落到原值。
+ *
+ * ⚠️ 上游回执侧（session.model / rateLimitsByModel / prices）用的全是
+ * **目录 key**，直接显示就是 `m-00032eaeec` —— 用户看不出是哪个模型。
+ * 涉及**请求/寻址**的地方绝不能用这个函数（那里要的是 key 本身）。
+ * 桥接依据见
+ * .agents/notes/implemented/bug-fix/2026-10-02-catalog-key-display-name-bridge.md
+ * @param {{ session?: { model?: string }, modelDisplayName?: string } | null} a 账号行
+ * @returns {string}
+ */
+function modelLabel(a) {
+  const sess = a?.session
+  const key = sess?.model
+  if (!key) return '—'
+  // 后端已解析的可读名优先（session.modelDisplayName），
+  // 再用本地模型列表兜底，最后才落到短 key。
+  const named = sess?.modelDisplayName || displayNameFor(key)
+  if (!named || named === key) return shortModel(key)
+  return named
+}
+
+/** 目录 key → 显示名（用模型列表里已有的条目做本地兜底）。 */
+function displayNameFor(key) {
+  const hit = (state.models || []).find((m) => m.id === key)
+  return hit?.display_name || hit?.displayName || null
+}
+
 function colorFor(email) {
   let h = 0
   for (const ch of String(email)) h = (h * 31 + ch.charCodeAt(0)) % 360
@@ -2697,8 +2807,8 @@ function colorFor(email) {
  * 会先有界等待它结束（不硬掐断），超时仍在途则如实提示"已中断在途回复"。
  */
 async function closeAccountSession(a, btn) {
-  const label = a.session?.model ? `会话（${shortModel(a.session.model)}）` : '会话'
-  const tip = `确认关闭 ${a.email} 的${label}？\n\n会立即向上游发起早退 DELETE 停止计费；\n若此刻有回复正在传输，会先等它结束（最多 10 秒），超时才中断。`
+  const label = a.session?.model ? t('account.sessionWithModel', { model: modelLabel(a) }) : t('account.session')
+  const tip = t('account.closeSessionConfirm', { email: a.email, label })
   if (!confirm(tip)) return
   const restore = withButtonLoading(btn)
   try {
@@ -2707,11 +2817,11 @@ async function closeAccountSession(a, btn) {
       body: JSON.stringify({ waitInFlightMs: 10000 }),
     })
     if (r.ok) {
-      const extra = r.refund != null ? `，退款 ${fmtNum(r.refund)} FB` : ''
-      const cut = r.interrupted ? '（在途回复被中断）' : ''
-      toast(`✅ 已关闭 ${a.email} 的会话${extra}${cut}`)
+      const extra = r.refund != null ? t('account.refundSuffix', { n: fmtNum(r.refund) }) : ''
+      const cut = r.interrupted ? t('account.interrupted') : ''
+      toast(t('account.sessionClosed', { email: a.email, extra, cut }))
     } else {
-      toast(`⚠️ 会话未关闭成功：${r.error || '上游拒绝'}（句柄已记录，服务重启时会自动重试退款）`, true)
+      toast(t('account.sessionCloseFailed', { msg: r.error || t('account.upstreamRejected') }), true)
     }
     refreshAccountsCard()
   } catch (err) {
@@ -2723,14 +2833,14 @@ async function closeAccountSession(a, btn) {
 
 async function clearCooldown(email) {
   await api(`/api/accounts/${encodeURIComponent(email)}/cooldown/clear`, { method: 'POST' })
-  toast('已解除冷却')
+  toast(t('account.cooldownCleared'))
   refreshAccountsCard()
 }
 
 async function removeAccount(email) {
-  if (!confirm(`确认删除账号 ${email}？`)) return
+  if (!confirm(t('account.deleteConfirm', { email }))) return
   await api(`/api/accounts/${encodeURIComponent(email)}`, { method: 'DELETE' })
-  toast('已删除')
+  toast(t('account.deleted'))
   refreshOverviewAfterAccountChange()
 }
 
@@ -2746,8 +2856,8 @@ function downloadTextFile(name, content, mime = 'application/json') {
 async function openCredentialModal(account) {
   const backdrop = el('div', { class: 'modal-backdrop' })
   const body = el('div', { class: 'card modal' }, [
-    el('h3', {}, `账号凭证 · ${account.email}`),
-    el('p', { class: 'muted', style: 'display:inline-flex;align-items:center;gap:6px' }, [el('span', { class: 'spinner' }), '正在读取…']),
+    el('h3', {}, t('account.credentialTitle', { email: account.email })),
+    el('p', { class: 'muted', style: 'display:inline-flex;align-items:center;gap:6px' }, [el('span', { class: 'spinner' }), t('common.loading')]),
   ])
   backdrop.append(body)
   document.body.append(backdrop)
@@ -2758,7 +2868,7 @@ async function openCredentialModal(account) {
     res = await api(`/api/accounts/${encodeURIComponent(account.key)}/credential`)
   } catch (err) {
     body.innerHTML = ''
-    body.append(el('h3', {}, '读取失败'), el('p', { class: 'muted' }, err.message))
+    body.append(el('h3', {}, t('account.readFailed')), el('p', { class: 'muted' }, err.message))
     return
   }
   const cred = res.credential
@@ -2767,8 +2877,8 @@ async function openCredentialModal(account) {
 
   body.innerHTML = ''
   body.append(
-    el('h3', {}, `账号凭证 · ${cred.email}`),
-    el('p', { class: 'muted' }, '凭据 JSON 可直接用于导入到其他 Freebuff Proxy 实例，或重新粘贴到「导入账号」。明文显示，仅供迁移/备份。'),
+    el('h3', {}, t('account.credentialTitle', { email: cred.email })),
+    el('p', { class: 'muted' }, t('account.credentialHint')),
     el('textarea', {
       id: 'cred-view',
       rows: 12,
@@ -2778,10 +2888,10 @@ async function openCredentialModal(account) {
     el('div', { class: 'row', style: 'margin-top:12px' }, [
       el('button', { class: 'primary', onclick: async () => {
         await navigator.clipboard.writeText(json).catch(() => {})
-        toast('已复制完整凭据 JSON')
-      } }, [icon('copy', 14), '复制 JSON']),
-      el('button', { onclick: () => downloadTextFile(filename, json) }, [icon('download', 14), '下载 JSON']),
-      el('button', { onclick: () => backdrop.remove() }, '关闭'),
+        toast(t('account.credentialCopied'))
+      } }, [icon('copy', 14), t('account.copyJson')]),
+      el('button', { onclick: () => downloadTextFile(filename, json) }, [icon('download', 14), t('account.downloadJson')]),
+      el('button', { onclick: () => backdrop.remove() }, t('common.close')),
     ]),
   )
   $('#cred-view').value = json
@@ -2796,8 +2906,8 @@ function shortProxy(proxy) {
 function openAddAccount() {
   const backdrop = el('div', { class: 'modal-backdrop' })
   const body = el('div', { class: 'card modal' }, [
-    el('h3', {}, '添加 Freebuff 账号（浏览器登录）'),
-    el('p', { class: 'muted', style: 'display:inline-flex;align-items:center;gap:6px' }, [el('span', { class: 'spinner' }), '服务端正在向 Freebuff 申请登录链接…']),
+    el('h3', {}, t('account.addTitle')),
+    el('p', { class: 'muted', style: 'display:inline-flex;align-items:center;gap:6px' }, [el('span', { class: 'spinner' }), t('account.requestingLoginUrl')]),
   ])
   backdrop.append(body)
   document.body.append(backdrop)
@@ -2806,20 +2916,20 @@ function openAddAccount() {
   api('/api/accounts/login', { method: 'POST' }).then(({ flow }) => {
     body.innerHTML = ''
     body.append(
-      el('h3', {}, '添加 Freebuff 账号（浏览器登录）'),
-      el('p', { class: 'muted' }, '在你自己电脑的浏览器打开下面的链接并完成登录（容器内不会打开浏览器）：'),
+      el('h3', {}, t('account.addTitle')),
+      el('p', { class: 'muted' }, t('account.openInBrowser')),
       el('div', { class: 'flow-url' }, flow.loginUrl),
       el('div', { class: 'row' }, [
-        el('a', { style: 'display:inline-block', href: flow.loginUrl, target: '_blank', rel: 'noopener' }, el('button', { class: 'primary' }, [icon('globe', 14), '打开链接并登录'])),
-        el('span', { class: 'muted' }, '完成登录后本窗口会自动刷新'),
+        el('a', { style: 'display:inline-block', href: flow.loginUrl, target: '_blank', rel: 'noopener' }, el('button', { class: 'primary' }, [icon('globe', 14), t('account.openLink')])),
+        el('span', { class: 'muted' }, t('account.autoRefresh')),
       ]),
-      el('p', { id: 'flow-status', style: 'margin-top:12px', class: 'muted' }, '等待登录回调…'),
-      el('button', { style: 'margin-top:8px', onclick: () => { api(`/api/accounts/login/${flow.id}/cancel`, { method: 'POST' }).catch(() => {}); backdrop.remove() } }, '取消'),
+      el('p', { id: 'flow-status', style: 'margin-top:12px', class: 'muted' }, t('account.waitingCallback')),
+      el('button', { style: 'margin-top:8px', onclick: () => { api(`/api/accounts/login/${flow.id}/cancel`, { method: 'POST' }).catch(() => {}); backdrop.remove() } }, t('common.cancel')),
     )
     pollFlow(flow.id, body, backdrop)
   }).catch((err) => {
     body.innerHTML = ''
-    body.append(el('h3', {}, '发起登录失败'), el('p', { class: 'muted' }, err.message))
+    body.append(el('h3', {}, t('account.loginStartFailed')), el('p', { class: 'muted' }, err.message))
   })
 }
 
@@ -2830,17 +2940,17 @@ async function pollFlow(id, body, backdrop) {
     if (flow.status === 'done') {
       if (statusEl) {
         statusEl.textContent = ''
-        statusEl.append(el('span', { class: 'badge ok' }, `登录成功：${flow.user?.email || ''}${flow.user?.id ? `（ID ${flow.user.id}）` : ''}`))
+        statusEl.append(el('span', { class: 'badge ok' }, t('account.loginSuccess', { email: flow.user?.email || '', id: flow.user?.id ? t('account.loginIdSuffix', { id: flow.user.id }) : '' })))
       }
-      toast(`账号 ${flow.user?.email} 已添加，正在探测上游…`)
+      toast(t('account.addedProbing', { email: flow.user?.email }))
       setTimeout(() => { backdrop.remove(); api('/api/accounts/probe', { method: 'POST' }).catch(() => {}).then(refreshOverviewAfterAccountChange) }, 1200)
       return
     }
     if (flow.status === 'expired' || flow.status === 'cancelled') {
-      if (statusEl) statusEl.textContent = flow.error || '已取消，请重新发起'
+      if (statusEl) statusEl.textContent = flow.error || t('account.loginCancelled')
       return
     }
-    if (statusEl) statusEl.textContent = '等待登录回调…（服务端正在轮询）'
+    if (statusEl) statusEl.textContent = t('account.waitingCallbackPolling')
   } catch {
     // transient; keep polling
   }
@@ -2855,21 +2965,21 @@ function openLoginFlow(f) {
 function openImportModal() {
   const backdrop = el('div', { class: 'modal-backdrop' })
   const body = el('div', { class: 'card modal' }, [
-    el('h3', {}, '导入账号'),
-    el('p', { class: 'muted' }, '粘贴 credentials JSON（从旧环境导出；proxy 为可选专属出口代理）：'),
+    el('h3', {}, t('account.import')),
+    el('p', { class: 'muted' }, t('account.importJsonHint')),
     el('textarea', { id: 'import-json', rows: 8, placeholder: '{\n  "email": "you@example.com",\n  "authToken": "...",\n  "proxy": "http://127.0.0.1:7890"\n}' }),
     el('div', { class: 'row', style: 'margin-top:12px' }, [
       el('button', { class: 'primary', onclick: async () => {
         try {
           const json = $('#import-json').value
           await api('/api/accounts/import', { method: 'POST', body: JSON.stringify({ json }) })
-          toast('导入成功，正在探测上游…')
+          toast(t('account.importedProbing'))
           backdrop.remove()
           try { await api('/api/accounts/probe', { method: 'POST' }) } catch { /* ignore */ }
           refreshOverviewAfterAccountChange()
         } catch (err) { toast(err.message, true) }
-      } }, [icon('box', 14), '导入']),
-      el('button', { onclick: () => backdrop.remove() }, '取消'),
+      } }, [icon('box', 14), t('account.import')]),
+      el('button', { onclick: () => backdrop.remove() }, t('common.cancel')),
     ]),
   ])
   backdrop.append(body)
@@ -2898,41 +3008,41 @@ async function refreshUsersTable(view) {
 async function renderUsers(view) {
   view.innerHTML = ''
   view.append(el('div', { class: 'row spread', style: 'margin-bottom:16px' }, [
-    el('h2', { style: 'margin:0' }, '用户管理'),
+    el('h2', { style: 'margin:0' }, t('user.management')),
     // 局部刷新必须是"原地更新"：早先直接 renderUsers(view) 会把 view 整个清空重渲染，
     // 用户看到的是"又新出一条栏目"（而它并不是真的刷新）。
-    el('button', { class: 'muted', onclick: () => refreshUsersTable(view) }, [icon('refresh', 13), '局部刷新']),
+    el('button', { class: 'muted', onclick: () => refreshUsersTable(view) }, [icon('refresh', 13), t('user.softRefresh')]),
   ]))
   state.users = (await api('/api/users')).data
 
   const table = el('div', { class: 'table-wrap', id: 'users-table' }, [
     el('table', {}, [
-      el('thead', {}, el('tr', {}, ['用户名', '角色', 'API Key', '操作'].map((t) => el('th', {}, t)))),
+      el('thead', {}, el('tr', {}, [t('user.username'), t('user.role'), t('user.apiKey'), t('common.actions')].map((h) => el('th', {}, h)))),
       el('tbody', {}, state.users.map((u, i) => {
         return el('tr', { class: 'row-in', style: `animation-delay:${i * 40}ms` }, [
           el('td', {}, [
             u.username,
-            u.username === state.me.username ? el('span', { class: 'muted', style: 'margin-left:4px' }, '(我)') : null,
+            u.username === state.me.username ? el('span', { class: 'muted', style: 'margin-left:4px' }, t('user.selfBadge')) : null,
           ]),
           el('td', {}, u.role === 'admin' ? el('span', { class: 'badge admin' }, 'admin') : el('span', { class: 'badge' }, 'user')),
           el('td', {}, el('div', { class: 'row' }, [
             el('code', { class: 'mono muted', style: 'font-size:12px' }, maskKey(u.apiKey)),
-            el('button', { class: 'icon', title: '复制完整 Key', onclick: async () => { await navigator.clipboard.writeText(u.apiKey).catch(() => {}); toast('已复制完整 Key') } }, icon('copy', 13)),
+            el('button', { class: 'icon', title: t('user.copyFullKey'), onclick: async () => { await navigator.clipboard.writeText(u.apiKey).catch(() => {}); toast(t('user.keyCopied')) } }, icon('copy', 13)),
             el('button', { onclick: async () => {
-              if (!confirm(`重置 ${u.username} 的 API Key？旧 Key 立即失效`)) return
+              if (!confirm(t('user.resetKeyConfirm', { name: u.username }))) return
               const r = await api(`/api/users/${encodeURIComponent(u.username)}/reset-key`, { method: 'POST' })
-              toast(`新 Key: ${r.apiKey}`)
+              toast(t('user.newKey', { key: r.apiKey }))
               renderUsers(view)
-            } }, '重置'),
+            } }, t('common.reset')),
           ])),
           el('td', {}, el('div', { class: 'row' }, [
-            el('button', { class: 'muted', onclick: () => openUserModal(u, view) }, '改密'),
+            el('button', { class: 'muted', onclick: () => openUserModal(u, view) }, t('user.changePassword')),
             u.username !== state.me.username
               ? el('button', { class: 'danger', onclick: async () => {
-                  if (!confirm(`删除用户 ${u.username}？`)) return
+                  if (!confirm(t('user.deleteConfirm', { name: u.username }))) return
                   await api(`/api/users/${encodeURIComponent(u.username)}`, { method: 'DELETE' })
                   renderUsers(view)
-                } }, '删除')
+                } }, t('common.delete'))
               : null,
           ])),
         ])
@@ -2942,11 +3052,11 @@ async function renderUsers(view) {
   view.append(el('div', { class: 'card', style: 'padding:0;overflow:hidden;margin-bottom:16px' }, table))
 
   const form = el('div', { class: 'card', id: 'users-new-card' }, [
-    el('h3', { style: 'margin:0 0 8px' }, '新建用户'),
+    el('h3', { style: 'margin:0 0 8px' }, t('user.newUser')),
     el('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fit,minmax(180px,1fr))' }, [
-      el('div', {}, [el('label', {}, '用户名'), el('input', { id: 'nu-user', placeholder: 'alice' })]),
-      el('div', {}, [el('label', {}, '初始密码'), el('input', { id: 'nu-pass', placeholder: '≥6 位' })]),
-      el('div', {}, [el('label', {}, '角色'), el('select', { id: 'nu-role' }, [el('option', { value: 'user' }, 'user'), el('option', { value: 'admin' }, 'admin')])]),
+      el('div', {}, [el('label', {}, t('user.username')), el('input', { id: 'nu-user', placeholder: 'alice' })]),
+      el('div', {}, [el('label', {}, t('user.initialPassword')), el('input', { id: 'nu-pass', placeholder: t('user.passwordPlaceholder') })]),
+      el('div', {}, [el('label', {}, t('user.role')), el('select', { id: 'nu-role' }, [el('option', { value: 'user' }, 'user'), el('option', { value: 'admin' }, 'admin')])]),
     ]),
     el('div', { style: 'margin-top:14px' }),
     el('button', { class: 'primary', onclick: async () => {
@@ -2959,10 +3069,10 @@ async function renderUsers(view) {
             role: $('#nu-role').value,
           }),
         })
-        toast(`已创建 ${r.user.username}，API Key: ${r.user.apiKey}`)
+        toast(t('user.created', { name: r.user.username, key: r.user.apiKey }))
         renderUsers(view)
       } catch (err) { toast(err.message, true) }
-    } }, [icon('plus', 14), '创建用户']),
+    } }, [icon('plus', 14), t('user.create')]),
   ])
   view.append(form)
 }
@@ -2975,8 +3085,8 @@ function maskKey(key) {
 function openUserModal(u, view) {
   const backdrop = el('div', { class: 'modal-backdrop' })
   const body = el('div', { class: 'card modal' }, [
-    el('h3', {}, `修改 ${u.username} 的密码`),
-    el('label', {}, '新密码'),
+    el('h3', {}, t('user.changePasswordTitle', { name: u.username })),
+    el('label', {}, t('user.newPassword')),
     el('input', { id: 'pw-new', type: 'password' }),
     el('div', { class: 'row', style: 'margin-top:12px' }, [
       el('button', { class: 'primary', onclick: async () => {
@@ -2985,11 +3095,11 @@ function openUserModal(u, view) {
             method: 'POST',
             body: JSON.stringify({ password: $('#pw-new').value }),
           })
-          toast('密码已更新')
+          toast(t('user.passwordUpdated'))
           backdrop.remove()
         } catch (err) { toast(err.message, true) }
-      } }, [icon('check', 14), '保存']),
-      el('button', { onclick: () => backdrop.remove() }, '取消'),
+      } }, [icon('check', 14), t('common.save')]),
+      el('button', { onclick: () => backdrop.remove() }, t('common.cancel')),
     ]),
   ])
   backdrop.append(body)
@@ -3021,9 +3131,9 @@ async function loadPlaygroundModels() {
       upstreamIds = new Set(list.upstreamModelIds)
       state.upstreamModelIds = list.upstreamModelIds
     }
-    if (!models.length) note = '上游目录为空：请确认账号已导入并完成一次探测'
+    if (!models.length) note = t('playground.catalogEmpty')
   } catch (err) {
-    note = '模型列表加载失败：' + err.message + '（可点总览页「一键刷新」后重试）'
+    note = t('playground.catalogLoadFail', { msg: err.message })
   }
   // 排序：上游确有额度的在前（可直接用），其余按 id 稳定排序
   const scored = models.map((m) => ({ ...m, hasQuota: upstreamIds.has(m.id) }))
@@ -3036,34 +3146,34 @@ async function renderPlayground(view) {
   const { models, note, upstreamCount } = await loadPlaygroundModels()
 
   view.append(el('div', { class: 'row spread', style: 'margin-bottom:16px' }, [
-    el('h2', { style: 'margin:0' }, '测试对话'),
-    el('span', { class: 'muted' }, '经 /v1/chat/completions 真实转发（流式）'),
+    el('h2', { style: 'margin:0' }, t('playground.title')),
+    el('span', { class: 'muted' }, t('playground.subtitle')),
   ]))
   const defaultModel = models.find((m) => m.id === 'deepseek/deepseek-v4-flash') || models[0]
   const card = el('div', { class: 'card' }, [
     el('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fit,minmax(220px,1fr))' }, [
       el('div', {}, [
-        el('label', {}, `模型（${models.length} 个可选${upstreamCount ? ` · 上游当前给额度 ${upstreamCount} 个` : ''}）`),
+        el('label', {}, t('playground.modelSelect', { n: models.length, extra: upstreamCount ? t('playground.modelQuotaSuffix', { n: upstreamCount }) : '' })),
         el('select', { id: 'pg-model' }, models.map((m) => el('option', {
           value: m.id,
           selected: defaultModel && m.id === defaultModel.id,
         }, `${m.hasQuota ? '✅ ' : ''}${m.id}`))),
         el('div', { class: 'row', style: 'margin-top:6px;gap:8px;align-items:center' }, [
           el('button', { class: 'muted', style: 'padding:4px 10px;font-size:12px', onclick: (e) => reloadPlaygroundModels(e.currentTarget) },
-            [icon('refresh', 12), '刷新模型列表']),
-          el('span', { class: 'muted', style: 'font-size:11px' }, '✅ = 上游此刻给了该模型额度'),
+            [icon('refresh', 12), t('playground.reloadModels')]),
+          el('span', { class: 'muted', style: 'font-size:11px' }, t('playground.checkMark')),
         ]),
         note ? el('div', { class: 'muted', style: 'margin-top:4px;font-size:11px' }, note) : null,
       ]),
       el('div', {}, [
-        el('label', {}, 'API Key（默认用你的）'),
+        el('label', {}, t('playground.apiKey')),
         el('input', { id: 'pg-key', value: state.me.apiKey, class: 'mono' }),
       ]),
     ]),
-    el('label', {}, '消息（一行一条，user/assistant 前缀可选）'),
-    el('textarea', { id: 'pg-msg', rows: 4, placeholder: '你好，介绍一下你自己' }),
+    el('label', {}, t('playground.message')),
+    el('textarea', { id: 'pg-msg', rows: 4, placeholder: t('playground.messagePlaceholder') }),
     el('div', { class: 'row', style: 'margin-top:12px' }, [
-      el('button', { class: 'primary', onclick: sendChat }, [icon('chat', 14), '发送']),
+      el('button', { class: 'primary', onclick: sendChat }, [icon('chat', 14), t('playground.send')]),
     ]),
     el('div', { class: 'chat-log', id: 'pg-log', style: 'margin-top:12px' }, ''),
   ])
@@ -3082,7 +3192,7 @@ async function reloadPlaygroundModels(btn) {
     sel.replaceChildren(...models.map((m) => el('option', { value: m.id },
       `${m.hasQuota ? '✅ ' : ''}${m.id}`)))
     sel.value = models.some((m) => m.id === prev) ? prev : (defaultModel ? defaultModel.id : '')
-    toast(`模型列表已刷新（${models.length} 个${upstreamCount ? `，上游给额度 ${upstreamCount} 个` : ''}）`)
+    toast(t('playground.modelsReloaded', { n: models.length, extra: upstreamCount ? t('playground.modelsReloadedSuffix', { n: upstreamCount }) : '' }))
   } catch (err) {
     toast(err.message, true)
   } finally {
@@ -3111,7 +3221,7 @@ async function sendChat() {
     if (!res.ok) {
       let msg = `HTTP ${res.status}`
       try { const j = await res.json(); msg = j.error?.message || j.error || msg } catch { /* noop */ }
-      log.append(el('div', { class: 'assistant', style: 'color:var(--red)' }, '错误: ' + msg))
+      log.append(el('div', { class: 'assistant', style: 'color:var(--red)' }, t('playground.errorPrefix') + msg))
       return
     }
     const reader = res.body.getReader()
@@ -3140,7 +3250,7 @@ async function sendChat() {
     }
     out.classList.remove('assistant-typing')
   } catch (err) {
-    log.append(el('div', { style: 'color:var(--red)' }, '错误: ' + err.message))
+    log.append(el('div', { style: 'color:var(--red)' }, t('playground.errorPrefix') + err.message))
   }
 }
 
@@ -3150,22 +3260,22 @@ async function renderMe(view) {
   const me = state.me
   const card = el('div', { class: 'card', style: 'max-width:720px' }, [
     el('div', { class: 'row spread', style: 'margin-bottom:16px' }, [
-      el('h2', { style: 'margin:0' }, '我的信息'),
+      el('h2', { style: 'margin:0' }, t('user.info')),
       el('span', { class: 'muted' }, me.role === 'admin' ? el('span', { class: 'badge admin' }, 'admin') : me.role),
     ]),
     // 定义列表
     el('div', { class: 'kv-list' }, [
-      el('div', { class: 'kv' }, [el('span', { class: 'k muted' }, '用户名'), el('span', { class: 'v' }, me.username)]),
-      el('div', { class: 'kv' }, [el('span', { class: 'k muted' }, '角色'), el('span', { class: 'v' }, me.role === 'admin' ? '管理员' : '普通用户')]),
-      el('div', { class: 'kv' }, [el('span', { class: 'k muted' }, '会话调度'), el('span', { class: 'v' }, '热会话优先：同模型请求复用现有会话，故障时自动切换账号')]),
+      el('div', { class: 'kv' }, [el('span', { class: 'k muted' }, t('user.username')), el('span', { class: 'v' }, me.username)]),
+      el('div', { class: 'kv' }, [el('span', { class: 'k muted' }, t('user.role')), el('span', { class: 'v' }, me.role === 'admin' ? t('user.roleAdmin') : t('user.roleUser'))]),
+      el('div', { class: 'kv' }, [el('span', { class: 'k muted' }, t('user.scheduling')), el('span', { class: 'v' }, t('user.schedulingValue'))]),
     ]),
     // API Key 独立代码块
-    el('label', { style: 'margin-top:20px' }, 'API Key（下游 Bearer token）'),
+    el('label', { style: 'margin-top:20px' }, t('user.apiKeyBearer')),
     el('div', { class: 'key-block' }, [
       el('code', { class: 'mono', id: 'me-key', style: 'font-size:12px;word-break:break-all;flex:1;min-width:0' }, me.apiKey),
-      el('button', { class: 'icon', title: '复制', onclick: async () => { await navigator.clipboard.writeText(me.apiKey).catch(() => {}); toast('已复制') } }, icon('copy', 14)),
+      el('button', { class: 'icon', title: t('common.copy'), onclick: async () => { await navigator.clipboard.writeText(me.apiKey).catch(() => {}); toast(t('common.copied')) } }, icon('copy', 14)),
     ]),
-    el('p', { class: 'muted', style: 'margin-top:16px' }, '下游 Agent 接入：把上面 API Key 作为 Bearer token，base_url 指向本服务，例如'),
+    el('p', { class: 'muted', style: 'margin-top:16px' }, t('user.downstreamHint')),
     // curl 示例：深色代码块，横向滚动不溢出卡片
     el('pre', { class: 'code-block mono' },
       `curl http://127.0.0.1:8787/v1/chat/completions \\\n  -H "Authorization: Bearer ${me.apiKey || 'sk-fb-…'}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"deepseek/deepseek-v4-flash","messages":[{"role":"user","content":"你好"}],"stream":true}'`),
@@ -3177,6 +3287,8 @@ async function renderMe(view) {
 window.addEventListener('hashchange', render)
 window.addEventListener('DOMContentLoaded', async () => {
   // 版本号/仓库地址：由发版流水线硬编码进 dashboard/version.json；本地没有则 fallback dev
+  // 语种必须在**首次 render 之前**定好：否则先渲染中文再切语言会闪一下。
+  initLocale()
   try {
     const res = await fetch('/version.json', { cache: 'no-store' })
     if (res.ok) state.version = await res.json()
