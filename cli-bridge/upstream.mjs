@@ -240,6 +240,24 @@ function devicePayload({ method, path, timestampMs, bodySha256, fetchId }) {
   ].join('\n');
 }
 
+/**
+ * 官方工具集 + 客户端工具，按 function.name 去重（官方优先）。
+ * 客户端没声明工具时不追加（没要工具就别背 37 个的 token）。
+ */
+function mergeOfficialTools(official, clientTools) {
+  const list = Array.isArray(official) ? [...official] : [];
+  if (!Array.isArray(clientTools) || clientTools.length === 0) return list;
+  const seen = new Set(list.map((t) => t?.function?.name).filter(Boolean));
+  for (const t of clientTools) {
+    const n = t?.function?.name;
+    if (n && !seen.has(n)) {
+      seen.add(n);
+      list.push(t);
+    }
+  }
+  return list;
+}
+
 class Bridge {
   constructor(cfg) {
     this.cfg = cfg;
@@ -485,7 +503,7 @@ class Bridge {
     return this._runState.step;
   }
 
-  /**
+/**
    * chat —— 逐字段照抄官方抓包（worker 层形态）。
    *
    * 官方真值（docs/reverse/captures/2026-10-03-official-client.jsonl）：
@@ -517,11 +535,16 @@ class Bridge {
     //   worker  → 官方 37 个工具
     // ⚠️ lookup_agent_info 在 desktop 世代**不存在**（37 工具里没有），
     //    它是我们从 CLI 侧抄来的，必须删除。
+    // ⚠️ **合并**而不是替换：官方工具集在前（满足工具指纹），
+    // 客户端自定义工具按名去重后追加。
+    //
+    // 直接替换会让客户端声明的自定义工具**静默消失** —— 上游 37 工具里
+    // 没有 run_code / get_weather 这类名字，用户以为声明了能调，实际发不出去。
     let outTools = tools || [];
     if (layer === 'manager' && OFFICIAL_DECIDE?.length) {
-      outTools = OFFICIAL_DECIDE;
+      outTools = mergeOfficialTools(OFFICIAL_DECIDE, tools);
     } else if (layer === 'worker' && OFFICIAL_TOOLS.length > 0) {
-      outTools = OFFICIAL_TOOLS;
+      outTools = mergeOfficialTools(OFFICIAL_TOOLS, tools);
     }
     const sysTpl = OFFICIAL_SYS?.[layer] || OFFICIAL_SYS?.worker;
 
