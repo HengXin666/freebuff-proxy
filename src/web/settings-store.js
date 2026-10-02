@@ -20,6 +20,16 @@ const DEFAULT_SETTINGS = Object.freeze({
   // 明确开启时仍可回退到纯文本。见
   // .agents/notes/implemented/bug-fix/2026-10-02-tool-request-fail-closed.md
   stripToolsOnSchemaRejection: false,
+  // 上游请求形态通道（2026-10-03 新增）：
+  //   'legacy'（默认）—— 沿用现有自拼形态（ensureFreebuffSystemMessages +
+  //       ensureFreebuffToolSignature + CLI 世代 agent）。来源为早期第三方项目
+  //       + 多年补丁，已无法与官方逐字段核对，但**行为稳定、测试覆盖完整**。
+  //   'official' —— 照抄官方客户端抓包真值：官方 37 工具（worker）/ 官方
+  //       decide（manager）、官方 system 模板、desktop 世代 agent、分层 provider。
+  //       见 src/upstream/official-shape.js 与 docs/reverse/14/15/17。
+  //       2026-10-03 在 cli-bridge 实测：200 + write_file 工具调用。
+  // ⚠️ 默认 legacy 是为**零回归**；official 需实机验证后再切。
+  upstreamChannel: 'legacy',
   // 每个账号同一时间可并发的 SSE 响应流数（账号内并发），默认 2。
   // 账号调度是"粘性优先"（drain, not rotate）：并发请求先挤同一账号，超过该值
   // 才溢出到下一个账号；从不主动平摊到新账号（上游把轮换健康账号当农场特征，
@@ -97,6 +107,10 @@ export class SettingsStore {
           raw.accountMaxConcurrency,
         )
       }
+      // 只接受两个已知通道，非法值一律回落到 legacy（不静默接受拼写错误）
+      if (raw?.upstreamChannel === 'official' || raw?.upstreamChannel === 'legacy') {
+        this.settings.upstreamChannel = raw.upstreamChannel
+      }
       if (raw?.accountSchedulingMode === 'sticky' || raw?.accountSchedulingMode === 'spread') {
         this.settings.accountSchedulingMode = raw.accountSchedulingMode
       }
@@ -154,6 +168,12 @@ export class SettingsStore {
       this.settings.accountMaxConcurrency = clampConcurrency(
         next.accountMaxConcurrency,
       )
+    }
+    if (next?.upstreamChannel !== undefined) {
+      if (next.upstreamChannel !== 'official' && next.upstreamChannel !== 'legacy') {
+        throw new TypeError("upstreamChannel must be 'legacy' or 'official'")
+      }
+      this.settings.upstreamChannel = next.upstreamChannel
     }
     if (next?.accountSchedulingMode !== undefined) {
       if (

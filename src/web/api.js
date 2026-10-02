@@ -1178,6 +1178,12 @@ export function createWebApi(deps) {
         lowBalanceThreshold: settingsStore?.get().lowBalanceThreshold ?? 15,
         // 遥测上报开关：官方 CLI 会发 app_launched 等生命周期事件，我们默认不发。
         cliTelemetryEnabled: settingsStore?.get().cliTelemetryEnabled === true,
+        // 上游请求形态通道（'legacy' 默认 / 'official' 照抄官方抓包）。
+        // 见 src/upstream/official-shape.js
+        upstreamChannel:
+          settingsStore?.get().upstreamChannel === 'official'
+            ? 'official'
+            : 'legacy',
       })
       return true
     }
@@ -1311,6 +1317,19 @@ export function createWebApi(deps) {
           return true
         }
         patch.cliTelemetryEnabled = body.cliTelemetryEnabled
+      }
+      // 上游请求形态通道（legacy / official）。见 src/upstream/official-shape.js
+      if (body.upstreamChannel !== undefined) {
+        if (
+          body.upstreamChannel !== 'legacy' &&
+          body.upstreamChannel !== 'official'
+        ) {
+          sendJson(res, 400, {
+            error: "upstreamChannel 必须是 'legacy' 或 'official'",
+          })
+          return true
+        }
+        patch.upstreamChannel = body.upstreamChannel
       }
       if (!Object.keys(patch).length) {
         sendJson(res, 400, {

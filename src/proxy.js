@@ -25,6 +25,7 @@ import {
   sendJson,
 } from './util/http.js'
 import { freebuffAuthHeaders } from './auth-store.js'
+import { officialChatShape, officialAgentId } from './upstream/official-shape.js'
 import {
   officialChatHeaders,
   clientEnvironment,
@@ -950,11 +951,21 @@ export function createProxyHandler(ctx) {
               typeof sessionModelId === 'string' &&
               (sessionModelId.startsWith('m-') ||
                 sessionModelId.startsWith('fbm1.'))
+            // ⚠️ 分通道：official 用 **desktop 世代**（抓包真值），
+            // legacy 沿用 CLI 世代的 base3-free-catalog。
+            // 见 docs/reverse/15-protocol-review.md P0-3。
+            const _channel =
+              settingsStore?.get?.()?.upstreamChannel === 'official' ||
+              config.upstream?.channel === 'official'
+                ? 'official'
+                : 'legacy'
             const agentId =
               agentOverride ||
-              (isCatalogMode
-                ? CATALOG_UNIFIED_AGENT_ID
-                : agentIdForModel(upstreamModel, customModels()))
+              (_channel === 'official'
+                ? officialAgentId('worker')
+                : isCatalogMode
+                  ? CATALOG_UNIFIED_AGENT_ID
+                  : agentIdForModel(upstreamModel, customModels()))
             try {
               runId = await rt.upstream.startAgentRun({ agentId })
               clientId = newIds().clientId
@@ -1309,9 +1320,26 @@ export function createProxyHandler(ctx) {
      */
     sessionModel,
     catalog,
+    /** 'worker' | 'manager'：官方形态的层（默认 worker）。 */
+    layerHint = 'worker',
+    /** repo_snapshot 的 JSON 字符串（worker 层用真实项目统计）。 */
+    repositorySnapshot = null,
   ) {
     const { clientId: fallbackClientId } = newIds()
     const effectiveClientId = clientId || fallbackClientId
+    // 官方形态（照抄抓包）：layer 由 layerHint 决定，默认 worker。
+    // mission 用当前用户消息 —— manager 层模板尾部必须替换掉抓包时那条死任务。
+    const _layer = layerHint === 'manager' ? 'manager' : 'worker'
+    const _userText = (() => {
+      const m = (clientBody?.messages || []).find((x) => x && x.role === 'user')
+      if (!m) return ''
+      return typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+    })()
+    const officialShape = officialChatShape({
+      layer: _layer,
+      mission: _userText,
+      repositoryStats: repositorySnapshot,
+    })
     // 优先级：服务端指派的 model（m-xxx）> 请求的模型名；
     // 再经目录翻成**句柄**（fbm1.xxx）—— 官方 chat 的 model 就是句柄。
     // 真机证据：{"model":"fbm1.AAEAAUPe2Us...","codebuff_metadata":{...}}
@@ -1342,12 +1370,48 @@ export function createProxyHandler(ctx) {
     // （reasoning token 计入该预算）提前掐断（finish_reason=length）——参考
     // freebuff2api-wokers#8「DS4 思考链稍长即截断」。转发上游前抬到 floor。
     body = normalizeOutputBudget(body)
-    // Free mode requires a system message opening with the Freebuff CLI marker
-    // ("You are Buffy, the strategic coding assistant."). Without it the
-    // upstream returns free_mode_cli_required. base3-free-* agent 用 base3
-    // 规范开场（对齐 trefeon PR #207：base3 run 必须以 base3 canonical 身份
-    // 开头，而不是 base2 的 strategic-assistant 身份）。
-    body.messages = ensureFreebuffSystemMessages(body.messages, agentId)
+    // ⚠️ 分通道（可在控制台「设置」切换，见 settingsStore.upstreamChannel）：
+    //   official —— 用**官方抓包原文**（官方 system 模板 + 官方 37 工具）。
+    //   legacy（默认）—— 旧的自拼形态（CLI 开场白 + 自编签名工具）。
+    //
+    // 旧形态来源是早期第三方项目 + 多年补丁，已无法与官方逐字段核对；
+    // 与抓包对比后发现三处硬差异（system 全文、工具集、agent 世代），
+    // 是身份/世代错配的根源。见 docs/reverse/17-current-status-and-gaps.md。
+    //
+    // 优先级：settingsStore（前端可调）> config.upstream.channel（兜底）。
+    const channel =
+      settingsStore?.get?.()?.upstreamChannel === 'official' ||
+      config.upstream?.channel === 'official'
+        ? 'official'
+        : 'legacy'
+    if (channel === 'official') {
+      const sys = officialShape.system
+      const rest = (body.messages || []).filter((m) => m && m.role !== 'system')
+      body.messages = sys ? [{ role: 'system', content: sys }, ...rest] : body.messages
+      // ⚠️ **合并**而非替换：官方工具集在前（满足工具指纹），
+      // 客户端自定义工具按名去重后追加（不丢用户声明的工具）。
+      // 直接替换会让不在官方 37 个里的自定义工具静默消失。
+      //
+      // ⚠️ 客户端**没有**声明工具时就不发工具集：用户没要工具，
+      // 没必要背 37 个工具的 token 成本，也不该凭空引入工具调用可能。
+      const clientTools = Array.isArray(body.tools) ? body.tools : []
+      if (clientTools.length > 0) {
+        const seen = new Set(
+          officialShape.tools.map((t) => t?.function?.name).filter(Boolean),
+        )
+        const extra = clientTools.filter(
+          (t) => t?.function?.name && !seen.has(t.function.name),
+        )
+        body.tools = [...officialShape.tools, ...extra]
+        body.tool_choice = 'auto'
+      }
+      if (body.provider === undefined) body.provider = officialShape.provider
+    } else {
+      // Free mode requires a system message opening with the Freebuff CLI marker
+      // ("You are Buffy, the strategic coding assistant."). base3-free-* agent
+      // 用 base3 规范开场（对齐 trefeon PR #207）。
+      body.messages = ensureFreebuffSystemMessages(body.messages, agentId)
+    }
     // 补齐**官方真签名工具**（名字 + 真实参数 schema），否则上游把请求判成
     // 第三方客户端并降级到 inclusionai/ling-3.0-tiny:free —— 其 slug 不可路由时
     // 以 404 失败、下游桥接层再崩成 502 空体，即 issue#15「所有模型空响应」。
@@ -1358,10 +1422,12 @@ export function createProxyHandler(ctx) {
     // 转发链路 —— 与同文件 blockPremiumModels 的写法保持一致。
     const freeToolSignatureEnabled =
       settingsStore?.get?.()?.freeToolSignatureEnabled !== false
-    body.tools = ensureFreebuffToolSignature(
-      body.tools,
-      freeToolSignatureEnabled,
-    )
+    if (channel !== 'official') {
+      body.tools = ensureFreebuffToolSignature(
+        body.tools,
+        freeToolSignatureEnabled,
+      )
+    }
     // 可观测性：把「上游会怎么看这个工具集」算出来记进日志。判定权永远在上游，
     // 本地算这份只为让「正在被降级」在出问题时能被看见（上游不回明确错误，
     // 症状只是回答变差或 404/502，不主动暴露原因）。
@@ -1566,7 +1632,13 @@ export function createProxyHandler(ctx) {
     // .agents/notes/implemented/bug-fix/2026-09-18-tool-schema-rejection-strip.md
     const toolStripCapable =
       hasClientTools(forwardBody) &&
-      settingsStore?.get?.()?.stripToolsOnSchemaRejection === true
+      settingsStore?.get?.()?.stripToolsOnSchemaRejection === true &&
+      // ⚠️ official 通道发的是**官方工具集**，本就不应触发 tool-schema 拒绝，
+      // 也就不需要"剥离工具重试"这条退路。剥离会丢掉官方工具集反而更糟。
+      !(
+        settingsStore?.get?.()?.upstreamChannel === 'official' ||
+        config.upstream?.channel === 'official'
+      )
     let requestBody = forwardBody
     let toolsStripped = false
     let upstreamRes

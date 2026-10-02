@@ -420,6 +420,19 @@ const DICT = {
 
   // ---- 系统设置 ----
   'system.freeQuotaPolicy': { 'zh-CN': '免费额度策略', en: 'Free quota policy' },
+  'system.upstreamChannel': { 'zh-CN': '上游请求链路', en: 'Upstream request channel' },
+  'system.upstreamChannelHint': {
+    'zh-CN': '照抄官方客户端抓包（官方工具集 + 官方 system + desktop 世代 agent）；切换后立即生效',
+    en: 'Mirror the official client capture (official toolset + system + desktop-generation agent); takes effect immediately',
+  },
+  'system.upstreamChannelLegacy': {
+    'zh-CN': 'legacy（现有自拼形态，行为稳定）',
+    en: 'legacy (current hand-built shape, stable behaviour)',
+  },
+  'system.upstreamChannelOfficial': {
+    'zh-CN': 'official（官方抓包照抄，2026-10-03 实测 200 + 工具调用）',
+    en: 'official (mirrors the capture; verified 200 + tool call on 2026-10-03)',
+  },
   'system.toolSignatureHint': {
     'zh-CN': '工具签名兼容（补齐官方真签名工具，避免被上游判作第三方客户端而降级）',
     en: 'Tool signature compatibility (fills in upstream’s real signed tools, so requests are not downgraded as third-party clients)',

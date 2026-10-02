@@ -1518,6 +1518,26 @@ async function renderProxySettings(view) {
     ]),
   ]))
 
+  // 上游请求链路：legacy（自拼）/ official（照抄官方抓包）
+  const channel = settings.upstreamChannel === 'official' ? 'official' : 'legacy'
+  view.append(el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
+    el('div', {}, [
+      el('h3', { style: 'margin:0 0 2px' }, t('system.upstreamChannel')),
+      el('span', { class: 'muted' }, t('system.upstreamChannelHint')),
+    ]),
+    el('div', { class: 'row' }, [
+      el('select', {
+        id: 'upstream-channel',
+        style: 'width:320px',
+        onchange: saveUpstreamChannelSetting,
+        ...(state.me.role === 'admin' ? {} : { disabled: '' }),
+      }, [
+        el('option', { value: 'legacy', ...(channel === 'legacy' ? { selected: '' } : {}) }, t('system.upstreamChannelLegacy')),
+        el('option', { value: 'official', ...(channel === 'official' ? { selected: '' } : {}) }, t('system.upstreamChannelOfficial')),
+      ]),
+    ]),
+  ]))
+
   const concurrency = settings.accountMaxConcurrency ?? 2
   const schedMode = settings.accountSchedulingMode === 'spread' ? 'spread' : 'sticky'
   const overflowWaitMs = settings.accountOverflowWaitMs ?? 15000
@@ -1732,6 +1752,28 @@ async function saveFreeToolSignatureSetting(event) {
 }
 
 /** 工具被拒时剥离 tools 重试开关（见 /api/settings.stripToolsOnSchemaRejection）。 */
+/** 上游请求链路（legacy / official）切换。 */
+async function saveUpstreamChannelSetting(event) {
+  const sel = event.currentTarget
+  const value = sel.value === 'official' ? 'official' : 'legacy'
+  sel.disabled = true
+  try {
+    await api('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({ upstreamChannel: value }),
+    })
+    toast(value === 'official' ? t('system.upstreamChannelOfficial') : t('system.upstreamChannelLegacy'))
+    try {
+      const s = await api('/api/settings')
+      sel.value = s.upstreamChannel === 'official' ? 'official' : 'legacy'
+    } catch { /* 回读失败也保持可交互 */ }
+  } catch (err) {
+    sel.value = value === 'official' ? 'legacy' : 'official'
+    toast(err.message, true)
+  }
+  sel.disabled = false
+}
+
 async function saveStripToolsSetting(event) {
   const input = event.currentTarget
   const enabled = input.checked
