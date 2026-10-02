@@ -14,15 +14,32 @@
  *    - x-freebuff-device-sig: {base64url(signature)}
  */
 
-import { createHash, generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
+import {
+  createHash,
+  createPrivateKey,
+  generateKeyPairSync,
+  sign as cryptoSign,
+} from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { logger } from '../util/log.js';
 
-const DEVICE_KEYS_PATH = '/api/v1/freebuff/device-keys';
-const DEVICE_KEY_HEADER = 'x-freebuff-device-key';
-const DEVICE_TIMESTAMP_HEADER = 'x-freebuff-device-ts';
-const DEVICE_SIGNATURE_HEADER = 'x-freebuff-device-sig';
+export const FREEBUFF_DEVICE_KEYS_PATH = '/api/v1/freebuff/device-keys';
+export const DEVICE_KEY_HEADER_NAME = 'x-freebuff-device-key';
+export const DEVICE_TIMESTAMP_HEADER_NAME = 'x-freebuff-device-ts';
+export const DEVICE_SIGNATURE_HEADER_NAME = 'x-freebuff-device-sig';
+export const DEVICE_SIGNATURE_VERSION = 'freebuff-device-v1';
+
+const DEVICE_KEYS_PATH = FREEBUFF_DEVICE_KEYS_PATH;
+const DEVICE_KEY_HEADER = DEVICE_KEY_HEADER_NAME;
+const DEVICE_TIMESTAMP_HEADER = DEVICE_TIMESTAMP_HEADER_NAME;
+const DEVICE_SIGNATURE_HEADER = DEVICE_SIGNATURE_HEADER_NAME;
+
+// 测试与旧 import 点使用的别名（官方头部名逐字，不要另立取值）
+export const HEADER_DEVICE_KEY = DEVICE_KEY_HEADER_NAME;
+export const HEADER_DEVICE_TIMESTAMP = DEVICE_TIMESTAMP_HEADER_NAME;
+export const HEADER_DEVICE_SIGNATURE = DEVICE_SIGNATURE_HEADER_NAME;
+
 const REGISTER_TIMEOUT_MS = 10000;
 const REGISTER_RETRY_MS = 300000; // 5分钟
 
@@ -38,34 +55,151 @@ function base64UrlEncode(buffer) {
 
 /**
  * 计算请求体的 SHA256 (hex)
+ * 空 body = 空串的哈希（e3b0c442...），官方同款。
  */
-function bodySha256(body) {
+export function bodySha256(body) {
   if (!body) return createHash('sha256').update('').digest('hex');
   const content = typeof body === 'string' ? body : JSON.stringify(body);
   return createHash('sha256').update(content).digest('hex');
 }
 
 /**
- * 生成签名载荷
+ * Base64url 解码
  */
-function buildSignaturePayload({ method, path, timestampMs, bodySha256, fetchId = '' }) {
-  return [
-    'freebuff-device-v1',
-    method.toUpperCase(),
-    path,
-    String(timestampMs),
-    bodySha256,
-    fetchId
-  ].join('\n');
+function base64UrlDecode(str) {
+  const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  const padding = '='.repeat((4 - base64.length % 4) % 4);
+  return Buffer.from(base64 + padding, 'base64');
 }
 
 /**
- * Ed25519 签名
+ * 生成签名载荷（换行拼接、METHOD 大写、fetchId 缺失用空串占位）。
+ * 逐字对齐官方 freebuffDeviceSignaturePayload()：6 行，缺一不可。
+ */
+export function deviceSignaturePayload({
+  method,
+  path,
+  timestampMs,
+  bodySha256,
+  fetchId,
+}) {
+  return [
+    DEVICE_SIGNATURE_VERSION,
+    String(method).toUpperCase(),
+    path,
+    String(timestampMs),
+    bodySha256,
+    fetchId ?? '',
+  ].join('\n');
+}
+
+/** buildSignaturePayload 的同义名（内部调用点沿用）。 */
+function buildSignaturePayload(opts) {
+  return deviceSignaturePayload(opts);
+}
+
+/**
+ * 生成一对 Ed25519 密钥（raw 公钥 + pkcs8 私钥，均 base64url）。
+ * 公钥必须是 **raw 32 字节**：上游要求 "base64url raw Ed25519 public key"，
+ * 传 SPKI 会被 400 拒绝。见
+ * .agents/notes/implemented/bug-fix/2026-10-02-device-signing-raw-public-key.md
+ */
+export function generateDeviceKey() {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519', {
+    publicKeyEncoding: { type: 'spki', format: 'der' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+  // SPKI DER = 12 字节头部 + 32 字节原始公钥
+  const rawPublicKey = publicKey.slice(-32);
+  return {
+    version: 1,
+    publicKey: base64UrlEncode(rawPublicKey),
+    privateKey: privateKey,
+    registrations: {},
+  };
+}
+
+/** 校验并规范化一个已存的密钥记录。 */
+export function parseDeviceKeyRecord(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (value.version !== 1) return null;
+  if (typeof value.publicKey !== 'string' || typeof value.privateKey !== 'string') {
+    return null;
+  }
+  const registrations = {};
+  const stored = value.registrations;
+  if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+    for (const [scope, keyId] of Object.entries(stored)) {
+      if (typeof keyId === 'string' && keyId) registrations[scope] = keyId;
+    }
+  }
+  return {
+    version: 1,
+    publicKey: value.publicKey,
+    privateKey: value.privateKey,
+    registrations,
+  };
+}
+
+/** 注册作用域：一个 (apiHost, account) 一个 keyId（官方同款字符串）。 */
+export function registrationScope(apiHost, accountId) {
+  return `${apiHost} user:${accountId}`;
+}
+
+/** 从 PEM/PKCS#8 私钥导入 KeyObject。 */
+export function importDevicePrivateKey(record) {
+  try {
+    const pem = record.privateKey;
+    // 既支持 PEM 字符串（本实现落盘格式），也支持 base64url DER（旧格式）
+    const key = pem.includes('-----BEGIN')
+      ? pem
+      : base64UrlDecode(pem);
+    return createPrivateKey(
+      pem.includes('-----BEGIN')
+        ? { key: pem, format: 'pem' }
+        : { key, format: 'der', type: 'pkcs8' },
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 对一个请求算签名，返回三个头。纯函数（不碰 IO）。
+ */
+export function signDeviceRequest({
+  privateKey,
+  keyId,
+  method,
+  url,
+  body,
+  fetchId,
+  timestampMs,
+}) {
+  const urlObj = new URL(url);
+  const ts = timestampMs ?? Date.now();
+  const payload = deviceSignaturePayload({
+    method,
+    path: urlObj.pathname,
+    timestampMs: ts,
+    bodySha256: bodySha256(body),
+    fetchId: fetchId ?? null,
+  });
+  const signature = cryptoSign(null, Buffer.from(payload, 'utf8'), privateKey);
+  return {
+    [DEVICE_KEY_HEADER]: keyId,
+    [DEVICE_TIMESTAMP_HEADER]: String(ts),
+    [DEVICE_SIGNATURE_HEADER]: base64UrlEncode(signature),
+  };
+}
+
+/**
+ * Ed25519 签名（payload → base64url）
  */
 function signPayload(privateKeyPem, payload) {
   const signature = cryptoSign(null, Buffer.from(payload, 'utf8'), {
     key: privateKeyPem,
-    format: 'pem'
+    format: 'pem',
   });
   return base64UrlEncode(signature);
 }

@@ -6333,7 +6333,15 @@ server.close()
   try {
     await hit()
     await new Promise((r) => setTimeout(r, 200))
-    assert.equal(await socks(), 1, '首次请求后应恰好有 1 条 keep-alive 连接')
+    // 首次请求会建 2 条 keep-alive：一条是本请求，另一条是**目录抓取**
+    // （/api/v1/freebuff/models）。目录抓取也必须走同一个代理 agent ——
+    // 不走就会旁路直连、上游看到宿主真实出口 IP（issue #5 根因）。
+    // 本用例关心的是"是否被回收"，不是"建了几条"，所以基线取实测值。
+    const baseline = await socks()
+    assert.ok(
+      baseline >= 1 && baseline <= 3,
+      `首次请求后的 keep-alive 基线应在 1..3（实测 ${baseline} 个）`,
+    )
 
     // 反复"更新凭证"：每次都 invalidate（丢弃旧 runtime）
     for (let i = 0; i < 12; i += 1) {
@@ -6343,8 +6351,8 @@ server.close()
     await new Promise((r) => setTimeout(r, 800))
     const after = await socks()
     assert.ok(
-      after <= 3,
-      `12 轮"更新凭证"后 socket 必须被回收（实测 ${after} 个）；` +
+      after <= baseline + 2,
+      `12 轮"更新凭证"后 socket 必须被回收（基线 ${baseline}，实测 ${after} 个）；` +
         '累积即说明旧 runtime 的出网 agent 没有被 close',
     )
   } finally {
