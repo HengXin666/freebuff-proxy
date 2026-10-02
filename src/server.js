@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto'
 import http from 'node:http'
+import { runWithLogContext } from './util/log.js'
 import path from 'node:path'
 import { createProxyHandler } from './proxy.js'
 import { createProxyFetch } from './upstream/client.js'
@@ -92,6 +94,14 @@ export function startServer(deps) {
   })
 
   async function handle(req, res) {
+    // 给这次下游请求一个全链路 id：其后所有日志（选号 / 会话 / 上游）都会自动
+    // 带上它，控制台「日志」页据此把一次请求的多条日志聚成一组，而不是几十条
+    // 无主记录交织在一起。账号在选号后由 patchLogContext 补上。
+    const reqId = randomUUID().slice(0, 8)
+    return runWithLogContext({ reqId }, () => handleInner(req, res))
+  }
+
+  async function handleInner(req, res) {
     const url = new URL(
       req.url || '/',
       `http://${req.headers.host || 'localhost'}`,

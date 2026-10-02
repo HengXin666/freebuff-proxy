@@ -662,6 +662,11 @@ const DICT = {
     en: 'No matching log entries. The buffer keeps only a bounded tail (in-process; cleared on restart).',
   },
   'logs.meta': { 'zh-CN': '{n} 条 · 服务端时间 {time}', en: '{n} entries · server time {time}' },
+  'logs.accountHint': { 'zh-CN': '发起该请求的账号', en: 'Account that issued this request' },
+  'logs.reqIdHint': {
+    'zh-CN': '请求 id：点击只看该请求的全链路日志',
+    en: 'Request id: click to filter this request’s whole trace',
+  },
   'logs.inProcessTitle': { 'zh-CN': '进程内日志', en: 'In-process logs' },
   'logs.auto': { 'zh-CN': '自动刷新', en: 'Auto-refresh' },
   'logs.stopAuto': { 'zh-CN': '停止自动刷新', en: 'Stop auto-refresh' },

@@ -556,6 +556,29 @@ function buildLogRow(line, idx) {
     }, [
       el('span', { class: 'log-ts' }, ts),
       el('span', { class: 'badge ' + logsLevelTone(line.level) }, line.level),
+      // ⚠️ 账号 + 请求 id：此前日志里没有这两个维度，多账号池并发时几十条
+      // 无主记录交织，排障只能靠猜。reqId 同时是聚合键（可用它筛选整条链路）。
+      line.account
+        ? el('span', {
+            class: 'badge',
+            style: 'font-size:11px',
+            title: t('logs.accountHint') || '账号',
+          }, String(line.account).split('@')[0])
+        : null,
+      line.reqId
+        ? el('span', {
+            class: 'badge muted',
+            style: 'font-size:11px',
+            title: t('logs.reqIdHint') || '请求 id（点击只看该请求）',
+            onclick: (e) => {
+              e.stopPropagation()
+              logsView.q = line.reqId
+              const input = document.querySelector('#logs-search')
+              if (input) input.value = line.reqId
+              refreshLogs()
+            },
+          }, '#' + line.reqId)
+        : null,
       el('span', { class: 'log-msg' }, line.msg || ''),
       hasExtra ? el('span', { class: 'muted', style: 'font-size:11px' }, open ? '▾' : '▸') : null,
     ].filter(Boolean)),

@@ -355,11 +355,17 @@ export function createWebApi(deps) {
       const search = q.get('q') || ''
       const limitRaw = Number(q.get('limit'))
       const sinceTs = q.get('since') || null
+      // reqId / account 过滤：控制台日志页据此把一次请求的多条日志聚成一组，
+      // 或只看某个账号 —— 多账号池并发时日志原本完全交织，没有这两个维度排不了障。
+      const reqId = q.get('reqId') || null
+      const account = q.get('account') || null
       const lines = readLogBuffer({
         level,
         q: search,
         limit: Number.isFinite(limitRaw) ? limitRaw : 300,
         sinceTs,
+        ...(reqId ? { reqId } : {}),
+        ...(account ? { account } : {}),
       })
       sendJson(res, 200, {
         ok: true,

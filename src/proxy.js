@@ -25,6 +25,7 @@ import {
   sendJson,
 } from './util/http.js'
 import { freebuffAuthHeaders } from './auth-store.js'
+import { patchLogContext } from './util/log.js'
 import { buildRpcCfg, rpcReuse } from './upstream/official-rpc.js'
 import {
   officialChatHeaders,
@@ -823,6 +824,15 @@ export function createProxyHandler(ctx) {
             }
           }
           lastKey = rt.key
+          // 账号选定 → 补进日志上下文：其后这条请求的所有日志都能对上"哪个账号"。
+          // 多账号池并发时没有它，日志就是一堆无主记录交织，排障只能靠猜。
+          patchLogContext({ account: rt.email || rt.key, model: upstreamModel })
+          logger.info('account selected', {
+            key: rt.key,
+            email: rt.email,
+            model: upstreamModel,
+            wasAgentOverride: !!agentOverride,
+          })
 
           // 账号并发上限：同一账号同时在途流数不超过上限（热会话优先复用，
           // 选号阶段已把满员账号排后；只有所有账号都满员时才排队复用，
