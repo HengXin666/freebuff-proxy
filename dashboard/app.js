@@ -1149,7 +1149,13 @@ function buildAccountRow(a, i) {
     el('td', { class: 'mono' }, `${a.inFlight || 0}/${a.concurrency || 1}`),
     accountTimeCell(a),
     el('td', {}, fmtQuota(a.quota, a.freebucks)),
-    el('td', {}, fmtFreebucks(a.freebucks, a.session?.model, a.lastRefund)),
+    // a.session.model 是**目录 key**（m-00032eaeec）；展示名由后端解析
+    // （modelDisplayName），拿不到就回落到 key —— 绝不显示空。
+    el('td', {}, fmtFreebucks(
+      a.freebucks,
+      a.modelDisplayName || a.session?.model,
+      a.lastRefund,
+    )),
     el('td', { class: 'mono' }, `${a.requests || 0} 次`),
     el('td', {}, cd ? el('span', { class: 'badge warn' }, a.cooldownCode || 'cooldown') : el('span', { class: 'muted' }, '—')),
     el('td', {}, ops),
@@ -2175,7 +2181,12 @@ async function syncUpstreamModels() {
     const merged = []
     for (const [id, m] of curById) merged.push(m) // 保留已存在的自定义/覆盖
     for (const um of upstream.models) {
-      const id = um.id
+      // ⚠️ 上游回执的 um.id 是**目录 key**（m-00032eaeec），而 catalog /
+      // 自定义模型用的是人类可读 id（deepseek/deepseek-v4-flash）。
+      // 此前直接拿 key 当 id 写入，导致同步出来的条目永远匹配不到实际模型
+      // —— 表现就是「点了同步上游模型，但没生效」。
+      // 后端已用 legacyDigests 反查出 catalogId，优先用它。
+      const id = um.catalogId || um.id
       if (!id) continue
       if (catalogSet.has(id)) continue // catalog 已有，不用写自定义
       const existing = curById.get(id) || {}

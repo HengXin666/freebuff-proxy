@@ -6,7 +6,13 @@ import {
   serializeCookie,
 } from '../util/http.js'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
-import { buildModelsListResponse, agentIdForModel, agentFallbackForModel } from '../model.js'
+import {
+  buildModelsListResponse,
+  agentIdForModel,
+  agentFallbackForModel,
+  FREEBUFF_AVAILABLE_MODELS,
+} from '../model.js'
+import { freebuffLegacyModelDigest } from '../upstream/catalog-protocol.js'
 import {
   saveAccountUser,
   coerceUser,
@@ -94,6 +100,70 @@ export function createWebApi(deps) {
   /** @type {{ data: any, at: number } | null} */
   let upstreamSessionCache = null
   const UPSTREAM_SESSION_CACHE_MS = 60_000
+
+  /**
+   * 目录 key（m-096e75164d）→ 内置 catalog 的人类可读 id
+   * （deepseek/deepseek-v4-flash），查不到返回 null。
+   *
+   * 桥接方式：上游目录行带 legacyDigests（旧 id 的 FNV-1a 摘要），内置
+   * catalog 的 id 算同一摘要即可反查。这是官方设计的唯一映射途径 ——
+   * 目录响应本身不列模型 id。
+   *
+   * 「同步上游模型」此前不生效的根因就在这里：回执只有 key，而 catalog
+   * 用人类可读 id，两侧对不上，同步写进去的条目永远匹配不到实际模型。
+   * @param {string} key
+   * @returns {string | null}
+   */
+  function catalogIdForKey(key) {
+    if (typeof key !== 'string' || !key) return null
+    let digestForKey = null
+    for (const row of runtimes.list()) {
+      try {
+        const cat = runtimes.get(row.key)?.upstream?.catalog
+        if (!cat) continue
+        for (const [digest, k] of cat.keyByDigest || []) {
+          if (k === key) {
+            digestForKey = digest
+            break
+          }
+        }
+        if (digestForKey) break
+      } catch {
+        // 换下一个 runtime
+      }
+    }
+    if (!digestForKey) return null
+    // 内置 catalog（含运行时合并的上游缓存）里按同一摘要反查人类可读 id
+    for (const m of FREEBUFF_AVAILABLE_MODELS) {
+      if (m?.id && freebuffLegacyModelDigest(m.id) === digestForKey) return m.id
+    }
+    return null
+  }
+
+  /**
+   * 目录 key（m-00032eaeec）→ 人类可读显示名（MiMo 2.6 Flash）。
+   *
+   * 上游回执侧（session.model / rateLimitsByModel / freebucks.prices）用的
+   * 全是目录 key，而控制台要显示人能认的名字。目录行自带 displayName，
+   * 抓目录时就缓存进了 CatalogHolder.displayNames。
+   * 拿不到（没抓过目录 / 该 key 不在本次目录里）就返回原值 ——
+   * 绝不因为取不到名字就让整行渲染失败。
+   * @param {string} keyOrId
+   * @returns {string}
+   */
+  function modelDisplayName(keyOrId) {
+    if (typeof keyOrId !== 'string' || !keyOrId) return keyOrId
+    for (const row of runtimes.list()) {
+      try {
+        const cat = runtimes.get(row.key)?.upstream?.catalog
+        const name = cat?.displayNameForKey?.(keyOrId)
+        if (name) return name
+      } catch {
+        // 单个 runtime 取不到就换下一个
+      }
+    }
+    return keyOrId
+  }
 
   async function probeUpstreamSession(force = false) {
     const now = Date.now()
@@ -562,6 +632,11 @@ export function createWebApi(deps) {
         // 用户是否隐藏由「模型管理」的 hidden 列表独立控制。
         const models = Object.entries(limits).map(([id, info]) => ({
           id,
+          // 回执侧 id 是目录 key（m-00032eaeec）——控制台要显示人能认的名字。
+          // catalogId 是目录侧的人类可读 id（deepseek/deepseek-v4-flash），
+          // 由 legacyDigests 反查得出；「同步上游模型」用它才能真正对上号。
+          displayName: modelDisplayName(id),
+          catalogId: catalogIdForKey(id),
           limit: info?.limit ?? null,
           recentCount: info?.recentCount ?? null,
           freebucksPerHour: Number.isFinite(prices[id]) ? prices[id] : null,
@@ -596,7 +671,16 @@ export function createWebApi(deps) {
 
     // ---- accounts (any logged-in user can view; manage = admin) ----
     if (method === 'GET' && route === '/api/accounts') {
-      sendJson(res, 200, { object: 'list', data: runtimes.list() })
+      // 回执里的 session.model 是**目录 key**（m-00032eaeec），控制台要显示
+      // 人能认的名字（MiMo 2.6 Flash）。这里额外给一份可读名，原字段保留
+      // （它是调度/寻址用的真值，不能被展示名覆盖）。
+      const data = runtimes.list().map((a) => ({
+        ...a,
+        modelDisplayName: a?.session?.model
+          ? modelDisplayName(a.session.model)
+          : null,
+      }))
+      sendJson(res, 200, { object: 'list', data })
       return true
     }
 

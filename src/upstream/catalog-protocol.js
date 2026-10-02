@@ -94,10 +94,35 @@ export class CatalogHolder {
      * deepseek/deepseek-v4-flash 这类 id 映射到服务端行的唯一正确途径。
      */
     this.legacyIndex = new Map()
+    /**
+     * @type {Map<string, string>} 目录 key（m-xxx）→ 人类可读显示名。
+     *
+     * 上游回执（session.model / rateLimitsByModel / freebucks.prices）用的
+     * 全都是目录 key（m-00032eaeec），而控制台要把它显示成人能认的名字。
+     * 目录行自带 displayName，抓一次就缓存下来 —— 否则前端只会裸显示
+     * `m-00032eaeec 10 FB/h` 这种服务端不透明标识。
+     */
+    this.displayNames = new Map()
+    /**
+     * @type {Map<string, string>} legacy 摘要 → 目录 key。
+     * 与 legacyIndex（摘要 → 句柄）互补：句柄是给上游发请求用的，
+     * key 是回执/展示侧用的，两边口径不同都要能查。
+     */
+    this.keyByDigest = new Map()
     /** 抓取失败后的退避截止时间。 */
     this.retryAfter = 0
     /** 进行中的抓取（避免并发重复抓）。 */
     this.inflight = null
+  }
+
+  /**
+   * 目录 key → 人类可读显示名；查不到返回 null（调用方回落到原 key）。
+   * @param {string} key
+   * @returns {string | null}
+   */
+  displayNameForKey(key) {
+    if (typeof key !== 'string' || !key) return null
+    return this.displayNames.get(key) || null
   }
 
   /** 是否已持有可用目录。 */
@@ -203,6 +228,8 @@ export class CatalogHolder {
         : Array.isArray(body?.models)
           ? body.models
           : []
+      this.displayNames = new Map()
+      this.keyByDigest = new Map()
       for (const m of rows) {
         if (!m || typeof m !== 'object') continue
         const key = m.key
@@ -210,6 +237,11 @@ export class CatalogHolder {
         if (typeof handle === 'string' && isModelHandle(handle)) {
           // key 是服务端标识
           if (typeof key === 'string') this.handles.set(key, handle)
+        }
+        // 回执侧（session.model / rateLimitsByModel / prices）用的是 key，
+        // 控制台要把 key 显示成人能认的名字 —— 目录行自带 displayName。
+        if (typeof key === 'string' && typeof m.displayName === 'string' && m.displayName) {
+          this.displayNames.set(key, m.displayName)
         }
       }
       // legacy 摘要索引：把**客户端请求的模型 id** 映射到服务端行。
@@ -230,6 +262,12 @@ export class CatalogHolder {
         const digests = Array.isArray(m.legacyDigests) ? m.legacyDigests : []
         for (const d of digests) {
           if (typeof d === 'string' && d) this.legacyIndex.set(d, handle)
+        }
+        // 摘要 → key（回执/展示侧口径）：与 legacyIndex（摘要 → 句柄）互补。
+        if (typeof m.key === 'string' && m.key) {
+          for (const d of digests) {
+            if (typeof d === 'string' && d) this.keyByDigest.set(d, m.key)
+          }
         }
       }
       // 默认/推荐模型（会话回执与 recommendedKey 用的就是它）

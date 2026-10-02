@@ -7247,6 +7247,56 @@ console.log('smoke ok')
   const hdrs = h2.headers()
   assert.equal(hdrs[HEADER_CATALOG_PROTOCOL], '1')
   assert.equal(hdrs[HEADER_CATALOG_FETCH], 'fbf1.AAGZWM32cR3rz9Ux042')
+
+  // 回执侧（session.model / rateLimitsByModel / prices）用的是目录 key，
+  // 控制台必须能把 key 显示成人能认的名字 —— 否则前端只会裸显示
+  // `m-00032eaeec 10 FB/h`（服务端不透明标识）。
+  assert.equal(
+    h2.displayNameForKey('m-00032eaeec'),
+    'MiMo',
+    'key → displayName 必须可用（控制台展示名）',
+  )
+  assert.equal(h2.displayNameForKey('m-nope'), null, '未知 key 返回 null')
+  assert.equal(h2.displayNameForKey(null), null, '空输入返回 null')
+}
+
+// 目录 key ↔ 人类可读 id 的桥接（legacyDigests 反查）。
+// 「同步上游模型」此前不生效的根因：回执只有 key（m-096e75164d），而 catalog /
+// 自定义模型用人类可读 id（deepseek/deepseek-v4-flash），两侧对不上，
+// 同步写进去的条目永远匹配不到实际模型。
+{
+  const { CatalogHolder, freebuffLegacyModelDigest } = await import(
+    '../src/upstream/catalog-protocol.js'
+  )
+  const h = new CatalogHolder({
+    apiHost: 'https://www.codebuff.com',
+    token: 't',
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          fetchId: 'fid',
+          rows: [
+            {
+              key: 'm-096e75164d',
+              handle: 'fbm1.DS',
+              displayName: 'DeepSeek V4.1 Flash',
+              legacyDigests: ['1e303ac563a6f9cc'],
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+  })
+  await h.fetch()
+  // 摘要 → key（回执/展示侧口径），与 legacyIndex（摘要 → 句柄）互补
+  assert.equal(h.keyByDigest.get('1e303ac563a6f9cc'), 'm-096e75164d')
+  // 内置 catalog 的 id 算同一摘要即可反查到该行
+  const { FREEBUFF_AVAILABLE_MODELS } = await import('../src/model.js')
+  const hit = FREEBUFF_AVAILABLE_MODELS.find(
+    (m) => freebuffLegacyModelDigest(m.id) === '1e303ac563a6f9cc',
+  )
+  assert.ok(hit, '内置 catalog 必须有一条 id 的摘要等于目录行的 legacyDigest')
+  assert.equal(hit.id, 'deepseek/deepseek-v4-flash')
 }
 
 // 会话模型绑定：chat 的 model 必须用**会话回执里服务端指派的值**
