@@ -13,6 +13,8 @@ import { SessionManager } from './session-manager.js'
 import { SessionHandleStore } from './session-handles.js'
 import { AccountStateStore } from './account-state-store.js'
 import { UpstreamError, isSessionRecoverableGate } from './upstream/client.js'
+import { freebuffLegacyModelDigest } from './upstream/catalog-protocol.js'
+import { FREEBUFF_AVAILABLE_MODELS } from './model.js'
 import { logger } from './util/log.js'
 
 /**
@@ -326,6 +328,28 @@ export class AccountRuntimes {
   }
 
   /**
+   * 在所有已知 runtime 的目录持有者上依次尝试解析，返回第一个非空结果。
+   *
+   * 为什么抽出来：目录表要**双向**用（key → 显示名 / key → 可读 id /
+   * 显示名 → key），每种都各写一遍遍历会分成三份几乎相同的代码 ——
+   * 而它们的失效条件完全一样（没抓过目录 / 该行不在这份目录里）。
+   * 单个 runtime 抛错不影响其它账号（多账号池里目录是逐账号持有的）。
+   * @param {(catalog: any) => string | null | undefined} fn
+   * @returns {string | null}
+   */
+  _fromCatalogs(fn) {
+    for (const rt of this.byKey.values()) {
+      try {
+        const v = fn(rt?.upstream?.catalog)
+        if (v) return v
+      } catch {
+        // 单个 runtime 取不到就换下一个
+      }
+    }
+    return null
+  }
+
+  /**
    * 目录 key（m-00032eaeec）→ 人类可读显示名（MiMo 2.6 Flash）。
    *
    * 上游回执侧（session.model / rateLimitsByModel / prices）用的全是目录 key，
@@ -337,15 +361,111 @@ export class AccountRuntimes {
    */
   _modelDisplayName(key) {
     if (typeof key !== 'string' || !key) return null
-    for (const rt of this.byKey.values()) {
-      try {
-        const name = rt?.upstream?.catalog?.displayNameForKey?.(key)
-        if (name) return name
-      } catch {
-        // 单个 runtime 取不到就换下一个
+    const fromCatalog = this._fromCatalogs((cat) => cat?.displayNameForKey?.(key))
+    if (fromCatalog) return fromCatalog
+    // ⚠️ 兜底：实时目录未抓取时（服务刚启动、或该 runtime 的 catalog 尚未
+    // fetch），displayNameForKey 一律返回 null —— 于是总览的额度列、模型列
+    // 会渲染成裸目录 key（m-096e75164d），用户根本认不出是哪个模型。
+    //
+    // 实测（2026-10-03）：账号池额度键全是 m-xxx，而 /api/overview 的
+    // modelNames 为 null，界面显示裸 key。
+    //
+    // 兜底手法与 _modelCatalogId 一致：用目录 key 的 legacyDigest 反查内置
+    // 静态表，命中则取其 displayName。不做模糊匹配。
+    const digest = this._fromCatalogs((cat) => cat?.digestForKey?.(key))
+    if (digest) {
+      for (const m of FREEBUFF_AVAILABLE_MODELS) {
+        if (m?.id && freebuffLegacyModelDigest(m.id) === digest && m.displayName) {
+          return m.displayName
+        }
       }
     }
     return null
+  }
+
+  /**
+   * 目录 key（m-00032eaeec）→ **人类可读目录 id**（deepseek/deepseek-v4-flash）。
+   *
+   * 上游目录只列 key 与 legacy 摘要，不列可读 id；所以先用摘要命中目录行，
+   * 再拿摘要去内置 catalog 反查。查不到返回 null —— 上游新模型（内置目录尚未
+   * 收录）本来就只有 key，调用方自行回落。
+   * @param {string} key
+   * @returns {string | null}
+   */
+  _modelCatalogId(key) {
+    if (typeof key !== 'string' || !key) return null
+    const digest = this._fromCatalogs((cat) => cat?.digestForKey?.(key))
+    if (!digest) return null
+    for (const m of FREEBUFF_AVAILABLE_MODELS) {
+      if (m?.id && freebuffLegacyModelDigest(m.id) === digest) return m.id
+    }
+    return null
+  }
+
+  /**
+   * 人类可读显示名（MiMo 2.6 Flash）→ 目录 key（m-00032eaeec）。
+   *
+   * 下游 Agent 手里只有 `/v1/models` 的 id 与 display_name，照着 display_name
+   * 填 `model` 是很自然的用法；而上游只认 key/句柄。这里把显示名落回 key，
+   * 再走既有的 handleFor 映射。查不到返回 null（不改变原值）。
+   * @param {string} name
+   * @returns {string | null}
+   */
+  _modelKeyForName(name) {
+    if (typeof name !== 'string' || !name) return null
+    return this._fromCatalogs((cat) => cat?.keyForName?.(name))
+  }
+
+  /**
+   * 把一组上游模型标识（目录 key）补全成「对外展示三件套」：
+   * `{ key, displayName, catalogId }`。
+   *
+   * `/v1/models` 与 `/api/models/upstream` 都要这三样：key 是服务端寻址真值，
+   * displayName 给人看，catalogId 是人类可读的请求口径。三者一起下发，
+   * 下游照着任何一个填 `model` 都能被解析回去（见 proxy.js 的 chat 入口解析）。
+   * @param {string[]} keys
+   * @returns {{ key: string, displayName: string | null, catalogId: string | null }[]}
+   */
+  modelAliases(keys) {
+    const out = []
+    for (const key of keys || []) {
+      if (typeof key !== 'string' || !key) continue
+      out.push({
+        key,
+        displayName: this._modelDisplayName(key),
+        catalogId: this._modelCatalogId(key),
+      })
+    }
+    return out
+  }
+
+  /**
+   * 把客户端给的 `model` 值归一到**调度口径**。
+   *
+   * `/v1/models` 现在对外给的是可读 id（catalogId 或 displayName），所以下游
+   * 有三条合法写法都可能到这儿：
+   *
+   *   - 目录 key（m-096e75164d）—— 老客户端/我们自己下发的 `freebuff_key`，原样保留；
+   *   - 人类可读 id（deepseek/deepseek-v4-flash）—— 原样保留（调度与句柄映射都认它）；
+   *   - 显示名（'Solar Pro 4'）—— 内置 catalog 里没有这个写法，必须落回目录 key，
+   *     否则白名单会拒、会话也会绑错模型。
+   *
+   * 查不到映射时**原样返回**：宁可让它照旧走白名单报错，也不猜一个模型出来。
+   * @param {string} model
+   * @returns {string}
+   */
+  resolveModelAlias(model) {
+    if (typeof model !== 'string') return model
+    const key = model.trim()
+    if (!key) return model
+    // 已是目录 key：服务端标识，原样用。
+    if (/^m-[0-9a-z]+$/i.test(key)) return key
+    // 已是句柄：交由 catalog.handleFor 原样透传。
+    if (key.startsWith('fbm1.')) return key
+    // 显示名 → 目录 key（大小写/首尾空白不敏感）。
+    const byName = this._modelKeyForName(key)
+    if (byName) return byName
+    return model
   }
 
   list() {
@@ -1225,11 +1345,35 @@ export class AccountRuntimes {
           fatalFailure = rec
           break
         }
-        const wrap =
-          err instanceof UpstreamError
-            ? err
-            : new UpstreamError(message, { status: 502, code: 'admit_failed' })
-        this.markCooldown(key, wrap, model)
+        // ⚠️ 槽位占用类**不该冷却账号**：它不是账号故障，而是"槽位正在被用"
+        // —— 等它空出即可。冷却会把一个**可用**账号钉死一段时间，
+        // 表现为"明明有号却全都冷却中"。AGENTS.md 对 purchase_capacity
+        // 已有明确规定；purchase_in_use / purchase_claim_released /
+        // premium_slot_taken 属同一类（见 client.js 409 状态全集注释）。
+        //
+        // 实测反例（2026-10-03）：全新账号配额 0/6、无购买无退款，
+        // 仅因上一次会话尚未释放而拿到 purchase_in_use，就被冷却
+        // 到 20:20 —— 于是"刚导入的干净账号立刻不可用"。
+        const slotBusyCodes = new Set([
+          'purchase_capacity',
+          'purchase_in_use',
+          'purchase_claim_released',
+          'premium_slot_taken',
+        ])
+        if (slotBusyCodes.has(String(err?.code))) {
+          logger.warn('account session slot busy; not cooling', {
+            key,
+            email: emailByKey.get(key),
+            code: err?.code,
+            model,
+          })
+        } else {
+          const wrap =
+            err instanceof UpstreamError
+              ? err
+              : new UpstreamError(message, { status: 502, code: 'admit_failed' })
+          this.markCooldown(key, wrap, model)
+        }
         logger.warn('account ensureSession failed; trying next', {
           key,
           email: emailByKey.get(key),

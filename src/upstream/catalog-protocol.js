@@ -104,11 +104,28 @@ export class CatalogHolder {
      */
     this.displayNames = new Map()
     /**
+     * @type {Map<string, string>} 显示名 → 目录 key（**反向**索引）。
+     *
+     * 存在的理由：下游 Agent 拿到的只有 `/v1/models` 的 id 与 display_name，
+     * 有人会**照着 display_name 填 model 字段**（模型选单里显示什么就填什么）。
+     * 上游只认目录 key / 句柄，裸显示名直接发过去必然 400/503。
+     * 有了这张表就能把 "MiMo 2.6 Flash" 落回 m-00032eaeec 再走正常映射。
+     * 见 .agents/notes/implemented/bug-fix/2026-10-02-catalog-key-display-name-bridge.md
+     */
+    this.keyByName = new Map()
+    /**
      * @type {Map<string, string>} legacy 摘要 → 目录 key。
      * 与 legacyIndex（摘要 → 句柄）互补：句柄是给上游发请求用的，
      * key 是回执/展示侧用的，两边口径不同都要能查。
      */
     this.keyByDigest = new Map()
+    /**
+     * @type {Map<string, string>} 目录 key → legacy 摘要（keyByDigest 的反向）。
+     * 展示侧要「key → 人类可读 id」必须先回到摘要，再拿摘要去内置 catalog
+     * 反查；只有 key → 句柄 那张表不够用（句柄不是摘要）。
+     * 一行可以有多个 legacyDigests，取第一个。
+     */
+    this.digestByKey = new Map()
     /** 抓取失败后的退避截止时间。 */
     this.retryAfter = 0
     /** 进行中的抓取（避免并发重复抓）。 */
@@ -123,6 +140,32 @@ export class CatalogHolder {
   displayNameForKey(key) {
     if (typeof key !== 'string' || !key) return null
     return this.displayNames.get(key) || null
+  }
+
+  /**
+   * 人类可读显示名 → 目录 key（反向解析，大小写与首尾空白不敏感）。
+   *
+   * 用途：调用方（chat 的 model 字段）拿到的可能是 displayName —— 那是
+   * `/v1/models` 里除了 id 之外唯一人看得懂的东西，照着填很自然。
+   * 查不到返回 null，调用方保持原值（绝不因此让请求失败）。
+   * @param {string} name
+   * @returns {string | null}
+   */
+  keyForName(name) {
+    if (typeof name !== 'string') return null
+    const k = name.trim()
+    if (!k) return null
+    return this.keyByName.get(k) || this.keyByName.get(k.toLowerCase()) || null
+  }
+
+  /**
+   * 目录 key → legacy 摘要（用于反查人类可读 id）。查不到返回 null。
+   * @param {string} key
+   * @returns {string | null}
+   */
+  digestForKey(key) {
+    if (typeof key !== 'string' || !key) return null
+    return this.digestByKey.get(key) || null
   }
 
   /** 是否已持有可用目录。 */
@@ -156,6 +199,34 @@ export class CatalogHolder {
     if (legacy) return legacy
     // 都不命中：原样返回（调用方据此走 legacy 路径或报错）
     return modelId
+  }
+
+  /**
+   * 模型 id → 目录句柄，带 **displayName 兜底**。
+   *
+   * 为什么需要兜底：主服务 `/v1/models` 的 id 来自**静态快照**
+   * （从官方仓库同步的 60 项），而目录是**实时**的（53 行）。两者会漂移 ——
+   * 实测（2026-10-03）：快照里有 `deepseek/deepseek-v4.1-flash`，
+   * 但实时目录里该行（`m-096e75164d` / "DeepSeek V4.1 Flash"）的
+   * legacyDigest 对应的是 `deepseek/deepseek-v4-flash`。
+   * 于是 `handleFor('deepseek/deepseek-v4.1-flash')` 不命中，
+   * admission 会把模型名原样发出去，服务端认不出。
+   *
+   * 兜底只做一件稳妥的事：用**完全一致的 displayName** 反查目录 key。
+   * 不做模糊匹配、不用 recommendedKey（后者已被证伪：会静默换模型）。
+   *
+   * @param {string} modelId legacy 模型 id
+   * @param {string|null} [displayName] 静态快照里的可读名
+   * @returns {string} 句柄；都命中不了则原样返回 modelId
+   */
+  handleForModel(modelId, displayName = null) {
+    const direct = this.handleFor(modelId)
+    if (direct !== modelId) return direct
+    if (!displayName) return modelId
+    const key = this.keyForName(displayName)
+    if (!key) return modelId
+    const handle = this.handles.get(key)
+    return handle || modelId
   }
 
   /** 该模型 id 是否在本次目录里（有对应行）。 */
@@ -243,7 +314,9 @@ export class CatalogHolder {
           ? body.models
           : []
       this.displayNames = new Map()
+      this.keyByName = new Map()
       this.keyByDigest = new Map()
+      this.digestByKey = new Map()
       for (const m of rows) {
         if (!m || typeof m !== 'object') continue
         const key = m.key
@@ -256,6 +329,13 @@ export class CatalogHolder {
         // 控制台要把 key 显示成人能认的名字 —— 目录行自带 displayName。
         if (typeof key === 'string' && typeof m.displayName === 'string' && m.displayName) {
           this.displayNames.set(key, m.displayName)
+          // 反向：显示名 → key。下游照着 display_name 填 model 时用它落回服务端
+          // 认的口径（key），否则裸显示名发给上游必然被拒。
+          const name = m.displayName.trim()
+          if (name && !this.keyByName.has(name)) this.keyByName.set(name, key)
+          if (name && !this.keyByName.has(name.toLowerCase())) {
+            this.keyByName.set(name.toLowerCase(), key)
+          }
         }
       }
       // legacy 摘要索引：把**客户端请求的模型 id** 映射到服务端行。
@@ -280,7 +360,10 @@ export class CatalogHolder {
         // 摘要 → key（回执/展示侧口径）：与 legacyIndex（摘要 → 句柄）互补。
         if (typeof m.key === 'string' && m.key) {
           for (const d of digests) {
-            if (typeof d === 'string' && d) this.keyByDigest.set(d, m.key)
+            if (typeof d === 'string' && d) {
+              this.keyByDigest.set(d, m.key)
+              if (!this.digestByKey.has(m.key)) this.digestByKey.set(m.key, d)
+            }
           }
         }
       }

@@ -7331,6 +7331,11 @@ console.log('smoke ok')
   )
   assert.equal(h2.displayNameForKey('m-nope'), null, '未知 key 返回 null')
   assert.equal(h2.displayNameForKey(null), null, '空输入返回 null')
+  // 反向：显示名 → key（下游照着 display_name 填 model 时靠它落回服务端口径）
+  assert.equal(h2.keyForName('MiMo'), 'm-00032eaeec')
+  assert.equal(h2.keyForName('mimo'), 'm-00032eaeec', '小写同样命中')
+  assert.equal(h2.keyForName(''), null, '空串返回 null')
+  assert.equal(h2.keyForName(null), null, '非字符串返回 null')
 }
 
 // 目录 key ↔ 人类可读 id 的桥接（legacyDigests 反查）。
@@ -7370,6 +7375,61 @@ console.log('smoke ok')
   )
   assert.ok(hit, '内置 catalog 必须有一条 id 的摘要等于目录行的 legacyDigest')
   assert.equal(hit.id, 'deepseek/deepseek-v4-flash')
+  // key → 摘要 的反向表：展示侧要「key → 人类可读 id」必须先回到摘要。
+  assert.equal(
+    h.digestForKey('m-096e75164d'),
+    '1e303ac563a6f9cc',
+    'key → 摘要必须可用（否则 /v1/models 的可读 id 反查不出来）',
+  )
+  assert.equal(h.digestForKey('m-nope'), null, '未知 key 返回 null')
+  // 显示名 → key 的反向解析：下游照着 /v1/models 的 display_name 填 model 时用。
+  assert.equal(h.keyForName('DeepSeek V4.1 Flash'), 'm-096e75164d')
+  assert.equal(h.keyForName('  deepseek v4.1 flash  '), 'm-096e75164d', '大小写/空白不敏感')
+  assert.equal(h.keyForName('不存在的模型'), null)
+}
+
+/**
+ * /v1/models 不得把目录 key（m-00032eaeec）当模型名返回给下游。
+ *
+ * 真实故障（用户反馈）：/v1/models 里有 5 条 `{id:'m-00032eaeec', source:'session'}`，
+ * 下游 Agent 拿它当模型表，看到的是一串不透明标识 ——「返回的也应该是模型名称，
+ * 而不是 ID」。extraIds 现在带 displayName / catalogId，按
+ * `catalogId || displayName || key` 取 id。
+ */
+{
+  const { buildModelsListResponse } = await import('../src/model.js')
+  const out = buildModelsListResponse({
+    includeAllCatalog: true,
+    extraIds: [
+      // 有 catalogId：直接用人类可读 id（生态通用写法）。
+      { key: 'm-096e75164d', displayName: 'DeepSeek V4.1 Flash', catalogId: 'deepseek/deepseek-v4-flash' },
+      // 无 catalogId（上游新模型）：够不到可读 id 时用 displayName。
+      { key: 'm-9a7e098cc1', displayName: 'Solar Pro 4', catalogId: null },
+      // 连名字都没有：兜底原 key，绝不丢模型。
+      { key: 'm-unknown0', displayName: null, catalogId: null },
+    ],
+  }).data
+  const ids = out.map((m) => m.id)
+  assert.ok(
+    !ids.includes('m-096e75164d'),
+    'm-096e75164d 必须换成人读得懂的 id 而不是裸目录 key',
+  )
+  // deepseek 那条内置 catalog 里本来就有，所以不该重复出现两次
+  assert.equal(
+    ids.filter((id) => id === 'deepseek/deepseek-v4-flash').length,
+    1,
+    'catalogId 与内置条目同模型时必须去重（用户不该在列表里看到两份）',
+  )
+  const solar = out.find((m) => m.id === 'Solar Pro 4')
+  assert.ok(solar, '没有 catalogId 的上游模型必须以 displayName 作 id')
+  assert.equal(solar.source, 'session')
+  assert.equal(solar.freebuff_key, 'm-9a7e098cc1', '原始目录 key 必须透出，便于排障')
+  const unknown = out.find((m) => m.id === 'm-unknown0')
+  assert.ok(unknown, '连名字都没有时兜底原 key，绝不能把模型弄丢')
+  assert.equal(unknown.display_name, 'm-unknown0')
+  // 回归：老写法（纯字符串 extraIds）仍然可用
+  const legacyShape = buildModelsListResponse({ extraIds: ['m-abcdef123'] }).data
+  assert.ok(legacyShape.find((m) => m.id === 'm-abcdef123'), '纯字符串 extraIds 必须继续被接受')
 }
 
 // 会话模型绑定：chat 的 model 必须用**会话回执里服务端指派的值**

@@ -282,7 +282,7 @@ export function isFreeModel(modelId, customModels) {
  * @param {{
  *   accessTier?: 'full' | 'limited' | null,
  *   includeAllCatalog?: boolean,
- *   extraIds?: string[],
+ *   extraIds?: (string | { key: string, displayName?: string | null, catalogId?: string | null })[],
  *   customModels?: { id: string, displayName?: string, pool?: string, multimodal?: boolean, agentId?: string, note?: string }[],
  *   blockPremium?: boolean,
  * }} [opts]
@@ -342,16 +342,45 @@ export function buildModelsListResponse(opts = {}) {
     })
   }
 
-  for (const id of opts.extraIds || []) {
-    if (!id || byId.has(id)) continue
+  /**
+   * 上游**会话回执**里才出现的模型（rateLimitsByModel / limitedModelOffers /
+   * 当前 model），内置 catalog 未必收录。
+   *
+   * ⚠️ 这里的 id **不能**直接是目录 key（`m-00032eaeec`）：下游 Agent 拿
+   * `/v1/models` 当模型表，看到的就是这串不透明标识 —— 用户明确要求
+   * 「返回的应该是模型名称，而不是 ID」。所以按下列优先级取可读口径：
+   *
+   *   1. `catalogId`（deepseek/deepseek-v4-flash）—— 上游与生态通用写法，
+   *      调度侧 isModelAllowed / handleFor 都能直接认；
+   *   2. `displayName`（Solar Pro 4）—— 内置 catalog 尚未收录的上游新模型
+   *      只有服务端给的名字可取，chat 入口会把它解析回 key（见 proxy.js）；
+   *   3. 兜底才是原 key（连名字都没有时，至少不丢模型）。
+   *
+   * 若 `catalogId` 指向的条目已经在列表里，说明它与内置/自定义条目是**同一个
+   * 模型**，不再重复添加（用户看到的列表里就此不再有裸 key 条目）。
+   * 原始 key 作为 `freebuff_key` 透出，调试/高级客户端仍能拿到服务端真值。
+   */
+  for (const entry of opts.extraIds || []) {
+    const e = typeof entry === 'string' ? { key: entry } : (entry || {})
+    const key = typeof e.key === 'string' ? e.key : ''
+    if (!key) continue
+    if (skip(key)) continue
+    const readable = typeof e.catalogId === 'string' && e.catalogId ? e.catalogId : null
+    const named =
+      typeof e.displayName === 'string' && e.displayName.trim() ? e.displayName.trim() : null
+    const id = readable || named || key
+    if (byId.has(id)) continue
     if (skip(id)) continue
     byId.set(id, {
       id,
       object: 'model',
       created: 0,
       owned_by: 'freebuff',
+      display_name: named || id,
       available: true,
       source: 'session',
+      ...(id !== key ? { freebuff_key: key } : {}),
+      ...(accessTier ? { current_access_tier: accessTier } : {}),
     })
   }
 

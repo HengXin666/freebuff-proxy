@@ -243,7 +243,7 @@ export function createProxyHandler(ctx) {
   async function handleModels(res) {
     let accessTier = null
     /** @type {string[]} */
-    let extraIds = []
+    let extraKeys = []
     try {
       const rt = runtimes.getAny()
       const session = await rt.upstream.freebuffSession('GET')
@@ -251,13 +251,19 @@ export function createProxyHandler(ctx) {
         if (session.accessTier === 'full' || session.accessTier === 'limited') {
           accessTier = session.accessTier
         }
-        extraIds = modelIdsFromSession(session)
+        extraKeys = modelIdsFromSession(session)
       }
     } catch (err) {
       logger.warn('models: session probe failed; returning static catalog', {
         error: err instanceof Error ? err.message : String(err),
       })
     }
+    // 会话回执侧给的是目录 key（m-00032eaeec）；下游 Agent 把它当模型名用
+    // 是看不懂的（用户明确要求「这里返回的也应该是模型名称，而不是 ID」）。
+    // 逐条补上 displayName / catalogId，由 model.js 选可读口径当 id。
+    const extraIds = runtimes.modelAliases
+      ? runtimes.modelAliases(extraKeys)
+      : extraKeys
     sendJson(
       res,
       200,
@@ -570,8 +576,8 @@ export function createProxyHandler(ctx) {
       return
     }
 
-    const upstreamModel = requireModelId(body.model)
-    if (!upstreamModel) {
+    const requestedModel = requireModelId(body.model)
+    if (!requestedModel) {
       sendJson(res, 400, {
         error: {
           message:
@@ -582,6 +588,13 @@ export function createProxyHandler(ctx) {
       })
       return
     }
+    /**
+     * `/v1/models` 对外给的是可读口径（catalogId，内置目录没有对应条目时是
+     * displayName），所以下游**照着模型表填的名字**必须能落地：
+     * 'Solar Pro 4' 这类显示名要落回目录 key 再走句柄映射，否则白名单会拒、
+     * 会话也会绑错模型。可读 id / key / 句柄则原样通过（见 resolveModelAlias）。
+     */
+    const upstreamModel = runtimes.resolveModelAlias(requestedModel)
 
     // 模型白名单校验：未隐藏 + catalog/自定义/上游会话出现过才放行。
     // 避免把"APP 里没有的模型"探测请求盲发上游（上游会标记异常行为，是免费

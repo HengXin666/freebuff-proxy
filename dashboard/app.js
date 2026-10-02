@@ -28,6 +28,20 @@ const state = {
   acctSectionsOpen: {},
   /** 上游此刻真实给出额度的模型 id（多账号并集），测试对话据此标注。 */
   upstreamModelIds: [],
+  /**
+   * 目录 key（m-00032eaeec）→ 可读显示名（MiMo 2.6 Flash）。
+   *
+   * 账号表的 session 列与「额度」chip 的数据源都是**上游回执**，键全是不透明
+   * 目录 key；后端把这一屏用到的映射随 /api/overview 一起下发，前端只管查表。
+   * 查不到就回落原 key —— 绝不因为取不到名字让整行渲染失败。
+   */
+  modelNames: {},
+  /**
+   * 上游此刻给了额度的模型的「可读三件套」：`{key, displayName, catalogId}`。
+   * /api/models 的 id 现在是可读口径（catalogId 或 displayName），而
+   * upstreamModelIds 是目录 key —— 标注 ✅ 时必须用这张表换算，否则永远对不上。
+   */
+  upstreamModels: [],
 }
 
 const $ = (sel, root = document) => root.querySelector(sel)
@@ -469,6 +483,7 @@ async function renderOverview(view) {
     } catch { /* 拿不到就用默认 15，不阻塞总览 */ }
     const data = await api('/api/overview')
     state.accounts = data.accounts
+    applyModelNames(data)
     endProgress()
     view.innerHTML = ''
     view.append(renderOverviewHeader(data))
@@ -1280,6 +1295,7 @@ async function refreshAccountsCard({ silent = true } = {}) {
   try {
     const data = await api('/api/overview')
     state.accounts = data.accounts
+    applyModelNames(data)
     try {
       const s = await api('/api/settings')
       if (Number.isInteger(s.lowBalanceThreshold)) {
@@ -1331,6 +1347,7 @@ async function refreshOverviewAfterAccountChange() {
   try {
     const data = await api('/api/overview')
     state.accounts = data.accounts
+    applyModelNames(data)
     // 与 refreshAccountsCard 共用同一套定点更新（同一个 id 容器），
     // 绝不再用 $('.table-wrap') 去选"第一个分区的表"，也不整块重建
     // （整块重建会重置分区的展开/折叠状态）。
@@ -1346,12 +1363,15 @@ async function probeAccount(a, btn) {
   const restore = withButtonLoading(btn)
   try {
     const r = await api(`/api/accounts/${encodeURIComponent(a.key)}/probe`, { method: 'POST' })
+    // 先并入模型名映射：下面那行 toast 会打印每个模型的已用/上限，
+    // 而它的键是目录 key —— 不先并表就又会把 m-00032eaeec 弹给用户。
+    applyModelNames(r)
     const sess = r.session || {}
     const limits = sess.rateLimitsByModel || {}
     const modelCount = Object.keys(limits).length
     if (r.ok) {
       const models = Object.entries(limits)
-        .map(([id, info]) => `${shortModel(id)} ${fmtNum(info?.recentCount)}/${info?.limit ?? '?'}`)
+        .map(([id, info]) => `${modelNameFor(id)} ${fmtNum(info?.recentCount)}/${info?.limit ?? '?'}`)
         .join(' · ')
       toast(t('account.probeOk', { email: a.email, n: modelCount }) + (models ? t('account.probeModelList', { list: models }) : ''))
       await refreshAccountsCard()
@@ -1380,7 +1400,9 @@ async function oneClickRefresh(btn) {
   try {
     const r = await api('/api/accounts/refresh', { method: 'POST' })
     state.accounts = r.accounts || state.accounts
+    applyModelNames(r)
     if (Array.isArray(r.upstreamModelIds)) state.upstreamModelIds = r.upstreamModelIds
+    if (Array.isArray(r.upstreamModels)) state.upstreamModels = r.upstreamModels
     const results = r.results || []
     const failed = results.filter((x) => !x.ok)
     const banned = failed.filter((x) => String(x.code || '').includes('banned'))
@@ -1409,6 +1431,7 @@ async function probeAllAccounts(btn = null) {
   try {
     const r = await api('/api/accounts/probe', { method: 'POST' })
     state.accounts = r.accounts
+    applyModelNames(r)
     const failed = (r.results || []).filter((x) => !x.ok)
     toast(failed.length
       ? t('account.probeDoneFail', { n: failed.length })
@@ -1431,6 +1454,7 @@ async function applyOverviewAndModelCards() {
   try {
     const data = await api('/api/overview')
     state.accounts = data.accounts
+    applyModelNames(data)
     refreshSnapshotExtras(data)
   } catch { /* 拿不到就沿用当前快照 */ }
   try { await renderProxySettings() } catch { /* 代理卡未挂载 */ }
@@ -2672,8 +2696,10 @@ function fmtQuota(quota, fb) {
     const cls = poolLeft != null && poolLeft <= 0
       ? 'err'
       : (hasPrice && Number.isFinite(poolLeft) && poolLeft < price ? 'warn' : 'ok')
+    // 悬停提示首行给人看的名字在前、服务端标识在后：排障时仍要能对上上游日志。
+    const name = modelNameFor(model)
     const tip = [
-      model,
+      name === model ? model : `${name}（${model}）`,
       hasPrice
         ? t('quota.priceTip', { price: fmtNum(price) })
         : t('quota.noPriceTip'),
@@ -2695,7 +2721,10 @@ function fmtQuota(quota, fb) {
       style: 'margin:2px 4px 2px 0',
       title: tip,
     }, [
-      el('span', { class: 'muted' }, `${shortModel(model)} `),
+      // ⚠️ 这里以前是 `shortModel(model)` —— 对目录 key（m-00032eaeec）来说
+      // "去 provider 前缀"是无效操作（它压根没有 `/`），于是裸 key 直接上屏。
+      // 用户截图里那串 `m-00032eaeec 10 FB/h` 就是这么来的。改走统一的可读名。
+      el('span', { class: 'muted' }, `${name} `),
       label,
       exhausted
         ? el('span', { class: 'muted' }, t('quota.poolEmpty'))
@@ -2834,17 +2863,80 @@ function modelLabel(a) {
   const sess = a?.session
   const key = sess?.model
   if (!key) return '—'
-  // 后端已解析的可读名优先（session.modelDisplayName），
-  // 再用本地模型列表兜底，最后才落到短 key。
-  const named = sess?.modelDisplayName || displayNameFor(key)
-  if (!named || named === key) return shortModel(key)
-  return named
+  // 后端已解析的可读名优先（session.modelDisplayName），再用本地映射兜底，
+  // 最后才落到短 key —— 与额度 chip 走**同一个**解析函数，避免两处口径分叉。
+  return sess?.modelDisplayName || modelNameFor(key)
 }
 
 /** 目录 key → 显示名（用模型列表里已有的条目做本地兜底）。 */
 function displayNameFor(key) {
   const hit = (state.models || []).find((m) => m.id === key)
   return hit?.display_name || hit?.displayName || null
+}
+
+/**
+ * 把后端下发的「目录 key → 可读名」表并入本地缓存。
+ *
+ * 为什么是**合并**而不是替换：/api/overview 与 /api/accounts/refresh 各自只带
+ * 当前那次快照里出现过的模型，直接替换会让上一次拿到的名字丢失，界面在两次
+ * 刷新之间闪回裸 key。合并则只增不减，映射只会越来越全。
+ * @param {{ modelNames?: Record<string, string>, upstreamModels?: Array<{key: string, displayName?: string|null}> }|null} payload
+ */
+function applyModelNames(payload) {
+  if (!payload) return
+  const incoming = payload.modelNames
+  if (incoming && typeof incoming === 'object') {
+    Object.assign(state.modelNames, incoming)
+  }
+  for (const row of payload.upstreamModels || []) {
+    if (row && typeof row.key === 'string' && row.displayName) {
+      state.modelNames[row.key] = row.displayName
+    }
+  }
+}
+
+/**
+ * 上游给了额度的模型 —— 换算成 `/v1/models` 里实际会出现的 id。
+ *
+ * ⚠️ 注释里别写 `**` + `/v1/...`：`**` 紧邻斜杠会提前闭合块注释（这正是
+ * 刚才写这行时踩到的语法错误）。
+ *
+ * 后端两个字段口径不同：`upstreamModelIds` 是目录 key（m-00032eaeec，判据真值），
+ * `upstreamModels` 是带 catalogId/displayName 的三件套。而 /v1/models 的 id 由
+ * `catalogId || displayName || key` 决定（见 src/model.js）。测试对话的下拉按
+ * `m.id` 比对打 ✅，所以这里必须做同样的换算，否则一个 ✅ 也标不出来。
+ * @returns {Set<string>}
+ */
+function upstreamReadableIds() {
+  const keys = state.upstreamModelIds || []
+  const byKey = new Map((state.upstreamModels || []).map((r) => [r?.key, r]))
+  const out = new Set()
+  for (const key of keys) {
+    const row = byKey.get(key)
+    out.add((row && (row.catalogId || row.displayName)) || key)
+  }
+  return out
+}
+
+/**
+ * 额度 chip / 悬停提示里的模型标识 → 人能看懂的名字。
+ *
+ * 上游回执（rateLimitsByModel / freebucks.prices / session.model）给的全是
+ * **目录 key**（m-00032eaeec），直接渲染出来用户根本认不出是哪个模型。
+ * 取值顺序：后端随总览下发的映射 > 模型列表里的 display_name > 去掉 provider
+ * 前缀的可读 id > 原值。**绝不返回空**——取不到名字就显示原 key，不隐藏信息。
+ * @param {string} model
+ * @returns {string}
+ */
+function modelNameFor(model) {
+  if (!model) return ''
+  const key = String(model)
+  const mapped = state.modelNames && state.modelNames[key]
+  if (mapped) return mapped
+  const local = displayNameFor(key)
+  if (local) return local
+  // 已经是可读 id（deepseek/deepseek-v4-flash）时，至少去掉 provider 前缀
+  return shortModel(key)
 }
 
 function colorFor(email) {
@@ -3174,14 +3266,16 @@ function openUserModal(u, view) {
  */
 async function loadPlaygroundModels() {
   let models = []
-  let upstreamIds = new Set(state.upstreamModelIds || [])
+  // 上游给了额度的模型：用**可读 id** 建集合（/api/models 的 id 现在是
+  // catalogId / displayName / key 三选一，拿目录 key 直接比会全部漏标）。
+  let upstreamIds = upstreamReadableIds()
   let note = ''
   try {
     const list = await api('/api/models')
     models = Array.isArray(list.data) ? list.data : []
     if (Array.isArray(list.upstreamModelIds)) {
-      upstreamIds = new Set(list.upstreamModelIds)
       state.upstreamModelIds = list.upstreamModelIds
+      upstreamIds = upstreamReadableIds()
     }
     if (!models.length) note = t('playground.catalogEmpty')
   } catch (err) {

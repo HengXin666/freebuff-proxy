@@ -516,7 +516,9 @@ export function createUpstreamClient(config, token, opts = {}) {
       let modelForWire = opts.model
       if (opts.model && !isModelHandle(opts.model)) {
         await catalog.fetch().catch(() => false)
-        modelForWire = catalog.handleFor(opts.model)
+        // 带 displayName 兜底：静态快照的 id 与实时目录会漂移（见
+        // catalog-protocol.js handleForModel 的说明）。
+        modelForWire = catalog.handleForModel(opts.model, opts.displayName)
         // ⚠️ 这里**不要**用 recommendedKey 兜底（曾用，已证伪）：
         // 它会把 deepseek/deepseek-v4-flash 静默映射到服务端"推荐"的
         // m-00032eaeec（MiMo 2.6 Flash）—— 会话绑 MiMo、agent 却是 deepseek，

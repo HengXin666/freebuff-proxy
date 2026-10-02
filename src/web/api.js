@@ -165,6 +165,29 @@ export function createWebApi(deps) {
     return keyOrId
   }
 
+  /**
+   * 当前账号池里出现过的目录 key → 可读显示名。
+   *
+   * 账号表的「额度」chip 按模型渲染，键来自 `quota.byModel` / `freebucks.prices`
+   * —— 全是目录 key。前端拿到这张表才能把 `m-00032eaeec` 显示成
+   * `MiMo 2.6 Flash`（用户要求）。取不到名字的 key 不进表，前端回落原 key。
+   * @returns {Record<string, string>}
+   */
+  function overviewModelNames() {
+    const keys = new Set()
+    for (const a of runtimes.list()) {
+      for (const id of Object.keys(a?.quota?.byModel || {})) keys.add(id)
+      for (const id of Object.keys(a?.freebucks?.prices || {})) keys.add(id)
+      if (a?.session?.model) keys.add(a.session.model)
+    }
+    /** @type {Record<string, string>} */
+    const out = {}
+    for (const row of runtimes.modelAliases([...keys])) {
+      if (row.displayName) out[row.key] = row.displayName
+    }
+    return out
+  }
+
   async function probeUpstreamSession(force = false) {
     const now = Date.now()
     if (!force && upstreamSessionCache && now - upstreamSessionCache.at < UPSTREAM_SESSION_CACHE_MS) {
@@ -461,8 +484,12 @@ export function createWebApi(deps) {
       } catch {
         models = []
       }
+      const accounts = runtimes.list()
       sendJson(res, 200, {
-        accounts: runtimes.list(),
+        accounts,
+        // 目录 key → 可读显示名，供账号表「额度」chip 把 `m-00032eaeec`
+        // 显示成 `MiMo 2.6 Flash`（前端不再裸显示服务端标识）。
+        modelNames: overviewModelNames(),
         accountCount: runtimes.allKeys().length,
         models: models.length,
         upstream: {
@@ -480,7 +507,7 @@ export function createWebApi(deps) {
 
     if (method === 'GET' && route === '/api/models') {
       let accessTier = null
-      let extraIds = []
+      let extraKeys = []
       // 沿用 60s 缓存：单次实时 GET 要走代理、往返 2-4s，而这是测试对话/模型管理
       // 的首屏路径，必须秒开。要强制拿最新目录用「一键刷新」/「同步上游模型」，
       // 它们走 probeAllAccountsSession() 与 probeUpstreamSessionFresh()。
@@ -488,16 +515,19 @@ export function createWebApi(deps) {
       if (session?.accessTier === 'full' || session?.accessTier === 'limited') {
         accessTier = session.accessTier
       }
-      extraIds = (session?.rateLimitsByModel
+      extraKeys = (session?.rateLimitsByModel
         ? Object.keys(session.rateLimitsByModel)
         : []
       ).concat(session?.model ? [session.model] : [])
+      // 上游回执口径是目录 key（m-xxx）—— 与 /v1/models 同源同处理：
+      // 补 displayName / catalogId 后可读口径优先，控制台与下游 Agent
+      // 看到的都不再是裸 key（用户要求）。
       sendJson(
         res,
         200,
         buildModelsListResponse({
           accessTier,
-          extraIds,
+          extraIds: runtimes.modelAliases(extraKeys),
           includeAllCatalog: true,
           customModels: modelStore ? modelStore.list() : [],
           hiddenModels: modelStore ? modelStore.hidden() : [],
@@ -650,12 +680,19 @@ export function createWebApi(deps) {
             modelStore ? modelStore.list() : [],
           ),
         }))
+        // 上游此刻真实给出额度的模型清单（多账号取并集）。⚠️ upstreamModelIds
+        // 是**目录 key**（m-00032eaeec）—— 它是"上游认不认这个模型"的判据，
+        // 调度/白名单要用，所以 key 口径不动；要显示给人看用同一响应里的
+        // upstreamModels（带 displayName / catalogId）。前端测试对话按 id 匹配
+        // ✅ 标注，而 /api/models 的 id 现在是可读口径 —— 所以前端改用
+        // upstreamModels.map(catalogId || displayName || key) 对齐。
         sendJson(res, 200, {
           models,
           accessTier: session?.accessTier ?? null,
-          // 上游此刻真实给出的模型清单（多账号取并集）：前端据此区分
-          // "目录里有"与"上游此刻确实给额度"，而不是靠一个布尔开关。
           upstreamModelIds: Object.keys(session?.rateLimitsByModel || {}),
+          upstreamModels: runtimes.modelAliases(
+            Object.keys(session?.rateLimitsByModel || {}),
+          ),
           freebucks: session?.freebucks || null,
           note: '只读探测，不创建 session',
         })
@@ -673,7 +710,7 @@ export function createWebApi(deps) {
     // 注：session.modelDisplayName（目录 key → 可读名）由 AccountRuntimes.list()
     // 统一带上，所有出口（本路由 / overview / probe / refresh）自动生效。
     if (method === 'GET' && route === '/api/accounts') {
-      sendJson(res, 200, { object: 'list', data: runtimes.list() })
+      sendJson(res, 200, { object: 'list', data: runtimes.list(), modelNames: overviewModelNames() })
       return true
     }
 
@@ -902,12 +939,18 @@ export function createWebApi(deps) {
         modelIds = Object.keys(session?.rateLimitsByModel || {})
       } catch { /* 目录刷新失败不影响账号刷新结果 */ }
       const failed = results.filter((r) => !r.ok)
+      // 上游模型清单同时给两种口径：upstreamModelIds 是目录 key（判据真值），
+      // upstreamModels 是可直接展示/选用的可读三件套（key/displayName/catalogId）。
+      // 前者别拿来当名字显示（用户明确要求不要看到 m-xxx）。
+      const upstreamKeys = results.length ? modelIds : []
       sendJson(res, 200, {
         ok: true,
         results,
         failures: failed.length,
         accounts: runtimes.list(),
+        modelNames: overviewModelNames(),
         upstreamModelIds: modelIds,
+        upstreamModels: runtimes.modelAliases(upstreamKeys),
         note: '只读刷新：未创建 / 未释放任何会话，已购买的付费时段不受影响',
       })
       return true
@@ -933,6 +976,9 @@ export function createWebApi(deps) {
           email: a.email,
           account: runtimes.list().find((x) => x.key === key),
           session,
+          // 检测结果的 toast 里会列「每个模型的已用/上限」，其键是目录 key ——
+          // 带上映射，前端才显示得出模型名而不是 m-00032eaeec。
+          modelNames: overviewModelNames(),
           note: '只读探测，未创建 session',
         })
       } catch (err) {
