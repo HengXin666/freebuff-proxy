@@ -32,7 +32,7 @@
     "notes:board": "node .agents/skills/hx-agent-notes/scripts/build-board.ts --init board.html"
   },
   "dependencies": {
-    "undici": "^8.10.0",
+    "undici": "^8.10.2",
     "yaml": "^2.8.0"
   },
   "devDependencies": {
