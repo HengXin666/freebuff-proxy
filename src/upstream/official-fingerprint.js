@@ -173,10 +173,21 @@ export function officialSessionHeaders(method, token, opts = {}) {
     // cli/src/utils/client-environment.ts）。缺它就不像官方客户端。
     [HEADER_CLIENT_ENV]: clientEnvironment(),
   }
-  // multi-session 协议：官方只在 instanceId 是 CLI claim（`cli:` 前缀）时发
-  // 这一整套头（cli/src/utils/freebuff-session-api.ts:186-200）。
-  // 服务端据此把请求认成 CLI 而不是 Desktop 标签。
-  if (isCliClaim(opts.instanceId)) {
+  // ⚠️ 这组头此前只在 `cli:` 前缀时才发（按官方 **CLI** 源码
+  // cli/src/utils/freebuff-session-api.ts:186-200：服务端据此认成 CLI
+  // 而非 Desktop 标签）。
+  //
+  // 但 **desktop** 抓包证明它同样发这一组，且用的是**裸 UUID**：
+  // 2026-10-03 抓取（docs/reverse/captures/2026-10-03-official-client.jsonl）
+  // line 8 / 34 / 54 三次 POST admission 均带
+  //   x-freebuff-instance-id: e1be7199-331e-4622-b5a9-0a2cfe8aecc1（裸 UUID）
+  //   x-freebuff-multi-session: 1
+  //   x-freebuff-purchase-continuity: 1
+  //   x-freebuff-desktop-attempt-id: <每次新 uuid>
+  //
+  // 本仓库走 desktop 路线，故改为「有 instanceId 就发整组」。
+  // 见 docs/reverse/15-protocol-review.md P0-2 / P1-5。
+  if (opts.instanceId) {
     headers[HEADER_MULTI_SESSION] = '1'
     headers[HEADER_PURCHASE_CONTINUITY] = '1'
     // 官方在**非 GET** 的 cli claim 请求上带 attempt id（POST admission 实测有）。
@@ -191,12 +202,14 @@ export function officialSessionHeaders(method, token, opts = {}) {
   }
   const tz = localTimeZone()
   if (tz) headers[HEADER_TIMEZONE] = tz
-  // 官方原文（cli/src/utils/freebuff-session-api.ts:201）：
+  // 官方 **CLI** 原文（cli/src/utils/freebuff-session-api.ts:201）：
   //   if ((multiSession || method !== 'POST') && opts.instanceId)
   //      headers[instance-id] = opts.instanceId
-  // 即：GET/DELETE 总是带；POST **只在 multiSession（cli claim）时**带 ——
-  // 那时它是客户端自己声明的 claim，服务端据此签发同一条（实测原样保留）。
-  if ((isCliClaim(opts.instanceId) || method !== 'POST') && opts.instanceId) {
+  // 即 CLI 下：GET/DELETE 总是带；POST 只在 cli claim 时带。
+  //
+  // ⚠️ **desktop 下 POST admission 也带**（抓包 line 8/34/54，裸 UUID）。
+  // 本仓库走 desktop，故改为：有 instanceId 就带，不再限定 cli: 与方法。
+  if (opts.instanceId) {
     headers[HEADER_INSTANCE_ID] = opts.instanceId
   }
   if (method === 'GET' && opts.compact) {
@@ -336,6 +349,26 @@ function fallbackUuid() {
     else out += hex[(Math.random() * 16) | 0]
   }
   return out
+}
+
+/**
+ * 生成一个**裸 UUID**形态的会话实例 id（**不带** `cli:` 前缀）。
+ *
+ * 抓包复核（2026-10-03，docs/reverse/15-protocol-review.md P0-2）：
+ * 官方 desktop 的 instanceId 是裸 UUID（如 e1be7199-331e-4622-b5a9-...），
+ * 且**整场复用**；而 `cli:` 前缀是 CLI 侧 claim 的形态
+ * （official-fingerprint 里另一条证据显示 CLI 抓包为 `cli:b4e28cef-...`）。
+ *
+ * 本仓库走 desktop 路线，故用裸 UUID。且调用方应**复用**同一个值，
+ * 不要每次 admission 新建 —— 那会让每次购买被全额退款作废。
+ *
+ * @returns {string}
+ */
+export function newRawInstanceId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID()
+  }
+  return fallbackUuid()
 }
 
 /** 判断 instanceId 是否是官方 CLI 形态的 claim（带 `cli:` 前缀）。 */

@@ -1,6 +1,6 @@
 import { logger } from './util/log.js'
 import { UpstreamError, isTerminalCountryBlock } from './upstream/client.js'
-import { newCliClaimId } from './upstream/official-fingerprint.js'
+import { newCliClaimId, newRawInstanceId } from './upstream/official-fingerprint.js'
 import { isFreeModel } from './model.js'
 
 /** 账号级故障状态码（回执反映账号处境，不反映某条会话的生死）。 */
@@ -43,6 +43,19 @@ export class SessionManager {
   }) {
     this.upstream = upstream
     this.config = config
+    /**
+     * 会话实例 id：**裸 UUID，整个进程生命周期内复用同一个**。
+     *
+     * 抓包复核（docs/reverse/15-protocol-review.md P0-2）：官方是裸 UUID
+     * 且**整场复用** —— line 8/34/54 三次 admission 同为
+     * `e1be7199-331e-4622-b5a9-0a2cfe8aecc1`，line 38 的 metadata 也是它。
+     * 我们此前用 `cli:<uuid>` 且**每次 admit 新建**，review 指出这可能就是
+     * 「购买被全额退款作废」的直接诱因：官方回执里 desktopRefunds 从未出现，
+     * 而我们每次都退（见 docs/reverse/12 §12.2「诱因尚未确定」）。
+     *
+     * cli-bridge 改成裸 UUID 复用后实测：admission 200 且未产生退款条目。
+     */
+    this.instanceId = newRawInstanceId()
     /** 账号标识（sessions.json 里的 owner key）。 */
     this.accountKey = accountKey
     /** 句柄变更回调（落盘 /data/sessions.json）。 */
@@ -737,7 +750,8 @@ export class SessionManager {
     // （不透明句柄，如 `m-00032eaeec`）。
     // 我们此前一直 POST /admission：那是官方不走的端点，被 503/409 拒。
     // 见 .agents/notes/implemented/bug-fix/2026-10-01-cli-get-session-path.md
-    const claimId = newCliClaimId()
+    // 裸 UUID + 复用（官方形态，见构造函数注释）
+    const claimId = this.instanceId
     logger.info('admitting freebuff session', { model, claimId })
     // 先走官方路径（GET + claim）；失败且是"端点/方法不认"类错误时再回落 POST。
     let body = null
@@ -958,7 +972,8 @@ export class SessionManager {
       // 裸发的 GET 服务端只能按 legacy 处理，这是被拒的直接原因之一。
       // 见 .agents/notes/implemented/bug-fix/2026-10-01-cli-get-session-path.md
       const opts = {
-        instanceId: this.session?.instanceId || newCliClaimId(),
+        // 裸 UUID（desktop 形态）；没有会话时用本进程复用的那个
+        instanceId: this.session?.instanceId || this.instanceId,
         compact: true,
       }
       try {

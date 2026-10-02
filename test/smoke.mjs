@@ -1077,12 +1077,25 @@ function chat(body, headers = {}) {
     ],
     '描述符字段与顺序必须与官方一致, got ' + JSON.stringify(envKeys),
   )
-  // 官方 CLI 自生成 `cli:<uuid>` claim：服务端据此认出 CLI（而非 Desktop 标签）。
-  // 实测确认服务端接受并原样保留该前缀。
+  // ⚠️ instanceId 形态随**路线**而异，两条都是真机实测值：
+  //   CLI     抓包 → `cli:<uuid>`（官方 newFreebuffCliInstanceId，
+  //                   服务端据此认出 CLI 而非 Desktop 标签）
+  //   desktop 抓包 → **裸 UUID 且整场复用**
+  //                  （line 8/34/54 三次 admission 同为 e1be7199-...，
+  //                   line 38 的 metadata 也是它）
+  //
+  // 本仓库走 desktop 路线，故用裸 UUID。且必须**复用**同一个值：
+  // 每次 admission 新建会让每次购买被全额退款作废
+  // （官方回执里 desktopRefunds 从未出现，而我们此前每次都退）。
+  // 见 docs/reverse/15-protocol-review.md P0-2 与 E.1。
   const admitInstance = admitCall.headers['x-freebuff-instance-id']
   assert.ok(
-    /^cli:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(admitInstance || ''),
-    'admission 必须自带 cli: 前缀的 claim（官方 newFreebuffCliInstanceId）, got ' + admitInstance,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(admitInstance || ''),
+    'admission 的 instanceId 必须是裸 UUID（desktop 形态）, got ' + admitInstance,
+  )
+  assert.ok(
+    !String(admitInstance || '').startsWith('cli:'),
+    'desktop 路线不得带 cli: 前缀（那是 CLI 形态）, got ' + admitInstance,
   )
   assert.equal(admitCall.headers['x-freebuff-multi-session'], '1', 'cli claim 必须带 multi-session 头')
   assert.equal(admitCall.headers['x-freebuff-purchase-continuity'], '1', 'cli claim 必须带 purchase-continuity 头')
@@ -1862,7 +1875,9 @@ for (const model of verifiedSpecialModels) {
   )
   assert.ok(
     getAdmit,
-    '必须走官方 GET /freebuff/session 建会话（官方 CLI 从不打 /admission）: ' +
+    '必须走官方 GET /freebuff/session 建会话' +
+      '（注：官方 CLI 从不打 /admission；但 desktop 走 POST /admission，' +
+      '两者都是官方形态，只是路线不同）: ' +
       JSON.stringify(sessCalls.map((c) => c.method + ' ' + c.url.split('/api')[1])),
   )
   // undici 会把头名规范化成首字母大写，断言两种写法都认
@@ -1870,9 +1885,11 @@ for (const model of verifiedSpecialModels) {
     getAdmit.headers['x-freebuff-instance-id'] ||
     getAdmit.headers['X-Freebuff-Instance-Id'] ||
     ''
+  // desktop 路线：裸 UUID（CLI 路线才是 cli: 前缀）。见 P0-2。
   assert.ok(
-    /^cli:/.test(instHdr),
-    'GET 建会话必须自带 cli: claim, got ' + JSON.stringify(instHdr),
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(instHdr),
+    'GET 建会话的 instanceId 必须是裸 UUID（desktop 形态）, got ' +
+      JSON.stringify(instHdr),
   )
   assert.equal(
     getAdmit.headers['x-freebuff-multi-session'],
