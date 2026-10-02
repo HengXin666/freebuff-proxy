@@ -18,6 +18,62 @@
 const HOST = 'https://www.codebuff.com';
 
 /**
+ * 官方资产加载（抓包真值，见 docs/reverse/captures/）。
+ *
+ * 我们不再自己编工具与 system —— 直接用抓到的官方原文：
+ *   official-tools.json         37 个工具完整定义
+ *   official-system-prompts.json 两层 system（manager / worker）
+ *
+ * 这是"照抄对齐"而非"推测"：请求体形态与官方逐字段一致
+ * （差异分析见 docs/reverse/14-captured-diff.md）。
+ */
+let OFFICIAL_TOOLS = null;
+let OFFICIAL_SYS = null;
+async function loadOfficialAssets() {
+  if (OFFICIAL_TOOLS && OFFICIAL_SYS) return { OFFICIAL_TOOLS, OFFICIAL_SYS };
+  const { readFile } = await import('node:fs/promises');
+  const { dirname, join } = await import('node:path');
+  // 本文件在 freebuff-proxy/cli-bridge/，抓包在 ../docs/reverse/captures/
+  const here = dirname(process.argv[1] || '');
+  const capDir = join(here, '..', 'docs', 'reverse', 'captures');
+  try {
+    OFFICIAL_TOOLS = JSON.parse(await readFile(join(capDir, 'official-tools.json'), 'utf8'));
+    OFFICIAL_SYS = JSON.parse(await readFile(join(capDir, 'official-system-prompts.json'), 'utf8'));
+  } catch {
+    OFFICIAL_TOOLS = [];
+    OFFICIAL_SYS = {};
+  }
+  return { OFFICIAL_TOOLS, OFFICIAL_SYS };
+}
+
+/**
+ * 生成 worker 层 system（官方模板 + 动态区块填充）。
+ *
+ * 官方模板含两个动态区块 <repository_stats> / <changed_file_paths>，
+ * 以及一句 "Current date: ..."。直接发模板而不填会成为新的不一致，
+ * 所以这里做最小填充（无 git 信息时给空/unknown，与官方 unknown 语义一致）。
+ */
+function renderWorkerSystem(tpl, opts = {}) {
+  const date = opts.date
+    || new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  let out = String(tpl || '');
+  out = out.replace(/Current date: [^\n]*/, `Current date: ${date}.`);
+  const stats = opts.repositoryStats
+    || JSON.stringify({
+      gitAvailable: false,
+      repositoryVisibility: 'unknown',
+      fileCount: 0,
+      fileCountIsLowerBound: false,
+      testFileCount: 0,
+      changedFileCount: 0,
+      changedFileScanTruncated: false,
+    });
+  out = out.replace('<repository_stats>', stats);
+  out = out.replace('<changed_file_paths>', opts.changedFilePaths || '');
+  return out;
+}
+
+/**
  * 逐字节 dump：把每个上游请求的原始形态落盘，供与官方客户端抓包逐字节对比。
  * FREEBUFF_DUMP_DIR 设置时启用。落盘内容 = 方法/路径/头部名值/体（Buffer hex + utf8）。
  */
@@ -196,6 +252,12 @@ class Bridge {
           'x-freebuff-model': row.handle,
           'x-freebuff-wallet-spend-limit': '0',
           'x-freebuff-first-tab-discount': '0',
+          // ⚠️ 官方 admission 有而我们此前缺失的两个头（抓包真值）：
+          //   x-fb-timezone: Asia/Shanghai
+          //   x-freebuff-desktop-attempt-id: <uuid>
+          'x-fb-timezone': this.cfg.timeZone
+            || (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'),
+          'x-freebuff-desktop-attempt-id': crypto.randomUUID(),
           'x-freebuff-instance-id': inst,
           'x-freebuff-purchase-continuity': '1',
           'x-freebuff-multi-session': '1',
@@ -252,41 +314,95 @@ class Bridge {
   }
 
   /** chat：model 用 handle；run_id 在 codebuff_metadata 里。 */
-  async chat({ row, instanceId, runId, messages, tools, stream = false }) {
+  /**
+   * chat —— 逐字段照抄官方抓包（worker 层形态）。
+   *
+   * 官方真值（docs/reverse/captures/2026-10-03-official-client.jsonl）：
+   *   TOP KEYS: model, codebuff_metadata, provider, messages, tools, tool_choice, stream
+   *   provider:              {"data_collection":"deny"}      ← worker 层
+   *   tool_choice:           "auto"
+   *   stream:                true
+   *   tools:                 官方 37 个（含 write_file）
+   *   metadata:              run_id / client_id / cost_mode / freebuff_instance_id /
+   *                          freebuff_multi_session / trace_session_id /
+   *                          repo_snapshot / llm_step_number / freebuff_reasoning_effort
+   *   ⚠️ 官方**没有** surface 与 freebuff_client_env（那两个是 CLI 侧的，
+   *      我们此前从第三方实现抄来，desktop 不用 —— 属"协议混用"）
+   *   UA 三段完整：.../codebuff ai-sdk/provider-utils/3.0.25 runtime/bun/1.4.2
+   */
+  async chat({
+    row, instanceId, runId, messages, tools,
+    stream = true,
+    layer = 'worker',
+    reasoningEffort = null,
+    noSend = false,
+  }) {
     const url = `${HOST}/api/v1/chat/completions`;
+    const { OFFICIAL_TOOLS, OFFICIAL_SYS } = await loadOfficialAssets();
+
+    const useOfficial = layer === 'worker' && OFFICIAL_TOOLS.length > 0;
+    const outTools = useOfficial ? OFFICIAL_TOOLS : (tools || []);
+    const sysTpl = OFFICIAL_SYS?.[layer] || OFFICIAL_SYS?.worker;
+
+    // system：官方模板渲染后置于首位（客户端消息里的 system 不再覆盖它）
+    const rest = (messages || []).filter((m) => m && m.role !== 'system');
+    const outMessages = sysTpl
+      ? [{ role: 'system', content: renderWorkerSystem(sysTpl) }, ...rest]
+      : messages;
+
+    const metadata = {
+      run_id: runId,
+      client_id: Math.random().toString(36).slice(2, 15),
+      cost_mode: 'free',
+      freebuff_instance_id: instanceId,
+      freebuff_multi_session: '1',
+      trace_session_id: crypto.randomUUID(),
+      repo_snapshot: JSON.stringify({
+        gitAvailable: false,
+        repositoryVisibility: 'unknown',
+        fileCount: 0,
+        fileCountIsLowerBound: false,
+        testFileCount: 0,
+        changedFileCount: 0,
+        changedFileScanTruncated: false,
+      }),
+      llm_step_number: '1',
+    };
+    if (reasoningEffort) metadata.freebuff_reasoning_effort = reasoningEffort;
+
     const body = JSON.stringify({
       model: row.handle,
-      messages,
+      codebuff_metadata: metadata,
+      // worker 层 = data_collection:deny；manager 层 = allow_fallbacks:true
+      provider: layer === 'manager'
+        ? { allow_fallbacks: true }
+        : { data_collection: 'deny' },
+      messages: outMessages,
+      tools: outTools,
+      tool_choice: 'auto',
       stream,
-      codebuff_metadata: {
-        run_id: runId,
-        client_id: Math.random().toString(36).slice(2, 15),
-        cost_mode: 'free',
-        freebuff_instance_id: instanceId,
-        freebuff_multi_session: '1',
-        // ⚠️ 必须与 x-freebuff-client 一致：header 是 desktop，
-        // metadata 里写 cli 会自相矛盾（"同身份"原则，见 docs/reverse/04）。
-        surface: 'desktop',
-        trace_session_id: crypto.randomUUID(),
-        freebuff_client_env:
-          'v1;in=1;out=1;tp=iterm;term=1;ct=1;sz=120x40;ci=0;ssh=0;l=1;p=shell;g=terminal;osc=1',
-      },
-      tools,
     });
+    // ⚠️ 严格照抄：官方 chat **只有**这 7 个业务头（抓包真值）。
+    // 我们此前多发 x-freebuff-instance-id / -client / -model /
+    // -catalog-protocol / -install-id —— 官方 chat 全都不带，
+    // 那些是 admission 用的。多发就是多余的指纹面。
+    //
+    // 注：此前"补 instance-id 后 428 消失"的因果待复核 ——
+    // 官方不带该头却正常，说明 428 的真因可能是别的（由 review agent 兜底）。
+    // 这里按"照抄"原则先对齐到官方形态。
     const hdrs = {
       'content-type': 'application/json',
+      accept: '*/*',
       ...this.auth(),
-      'user-agent': 'ai-sdk/openai-compatible/0.0.0-test/codebuff',
+      'user-agent':
+        'ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.25 runtime/bun/1.4.2',
       'x-freebuff-acting-user-id': this.cfg.userId,
-      'x-freebuff-catalog-protocol': '1',
       'x-freebuff-catalog-fetch': this.fid,
-      'x-freebuff-model': row.handle,
-      'x-freebuff-instance-id': instanceId,
-      'x-freebuff-client': 'desktop',
-      'x-freebuff-install-id': this.cfg.installId,
       ...(await this.signHeaders('POST', url, body, this.fid)),
     };
-    await dumpReq('chat', 'POST', url, hdrs, body);
+    await dumpReq(`chat-${layer}`, 'POST', url, hdrs, body);
+    // noSend：只 dump 不发送（离线对比用，零额度消耗）
+    if (noSend) return { status: 0, text: '(dry-run, not sent)' };
     const res = await fetch(url, { method: 'POST', headers: hdrs, body });
     const text = await res.text();
     return { status: res.status, text };
@@ -348,6 +464,23 @@ try {
       out.chat = c;
       out.ok = c.status === 200;
     }
+  } else if (act === 'dryrun') {
+    // 只构造并 dump，不发送。用于与官方抓包做离线逐字段对比，零额度消耗。
+    const row = bridge.catalog.rows.find((r) => r.key === input.modelKey)
+      || bridge.catalog.rows.find((r) => r.handle === input.modelKey)
+      || bridge.catalog.rows[0];
+    const fakeInst = 'cli:dryrun-' + crypto.randomUUID();
+    const fakeRun = 'dryrun-' + crypto.randomUUID();
+    await bridge.chat({
+      row, instanceId: fakeInst, runId: fakeRun,
+      messages: input.messages || [{ role: 'user', content: 'x' }],
+      tools: input.tools, layer: input.layer || 'worker',
+      reasoningEffort: input.reasoningEffort || null,
+      stream: input.stream !== false,
+      noSend: true,
+    }).catch(() => ({}));
+    out.dryrun = { instanceId: fakeInst, runId: fakeRun, sent: false };
+    out.ok = true;
   } else if (act === 'release') {
     out.result = await bridge.release(input.instanceId);
   } else if (act === 'full') {
