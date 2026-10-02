@@ -44,6 +44,19 @@ const SWITCHABLE_CODES = new Set([
   'admit_failed',
 ])
 
+/**
+ * 槽位占用类：不是账号故障，而是"槽位正在被用 / 声明刚被释放"。
+ * 冷却它们 = 把可用账号钉死。两处判据必须一致（ensureSession 与
+ * reacquireAfterGate）。见
+ * .agents/notes/implemented/bug-fix/2026-10-03-model-name-fallback-and-slot-no-cooldown.md
+ */
+const SLOT_BUSY_CODES = new Set([
+  'purchase_capacity',
+  'purchase_in_use',
+  'purchase_claim_released',
+  'premium_slot_taken',
+])
+
 /** Whole-account cooldown (any model). */
 const ACCOUNT_COOLDOWN_CODES = new Set([
   'rate_limited',
@@ -1354,13 +1367,7 @@ export class AccountRuntimes {
         // 实测反例（2026-10-03）：全新账号配额 0/6、无购买无退款，
         // 仅因上一次会话尚未释放而拿到 purchase_in_use，就被冷却
         // 到 20:20 —— 于是"刚导入的干净账号立刻不可用"。
-        const slotBusyCodes = new Set([
-          'purchase_capacity',
-          'purchase_in_use',
-          'purchase_claim_released',
-          'premium_slot_taken',
-        ])
-        if (slotBusyCodes.has(String(err?.code))) {
+        if (SLOT_BUSY_CODES.has(String(err?.code))) {
           logger.warn('account session slot busy; not cooling', {
             key,
             email: emailByKey.get(key),
@@ -1512,7 +1519,16 @@ export class AccountRuntimes {
         opts.switchAccount ||
         (opts.gateCode && SWITCHABLE_CODES.has(opts.gateCode))
       ) {
-        if (!opts.noCooldown) {
+        // ⚠️ 槽位占用类**不冷却**：它不是账号故障，只是"槽位正在被用"，
+        // 等它空出即可。冷却会把可用账号钉死（实测：干净账号仅因上一次会话
+        // 未释放就拿到 purchase_claim_released，随即被冷却 → 立刻不可用）。
+        // 与 ensureSession 里的 slotBusyCodes 同一套判据。
+        if (!opts.noCooldown && !SLOT_BUSY_CODES.has(String(opts.gateCode))) {
+          logger.warn('gate is slot-busy; switching account without cooling', {
+            key: opts.preferredKey,
+            gateCode: opts.gateCode,
+            model,
+          })
           this.markCooldown(
             opts.preferredKey,
             new UpstreamError(opts.gateCode, {

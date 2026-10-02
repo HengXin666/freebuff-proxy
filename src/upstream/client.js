@@ -3,6 +3,7 @@ import { logger } from '../util/log.js'
 import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from 'undici'
 import { DeviceSigner } from './device-signing.js'
 import { CatalogHolder, isModelHandle } from './catalog-protocol.js'
+import { FREEBUFF_AVAILABLE_MODELS } from '../model.js'
 import {
   BUN_USER_AGENT,
   HEADER_COMPACT_SESSION as FREEBUFF_COMPACT_SESSION_HEADER,
@@ -518,7 +519,14 @@ export function createUpstreamClient(config, token, opts = {}) {
         await catalog.fetch().catch(() => false)
         // 带 displayName 兜底：静态快照的 id 与实时目录会漂移（见
         // catalog-protocol.js handleForModel 的说明）。
-        modelForWire = catalog.handleForModel(opts.model, opts.displayName)
+        //
+        // displayName 由**调用方**给（session-manager 没有模型表的上下文），
+        // 这里从内置静态表按 id 查；查不到就只走 legacyDigests 精确匹配。
+        const displayName =
+          opts.displayName ||
+          (FREEBUFF_AVAILABLE_MODELS.find((m) => m?.id === opts.model)
+            ?.displayName ?? null)
+        modelForWire = catalog.handleForModel(opts.model, displayName)
         // ⚠️ 这里**不要**用 recommendedKey 兜底（曾用，已证伪）：
         // 它会把 deepseek/deepseek-v4-flash 静默映射到服务端"推荐"的
         // m-00032eaeec（MiMo 2.6 Flash）—— 会话绑 MiMo、agent 却是 deepseek，
@@ -540,7 +548,32 @@ export function createUpstreamClient(config, token, opts = {}) {
           compact: opts.compact,
           walletSpendLimit: opts.walletSpendLimit,
         }),
-        ...freebuffAuthHeaders(token),
+        // ⚠️ **不加** x-codebuff-api-key。
+        //
+        // 官方抓包（docs/reverse/captures/2026-10-03-official-client.jsonl）
+        // 逐端点核对：session GET / admission POST / agent-runs POST
+        // **都不带**这个头，只用 `Authorization: Bearer`。
+        // 我们此前额外带上它（既有注释称"只带 Bearer 会 401"），
+        // 于是与官方形态不一致 —— 且实测主服务 admission 失败
+        // （purchase_claim_released / admit_failed），而副仓库
+        // （不带该头）同一账号同一时刻 admission 200 active。
+        //
+        // 按官方抓包为准：只带 Bearer。若后续实测确有 401 再回退并补证据。
+      }
+
+      // 调试：FB_DEBUG_SESSION_HEADERS=1 时打印完整的 admission/session 头部，
+      // 用于与官方抓包逐字段对比（官方 admission **不带** x-codebuff-api-key）。
+      if (process.env.FB_DEBUG_SESSION_HEADERS === '1') {
+        logger.info('session request headers', {
+          method,
+          url,
+          headers: Object.fromEntries(
+            Object.entries(headers).map(([k, v]) => [
+              k,
+              /authorization|api-key/i.test(k) ? 'Bearer ***' : String(v).slice(0, 60),
+            ]),
+          ),
+        })
       }
 
       const init = {
@@ -578,6 +611,15 @@ export function createUpstreamClient(config, token, opts = {}) {
 
       const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'))
       const text = await res.text()
+      // 调试：打印上游原文，用于定位 admission 失败的真因（错误码被上层
+      // sanitize 精简后看不出所以然）。
+      if (process.env.FB_DEBUG_SESSION_HEADERS === '1') {
+        logger.info('session response raw', {
+          method,
+          status: res.status,
+          text: String(text || '').slice(0, 600),
+        })
+      }
       let body = null
       try {
         body = text ? JSON.parse(text) : null

@@ -761,6 +761,10 @@ export class SessionManager {
       logger.warn('GET-claim admit failed; falling back to POST admission', {
         code: err?.code,
         status: err?.status,
+        // ⚠️ 没有这两个字段时（网络层异常）必须留 message，否则日志里
+        // 只剩一句"失败"而看不出原因（实测排障时就卡在这里）。
+        message: err instanceof Error ? err.message : String(err),
+        cause: err?.cause ? String(err.cause).slice(0, 200) : undefined,
         claimId,
       })
       body = null
