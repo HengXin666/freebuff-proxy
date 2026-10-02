@@ -30,16 +30,16 @@ const DEFAULTS = {
     loginBase: 'https://freebuff.com',
     /**
      * 请求形态通道：
-     *   'legacy'（**当前默认**）—— 沿用现有自拼形态
+     *   'legacy' —— 沿用现有自拼形态
      *       （ensureFreebuffSystemMessages + ensureFreebuffToolSignature）。
      *       保持默认是为了**零回归**：现有行为与测试全部不变。
      *   'official' —— 照抄官方客户端抓包真值：官方 37 工具 /
      *       官方 system 模板 / desktop 世代 agent / 分层 provider。
      *       见 src/upstream/official-shape.js 与 docs/reverse/14/15/17。
      *       2026-10-03 在 cli-bridge 上实测 200 + 工具调用；
-     *       待配额重置后在主服务验证，再决定是否切为默认。
+     *       已设为主路径；legacy 仅作回退保留。
      */
-    channel: 'legacy',
+    channel: 'official',
     /** null → <dataDir>/credentials (legacy ./credentials kept as fallback) */
     credentialsDir: null,
     /** Explicit proxy URL, e.g. http://user:pass@host:7890. Env HTTP(S)_PROXY used otherwise. */

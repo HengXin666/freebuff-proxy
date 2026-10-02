@@ -25,7 +25,7 @@ import {
   sendJson,
 } from './util/http.js'
 import { freebuffAuthHeaders } from './auth-store.js'
-import { officialChatShape, officialAgentId } from './upstream/official-shape.js'
+import { buildRpcCfg, rpcReuse } from './upstream/official-rpc.js'
 import {
   officialChatHeaders,
   clientEnvironment,
@@ -951,9 +951,11 @@ export function createProxyHandler(ctx) {
               typeof sessionModelId === 'string' &&
               (sessionModelId.startsWith('m-') ||
                 sessionModelId.startsWith('fbm1.'))
-            // ⚠️ 分通道：official 用 **desktop 世代**（抓包真值），
-            // legacy 沿用 CLI 世代的 base3-free-catalog。
-            // 见 docs/reverse/15-protocol-review.md P0-3。
+            // ⚠️ official 通道：**跳过**本段 startAgentRun。
+            // agent 世代是官方形态的一部分，实现只在副仓库；这里自己发一次
+            // 会用 legacy 世代，与副仓库后续 chat 的世代打架。
+            // 副仓库的 `reuse` 会自己做 startRun（desktop 世代）+ chat。
+            // 见 docs/reverse/17-current-status-and-gaps.md
             const _channel =
               settingsStore?.get?.()?.upstreamChannel === 'official' ||
               config.upstream?.channel === 'official'
@@ -961,11 +963,16 @@ export function createProxyHandler(ctx) {
                 : 'legacy'
             const agentId =
               agentOverride ||
-              (_channel === 'official'
-                ? officialAgentId('worker')
-                : isCatalogMode
-                  ? CATALOG_UNIFIED_AGENT_ID
-                  : agentIdForModel(upstreamModel, customModels()))
+              (isCatalogMode
+                ? CATALOG_UNIFIED_AGENT_ID
+                : agentIdForModel(upstreamModel, customModels()))
+            // official 通道**仍然发** startAgentRun：
+            //   - 保证 runId 始终有值（FINISH 上报、以及 RPC 失败回落 legacy
+            //     时都要用）；
+            //   - 不影响 chat 世代 —— official 下 chat 由副仓库执行，
+            //     它自己会用 desktop 世代再 startRun 一次。
+            // 见 docs/reverse/17-current-status-and-gaps.md
+            {
             try {
               runId = await rt.upstream.startAgentRun({ agentId })
               clientId = newIds().clientId
@@ -999,6 +1006,7 @@ export function createProxyHandler(ctx) {
               } else {
                 throw agentErr
               }
+            }
             }
             logger.info('started agent run', {
               runId,
@@ -1327,19 +1335,6 @@ export function createProxyHandler(ctx) {
   ) {
     const { clientId: fallbackClientId } = newIds()
     const effectiveClientId = clientId || fallbackClientId
-    // 官方形态（照抄抓包）：layer 由 layerHint 决定，默认 worker。
-    // mission 用当前用户消息 —— manager 层模板尾部必须替换掉抓包时那条死任务。
-    const _layer = layerHint === 'manager' ? 'manager' : 'worker'
-    const _userText = (() => {
-      const m = (clientBody?.messages || []).find((x) => x && x.role === 'user')
-      if (!m) return ''
-      return typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
-    })()
-    const officialShape = officialChatShape({
-      layer: _layer,
-      mission: _userText,
-      repositoryStats: repositorySnapshot,
-    })
     // 优先级：服务端指派的 model（m-xxx）> 请求的模型名；
     // 再经目录翻成**句柄**（fbm1.xxx）—— 官方 chat 的 model 就是句柄。
     // 真机证据：{"model":"fbm1.AAEAAUPe2Us...","codebuff_metadata":{...}}
@@ -1384,29 +1379,11 @@ export function createProxyHandler(ctx) {
       config.upstream?.channel === 'official'
         ? 'official'
         : 'legacy'
-    if (channel === 'official') {
-      const sys = officialShape.system
-      const rest = (body.messages || []).filter((m) => m && m.role !== 'system')
-      body.messages = sys ? [{ role: 'system', content: sys }, ...rest] : body.messages
-      // ⚠️ **合并**而非替换：官方工具集在前（满足工具指纹），
-      // 客户端自定义工具按名去重后追加（不丢用户声明的工具）。
-      // 直接替换会让不在官方 37 个里的自定义工具静默消失。
-      //
-      // ⚠️ 客户端**没有**声明工具时就不发工具集：用户没要工具，
-      // 没必要背 37 个工具的 token 成本，也不该凭空引入工具调用可能。
-      const clientTools = Array.isArray(body.tools) ? body.tools : []
-      if (clientTools.length > 0) {
-        const seen = new Set(
-          officialShape.tools.map((t) => t?.function?.name).filter(Boolean),
-        )
-        const extra = clientTools.filter(
-          (t) => t?.function?.name && !seen.has(t.function.name),
-        )
-        body.tools = [...officialShape.tools, ...extra]
-        body.tool_choice = 'auto'
-      }
-      if (body.provider === undefined) body.provider = officialShape.provider
-    } else {
+    // ⚠️ official 通道**不在这里构造**：官方形态的实现只有一份，在 cli-bridge。
+    // 本函数只产出 legacy 形态；official 会在发送阶段把整条请求委托给副仓库
+    // （见 forwardCompletions 里的 rpcChat 分支），避免两份实现漂移。
+    // 见 docs/reverse/17-current-status-and-gaps.md
+    if (channel !== 'official') {
       // Free mode requires a system message opening with the Freebuff CLI marker
       // ("You are Buffy, the strategic coding assistant."). base3-free-* agent
       // 用 base3 规范开场（对齐 trefeon PR #207）。
@@ -1630,23 +1607,103 @@ export function createProxyHandler(ctx) {
     // 只对"客户端确实带了 tools"的请求生效——没有工具可去时重试毫无意义。
     // 判据与取舍见
     // .agents/notes/implemented/bug-fix/2026-09-18-tool-schema-rejection-strip.md
-    const toolStripCapable =
-      hasClientTools(forwardBody) &&
-      settingsStore?.get?.()?.stripToolsOnSchemaRejection === true &&
-      // ⚠️ official 通道发的是**官方工具集**，本就不应触发 tool-schema 拒绝，
-      // 也就不需要"剥离工具重试"这条退路。剥离会丢掉官方工具集反而更糟。
-      !(
-        settingsStore?.get?.()?.upstreamChannel === 'official' ||
-        config.upstream?.channel === 'official'
-      )
+    // 注意：toolStripCapable 在 RPC 之后计算（见下），因为只有在**确定**
+    // 走了官方形态时才可以禁用这条退路；若 RPC 不可用而降级到 legacy，
+    // 退路必须重新生效（否则 legacy 的 404 无法恢复）。
     let requestBody = forwardBody
     let toolsStripped = false
     let upstreamRes
     /** 非 2xx 时上游响应体的文本（在循环里读一次，避免重复消费流）。 */
     let upstreamErrText = null
+
+    // ⚠️ official 通道：**整条请求委托给副仓库（cli-bridge）执行**。
+    //
+    // 官方形态的实现只有一份（在 cli-bridge，bun 执行）：官方 37 工具 /
+    // 官方 system 模板 / desktop 世代 agent / 分层 provider。
+    // 主服务不复制那份逻辑，而是把 instanceId + messages + tools 传过去，
+    // 由副仓库 startRun + chat，再把原始响应透传给下游 —— 这就是 RPC 边界。
+    //
+    // 用 `reuse` 而不是 `full`：主服务**已经**做过 admission 并持有会话，
+    // 副仓库不需要再买一次（一次 admit = 买断一小时）。
+    // 见 docs/reverse/17-current-status-and-gaps.md
+    const _official =
+      settingsStore?.get?.()?.upstreamChannel === 'official' ||
+      config.upstream?.channel === 'official'
+    /** RPC 是否拿到了响应（拿到则跳过下面的 raw 重试循环）。 */
+    let _rpcResponse = false
+    if (_official) {
+      try {
+        const rpcCfg = await buildRpcCfg(upstream, config)
+        if (!rpcCfg) {
+          logger.warn('official channel: no rpc cfg, falling back to legacy')
+        } else {
+          const rpc = await rpcReuse({
+            cfg: rpcCfg,
+            instanceId,
+            modelKey: forwardBody.model,
+            messages: forwardBody.messages,
+            tools: forwardBody.tools,
+            layer: 'worker',
+            stream: true,
+            timeoutMs: Math.max(
+              1_000,
+              Math.min(180_000, schedulingDeadline - Date.now()),
+            ),
+          })
+          logger.info('official channel: rpc result', {
+            status: rpc.status,
+            ok: rpc.ok,
+            model: rpc.model?.name,
+            error: rpc.error,
+          })
+          if (rpc.status) {
+            _rpcResponse = true
+            upstreamRes = new Response(rpc.text || '', {
+              status: rpc.status,
+              headers: { 'content-type': 'application/json' },
+            })
+            upstreamErrText = rpc.ok ? null : (rpc.text || '')
+          }
+        }
+      } catch (err) {
+        logger.warn('official channel rpc failed, falling back to legacy', {
+          error: String(err?.message || err),
+        })
+      }
+      // ⚠️ 降级：RPC 没拿到响应（不可用/失败/无凭据）时，
+      // 请求体必须补成 legacy 形态再走原 raw 路径 ——
+      // 否则会发出一个"既没有官方 system、也没有签名工具"的畸形请求。
+      if (!upstreamRes) {
+        requestBody.messages = ensureFreebuffSystemMessages(
+          requestBody.messages,
+          forwardBody.agentId || agentIdForModel(upstreamModel, customModels()),
+        )
+        if (
+          settingsStore?.get?.()?.freeToolSignatureEnabled !== false &&
+          Array.isArray(requestBody.tools)
+        ) {
+          requestBody.tools = ensureFreebuffToolSignature(
+            requestBody.tools,
+            true,
+          )
+        }
+      }
+    }
+
+    // official 通道发的是**官方工具集**，本就不应触发 tool-schema 拒绝，
+    // 也就不需要"剥离工具重试"这条退路（剥离会丢掉官方工具集反而更糟）。
+    // 但 RPC 没命中而降级到 legacy 时，退路必须重新生效。
+    const toolStripCapable =
+      hasClientTools(forwardBody) &&
+      settingsStore?.get?.()?.stripToolsOnSchemaRejection === true &&
+      !upstreamRes
+
     try {
       // 最多两轮：第一轮带原工具集，被 tool-schema 拒后第二轮去掉工具。
+      // ⚠️ official 通道已由 RPC 拿到响应 → 整段跳过（不再自己发一次 raw）。
       for (let round = 0; round < 2; round++) {
+        // 只有 RPC 拿到响应才跳过；循环内重试时上游 404 不应被这里打断
+        if (_rpcResponse) break
         upstreamRes = await upstream.raw('/api/v1/chat/completions', {
           method: 'POST',
           headers,

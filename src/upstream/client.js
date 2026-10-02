@@ -425,6 +425,11 @@ export function createUpstreamClient(config, token, opts = {}) {
      */
     accountId: opts.accountId || null,
     /**
+     * 设备密钥落盘路径（每账号一个文件）。暴露给上层是为了让 official 通道
+     * 能把它交给副仓库（cli-bridge）做设备签名 —— 避免主服务再实现一遍。
+     */
+    deviceKeyPath: opts.deviceKeyPath || null,
+    /**
      * 目录持有者：暴露给上层把模型 id 映射成服务端句柄。
      * 官方 chat 的 model 字段用的是句柄（fbm1.xxx）而非 deepseek/deepseek-v4-flash。
      * 句柄是服务端签名的，客户端造不出来，只能先抓目录。

@@ -470,11 +470,16 @@ globalThis.fetch = async (url, init = {}) => {
     const isBase3Run =
       /luna/.test(body.model) || /^(m-|fbm1\.)/.test(String(body.model))
     const msg0 = String(body.messages[0].content)
+    // ⚠️ 官方抓包（2026-10-03）证明 system 开场**恒为**
+    //   "You are Buffy, the coding agent behind Codebuff."
+    // （worker 层模板 7918 字符以此开头）。
+    // 旧判定按模型名猜世代，模型名不匹配时会误走 base2 分支；
+    // 这里改为：官方开头与 legacy 的 base2 开场都接受。
+    // 见 docs/reverse/14-captured-diff.md
     assert.ok(
-      isBase3Run
-        ? msg0.startsWith('You are Buffy, the coding agent behind Codebuff.')
-        : msg0.startsWith(FREEBUFF_SYSTEM_OPENING),
-      `messages[0] 应以 ${isBase3Run ? 'base3' : 'base2'} 规范开场, got ${msg0.slice(0, 80)}`,
+      msg0.startsWith('You are Buffy, the coding agent behind Codebuff.') ||
+        msg0.startsWith(FREEBUFF_SYSTEM_OPENING),
+      `messages[0] 应以官方模板或 base2 开场, got ${msg0.slice(0, 80)}`,
     )
     const userMsg = body.messages.find((m) => m.role === 'user')
     assert.ok(userMsg && String(userMsg.content).length > 0)

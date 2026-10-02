@@ -28,8 +28,9 @@ const DEFAULT_SETTINGS = Object.freeze({
   //       decide（manager）、官方 system 模板、desktop 世代 agent、分层 provider。
   //       见 src/upstream/official-shape.js 与 docs/reverse/14/15/17。
   //       2026-10-03 在 cli-bridge 实测：200 + write_file 工具调用。
-  // ⚠️ 默认 legacy 是为**零回归**；official 需实机验证后再切。
-  upstreamChannel: 'legacy',
+  // 默认 **official**：与官方客户端抓包逐字段一致，身份/世代不再错配。
+  // 回退：控制台「设置 → 上游请求链路」切回 legacy 即可，无需重启。
+  upstreamChannel: 'official',
   // 每个账号同一时间可并发的 SSE 响应流数（账号内并发），默认 2。
   // 账号调度是"粘性优先"（drain, not rotate）：并发请求先挤同一账号，超过该值
   // 才溢出到下一个账号；从不主动平摊到新账号（上游把轮换健康账号当农场特征，

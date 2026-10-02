@@ -1,0 +1,172 @@
+/**
+ * 副仓库（cli-bridge）RPC 客户端 —— **薄封装，零协议代码**。
+ *
+ * 设计原则：上游请求的协议实现**只有一份**，在 `cli-bridge/`（bun 执行）。
+ * 主服务（Node）不复制那套逻辑，而是把请求**委托**给它执行，再把结果
+ * 透传给下游。这就是用户要的「主侧请求到副侧，副侧直接透传自己逻辑，
+ * 相当于一个 RPC」。
+ *
+ * 为什么不直接在 Node 里再实现一遍：
+ *   - 两份实现必然漂移，且官方形态一旦变化要改两处；
+ *   - cli-bridge 用 bun 执行，TLS 栈与官方客户端同源；
+ *   - 2026-10-03 的 200 + 工具调用是在副仓库实测出来的，
+ *     重复实现等于把已验证的逻辑丢掉重写。
+ *
+ * 见 docs/reverse/17-current-status-and-gaps.md。
+ */
+
+import { readFile } from 'node:fs/promises'
+import { callBun } from '../../cli-bridge/bridge.mjs'
+
+/**
+ * 用主服务的 upstream 客户端构造副仓库需要的 cfg。
+ *
+ * 主服务的设备密钥是**落盘文件**（data/device-keys/<accountKey>.json），
+ * 副仓库需要的是里面的 keyId / privateKey —— 这里读出来转成副仓库形态。
+ *
+ * @param {object} upstream 主服务 createUpstreamClient 的返回值
+ * @param {object} config 主服务 config
+ * @param {string} accountKey 凭据文件名（账号 key）
+ * @returns {Promise<object|null>} null 表示拿不到凭据（调用方应回落 legacy）
+ */
+export async function buildRpcCfg(upstream, config = {}) {
+  if (!upstream?.token) return null
+  const cfg = {
+    token: upstream.token,
+    userId: upstream.accountId || null,
+    // 官方 chat 8 头里没有 install-id，chat 那一跳不需要它
+    installId: null,
+    keyId: null,
+    privateKey: null,
+    timeZone: config?.upstream?.timeZone || 'Asia/Shanghai',
+  }
+  const p = upstream.deviceKeyPath
+  if (p) {
+    try {
+      const dk = JSON.parse(await readFile(p, 'utf8'))
+      cfg.keyId =
+        dk.registrations?.[`https://www.codebuff.com user:${cfg.userId}`] || null
+      cfg.privateKey = dk.privateKey || null
+    } catch {
+      // 无设备密钥也能发（副仓库退化为不签名），不阻塞
+    }
+  }
+  return cfg
+}
+
+/**
+ * 委托副仓库执行 **startRun + chat**（不 admission）。
+ *
+ * 用于主服务已持有会话（instanceId）的场景：副仓库自己按 desktop 世代
+ * startAgentRun，再用官方形态发 chat。主服务因此**不需要**知道 agent 世代、
+ * 官方工具集、官方 system 的任何细节 —— 那些只在副仓库里有一份。
+ *
+ * @param {object} params 同 rpcChat，但不需要 runId
+ * @returns {Promise<{ ok: boolean, status?: number, text?: string, runId?: string, model?: object, error?: string }>}
+ */
+export async function rpcReuse(params) {
+  const {
+    cfg,
+    instanceId,
+    modelKey,
+    messages,
+    tools,
+    layer = 'worker',
+    reasoningEffort = null,
+    stream = true,
+    timeoutMs = 180_000,
+  } = params
+
+  const out = await callBun(
+    {
+      cfg,
+      action: 'reuse',
+      modelKey,
+      instanceId,
+      messages,
+      tools,
+      layer,
+      reasoningEffort,
+      stream,
+    },
+    timeoutMs,
+  )
+
+  return {
+    ok: out?.chat?.status === 200,
+    status: out?.chat?.status,
+    text: out?.chat?.text,
+    runId: out?.startRun?.runId || null,
+    model: out?.model,
+    error: out?.error,
+  }
+}
+
+/**
+ * 委托副仓库执行 chat 那一跳。
+ *
+ * 主服务已持有会话（instanceId）与 run（runId），这里**不重复 admission**，
+ * 只委托最后一步，避免多买一次会话（一次 admit = 买断一小时）。
+ *
+ * @param {object} params
+ * @param {object} params.cfg 副仓库需要的凭据配置 { token, userId, installId, keyId, privateKey, timeZone }
+ * @param {string} params.instanceId 会话实例 id（主服务已有）
+ * @param {string} params.runId agent run id（主服务已有）
+ * @param {string} params.modelKey 目录 key（m-xxx）或 handle（fbm1.xxx）
+ * @param {any[]} params.messages 消息（system 由副仓库用官方模板生成）
+ * @param {any[]} [params.tools]
+ * @param {'worker'|'manager'} [params.layer]
+ * @param {string|null} [params.reasoningEffort]
+ * @param {boolean} [params.stream]
+ * @param {number} [params.timeoutMs]
+ * @returns {Promise<{ ok: boolean, status?: number, text?: string, model?: object, error?: string }>}
+ */
+export async function rpcChat(params) {
+  const {
+    cfg,
+    instanceId,
+    runId,
+    modelKey,
+    messages,
+    tools,
+    layer = 'worker',
+    reasoningEffort = null,
+    stream = true,
+    timeoutMs = 180_000,
+  } = params
+
+  const out = await callBun(
+    {
+      cfg,
+      action: 'chat',
+      modelKey,
+      instanceId,
+      runId,
+      messages,
+      tools,
+      layer,
+      reasoningEffort,
+      stream,
+    },
+    timeoutMs,
+  )
+
+  const result = out?.result || {}
+  return {
+    ok: result.status === 200,
+    status: result.status,
+    text: result.text,
+    model: out.model,
+    error: out.error,
+  }
+}
+
+/** 副仓库是否可用（bun 存在且可执行）。 */
+export async function rpcAvailable() {
+  try {
+    const { hasBun } = await import('../../cli-bridge/bridge.mjs')
+    return hasBun()
+  } catch {
+    return false
+  }
+}
