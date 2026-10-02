@@ -54,6 +54,73 @@ async function loadOfficialAssets() {
 }
 
 /**
+ * 采集 repo_snapshot（worker 层用真实项目统计，manager 层全 0）。
+ *
+ * 官方分层取值：line 14（manager）fileCount 0；
+ * line 38（worker）fileCount 69、testFileCount 5。
+ * 我们此前统一硬编码 0 —— worker 层会成为不一致点。
+ *
+ * 只做**轻量**统计：受 .gitignore 影响的文件不逐个读内容，
+ * 仅统计数量并识别测试文件，超时/失败即回落到全 0。
+ */
+async function collectRepoSnapshot(dir) {
+  const zero = {
+    gitAvailable: false,
+    repositoryVisibility: 'unknown',
+    fileCount: 0,
+    fileCountIsLowerBound: false,
+    testFileCount: 0,
+    changedFileCount: 0,
+    changedFileScanTruncated: false,
+  };
+  if (!dir) return zero;
+  try {
+    const { readdir, stat } = await import('node:fs/promises');
+    const { join, extname, basename } = await import('node:path');
+    const SKIP = new Set(['.git', 'node_modules', 'dist', 'build', '.next',
+      '.cache', 'coverage', '.venv', '__pycache__', '.mypy_cache']);
+    const TEST_RE = /(^|[._-])(test|spec|tests|specs)([._-]|$)|\.(test|spec)\./i;
+    let fileCount = 0, testFileCount = 0, truncated = false;
+    const queue = [dir];
+    let visited = 0;
+    while (queue.length && visited < 20000) {
+      const cur = queue.pop();
+      let entries = [];
+      try { entries = await readdir(cur, { withFileTypes: true }); } catch { continue; }
+      for (const e of entries) {
+        if (e.name.startsWith('.') && e.name !== '.') {
+          if (SKIP.has(e.name)) continue;
+        }
+        const p = join(cur, e.name);
+        if (e.isDirectory()) {
+          if (SKIP.has(e.name)) continue;
+          if (queue.length < 4000) queue.push(p); else truncated = true;
+          continue;
+        }
+        if (!e.isFile()) continue;
+        visited++;
+        fileCount++;
+        if (TEST_RE.test(e.name)) testFileCount++;
+        if (visited >= 20000) { truncated = true; break; }
+      }
+    }
+    let gitAvailable = false;
+    try { await stat(join(dir, '.git')); gitAvailable = true; } catch {}
+    return {
+      gitAvailable,
+      repositoryVisibility: 'unknown',
+      fileCount,
+      fileCountIsLowerBound: truncated,
+      testFileCount,
+      changedFileCount: 0,
+      changedFileScanTruncated: false,
+    };
+  } catch {
+    return zero;
+  }
+}
+
+/**
  * manager 层 system 的 mission 段是**动态的**：抓包提取的模板里嵌着
  * 当时那条用户消息（USER_TURN_MARKER: create file /tmp/user-turn-proof.txt...）。
  * 原样发出等于每次都告诉上游"我要建这个文件" —— 必须按当前请求替换。
@@ -369,6 +436,34 @@ class Bridge {
     return this.chat({ row, instanceId, runId, messages, tools, stream });
   }
 
+  /**
+   * FINISH 上报：run 结束时告诉上游。
+   *
+   * 官方每次 run 结束都发（line 32 / 65 / 74），带 steps[].messageId
+   * （取自流式响应的 chatcmpl-*）。我们此前**从不发** —— run 悬挂。
+   */
+  async finishRun(runId, { status = 'completed', steps = [] } = {}) {
+    const url = `${HOST}/api/v1/agent-runs`;
+    const payload = JSON.stringify({
+      action: 'FINISH',
+      runId,
+      status,
+      totalSteps: steps.length,
+      directCredits: 0,
+      totalCredits: 0,
+      steps,
+    });
+    const hdrs = {
+      'content-type': 'application/json',
+      ...this.auth(),
+      'x-freebuff-acting-user-id': this.cfg.userId,
+    };
+    await dumpReq('finishRun', 'POST', url, hdrs, payload);
+    const res = await fetch(url, { method: 'POST', headers: hdrs, body: payload });
+    const text = await res.text().catch(() => '');
+    return { status: res.status, text: text.slice(0, 300) };
+  }
+
   /** chat：model 用 handle；run_id 在 codebuff_metadata 里。 */
   /**
    * trace_session_id：一个 run 一个，不是每请求随机
@@ -450,15 +545,20 @@ class Bridge {
       freebuff_instance_id: instanceId,
       freebuff_multi_session: '1',
       trace_session_id: this._traceFor(runId),
-      repo_snapshot: JSON.stringify({
-        gitAvailable: false,
-        repositoryVisibility: 'unknown',
-        fileCount: 0,
-        fileCountIsLowerBound: false,
-        testFileCount: 0,
-        changedFileCount: 0,
-        changedFileScanTruncated: false,
-      }),
+      // 分层取值：manager 全 0；worker 用真实项目统计（P1-9）
+      repo_snapshot: JSON.stringify(
+        layer === 'manager'
+          ? {
+              gitAvailable: false,
+              repositoryVisibility: 'unknown',
+              fileCount: 0,
+              fileCountIsLowerBound: false,
+              testFileCount: 0,
+              changedFileCount: 0,
+              changedFileScanTruncated: false,
+            }
+          : await collectRepoSnapshot(this.cfg.projectDir || process.cwd()),
+      ),
       // 官方同 run 内递增（line 38=1 → 42=2 → 45=3 → 56=4），字符串形态
       llm_step_number: String(this._stepFor(runId)),
     };
@@ -499,7 +599,16 @@ class Bridge {
     if (noSend) return { status: 0, text: '(dry-run, not sent)' };
     const res = await fetch(url, { method: 'POST', headers: hdrs, body });
     const text = await res.text();
-    return { status: res.status, text };
+    // 从流式响应里取 chatcmpl-* id —— FINISH 上报需要它（官方 line 32/65/74）
+    let messageId = null;
+    for (const line of String(text).split('\n')) {
+      if (!line.startsWith('data: ')) continue;
+      const d = line.slice(6).trim();
+      if (!d || d === '[DONE]') continue;
+      const m = d.match(/"id"\s*:\s*"(chatcmpl-[^"]+)"/);
+      if (m) { messageId = m[1]; break; }
+    }
+    return { status: res.status, text, messageId };
   }
 }
 
@@ -600,10 +709,27 @@ try {
         // 上游不知道请求属于哪个会话 → 428 waiting_room_required。
         const c = await bridge.chat({
           row, instanceId: inst, runId: run.runId,
-          messages: input.messages, tools: input.tools, stream: input.stream,
+          messages: input.messages, tools: input.tools,
+          stream: input.stream !== false,
+          layer: input.layer || 'worker',
+          reasoningEffort: input.reasoningEffort || null,
         });
         out.chat = c;
         out.ok = c.status === 200;
+        // FINISH 上报：官方每次 run 结束都发（line 32/65/74）。
+        // steps[].messageId 取流式响应的 chatcmpl-*。
+        if (input.finishRun !== false) {
+          const steps = c.messageId
+            ? [{ id: c.messageId, stepNumber: 1, credits: 0,
+                 childRunIds: [], messageId: c.messageId,
+                 status: c.status === 200 ? 'completed' : 'failed',
+                 startTime: new Date().toISOString() }]
+            : [];
+          out.finishRun = await bridge.finishRun(run.runId, {
+            status: c.status === 200 ? 'completed' : 'failed',
+            steps,
+          });
+        }
       }
     }
   } else {
