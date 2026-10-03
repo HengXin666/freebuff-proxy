@@ -8,8 +8,7 @@ import {
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import {
   buildModelsListResponse,
-  agentIdForModel,
-  agentFallbackForModel,
+  CATALOG_UNIFIED_AGENT_ID,
   FREEBUFF_AVAILABLE_MODELS,
 } from '../model.js'
 import { freebuffLegacyModelDigest } from '../upstream/catalog-protocol.js'
@@ -666,26 +665,42 @@ export function createWebApi(deps) {
         // 上游探测返回上游真实存在的全部模型（不过滤 hidden）——
         // 「同步上游模型」要能看到并拉回上游的完整列表；
         // 用户是否隐藏由「模型管理」的 hidden 列表独立控制。
-        const models = Object.entries(limits).map(([id, info]) => ({
-          id,
-          // 回执侧 id 是目录 key（m-00032eaeec）——控制台要显示人能认的名字。
-          // catalogId 是目录侧的人类可读 id（deepseek/deepseek-v4-flash），
-          // 由 legacyDigests 反查得出；「同步上游模型」用它才能真正对上号。
-          displayName: modelDisplayName(id),
-          catalogId: catalogIdForKey(id),
-          limit: info?.limit ?? null,
-          recentCount: info?.recentCount ?? null,
-          freebucksPerHour: Number.isFinite(prices[id]) ? prices[id] : null,
-          pool: info?.pool ?? null,
-          poolLabel: info?.poolLabel ?? null,
-          resetAt: info?.resetAt ?? null,
-          resetTimeZone: info?.resetTimeZone ?? null,
-          agentId: agentIdForModel(id, modelStore ? modelStore.list() : []),
-          fallbackAgentId: agentFallbackForModel(
-            id,
-            modelStore ? modelStore.list() : [],
-          ),
-        }))
+        //
+        // ⚠️ 两份口径并存，别互相顶替（用户要求：对外**不要**再出现 m-xxx）：
+        //   - `key`  = 目录 key（m-00032eaeec）——服务端寻址/白名单判据真值；
+        //   - `id`   = 可读模型名 `catalogId || displayName || key`，与 /v1/models
+        //              的 id 完全同源，控制台表格首列显示的就是它。
+        //   - `agentId`：本接口的条目**全部**来自会话回执/实时目录，属目录模式，
+        //     官方用的统一 agent 就是 CATALOG_UNIFIED_AGENT_ID。此前按 key 推导
+        //     出 `base2-free-m-00032eaeec` —— 上游不存在的 agent，纯噪音。
+        const models = Object.entries(limits).map(([key, info]) => {
+          const displayName = modelDisplayName(key)
+          const catalogId = catalogIdForKey(key)
+          return {
+            key,
+            id: catalogId || displayName || key,
+            // 回执侧 id 是目录 key（m-00032eaeec）——控制台要显示人能认的名字。
+            // catalogId 是目录侧的人类可读 id（deepseek/deepseek-v4-flash），
+            // 由 legacyDigests 反查得出；「同步上游模型」用它才能真正对上号。
+            displayName,
+            catalogId,
+            limit: info?.limit ?? null,
+            recentCount: info?.recentCount ?? null,
+            freebucksPerHour: Number.isFinite(prices[key]) ? prices[key] : null,
+            pool: info?.pool ?? null,
+            poolLabel: info?.poolLabel ?? null,
+            resetAt: info?.resetAt ?? null,
+            resetTimeZone: info?.resetTimeZone ?? null,
+            // agent **一律**是统一目录 agent，不按模型推导。
+            // 本接口的行全部以**目录 key** 为身份，而调度时 agent 由会话回执的
+            // model 决定：`snap.model` 是目录 key（m-xxx）→ proxy.js 走
+            // isCatalogMode → `base3-free-catalog`。所以这里按 catalogId 推导
+            // （如 `base2-free-deepseek-flash`）反而**不是**实际会被使用的 agent。
+            // 修复前按 key 推导出的 `base2-free-m-00032eaeec` 更是上游不存在的值。
+            agentId: CATALOG_UNIFIED_AGENT_ID,
+            fallbackAgentId: CATALOG_UNIFIED_AGENT_ID,
+          }
+        })
         // 上游此刻真实给出额度的模型清单（多账号取并集）。⚠️ upstreamModelIds
         // 是**目录 key**（m-00032eaeec）—— 它是"上游认不认这个模型"的判据，
         // 调度/白名单要用，所以 key 口径不动；要显示给人看用同一响应里的

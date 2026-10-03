@@ -287,6 +287,8 @@ const DICT = {
     en: 'Upstream request quota {used}/{limit} ({pool})',
   },
   'quota.resetLine': { 'zh-CN': '重置 {at} · {in}', en: 'Resets {at} · {in}' },
+  // 悬停提示首行：给人看的名字在前、服务端标识在后（排障要对得上上游日志）。
+  'quota.modelWithKey': { 'zh-CN': '{name}（{key}）', en: '{name} ({key})' },
   'quota.poolEmpty': { 'zh-CN': ' · 池空', en: ' · pool empty' },
   'quota.resetSoon': { 'zh-CN': '即将重置', en: 'resetting now' },
   'quota.resetLocalWithUpstream': { 'zh-CN': '{local}（上游 {upstream}）', en: '{local} (upstream {upstream})' },
@@ -341,6 +343,10 @@ const DICT = {
   'model.available': { 'zh-CN': '可用', en: 'Available' },
   'model.management': { 'zh-CN': '模型管理', en: 'Models' },
   'model.id': { 'zh-CN': '模型 id', en: 'Model id' },
+  'model.idHint': {
+    'zh-CN': '对外模型名（catalogId 优先，其次上游显示名）。悬停可看服务端目录 key',
+    en: 'The public model name (catalogId first, then upstream display name). Hover for the server-side catalog key',
+  },
   'model.displayName': { 'zh-CN': '显示名', en: 'Display name' },
   'model.quotaHeader': { 'zh-CN': '额度（今日 · FB/h）', en: 'Quota (today · FB/h)' },
   'model.agentBase2': { 'zh-CN': 'agent (base2)', en: 'agent (base2)' },

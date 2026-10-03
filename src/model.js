@@ -449,8 +449,29 @@ function customModelIndex(customModels) {
 }
 
 /**
+ * 传进来的模型标识是不是**目录标识**（目录 key `m-xxx` / 句柄 `fbm1.`）。
+ *
+ * 判据与 `src/proxy.js` 的 `isCatalogMode`（`snap.model` 以 `m-` / `fbm1.` 开头）
+ * 同源：目录模式下上游只认统一 agent，不按模型推导 agent。
+ * @param {string} modelId
+ * @returns {boolean}
+ */
+export function isCatalogModelId(modelId) {
+  return (
+    typeof modelId === 'string' &&
+    (modelId.startsWith('m-') || modelId.startsWith('fbm1.'))
+  )
+}
+
+/**
  * Freebuff free-mode root agent id for a model (server run registry)。
- * 解析顺序：前端自定义 agentId > 内置 catalog > 命名规则推导 > 通用 base2-free。
+ * 解析顺序：目录标识 > 前端自定义 agentId > 内置 catalog > 命名规则推导 >
+ * 通用 base2-free。
+ *
+ * ⚠️ 目录标识（`m-xxx` 目录 key / `fbm1.` 句柄）**不推导**，一律返回统一 agent
+ * `base3-free-catalog`：目录模式下官方 START 用的就是这个值，而目录 key 不含任何
+ * 模型名信息，`deriveAgentId` 对它只会产出 `base2-free-m-00032eaeec` 这种**上游
+ * 不存在**的 agent。见 2026-10-01-catalog-agent.md、2026-10-03-readable-model-id-unification.md。
  *
  * ⚠️ 硬性例外（风控保护）：luna 系列只能用 base3 孪生 agent。上游已退役
  * base2-free-luna 且任何 base2 尝试都会触发账号风控（实测）。因此 luna 的
@@ -461,6 +482,7 @@ function customModelIndex(customModels) {
  * @returns {string}
  */
 export function agentIdForModel(modelId, customModels) {
+  if (isCatalogModelId(modelId)) return CATALOG_UNIFIED_AGENT_ID
   const forced = forcedBase3AgentForModel(modelId)
   if (forced) return forced
   const cm = customModelIndex(customModels).get(modelId)
@@ -474,9 +496,12 @@ export function agentIdForModel(modelId, customModels) {
 
 /**
  * 主 agent 不可用时的兜底 agent（base3 孪生；无孪生则回退通用 base2-free）。
- * 解析顺序：前端自定义 fallbackAgentId > 内置 catalog > 通用 base2-free。
+ * 解析顺序：目录标识 > 前端自定义 fallbackAgentId > 内置 catalog > 通用 base2-free。
  * 注意：不搞"推导 base3"——catalog 里没有 base3 孪生的模型（如 -max 系列）
  * 推导出的 base3-free-* 很可能不存在，回退 base2-free 反而更稳。
+ *
+ * 目录标识（`m-xxx` / `fbm1.`）与主 agent 一致返回 `base3-free-catalog`：
+ * 目录模式下的兜底**必须同代**，跨世代（base2）会被上游按世代校验拒绝。
  *
  * 硬性例外同 agentIdForModel：luna 系列的兜底也强制 base3（本来主 agent 就是
  * base3，兜底一致，绝无 base2 参与）。
@@ -485,6 +510,7 @@ export function agentIdForModel(modelId, customModels) {
  * @returns {string}
  */
 export function agentFallbackForModel(modelId, customModels) {
+  if (isCatalogModelId(modelId)) return CATALOG_UNIFIED_AGENT_ID
   const forced = forcedBase3AgentForModel(modelId)
   if (forced) return forced
   const cm = customModelIndex(customModels).get(modelId)

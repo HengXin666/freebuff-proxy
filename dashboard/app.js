@@ -562,14 +562,14 @@ function buildLogRow(line, idx) {
         ? el('span', {
             class: 'badge',
             style: 'font-size:11px',
-            title: t('logs.accountHint') || '账号',
+            title: t('logs.accountHint'),
           }, String(line.account).split('@')[0])
         : null,
       line.reqId
         ? el('span', {
             class: 'badge muted',
             style: 'font-size:11px',
-            title: t('logs.reqIdHint') || '请求 id（点击只看该请求）',
+            title: t('logs.reqIdHint'),
             onclick: (e) => {
               e.stopPropagation()
               logsView.q = line.reqId
@@ -2271,8 +2271,15 @@ async function renderModelSettings(view) {
           el('th', {}, t('model.source')),
           isAdmin ? el('th', {}, t('common.actions')) : null,
         ])),
-        el('tbody', {}, rows.map((m) => el('tr', {}, [
-          el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.id),
+        el('tbody', {}, rows.map((m) => el('tr', { 'data-key': m.key || m.id }, [
+          // 首列是**对外模型名**（catalogId || displayName），与 /v1/models 的 id 同源；
+          // 目录 key（m-00032eaeec）退到 title 里 —— 排障时仍要能对上上游日志，
+          // 但不该再出现在页面上（用户要求）。见
+          // .agents/notes/implemented/bug-fix/2026-10-03-readable-model-id-unification.md
+          el('td', {
+            style: 'font-family:var(--mono);font-size:11px',
+            title: m.key && m.key !== m.id ? t('model.idHint') + `: ${m.key}` : null,
+          }, m.id),
           el('td', {}, m.display_name || m.displayName || '—'),
           el('td', {}, el('span', { class: 'badge', class: poolBadgeClass(m.pool) }, poolLabel(m.pool))),
           el('td', {}, fmtModelPrice(m)),
@@ -2285,7 +2292,9 @@ async function renderModelSettings(view) {
             ? el('td', {}, el('button', {
                 class: 'icon danger',
                 title: t('model.deleteTitle'),
-                onclick: () => removeCustomModel(m.id),
+                // 删除/隐藏提交目录 key 而非展示 id：hidden 表与调度同口径（key），
+                // 用可读名提交会隐藏不掉（白名单仍按 key 放行）。
+                onclick: () => removeCustomModel(m.key || m.id, m.id),
               }, icon('trash', 13)))
             : null,
         ]))),
@@ -2306,7 +2315,9 @@ async function renderModelSettings(view) {
           el('label', { class: 'muted' }, t('model.hiddenArea', { n: data.hidden.length })),
           el('div', { class: 'hidden-badges row', style: 'margin-top:6px;gap:6px;flex-wrap:wrap' }, (data.hidden || []).map((id) =>
             el('span', { class: 'badge', style: 'display:inline-flex;align-items:center;gap:6px' }, [
-              el('code', { style: 'font-family:var(--mono);font-size:11px' }, id),
+              // hidden 列表存的是**服务端口径**（目录 key / catalog id）；
+              // 显示走统一映射，别把 m-00032eaeec 再弹回给用户。
+              el('code', { style: 'font-family:var(--mono);font-size:11px', title: id }, modelNameFor(id)),
               el('button', {
                 class: 'icon', title: t('model.restoreTitle'),
                 onclick: () => restoreCustomModel(id),
@@ -2387,21 +2398,31 @@ async function syncUpstreamModels() {
 /** 删除表格里的模型（内置/catalog/上游模型）：加入 hidden 隐藏，可恢复；
  * 重新「同步上游」会按最新上游拉回，不会永久丢失。
  * （用户手动添加的自定义模型在下方编辑器里删，那个是彻底移除。） */
-async function removeCustomModel(id, source) {
-  if (!confirm(t('model.hideConfirm', { id }))) return
-  // 乐观 UI：点击瞬间先从表格移除该行、插入恢复区（不等待任何网络请求）
+/**
+ * 隐藏一个模型（内置的也能隐藏，加入 hidden 列表）。
+ *
+ * ⚠️ 两个参数分开：`key` 是**服务端口径**（目录 key / catalog id，提交给 hide 接口，
+ * 与调度白名单同源），`label` 是**给人看的口径**（确认框与 toast 里显示）。
+ * 只用展示名提交会隐藏不掉（白名单仍按 key 放行），只显示 key 又会把
+ * `m-00032eaeec` 弹回给用户 —— 两处都得对。
+ */
+async function removeCustomModel(key, label) {
+  const shown = label || key
+  if (!confirm(t('model.hideConfirm', { id: shown }))) return
+  // 乐观 UI：点击瞬间先从表格移除该行、插入恢复区（不等待任何网络请求）。
+  // 行按 data-key 匹配（首列显示的是可读名，拿它比 key 永远找不到行）。
   const row = [...document.querySelectorAll('#models-card tbody tr')].find(
-    (r) => (r.querySelector('td') || {}).textContent === id,
+    (r) => r.dataset.key === key,
   )
   if (row) row.remove()
   const card = $('#models-card')
-  if (card) addRestoreBadge(card, id)
+  if (card) addRestoreBadge(card, key, shown)
   try {
     await api('/api/models/custom/hide', {
       method: 'POST',
-      body: JSON.stringify({ id }),
+      body: JSON.stringify({ id: key }),
     })
-    toast(t('model.hidden', { id }))
+    toast(t('model.hidden', { id: shown }))
   } catch (err) {
     // 失败：把行加回表格（用本地重建），并撤销恢复区，反馈错误
     toast(err.message, true)
@@ -2446,7 +2467,12 @@ async function restoreCustomModel(id) {
 }
 
 /** 在模型卡里追加一个"已删除模型"恢复徽章（没有恢复区则先创建） */
-function addRestoreBadge(card, id) {
+/**
+ * 在「已删除的模型」区插入一个可恢复徽章。
+ * `key` 是服务端口径（提交给 unhide），`label` 是展示口径（可读模型名）；
+ * hidden 列表里存的永远是 key（与调度白名单同源），页面显示的是 label。
+ */
+function addRestoreBadge(card, key, label) {
   let area = card.querySelector('#hidden-models-area')
   if (!area) {
     area = el('div', { id: 'hidden-models-area', style: 'margin-top:14px;padding-top:12px;border-top:1px solid var(--border)' }, [
@@ -2455,14 +2481,14 @@ function addRestoreBadge(card, id) {
     ])
     card.append(area)
   }
-  const label = area.querySelector('.muted')
-  if (label) {
+  const labelEl = area.querySelector('.muted')
+  if (labelEl) {
     const n = area.querySelectorAll('.badge').length
-    label.textContent = t('model.hiddenArea', { n })
+    labelEl.textContent = t('model.hiddenArea', { n })
   }
   area.querySelector('.hidden-badges').append(el('span', { class: 'badge', style: 'display:inline-flex;align-items:center;gap:6px' }, [
-    el('code', { style: 'font-family:var(--mono);font-size:11px' }, id),
-    el('button', { class: 'icon', title: t('model.restoreTitle'), onclick: () => restoreCustomModel(id) }, icon('refresh', 12)),
+    el('code', { style: 'font-family:var(--mono);font-size:11px', title: key }, label || key),
+    el('button', { class: 'icon', title: t('model.restoreTitle'), onclick: () => restoreCustomModel(key) }, icon('refresh', 12)),
   ]))
 }
 
@@ -2724,7 +2750,7 @@ function fmtQuota(quota, fb) {
     // 悬停提示首行给人看的名字在前、服务端标识在后：排障时仍要能对上上游日志。
     const name = modelNameFor(model)
     const tip = [
-      name === model ? model : `${name}（${model}）`,
+      name === model ? model : t('quota.modelWithKey', { name, key: model }),
       hasPrice
         ? t('quota.priceTip', { price: fmtNum(price) })
         : t('quota.noPriceTip'),
