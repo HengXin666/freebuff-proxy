@@ -415,6 +415,62 @@ export function createUpstreamClient(config, token, opts = {}) {
     }
   }
 
+  /**
+   * 登录类请求（/api/auth/cli/code、/api/auth/cli/status）的瞬时故障重试。
+   *
+   * 为什么需要：代理池回落 + 单次尝试超时**只存在于 fetchWithProxy 的 pool 分支**
+   * （见 buildFetchWithProxy）。而 resolveProxy 在「无代理且无环境变量」时返回
+   * `kind:'none'`，fetchWithProxy 直接走裸 fetch 一次性返回——**没有任何回落**。
+   * 官方推荐的家庭部署恰恰就是「代理设置留空」，于是这条最推荐的路径上一次
+   * 网络抖动 = 一次硬失败，前台表现为「发起登录失败: This operation was aborted」
+   * （AbortError 的原文，用户无法判断是超时/DNS/TLS）。
+   *
+   * 这里只补「同代理重试一次」，不改变换号/换出口语义：loginCode/loginStatus
+   * 都是幂等或可重复的，重试不会多买会话、不会动账号账本。
+   * 非瞬时错误（4xx/5xx 走 UpstreamError）不重试。
+   */
+  async function fetchLoginUpstream(url, init, label) {
+    const attempts = 2
+    let lastErr
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        return await apiFetch(url, init)
+      } catch (err) {
+        lastErr = err
+        const name = err?.name
+        const code = err?.code
+        const transient =
+          name === 'AbortError' ||
+          name === 'TypeError' || // undici 网络层失败（fetch failed）
+          code === 'ECONNRESET' ||
+          code === 'ETIMEDOUT' ||
+          code === 'EAI_AGAIN' ||
+          code === 'ENOTFOUND' ||
+          code === 'ECONNREFUSED' ||
+          code === 'EPIPE'
+        if (!transient || attempt === attempts) break
+        logger.warn('login upstream transient failure; retrying same route', {
+          label,
+          attempt,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    // 给出可诊断的原因码，而不是把 AbortError 原文甩给前端
+    if (lastErr?.name === 'AbortError') {
+      throw new UpstreamError(
+        `上游登录请求超时（${init.timeoutMs ?? '?'}ms），请重试`,
+        { code: 'upstream_timeout' },
+      )
+    }
+    if (lastErr?.name === 'TypeError') {
+      throw new UpstreamError(`上游登录请求网络失败：${lastErr.message}`, {
+        code: lastErr.code ?? 'upstream_network',
+      })
+    }
+    throw lastErr
+  }
+
   return {
     apiBase,
     loginBase,
@@ -455,13 +511,20 @@ export function createUpstreamClient(config, token, opts = {}) {
       // 用 apiFetch（带超时 + 代理池回落）而不是裸 fetchWithProxy：
       // freebuff.com 网络波动/被墙时裸 fetch 会永远挂起，轮询/弹窗
       // 无限堆积 socket，把整个服务拖死（前台表现为「系统崩溃、只能重启」）。
-      const res = await apiFetch(`${loginBase}/api/auth/cli/code`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ fingerprintId }),
-        includeAuth: false,
-        timeoutMs: 15_000,
-      })
+      // ⚠️ 无代理部署（kind:'none'）下 apiFetch 没有池内回落，靠
+      // fetchLoginUpstream 补一次重试——见 .agents/notes/implemented/bug-fix/
+      // 2026-10-03-login-transient-retry.md
+      const res = await fetchLoginUpstream(
+        `${loginBase}/api/auth/cli/code`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ fingerprintId }),
+          includeAuth: false,
+          timeoutMs: 15_000,
+        },
+        'login/code',
+      )
       if (!res.ok) {
         throw new UpstreamError(`login code failed: ${res.status}`, {
           status: res.status,
@@ -479,11 +542,15 @@ export function createUpstreamClient(config, token, opts = {}) {
       })
       // 同上：必须带超时。登录轮询每 4s 一轮，若 status 永远挂起（上游
       // 不可达），每轮都泄漏一个永不结束的 fetch/socket，服务最终被拖死。
-      const res = await apiFetch(`${loginBase}/api/auth/cli/status?${qs}`, {
-        method: 'GET',
-        includeAuth: false,
-        timeoutMs: 15_000,
-      })
+      const res = await fetchLoginUpstream(
+        `${loginBase}/api/auth/cli/status?${qs}`,
+        {
+          method: 'GET',
+          includeAuth: false,
+          timeoutMs: 15_000,
+        },
+        'login/status',
+      )
       if (res.status === 401) return { pending: true }
       if (!res.ok) {
         throw new UpstreamError(`login status failed: ${res.status}`, {
