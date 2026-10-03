@@ -299,10 +299,27 @@ class Bridge {
 
   async fetchCatalog() {
     const url = `${HOST}/api/v1/freebuff/models`;
+    /**
+     * ⚠️ 头集逐字对齐官方抓包（165 条里 catalog 那 1 条原样）：
+     *
+     *   Authorization: Bearer <token>
+     *   x-freebuff-catalog-protocol: 1
+     *   x-freebuff-client: desktop
+     *   User-Agent: Bun/1.4.2      ← bun 裸 fetch 的默认 UA，天然一致
+     *   Accept: * / *               ← bun 默认，天然一致
+     *
+     * 两处修正（见 docs/reverse/19 §19.10）：
+     *   - 补 `x-freebuff-client: desktop`（此前缺）；
+     *   - **去掉设备签名**：官方这一跳不签（只有 session 才签），
+     *     带了会让目录行数从 13 变成 53 —— 那是形态偏离换来的另一份响应。
+     *
+     * bun 不会像 Node 那样自动加 accept-language / sec-fetch-mode，
+     * 所以这一跳在 bun 上与客户端**完全一致**。
+     */
     const h1 = {
       ...this.auth(),
       'x-freebuff-catalog-protocol': '1',
-      ...(await this.signHeaders('GET', url, null, null)),
+      'x-freebuff-client': 'desktop',
     };
     await dumpReq('catalog', 'GET', url, h1, null);
     const res = await fetch(url, { headers: h1 });

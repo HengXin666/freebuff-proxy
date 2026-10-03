@@ -240,6 +240,35 @@ export function createProxyFetch(config, opts = {}) {
  * @param {{ proxy?: string | null, accountId?: string }} [opts]
  *   proxy: 账号显式代理覆盖；accountId: 用于全局代理池的稳定分配（如账号邮箱）
  */
+
+/**
+ * 构造 bun 执行通道（**同步返回**，内部惰性解析）。
+ *
+ * catalog 那一跳要"与客户端完全一致"就必须跑在 bun 上 —— Node 的内置
+ * fetch 会自动加 `accept-language` 与 `sec-fetch-mode`（后者是 forbidden
+ * header，设不掉），而客户端（bun）不带这两个。
+ *
+ * 不做成必需依赖：bun 未随镜像分发 / 执行失败时静默退回 Node 路径
+ * （功能不降级，只是头集差两项）。
+ *
+ * 为什么同步返回：createUpstreamClient 不是 async，改成 await 会破坏签名。
+ * 真正的加载推迟到第一次抓取时，不阻塞客户端构造。
+ * @returns {((input: object) => Promise<any>) | null}
+ */
+function makeBunFetcher() {
+  let loader = null
+  return async (input) => {
+    if (loader === null) {
+      loader = import('../../cli-bridge/bridge.mjs')
+        .then((m) => (m.hasBun() ? m.callBun : null))
+        .catch(() => null)
+    }
+    const callBun = await loader
+    if (!callBun) return null
+    return callBun(input, 30_000)
+  }
+}
+
 export function createUpstreamClient(config, token, opts = {}) {
   const apiBase = config.upstream.apiBase
   
@@ -313,6 +342,13 @@ export function createUpstreamClient(config, token, opts = {}) {
   const catalog = new CatalogHolder({
     apiHost: apiBase,
     token,
+    /**
+     * bun 通道：catalog 这一跳交给官方同一个运行时发，做到头集逐字节一致
+     * （Node 会自动加 accept-language / sec-fetch-mode，且后者设不掉）。
+     * 懒加载 cli-bridge，失败时为 null → 自动退回 Node 路径。
+     * 见 docs/reverse/19 §19.10。
+     */
+    bunFetch: makeBunFetcher(),
     /**
      * ⚠️ catalog 这一跳**不带设备签名**。
      *

@@ -108,6 +108,12 @@ export class CatalogHolder {
      * 13 行里只命中 3 行）。
      */
     this.rowByKey = new Map()
+    /**
+     * 可选的 bun 执行通道：把 catalog 请求交给官方同一个运行时发。
+     * 由调用方（client.js）注入 `callBun`；为 null 时走 Node 路径。
+     * @type {((input: object) => Promise<any>) | null}
+     */
+    this.bunFetch = opts.bunFetch || null
     /** @type {string|null} */
     this.fetchId = null
     /** @type {Map<string, string>} 目录 key（m-xxx）→ 句柄（fbm1.xxx） */
@@ -322,7 +328,50 @@ export class CatalogHolder {
     return this.inflight
   }
 
+  /**
+   * 优先**在 bun 里抓目录**（与官方客户端同一个运行时）。
+   *
+   * 为什么必须走 bun 才叫"一致"（实测，docs/reverse/19 §19.10）：
+   * Node 26 的内置 fetch 会**自动**加两个头，且 `sec-fetch-mode: cors`
+   * 属于 forbidden header，设不掉：
+   *
+   *   Node 26   → connection / authorization / catalog-protocol / client /
+   *               user-agent / accept / **accept-language** /
+   *               **sec-fetch-mode: cors** / accept-encoding
+   *   Bun 1.4.2 → connection / authorization / catalog-protocol / client /
+   *               user-agent / accept / accept-encoding      ← 与客户端一致
+   *
+   * 客户端就是 bun 跑的，所以只有 bun 这一跳能做到逐字节相同。
+   * bun 不可用（未随镜像分发 / 执行失败）时退回 Node 路径，可用性优先。
+   */
+  async _fetchViaBun() {
+    if (!this.bunFetch) return null
+    try {
+      const out = await this.bunFetch({ cfg: { token: this.token }, action: 'catalog' })
+      const body = out?.catalog
+      if (!body || !Array.isArray(body.rows) || !body.rows.length) return null
+      if (typeof body.fetchId !== 'string' || !body.fetchId) return null
+      return body
+    } catch {
+      return null
+    }
+  }
+
   async _doFetch() {
+    /**
+     * bun 路径拿到的就是目录原文（已在 bun 侧按客户端头集发出），
+     * 直接走同一套解析，避免两条解析逻辑。
+     */
+    const viaBun = await this._fetchViaBun()
+    if (viaBun) {
+      this._apply(viaBun)
+      logger.info('catalog fetched via bun (client-identical headers)', {
+        fetchId: String(viaBun.fetchId).slice(0, 24) + '...',
+        rows: viaBun.rows.length,
+        version: viaBun.version ?? null,
+      })
+      return true
+    }
     const url = `${this.apiHost}${CATALOG_PATH}`
     const ac = new AbortController()
     const timer = setTimeout(() => ac.abort(), this.timeoutMs)
@@ -351,6 +400,20 @@ export class CatalogHolder {
           [HEADER_CLIENT]: CLIENT_DESKTOP,
           'user-agent': CATALOG_FETCH_USER_AGENT,
           accept: '*/*',
+          /**
+           * ⚠️ 这两个是 **Node 内置 fetch 自动加的**，客户端（bun）不发：
+           *   - `accept-language: *` —— 显式设空串即可消除；
+           *   - `sec-fetch-mode: cors` —— forbidden header，**设不掉**。
+           *
+           * 实测（本地镜像 + 裸 fetch 对照）：
+           *   Node 26 fetch → 自动带 accept-language / sec-fetch-mode
+           *   Bun 1.4.2    → 只带 5 个业务头，与客户端抓包逐项一致
+           * 所以这两个头是**运行时差异**，要彻底一致只能让请求跑在 bun 上
+           * （见 docs/reverse/19 §19.10）。这里先把能消除的消除。
+           */
+          'accept-language': '',
+          // 客户端发的是这四种（含 br / zstd），Node 默认只给 gzip, deflate
+          'accept-encoding': 'gzip, deflate, br, zstd',
         },
         signal: ac.signal,
       })
@@ -360,12 +423,34 @@ export class CatalogHolder {
         return false
       }
       const body = await res.json()
+      const applied = this._apply(body)
+      if (!applied) {
+        this.retryAfter = Date.now() + 5 * 60_000
+        return false
+      }
+      return true
+    } catch (err) {
+      logger.debug('catalog fetch failed', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+      this.retryAfter = Date.now() + 5 * 60_000
+      return false
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
+   * 解析并应用一份目录响应（bun 路径与 Node 路径共用）。
+   * @param {any} body
+   * @returns {boolean} 是否成功（缺 fetchId 视为失败）
+   */
+  _apply(body) {
       const fetchId = body && (body.fetchId || body.catalogFetchId)
       if (typeof fetchId !== 'string' || !fetchId) {
         logger.warn('catalog response missing fetchId', {
           keys: body && typeof body === 'object' ? Object.keys(body).slice(0, 12) : [],
         })
-        this.retryAfter = Date.now() + 5 * 60_000
         return false
       }
       this.fetchId = fetchId
@@ -458,14 +543,5 @@ export class CatalogHolder {
         version: this.version,
       })
       return true
-    } catch (err) {
-      logger.debug('catalog fetch failed', {
-        error: err instanceof Error ? err.message : String(err),
-      })
-      this.retryAfter = Date.now() + 5 * 60_000
-      return false
-    } finally {
-      clearTimeout(timer)
-    }
   }
 }
