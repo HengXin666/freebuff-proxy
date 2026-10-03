@@ -73,20 +73,30 @@ docker compose down         # 停止（数据保留在 ./data）
 
 ---
 
-## 上游请求链路（legacy / official）
+## 上游请求链路
 
-上游请求的协议形态可在**控制台 → 设置 → 「上游请求链路」**切换，立即生效。
+上游请求**只有一条链路**：主服务（Node）把请求 **RPC 委托给 `cli-bridge/`（官方同款 bun 执行）**，由它按**官方客户端抓包真值**发出 —— 官方 37 工具、官方 system 模板、desktop 世代 agent、分层 provider。
 
-| 通道 | 说明 | 状态 |
-|------|------|------|
-| **official** | 照抄官方客户端抓包真值：官方 37 工具、官方 system 模板、desktop 世代 agent、分层 provider | ✅ 默认推荐 |
-| legacy | 旧的自拼形态（CLI 开场白 + 自编签名工具 + CLI 世代 agent） | 回退保留 |
+主服务**不再自己拼上游请求**：旧的自拼形态（CLI 开场白 + 自编签名工具 + CLI 世代 agent + 自管 session 调度）已**废弃并禁止调用**（`config.resolveUpstreamChannel()` 会强制回落并告警，控制台选项置灰）。
 
-**为什么默认 official**：它可逐字段核对（而非猜测）、实测拿到 **HTTP 200 + 工具调用**，并消除了 legacy 里「CLI 开场白配 desktop 会话」的身份/世代错配。
+原因：旧形态与官方抓包**逐字段不符**，实测 admission 反复失败（`purchase_claim_released`），而且会制造"看起来在跑、实际全被拒"的假象。
 
-**架构：RPC 委托，不是两份实现。** 官方形态的实现只有一份，在 `cli-bridge/`（用官方同款 bun 执行）；主服务只传参数、拿响应透传。副仓库不可用时自动降级为 legacy。
+**协议实现只有一份**（在 `cli-bridge/`），主服务只传参数、拿响应透传 —— 不是两份实现。
 
 **客户端带自定义工具**：合并而非替换 —— 官方工具集在前（满足工具指纹）+ 客户端工具按名去重追加。注意代理**不执行**工具，只把上游的 `tool_call` 原样返回，由客户端执行。
+
+**自测（v1.18.0，端到端非流式 + 带工具）**：
+
+```jsonc
+{
+  "object": "chat.completion",
+  "choices": [{ "message": { "role": "assistant",
+    "tool_calls": [{ "id": "call_11007a52ef3b4aa4ad395f4c",
+      "function": { "name": "write_file",
+        "arguments": "{\"path\":\"/tmp/selftest-proof.txt\",\"content\":\"selftest-ok\"}" }}]},
+    "finish_reason": "tool_calls" }]
+}
+```
 
 细节见 **[两条链路选型与工具转换](docs/reverse/18-channel-guide-and-tool-mapping.md)**。
 
