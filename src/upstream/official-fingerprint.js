@@ -106,11 +106,11 @@ export const SESSION_ENDPOINT = '/api/v1/freebuff/session'
 /** 头部常量（二进制原文逐字）。 */
 export const HEADER_MODEL = 'x-freebuff-model'
 export const HEADER_INSTANCE_ID = 'x-freebuff-instance-id'
-export const HEADER_COMPACT_SESSION = 'x-freebuff-compact-session'
+/** ⚠️ `x-freebuff-compact-session` 常量已删除：客户端 0 次，见 RETIRED_HEADERS。 */
 export const HEADER_WALLET_SPEND_LIMIT = 'x-freebuff-wallet-spend-limit'
 export const HEADER_FIRST_TAB_DISCOUNT = 'x-freebuff-first-tab-discount'
 export const HEADER_ACTING_USER_ID = 'x-freebuff-acting-user-id'
-export const HEADER_API_KEY = 'x-codebuff-api-key'
+/** ⚠️ `x-codebuff-api-key` 常量已删除：客户端 0 次，见 RETIRED_HEADERS（真源）。 */
 /**
  * 官方每次会话请求都带本机时区（二进制原文 w6A）：
  *   function w6A(){try{return{["x-fb-timezone"]:Intl.DateTimeFormat()
@@ -171,7 +171,8 @@ export function officialSessionHeaders(method, token, opts = {}) {
     [HEADER_FIRST_TAB_DISCOUNT]: opts.firstTabDiscount ? '1' : '0',
     // 客户端环境描述符：官方在 session 与广告请求上都带（见
     // cli/src/utils/client-environment.ts）。缺它就不像官方客户端。
-    [HEADER_CLIENT_ENV]: clientEnvironment(),
+    // ⚠️ 不再发 `x-freebuff-env` 头：desktop 客户端 0 次。
+    // clientEnvironment() 仍用于 chat 的 codebuff_metadata（那里客户端确实放）。
   }
   // ⚠️ 这组头此前只在 `cli:` 前缀时才发（按官方 **CLI** 源码
   // cli/src/utils/freebuff-session-api.ts:186-200：服务端据此认成 CLI
@@ -212,9 +213,7 @@ export function officialSessionHeaders(method, token, opts = {}) {
   if (opts.instanceId) {
     headers[HEADER_INSTANCE_ID] = opts.instanceId
   }
-  if (method === 'GET' && opts.compact) {
-    headers[HEADER_COMPACT_SESSION] = '1'
-  }
+  // ⚠️ 不再发 `x-freebuff-compact-session`：desktop 客户端 0 次。
   if (method === 'POST') {
     if (opts.model) headers[HEADER_MODEL] = opts.model
     headers[HEADER_WALLET_SPEND_LIMIT] = String(opts.walletSpendLimit ?? 0)
@@ -256,12 +255,14 @@ export function officialChatHeaders(token, opts = {}) {
  * @param {string} token
  * @returns {Record<string, string>}
  */
-export function officialApiKeyHeaders(token) {
-  return {
-    Authorization: 'Bearer ' + token,
-    [HEADER_API_KEY]: token,
-  }
-}
+/**
+ * ⚠️ `officialApiKeyHeaders()` 已删除。
+ *
+ * 它发的 `x-codebuff-api-key` 在客户端 165 条抓包里出现 **0 次**
+ * （docs/reverse/20 §20.4）。上游鉴权只发 Bearer —— 需要鉴权头用
+ * `freebuffAuthHeaders()`（src/auth-store.js）。
+ * 保留此函数等于给回潮留一个入口，故连定义一起删。
+ */
 
 /**
  * 官方 CLI 的**客户端环境描述符**（terminal-environment summary）。
@@ -280,7 +281,7 @@ export function officialApiKeyHeaders(token) {
  * 只放存在性标志、尺寸与固定桶名 —— **绝不**放路径、进程名、环境变量原文
  * （官方明确约束：never a raw environment value, path, or process name）。
  */
-export const HEADER_CLIENT_ENV = 'x-freebuff-env'
+/** ⚠️ `x-freebuff-env` 常量已删除：desktop 客户端 0 次，见 RETIRED_HEADERS。 */
 
 /**
  * 官方 CLI 的会话 claim 前缀（`cli:`）。

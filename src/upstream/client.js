@@ -6,12 +6,10 @@ import { CatalogHolder, isModelHandle } from './catalog-protocol.js'
 import { FREEBUFF_AVAILABLE_MODELS } from '../model.js'
 import {
   BUN_USER_AGENT,
-  HEADER_COMPACT_SESSION as FREEBUFF_COMPACT_SESSION_HEADER,
   HEADER_INSTANCE_ID as FREEBUFF_INSTANCE_HEADER,
   HEADER_MODEL as FREEBUFF_MODEL_HEADER,
   SESSION_ADMISSION_ENDPOINT,
   SESSION_ENDPOINT,
-  officialApiKeyHeaders,
   officialSessionHeaders,
 } from './official-fingerprint.js'
 
@@ -19,7 +17,6 @@ import {
 // 只是为兼容既有 import 点，不要在本文件另立取值。
 export {
   BUN_USER_AGENT,
-  FREEBUFF_COMPACT_SESSION_HEADER,
   FREEBUFF_INSTANCE_HEADER,
   FREEBUFF_MODEL_HEADER,
 }

@@ -46,6 +46,21 @@ jobs:
       - name: Check i18n red lines
         run: node scripts/check-i18n.mjs
 
+  # 上游契门禁：上游改了端点/头名，必须**机器发现**，不能靠人读文档再对代码。
+  # 判据：抓包生成的契约快照（docs/reverse/upstream-contract.json）
+  #       ↔ 单一真源（src/upstream/upstream-contract.js）对账；
+  #       另拦两类违规：源码里绕过真源的裸头字面量、已废弃头的回潮。
+  # 上游变更后的处置：重抓包 → npm run gen:contract → 改真源文件 → 本关转绿。
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify upstream contract matches the single source of truth
+        run: node scripts/check-upstream-contract.mjs
+
   # 镜像启动门禁：真实构建 + 真实起容器 + 真实打健康检查。
   #
   # 为什么单独有这一关：上面的 test 用 mock 上游、**不启动容器**，所以"新镜像 +
@@ -83,7 +98,7 @@ jobs:
         id: verify
 
   build-push:
-    needs: [test, image-boot, i18n]
+    needs: [test, image-boot, i18n, contract]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:

@@ -1,0 +1,610 @@
+{
+  "version": 1,
+  "generatedAt": "2026-10-03T16:21:41.700Z",
+  "source": {
+    "files": [
+      "docs/reverse/captures/2026-10-03-e2/2026-10-03-official-client-e2.jsonl",
+      "docs/reverse/captures/2026-10-03-official-client.jsonl"
+    ],
+    "requestRecords": 83
+  },
+  "transportHeaders": [
+    "accept",
+    "accept-encoding",
+    "connection",
+    "content-length",
+    "content-type",
+    "host",
+    "user-agent"
+  ],
+  "endpoints": [
+    {
+      "key": "DELETE /api/v1/freebuff/session",
+      "method": "DELETE",
+      "path": "/api/v1/freebuff/session",
+      "count": 2,
+      "optional": false,
+      "headers": [
+        {
+          "name": "authorization",
+          "always": true,
+          "sampleValues": [
+            "Bearer b361ec91-30b6-429…(43)"
+          ]
+        },
+        {
+          "name": "x-freebuff-catalog-fetch",
+          "always": true,
+          "sampleValues": [
+            "fbf1.AAHc6mj4MPgjsBuZ2bD…(163)"
+          ]
+        },
+        {
+          "name": "x-freebuff-device-key",
+          "always": true,
+          "sampleValues": [
+            "YP21Eug4HHmST2REeo2iBn"
+          ]
+        },
+        {
+          "name": "x-freebuff-device-sig",
+          "always": true,
+          "sampleValues": [
+            "L3RjVfo9B1QBBc_JRfx1slgh…(86)"
+          ]
+        },
+        {
+          "name": "x-freebuff-device-ts",
+          "always": true,
+          "sampleValues": [
+            "1791026735504"
+          ]
+        },
+        {
+          "name": "x-freebuff-instance-id",
+          "always": true,
+          "sampleValues": [
+            "2d6512af-7fea-438c-80b5-21c453171c2f",
+            "ef72ea8b-bc18-4345-b8ab-2a57c3ffc0f4"
+          ]
+        },
+        {
+          "name": "x-freebuff-multi-session",
+          "always": true,
+          "sampleValues": [
+            "1"
+          ]
+        },
+        {
+          "name": "x-freebuff-purchase-continuity",
+          "always": true,
+          "sampleValues": [
+            "1"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "GET /api/v1/ads/policy",
+      "method": "GET",
+      "path": "/api/v1/ads/policy",
+      "count": 1,
+      "optional": true,
+      "headers": [
+        {
+          "name": "authorization",
+          "always": true,
+          "sampleValues": [
+            "Bearer b361ec91-30b6-429…(43)"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "GET /api/v1/ads/proposal",
+      "method": "GET",
+      "path": "/api/v1/ads/proposal",
+      "count": 5,
+      "optional": true,
+      "headers": [
+        {
+          "name": "authorization",
+          "always": true,
+          "sampleValues": [
+            "Bearer b361ec91-30b6-429…(43)",
+            "Bearer 0cd9d1d3-2593-49f…(43)"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "GET /api/v1/freebuff/models",
+      "method": "GET",
+      "path": "/api/v1/freebuff/models",
+      "count": 1,
+      "optional": false,
+      "headers": [
+        {
+          "name": "authorization",
+          "always": true,
+          "sampleValues": [
+            "Bearer b361ec91-30b6-429…(43)"
+          ]
+        },
+        {
+          "name": "x-freebuff-catalog-protocol",
+          "always": true,
+          "sampleValues": [
+            "1"
+          ]
+        },
+        {
+          "name": "x-freebuff-client",
+          "always": true,
+          "sampleValues": [
+            "desktop"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "GET /api/v1/freebuff/session",
+      "method": "GET",
+      "path": "/api/v1/freebuff/session",
+      "count": 18,
+      "optional": false,
+      "headers": [
+        {
+          "name": "authorization",
+          "always": true,
+          "sampleValues": [
+            "Bearer b361ec91-30b6-429…(43)",
+            "Bearer 0cd9d1d3-2593-49f…(43)"
+          ]
+        },
+        {
+          "name": "x-fb-timezone",
+          "always": true,
+          "sampleValues": [
+            "Asia/Shanghai"
+          ]
+        },
+        {
+          "name": "x-freebuff-catalog-fetch",
+          "always": true,
+          "sampleValues": [
+            "fbf1.AAHc6mj4MPgjsBuZ2bD…(163)",
+            "fbf1.AAGq0C5lYSihdzMha1A…(192)"
+          ]
+        },
+        {
+          "name": "x-freebuff-catalog-protocol",
+          "always": true,
+          "sampleValues": [
+            "1"
+          ]
+        },
+        {
+          "name": "x-freebuff-client",
+          "always": true,
+          "sampleValues": [
+            "desktop"
+          ]
+        },
+        {
+          "name": "x-freebuff-device-key",
+          "always": true,
+          "sampleValues": [
+            "YP21Eug4HHmST2REeo2iBn"
+          ]
+        },
+        {
+          "name": "x-freebuff-device-sig",
+          "always": true,
+          "sampleValues": [
+            "ry0iydd_l0jenGtemasQMJTu…(86)",
+            "v0gDy0Ns1qllGpBBGON9Z4YP…(86)",
+            "4xzjqGPP_3Gxx1M-QrRidR_a…(86)"
+          ]
+        },
+        {
+          "name": "x-freebuff-device-ts",
+          "always": true,
+          "sampleValues": [
+            "1791026594954",
+            "1791026595529",
+            "1791026612680"
+          ]
+        },
+        {
+          "name": "x-freebuff-first-tab-discount",
+          "always": true,
+          "sampleValues": [
+            "0"
+          ]
+        },
+        {
+          "name": "x-freebuff-heartbeat",
+          "always": true,
+          "sampleValues": [
+            "1"
+          ]
+        },
+        {
+          "name": "x-freebuff-include-unused-rate-limits",
+          "always": true,
+          "sampleValues": [
+            "1"
+          ]
+        },
+        {
+          "name": "x-freebuff-install-id",
+          "always": true,
+          "sampleValues": [
+            "5a989c7b-c374-41bb-aecc-ba47e4a3a2b3"
+          ]
+        },
+        {
+          "name": "x-freebuff-instance-id",
+          "always": true,
+          "sampleValues": [
+            "2d6512af-7fea-438c-80b5-21c453171c2f",
+            "ef72ea8b-bc18-4345-b8ab-2a57c3ffc0f4",
+            "e1be7199-331e-4622-b5a9-0a2cfe8aecc1"
+          ]
+        },
+        {
+          "name": "x-freebuff-multi-session",
+          "always": true,
+          "sampleValues": [
+            "1"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "GET /api/v1/project-profile",
+      "method": "GET",
+      "path": "/api/v1/project-profile",
+      "count": 1,
+      "optional": true,
+      "headers": [
+        {
+          "name": "authorization",
+          "always": true,
+          "sampleValues": [
+            "Bearer 0cd9d1d3-2593-49f…(43)"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "HEAD /",
+      "method": "HEAD",
+      "path": "/",
+      "count": 18,
+      "optional": true,
+      "headers": []
+    },
+    {
+      "key": "POST /api/ads",
+      "method": "POST",
+      "path": "/api/ads",
+      "count": 2,
+      "optional": true,
+      "headers": [
+        {
+          "name": "authorization",
+          "always": true,
+          "sampleValues": [
+            "Bearer 0cd9d1d3-2593-49f…(43)"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "POST /api/logs",
+      "method": "POST",
+      "path": "/api/logs",
+      "count": 7,
+      "optional": true,
+      "headers": [
+        {
+          "name": "authorization",
+          "always": true,
+          "sampleValues": [
+            "Bearer b361ec91-30b6-429…(43)",
+            "Bearer 0cd9d1d3-2593-49f…(43)"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "POST /api/v1/ads",
+      "method": "POST",
+      "path": "/api/v1/ads",
+      "count": 1,
+      "optional": true,
+      "headers": [
+        {
+          "name": "authorization",
+          "always": true,
+          "sampleValues": [
+            "Bearer b361ec91-30b6-429…(43)"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "POST /api/v1/ads/impression",
+      "method": "POST",
+      "path": "/api/v1/ads/impression",
+      "count": 9,
+      "optional": true,
+      "headers": [
+        {
+          "name": "authorization",
+          "always": true,
+          "sampleValues": [
+            "Bearer b361ec91-30b6-429…(43)",
+            "Bearer 0cd9d1d3-2593-49f…(43)"
+          ]
+        },
+        {
+          "name": "x-freebuff-event-id",
+          "always": true,
+          "sampleValues": [
+            "f31940a1-c6a9-4e10-b806-03cc6e8856a5",
+            "172c85cb-0ccf-484b-9d42-2c4a1ff19e8e",
+            "12e2a630-6fca-4c8b-bb45-549a96264f46"
+          ]
+        },
+        {
+          "name": "x-freebuff-render-delay-ms",
+          "always": true,
+          "sampleValues": [
+            "14"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "POST /api/v1/agent-runs",
+      "method": "POST",
+      "path": "/api/v1/agent-runs",
+      "count": 6,
+      "optional": false,
+      "headers": [
+        {
+          "name": "authorization",
+          "always": true,
+          "sampleValues": [
+            "Bearer 0cd9d1d3-2593-49f…(43)"
+          ]
+        },
+        {
+          "name": "x-freebuff-acting-user-id",
+          "always": true,
+          "sampleValues": [
+            "ce620a8c-f4a2-4973-85e7-435950d6a988"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "POST /api/v1/chat/completions",
+      "method": "POST",
+      "path": "/api/v1/chat/completions",
+      "count": 8,
+      "optional": false,
+      "headers": [
+        {
+          "name": "authorization",
+          "always": true,
+          "sampleValues": [
+            "Bearer 0cd9d1d3-2593-49f…(43)"
+          ]
+        },
+        {
+          "name": "x-freebuff-acting-user-id",
+          "always": true,
+          "sampleValues": [
+            "ce620a8c-f4a2-4973-85e7-435950d6a988"
+          ]
+        },
+        {
+          "name": "x-freebuff-catalog-fetch",
+          "always": true,
+          "sampleValues": [
+            "fbf1.AAGq0C5lYSihdzMha1A…(192)"
+          ]
+        },
+        {
+          "name": "x-freebuff-device-key",
+          "always": true,
+          "sampleValues": [
+            "YP21Eug4HHmST2REeo2iBn"
+          ]
+        },
+        {
+          "name": "x-freebuff-device-sig",
+          "always": true,
+          "sampleValues": [
+            "6i9jKBK8qzGnoKzQkC59ALu3…(86)",
+            "dnBm09E3nVwzMY_SQ-AVlSVx…(86)",
+            "QB6N4b5xRHVbH31pNK4glssv…(86)"
+          ]
+        },
+        {
+          "name": "x-freebuff-device-ts",
+          "always": true,
+          "sampleValues": [
+            "1790965859441",
+            "1790965914659",
+            "1790965927612"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "POST /api/v1/freebuff/device-keys",
+      "method": "POST",
+      "path": "/api/v1/freebuff/device-keys",
+      "count": 1,
+      "optional": false,
+      "headers": [
+        {
+          "name": "authorization",
+          "always": true,
+          "sampleValues": [
+            "Bearer b361ec91-30b6-429…(43)"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "POST /api/v1/freebuff/session/admission",
+      "method": "POST",
+      "path": "/api/v1/freebuff/session/admission",
+      "count": 3,
+      "optional": false,
+      "headers": [
+        {
+          "name": "authorization",
+          "always": true,
+          "sampleValues": [
+            "Bearer 0cd9d1d3-2593-49f…(43)"
+          ]
+        },
+        {
+          "name": "x-fb-timezone",
+          "always": true,
+          "sampleValues": [
+            "Asia/Shanghai"
+          ]
+        },
+        {
+          "name": "x-freebuff-catalog-fetch",
+          "always": true,
+          "sampleValues": [
+            "fbf1.AAGq0C5lYSihdzMha1A…(192)"
+          ]
+        },
+        {
+          "name": "x-freebuff-catalog-protocol",
+          "always": true,
+          "sampleValues": [
+            "1"
+          ]
+        },
+        {
+          "name": "x-freebuff-client",
+          "always": true,
+          "sampleValues": [
+            "desktop"
+          ]
+        },
+        {
+          "name": "x-freebuff-desktop-attempt-id",
+          "always": true,
+          "sampleValues": [
+            "0ba618c7-27f4-4f5e-97f9-b8bbfed5937d",
+            "7a564efe-5935-47a8-ab2d-ce883759e620",
+            "471ab8ff-a27e-4641-a3c8-b38af84d5d31"
+          ]
+        },
+        {
+          "name": "x-freebuff-device-key",
+          "always": true,
+          "sampleValues": [
+            "YP21Eug4HHmST2REeo2iBn"
+          ]
+        },
+        {
+          "name": "x-freebuff-device-sig",
+          "always": true,
+          "sampleValues": [
+            "o8sBmZEmQGwCuWjeY9oxXNZS…(86)",
+            "UBVm2RhCkOIKOdooJE-5nHAH…(86)",
+            "-6MMs7YSkSH6J7lveu9Oft_I…(86)"
+          ]
+        },
+        {
+          "name": "x-freebuff-device-ts",
+          "always": true,
+          "sampleValues": [
+            "1790965858915",
+            "1790965927165",
+            "1790965936489"
+          ]
+        },
+        {
+          "name": "x-freebuff-first-tab-discount",
+          "always": true,
+          "sampleValues": [
+            "0"
+          ]
+        },
+        {
+          "name": "x-freebuff-install-id",
+          "always": true,
+          "sampleValues": [
+            "5a989c7b-c374-41bb-aecc-ba47e4a3a2b3"
+          ]
+        },
+        {
+          "name": "x-freebuff-instance-id",
+          "always": true,
+          "sampleValues": [
+            "e1be7199-331e-4622-b5a9-0a2cfe8aecc1"
+          ]
+        },
+        {
+          "name": "x-freebuff-model",
+          "always": true,
+          "sampleValues": [
+            "fbm1.AAEAAUPkLF6HpwLlITJ…(116)"
+          ]
+        },
+        {
+          "name": "x-freebuff-multi-session",
+          "always": true,
+          "sampleValues": [
+            "1"
+          ]
+        },
+        {
+          "name": "x-freebuff-purchase-continuity",
+          "always": true,
+          "sampleValues": [
+            "1"
+          ]
+        },
+        {
+          "name": "x-freebuff-wallet-spend-limit",
+          "always": true,
+          "sampleValues": [
+            "0"
+          ]
+        }
+      ]
+    }
+  ],
+  "firstSeenOrder": [
+    "HEAD /",
+    "GET /api/v1/freebuff/session",
+    "POST /api/v1/freebuff/session/admission",
+    "POST /api/logs",
+    "POST /api/v1/agent-runs",
+    "POST /api/v1/chat/completions",
+    "GET /api/v1/ads/proposal",
+    "POST /api/ads",
+    "POST /api/v1/ads/impression",
+    "GET /api/v1/project-profile",
+    "GET /api/v1/freebuff/models",
+    "POST /api/v1/freebuff/device-keys",
+    "GET /api/v1/ads/policy",
+    "POST /api/v1/ads",
+    "DELETE /api/v1/freebuff/session"
+  ]
+}

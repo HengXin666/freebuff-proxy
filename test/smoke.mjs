@@ -1086,11 +1086,20 @@ function chat(body, headers = {}) {
   assert.equal(admitCall.headers['x-freebuff-wallet-spend-limit'], '0')
   assert.equal(admitCall.headers['x-freebuff-first-tab-discount'], '0')
   assert.ok(admitCall.headers['x-fb-timezone'], '准入请求应带本机时区')
-  // 客户端环境描述符（x-freebuff-env）：官方 CLI 在 session 请求上必带的
-  // 终端环境摘要。上游据此判断"是不是真 CLI"——缺它就不像官方客户端。
-  // 格式对齐官方 cli/src/utils/client-environment.ts formatClientEnvironment()。
-  const envDesc = admitCall.headers['x-freebuff-env']
-  assert.ok(envDesc, '准入请求必须带 x-freebuff-env（官方客户端环境描述符）')
+  /**
+   * ⚠️ `x-freebuff-env` **头不再发送**：desktop 客户端 165 条抓包 0 次
+   * （docs/reverse/20 §20.2 / 21 §21.3）。它来自官方 **CLI** 源码，
+   * 我们走 desktop 路线，带它等于自报 CLI 身份。
+   *
+   * 但**同一份描述符仍要放进 chat 的 codebuff_metadata**
+   * （客户端在那里确实放）—— 下面从 metadata 取，不再从头上取。
+   */
+  assert.ok(
+    !admitCall.headers['x-freebuff-env'],
+    '准入请求不得再带 x-freebuff-env 头（desktop 客户端 0 次）',
+  )
+  const envDesc = JSON.parse(chatCall.body).codebuff_metadata?.freebuff_client_env
+  assert.ok(envDesc, 'chat 的 codebuff_metadata 仍要带 freebuff_client_env')
   assert.match(
     envDesc,
     /^v1;(in|out|tp|term|ct|sz|ci|ssh|l|p|g|osc)=/,

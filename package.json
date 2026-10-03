@@ -31,7 +31,10 @@
     "notes:archive": "node .agents/skills/hx-agent-notes/scripts/archive-note.ts",
     "notes:board": "node .agents/skills/hx-agent-notes/scripts/build-board.ts --init board.html",
     "test:smoke": "node test/smoke.mjs",
-    "test:catalog": "node test/verify-catalog-models.mjs"
+    "test:catalog": "node test/verify-catalog-models.mjs",
+    "gen:contract": "node scripts/gen-upstream-contract.mjs",
+    "check:contract": "node scripts/check-upstream-contract.mjs",
+    "check:all": "npm run check:contract && npm run test:catalog && npm run typecheck && npm run test:smoke"
   },
   "dependencies": {
     "undici": "^8.10.2",
