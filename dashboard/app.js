@@ -536,6 +536,7 @@ async function renderOverview(view) {
 const logsView = {
   level: 'all',
   q: '',
+  account: '',
   auto: false,
   expanded: new Set(),
   timer: null,
@@ -548,11 +549,27 @@ function logsLevelTone(level) {
   return ''
 }
 
+/**
+ * 时间戳 → 人读的本地时间（`MM-DD HH:mm:ss`）。
+ *
+ * 原样吐 ISO 串（`2026-10-03T18:52:20.220Z`）有两个毛病：它是 UTC，与用户
+ * 本地墙钟差 8 小时；且一屏几十条里 T/Z 分隔符和毫秒全是噪音，扫读不出
+ * "刚刚发生了什么"。保留完整 ISO 在 title 里，鼠标悬停仍可看精确值。
+ */
+function logsTs(iso) {
+  if (!iso) return '—'
+  const ms = Date.parse(iso)
+  if (!Number.isFinite(ms)) return String(iso)
+  const d = new Date(ms)
+  const p = (x) => String(x).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
 /** 一条日志：默认只给 ts/level/msg，点开才给完整字段（避免一眼全是噪音）。 */
 function buildLogRow(line, idx) {
   const key = (line.ts || '') + '|' + idx
   const open = logsView.expanded.has(key)
-  const ts = (line.ts || '').replace('T', ' ').replace('Z', '')
+  const ts = logsTs(line.ts)
   const extra = { ...line }
   delete extra.ts
   delete extra.level
@@ -572,12 +589,23 @@ function buildLogRow(line, idx) {
       el('span', { class: 'badge ' + logsLevelTone(line.level) }, line.level),
       // ⚠️ 账号 + 请求 id：此前日志里没有这两个维度，多账号池并发时几十条
       // 无主记录交织，排障只能靠猜。reqId 同时是聚合键（可用它筛选整条链路）。
+      //
+      // 账号**显示完整邮箱**：此前写成 `split('@')[0]`（只留本地部分），
+      // 于是 `a@gmail.com` 与 `a@outlook.com` 在日志页上长得一模一样 ——
+      // 多账号池里这直接把"哪个号出的问题"变成了猜谜。用户要的就是邮箱。
       line.account
         ? el('span', {
             class: 'badge',
             style: 'font-size:11px',
             title: t('logs.accountHint'),
-          }, String(line.account).split('@')[0])
+            onclick: (e) => {
+              e.stopPropagation()
+              logsView.account = String(line.account)
+              const sel = document.querySelector('#logs-account')
+              if (sel) sel.value = logsView.account
+              refreshLogs()
+            },
+          }, String(line.account))
         : null,
       line.reqId
         ? el('span', {
@@ -635,6 +663,9 @@ function renderLogsList() {
 async function refreshLogs() {
   const q = new URLSearchParams({ level: logsView.level, limit: '300' })
   if (logsView.q.trim()) q.set('q', logsView.q.trim())
+  // 账号维度：后端已支持 `account=` 过滤（src/util/log.js readLogBuffer），
+  // 此前前端从未传过 —— 多账号池下"只看某个号"只能靠在搜索框里手打邮箱。
+  if (logsView.account) q.set('account', logsView.account)
   let data = null
   try { data = await api('/api/logs?' + q.toString()) } catch { return }
   logsView.lines = data?.lines || []
@@ -643,7 +674,7 @@ async function refreshLogs() {
   if (meta) {
     meta.textContent = t('logs.meta', {
       n: logsView.lines.length,
-      time: (data?.serverTime || '').replace('T', ' ').replace('Z', ''),
+      time: logsTs(data?.serverTime),
     })
   }
 }
@@ -685,6 +716,28 @@ async function renderLogs(view) {
         },
       }, [icon('refresh', 13), logsView.auto ? t('logs.stopAuto') : t('logs.auto')]),
       el('button', { class: 'muted', onclick: () => refreshLogs() }, [icon('refresh', 13), t('common.refresh')]),
+      /**
+       * 清空缓冲：环形缓冲会**自动丢最旧的**，但用户想"从现在起只看新的"时
+       * 旧条目仍占满整页（一次故障刷出几百条后新日志被挤到最底下）。
+       * 没有这个按钮就只能重启进程，而重启会连带丢掉热会话现场。
+       * 只清内存里的日志缓冲，不动任何落盘数据。
+       */
+      el('button', {
+        class: 'danger',
+        id: 'logs-clear-btn',
+        onclick: async () => {
+          if (!confirm(t('logs.clearConfirm'))) return
+          try {
+            await api('/api/logs', { method: 'DELETE' })
+            logsView.lines = []
+            logsView.expanded.clear()
+            renderLogsList()
+            toast(t('logs.cleared'))
+          } catch (err) {
+            toast(err.message, true)
+          }
+        },
+      }, [icon('trash', 13), t('logs.clear')]),
     ]),
   ]))
 
@@ -699,6 +752,36 @@ async function renderLogs(view) {
     ['error', t('logs.levelError')],
   ].map(([v, label]) => el('option', { value: v, selected: logsView.level === v ? 'selected' : null }, label)))
 
+  /**
+   * 账号筛选下拉：选项直接取账号池的**邮箱**。
+   *
+   * 为什么不是"填关键词"：日志里的 `account` 字段就是邮箱，但用户得先知道
+   * 拼法才能搜；而账号池是他自己导入的，下拉里点一下即可。
+   * 还额外并入**缓冲里出现过**的账号 —— 有些日志来自已删除/尚未刷进
+   * `state.accounts` 的号，只按账号池建选项会漏掉它们。
+   */
+  const accountOptions = [['', t('logs.accountAll')]]
+  const seen = new Set()
+  for (const a of state.accounts || []) {
+    const email = String(a?.email || '').trim()
+    if (email && !seen.has(email)) {
+      seen.add(email)
+      accountOptions.push([email, email])
+    }
+  }
+  for (const line of logsView.lines) {
+    const email = String(line?.account || '').trim()
+    if (email && !seen.has(email)) {
+      seen.add(email)
+      accountOptions.push([email, email])
+    }
+  }
+  const accountSel = el('select', {
+    id: 'logs-account',
+    onchange: (e) => { logsView.account = e.target.value; refreshLogs() },
+  }, accountOptions.map(([v, label]) =>
+    el('option', { value: v, selected: logsView.account === v ? 'selected' : null }, label)))
+
   const searchInput = el('input', {
     id: 'logs-q',
     placeholder: t('logs.searchPlaceholder'),
@@ -709,6 +792,7 @@ async function renderLogs(view) {
 
   card.append(el('div', { class: 'row', style: 'margin-top:10px;gap:8px;flex-wrap:wrap' }, [
     levelSel,
+    accountSel,
     searchInput,
     el('button', { onclick: () => refreshLogs() }, [icon('search', 13), t('common.search')]),
     el('button', {
@@ -716,11 +800,14 @@ async function renderLogs(view) {
       onclick: () => {
         logsView.q = ''
         logsView.level = 'all'
+        logsView.account = ''
         logsView.expanded.clear()
         const inp = document.querySelector('#logs-q')
         if (inp) inp.value = ''
         const sel = document.querySelector('#logs-level')
         if (sel) sel.value = 'all'
+        const asel = document.querySelector('#logs-account')
+        if (asel) asel.value = ''
         refreshLogs()
       },
     }, t('logs.clearFilters')),
@@ -1314,7 +1401,20 @@ function probeReason(code, message) {
   if (/rate_limited|spend_limited|free_mode_rate_limited/.test(c)) {
     return { label: t('account.probeRateLimited'), tip: t('account.probeRateLimitedTip', { msg }) }
   }
-  if (c.includes('unauthorized') || c.includes('invalid') || c.includes('401')) {
+  /**
+   * ⚠️ 401 单独判，且**只认真正的鉴权失败**。
+   *
+   * 此前写成 `c.includes('unauthorized') || c.includes('invalid') || c.includes('401')`
+   * —— 宽匹配把任何含这些子串的 code 都判成「凭证无效」，而「凭证无效」
+   * 在控制台上的含义是"这个号要重新登录"，处置成本最高（要用户去浏览器重登
+   * 再导入）。真因若是别的，用户就照着错的提示白折腾一遍。
+   *
+   * 现在：后端已把 session 401 归一成 `auth_unauthorized`（见
+   * upstream/client.js 的 401 分支），这里按精确 code 命中，并把上游原文
+   * （"Invalid API key" / "Missing or invalid Authorization header"）带进 tip。
+   * 拿不到结构化 code 的老后端仍靠上游原文兜底，不退化成"未知原因"。
+   */
+  if (c === 'auth_unauthorized' || /unauthorized|invalid api key|missing or invalid authorization/.test(c + ' ' + msg.toLowerCase())) {
     return { label: t('account.probeInvalidCred'), tip: t('account.probeInvalidCredTip', { msg }) }
   }
   return { label: t('account.probeFailed'), tip: msg }

@@ -1,4 +1,4 @@
-import { logger } from './util/log.js'
+import { logger, runWithLogContext } from './util/log.js'
 import { UpstreamError, isTerminalCountryBlock } from './upstream/client.js'
 import { newCliClaimId, newRawInstanceId } from './upstream/official-fingerprint.js'
 import { isFreeModel } from './model.js'
@@ -38,6 +38,7 @@ export class SessionManager {
     getSessionSettings,
     hasPendingUser,
     accountKey = null,
+    logContext = null,
     onSessionChange = null,
     onStateChange = null,
   }) {
@@ -58,6 +59,17 @@ export class SessionManager {
     this.instanceId = newRawInstanceId()
     /** 账号标识（sessions.json 里的 owner key）。 */
     this.accountKey = accountKey
+    /**
+     * 日志上下文（account/key）——本 Manager 产生的每条日志都自动带上。
+     *
+     * 为什么需要：logger 的 `account` 字段此前只在 **chat 路径**（proxy.js
+     * `patchLogContext`）被写上，探测/刷新/选号/空闲释放这些路径全是空的。
+     * 于是控制台「日志」页的账号筛选对这些日志永远筛不出东西 —— 而排障
+     * 恰恰最需要它们（一次 admit 失败、一次风控拒绝都是这条路径产生的）。
+     * 上层创建 runtime 时把邮箱传进来，这里包住所有入口方法。
+     */
+    this._logContext =
+      logContext && typeof logContext === 'object' ? logContext : null
     /** 句柄变更回调（落盘 /data/sessions.json）。 */
     this._onSessionChange =
       typeof onSessionChange === 'function' ? onSessionChange : null
@@ -533,7 +545,12 @@ export class SessionManager {
     this._mutex = prev.then(() => wait)
     await prev
     try {
-      return await fn()
+      // 锁内的整段执行都带上本账号的日志上下文（refresh / admit / release /
+      // 退款追问全走这里）——没有它，探测与释放产生的日志在控制台上
+      // 就是几十条无主记录，按账号筛选筛不出任何东西。
+      return this._logContext
+        ? await runWithLogContext(this._logContext, fn)
+        : await fn()
     } finally {
       release()
     }

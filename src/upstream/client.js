@@ -1036,6 +1036,34 @@ export function createUpstreamClient(config, token, opts = {}) {
         return body
       }
 
+      /**
+       * 401 = 上游**不认这个 token**，与限流/风控/封禁是完全不同的处置路径。
+       *
+       * 实测（2026-10-04，单变量对照）：
+       *   - 有效 token → 200 `{"status":"none", accessTier:"limited", freebucks:{...}}`
+       *   - 无效 token → 401 `{"error":"unauthorized","message":"Invalid API key"}`
+       *   - 无 token    → 401 `{"error":"unauthorized","message":"Missing or invalid Authorization header"}`
+       * 即上游在 401 上已经用明文说清了原因，读它即可。
+       *
+       * ⚠️ 此前这里只走通用 `!res.ok` 分支，`code` 取 `body.error` = `unauthorized`。
+       * 后果：控制台 `probeReason()` 用 `c.includes('unauthorized')` 命中
+       * 「凭证无效」，把**网络/出口类 401** 也判成凭证失效 —— 用户看到
+       * "凭证无效" 就去重新登录，而真因（token 过期/被吊销）与处置
+       * （重新登录导入）都不会被提示。所以这里单独归一，把上游原文带走。
+       */
+      if (res.status === 401) {
+        throw new UpstreamError(
+          body?.message ||
+            `freebuff session ${method} rejected: 401 unauthorized`,
+          {
+            status: 401,
+            code: 'auth_unauthorized',
+            body,
+            retryAfterMs,
+          },
+        )
+      }
+
       if (!res.ok) {
         throw new UpstreamError(
           `freebuff session ${method} failed: ${res.status}`,

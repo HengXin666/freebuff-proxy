@@ -15,7 +15,7 @@ import { AccountStateStore } from './account-state-store.js'
 import { UpstreamError, isSessionRecoverableGate } from './upstream/client.js'
 import { freebuffLegacyModelDigest } from './upstream/catalog-protocol.js'
 import { FREEBUFF_AVAILABLE_MODELS } from './model.js'
-import { logger } from './util/log.js'
+import { logger, runWithLogContext } from './util/log.js'
 
 /**
  * 账号级冷却里“被上游拒付/封禁”的那几种 code。
@@ -740,25 +740,48 @@ export class AccountRuntimes {
       this.byKey.delete(accountKey)
     }
 
-    const upstream = createUpstreamClient(this.config, user.authToken, {
-      proxy: user.proxy || null,
-      // ⚠️ accountId 用于两处，语义不同但都需要**账号 user id**：
-      //   1) 代理池稳定分配（同一账号固定出口）
-      //   2) 官方 chat 的 x-freebuff-acting-user-id（真机抓包确认是 user id）
-      // 用 user.id 而不是 accountKey —— accountKey 是凭据文件名（可能是邮箱）。
-      accountId: user.id || accountKey,
-      // 设备签名密钥落盘位置：与上游官方 CLI 同款（每账号一个文件）。
-      // 上游据此判定「是不是注册过的真客户端」——见 src/upstream/device-signing.js
-      deviceKeyPath: path.join(
-        this.config.server.dataDir,
-        'device-keys',
-        `${accountKey}.json`,
-      ),
-    })
+    /**
+     * ⚠️ runtime 创建期间的日志（`createUpstreamClient called` /
+     * `DeviceSigner constructed` / `device key registered` …）此前**没有账号
+     * 归属**：它们发生在 SessionManager 存在之前，而日志上下文只在 chat 路径
+     * （proxy.js `patchLogContext`）被写上。控制台上就是一批无主的
+     * "createUpstreamClient called" —— 用户看到的"奇奇怪怪的东西"正是它。
+     * 这里把整段创建包进本账号的上下文，与 SessionManager 内部保持一致。
+     */
+    const ctx = { account: user.email || accountKey, key: accountKey }
+    const upstream = runWithLogContext(ctx, () =>
+      createUpstreamClient(this.config, user.authToken, {
+        proxy: user.proxy || null,
+        // ⚠️ accountId 用于两处，语义不同但都需要**账号 user id**：
+        //   1) 代理池稳定分配（同一账号固定出口）
+        //   2) 官方 chat 的 x-freebuff-acting-user-id（真机抓包确认是 user id）
+        // 用 user.id 而不是 accountKey —— accountKey 是凭据文件名（可能是邮箱）。
+        accountId: user.id || accountKey,
+        // 设备签名密钥落盘位置：与上游官方 CLI 同款（每账号一个文件）。
+        // 上游据此判定「是不是注册过的真客户端」——见 src/upstream/device-signing.js
+        deviceKeyPath: path.join(
+          this.config.server.dataDir,
+          'device-keys',
+          `${accountKey}.json`,
+        ),
+      }),
+    )
     const sessions = new SessionManager({
       upstream,
       config: this.config,
       accountKey,
+      /**
+       * ⚠️ 日志上下文的 `account` 字段在这里**按账号固定注入**。
+       *
+       * 此前只有 proxy.js 在 chat 路径上 `patchLogContext({ account })`，
+       * 于是**探测/刷新/选号/空闲释放**这些路径产生的日志 `account` 全是空
+       * —— 控制台「日志」页的账号筛选永远筛不出东西，多账号池排障时几十条
+       * 无主记录交织（正是用户报的"又不能基于账号进行筛选"）。
+       *
+       * SessionManager 自己不知道邮箱（它只拿到 accountKey，而 key 可能是
+       * UUID），所以由这里把可读的邮箱一并给它，logger 自动带上。
+       */
+      logContext: { account: user.email || accountKey, key: accountKey },
       // 句柄变更落盘（track/clear/orphan）——见 SessionHandleStore。
       onSessionChange: (ev) => this.handleStore.handleEvent(ev),
       // 账号账目落盘（freebucks/quota/lastProbe）——见 AccountStateStore。

@@ -221,10 +221,12 @@ const DICT = {
   'account.probeIpCappedTip': { 'zh-CN': 'IP 达上限：{msg}', en: 'IP limit reached: {msg}' },
   'account.probeRateLimited': { 'zh-CN': '限流', en: 'Rate limited' },
   'account.probeRateLimitedTip': { 'zh-CN': '账号限流/额度：{msg}', en: 'Account rate / quota limited: {msg}' },
-  'account.probeInvalidCred': { 'zh-CN': '凭证无效', en: 'Invalid credentials' },
+  'account.probeInvalidCred': { 'zh-CN': '凭证失效', en: 'Credentials rejected' },
+  // ⚠️ tip 必须带**上游原文 + 怎么修**：只写"凭证无效"用户只能猜，
+  // 而"重新登录"与"等等再看"是两条成本完全不同的动作。
   'account.probeInvalidCredTip': {
-    'zh-CN': '凭据失效（需重新登录）：{msg}',
-    en: 'Credentials expired (sign in again): {msg}',
+    'zh-CN': '上游不认这个 token（{msg}）。处置：用浏览器重新登录该账号并重新导入凭据；这不是限流，等待不会恢复。',
+    en: 'Upstream rejected this token ({msg}). Fix: sign in again in a browser and re-import the credential; this is not rate limiting — waiting will not help.',
   },
   'account.probeFailed': { 'zh-CN': '探测失败', en: 'Probe failed' },
   'account.refreshed': { 'zh-CN': '账号状态已刷新', en: 'Account status refreshed' },
@@ -695,6 +697,18 @@ const DICT = {
     en: 'Search (matches full fields, e.g. country / banned / 503 / email)',
   },
   'logs.clearFilters': { 'zh-CN': '清除筛选', en: 'Clear filters' },
+  // 只清**内存里的日志缓冲**：不动任何落盘数据，也不影响在途请求
+  'logs.clear': { 'zh-CN': '清空', en: 'Clear' },
+  'logs.clearConfirm': {
+    'zh-CN': '清空进程内日志缓冲？只清显示的日志，不影响账号/会话/配置等任何落盘数据，也不会重启服务。',
+    en: 'Clear the in-process log buffer? Only the displayed logs are cleared — no persisted data (accounts / sessions / config) is touched and the service is not restarted.',
+  },
+  'logs.cleared': { 'zh-CN': '日志缓冲已清空', en: 'Log buffer cleared' },
+  'logs.accountAll': { 'zh-CN': '全部账号', en: 'All accounts' },
+  'logs.accountFilterHint': {
+    'zh-CN': '只看某个账号（点日志里的账号徽章也可直接筛选）',
+    en: 'Filter by account (or click the account badge on a log row)',
+  },
   'logs.expandHint': {
     'zh-CN': '点任意一行展开完整字段（含上游原始判据），可一键复制。缓冲为进程内有界环形队列，重启即清空。',
     en: 'Click any row to expand the full fields (including raw upstream verdicts) and copy them in one click. The buffer is a bounded in-process ring, cleared on restart.',

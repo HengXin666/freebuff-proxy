@@ -22,7 +22,7 @@ import {
   readJsonFile,
   writeJsonFile,
 } from '../auth-store.js'
-import { logger, readLogBuffer } from '../util/log.js'
+import { logger, readLogBuffer, clearRing } from '../util/log.js'
 import { requestSlotStats } from '../proxy.js'
 import { dataFileAudit } from '../util/json-store.js'
 
@@ -339,6 +339,30 @@ export function createWebApi(deps) {
         accounts,
         failed,
       })
+      return true
+    }
+
+    /**
+     * 清空进程内日志缓冲（控制台「日志」页的「清空」按钮）。
+     *
+     * 为什么需要：缓冲是**环形且只保留最近 N 条**，自动丢弃最旧的 ——
+     * 但用户想"从这一刻起只看新的"时，旧条目仍然占着整页（尤其一次故障
+     * 刷出几百条后，新日志被挤到最底下很难找）。没有手动清空就只能重启
+     * 进程，而重启会连带丢掉热会话现场。
+     *
+     * 只清内存缓冲，不碰落盘数据（data/ 与 sessions.json 都不动），
+     * 也不影响正在进行的请求。
+     */
+    if (method === 'DELETE' && route === '/api/logs') {
+      if (user.role !== 'admin') {
+        sendJson(res, 403, { error: '需要管理员权限' })
+        return true
+      }
+      const before = readLogBuffer({ limit: 1 }).length
+      clearRing()
+      logger.info('log buffer cleared by admin', { username: user.username, hadEntries: before > 0 })
+      // 清完立刻返回空列表：前端不必再发一次 GET，也避免"清了但还显示旧的"错觉
+      sendJson(res, 200, { ok: true, lines: [], total: 0, truncated: false, serverTime: new Date().toISOString() })
       return true
     }
 

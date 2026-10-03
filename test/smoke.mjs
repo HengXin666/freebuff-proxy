@@ -7792,3 +7792,79 @@ console.log('smoke ok')
   await rts.shutdown()
   fs.rmSync(dir, { recursive: true, force: true })
 }
+
+/* ================================================================
+   回归：上游 401 必须归一成 auth_unauthorized（不是裸 unauthorized）
+   ================================================================ */
+{
+  const origFetch = globalThis.fetch
+  /**
+   * 上游 401 的真值（2026-10-04 单变量对照实测）：
+   *   无效 token → 401 {"error":"unauthorized","message":"Invalid API key"}
+   *   无 token   → 401 {"error":"unauthorized","message":"Missing or invalid Authorization header"}
+   */
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({ error: 'unauthorized', message: 'Invalid API key' }),
+      { status: 401, headers: { 'content-type': 'application/json' } },
+    )
+  const { createUpstreamClient } = await import('../src/upstream/client.js')
+  const cfg = loadConfig()
+  const cli = createUpstreamClient(cfg, 'bad-token', { accountId: 'u401' })
+  let caught = null
+  try {
+    await cli.freebuffSession('GET')
+  } catch (err) {
+    caught = err
+  }
+  globalThis.fetch = origFetch
+  assert.ok(caught, '401 必须抛出（不得被当成成功回执吞掉）')
+  assert.equal(caught.status, 401)
+  /**
+   * ⚠️ 以前 code 直接取 `body.error` = `unauthorized`。控制台 probeReason()
+   * 用宽匹配 `includes('unauthorized')` 命中「凭证无效」，把网络/出口类 401
+   * 也判成凭证失效。归一成 auth_unauthorized 后前端才能精确命中并给出处置。
+   */
+  assert.equal(
+    caught.code,
+    'auth_unauthorized',
+    `401 必须归一成 auth_unauthorized，got ${caught.code}`,
+  )
+  // 上游原文必须带走：只说"凭证无效"用户不知道是 key 失效还是头没带
+  assert.match(caught.message, /Invalid API key/, '错误消息必须带上游原文')
+  assert.equal(caught.body?.error, 'unauthorized')
+}
+
+/* ================================================================
+   回归：日志缓冲可清空 + 可按账号过滤
+   ================================================================ */
+{
+  const { clearRing, readLogBuffer, configureLogBuffer, configureLogger, log } =
+    await import('../src/util/log.js')
+  const cap = configureLogBuffer(100)
+  // smoke 全局把 level 设成了 error，info 会被过滤掉；这里临时放开再还原。
+  configureLogger({ level: 'info' })
+  clearRing()
+  log('info', 'alpha line', { account: 'a@gmail.com' })
+  log('info', 'beta line', { account: 'b@outlook.com' })
+  log('error', 'gamma line', { account: 'a@gmail.com' })
+  assert.equal(readLogBuffer().length, 3, 'info 级别必须能进缓冲')
+
+  // 按账号过滤：后端早已支持，但前端从未传 —— 这里钉住它不被简化掉。
+  const onlyA = readLogBuffer({ account: 'a@gmail.com' })
+  assert.equal(onlyA.length, 2, 'account 过滤必须命中该账号的两条')
+  assert.ok(onlyA.every((l) => l.account === 'a@gmail.com'))
+  const onlyB = readLogBuffer({ account: 'b@outlook.com' })
+  assert.equal(onlyB.length, 1)
+  // 大小写不敏感（用户手打邮箱不会刻意对齐大小写）
+  assert.equal(readLogBuffer({ account: 'A@GMAIL.COM' }).length, 2)
+
+  // 级别过滤仍然有效（不能被 account 分支挤掉）
+  assert.equal(readLogBuffer({ level: 'error' }).length, 1)
+
+  // 清空：控制台「清空」按钮依赖它
+  clearRing()
+  assert.equal(readLogBuffer().length, 0, '清空后必须为空')
+  configureLogger({ level: 'error' })
+  configureLogBuffer(cap)
+}
