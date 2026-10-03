@@ -683,13 +683,16 @@ export function createWebApi(deps) {
       }
       try {
         /**
-         * ⚠️ **零自动探测**（docs/reverse/20 §20.3）：本接口只读本地缓存。
+         * 本接口 = 「同步上游模型」按钮的后端，**是用户主动触发**，
+         * 所以允许抓目录（docs/reverse/20 §20.3 只允许这类时机发请求）。
          *
-         * 名字里的 "upstream" 是历史遗留 —— 它曾经真的去打上游。现在清单
-         * 来自已缓存的目录行，额度/单价来自已缓存的会话快照。要拿新数据
-         * 就点「一键刷新」（走 `/api/accounts/refresh`），
-         * 只有那个动作才被允许发请求。
+         * ⚠️ 上一版把它改成了纯读缓存，结果按钮点了永远是空 ——
+         * 而负责刷新的「一键刷新」只跑 session GET、根本不抓目录，
+         * 两个按钮对不上，目录永远拿不到。这是我自己引入的 bug。
+         *
+         * 抓目录后再读一次缓存，顺带把额度/单价带上。
          */
+        await runtimes.refreshCatalogs?.({ force: true })
         const catalog = runtimes.catalogRows?.() || { rows: [], issuedAt: null }
         if (!catalog.rows.length) {
           sendJson(res, 200, {
