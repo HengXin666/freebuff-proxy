@@ -122,6 +122,15 @@ const DICT = {
   'account.waitingCallback': { 'zh-CN': '等待登录回调…', en: 'Waiting for the sign-in callback…' },
   'account.waitingCallbackPolling': { 'zh-CN': '等待登录回调…（服务端正在轮询）', en: 'Waiting for the sign-in callback… (server is polling)' },
   'account.loginStartFailed': { 'zh-CN': '发起登录失败', en: 'Failed to start sign-in' },
+  // 按 err.code 给出的可操作引导（不再是只能看 AbortError 原文）
+  'account.loginHintTimeout': {
+    'zh-CN': '上游响应超时（已自动重试一次）。请重试；若持续超时，检查到 freebuff.com 的链路或被墙情况。',
+    en: 'Upstream timed out (one retry already attempted). Please retry; if it keeps timing out, check the route to freebuff.com.',
+  },
+  'account.loginHintNetwork': {
+    'zh-CN': '网络层失败（已自动重试一次）。请检查 DNS / 出口连通性后重试。',
+    en: 'Network failure (one retry already attempted). Check DNS / egress connectivity, then retry.',
+  },
   'account.loginSuccess': { 'zh-CN': '登录成功：{email}{id}', en: 'Signed in: {email}{id}' },
   'account.loginIdSuffix': { 'zh-CN': '（ID {id}）', en: ' (ID {id})' },
   'account.addedProbing': { 'zh-CN': '账号 {email} 已添加，正在探测上游…', en: 'Account {email} added; probing upstream…' },
