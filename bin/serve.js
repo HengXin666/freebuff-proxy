@@ -325,10 +325,22 @@ async function main() {
    * 不会带着一个卡死的上游在后台无限堆积。
    */
   function startUpstreamWarmup() {
-    // 指纹对齐：把 chat UA 里的 CLI 版本号刷成 npm 上 freebuff 的最新版本。
-    // 上游按请求指纹判断"是不是官方客户端"，写死一个过时版本本身就是破绽；
-    // best-effort 且失败保留现值，绝不因一次网络失败影响可用性。
-    // 见 .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md
+    /**
+     * ⚠️ 启动时的 npm 版本拉取**已停用**（零自动探测，
+     * docs/reverse/20 §20.3）：它会在每次启动自动打
+     * `registry.npmjs.org`，属于"我们不请自来的外部请求"。
+     *
+     * CLI 版本号改用仓库内的已知值（`getCliVersion()` 的默认值，
+     * 抓包实测 0.2.12）；要跟进官方发版由维护者显式触发，或打开
+     * 设置里的开关（见下）。功能保留、默认不动。
+     */
+    const cliVersionAuto = settingsStore?.get?.().cliVersionAutoRefresh === true
+    if (!cliVersionAuto) {
+      logger.info('cli fingerprint version kept (auto-refresh disabled)', {
+        version: getCliVersion(),
+      })
+      return
+    }
     void refreshCliVersion()
       .then((version) => {
         logger.info('cli fingerprint version aligned', { version })
@@ -348,6 +360,7 @@ async function main() {
         // 每 6h 拉一次 npm latest；版本变了就 warn（一眼看出该跟进官方）。
         // unref：定时器绝不挡进程退出。
         const versionSweeper = setInterval(() => {
+          if (settingsStore?.get?.().cliVersionAutoRefresh !== true) return
           const before = getCliVersion()
           void refreshCliVersion()
             .then((next) => {

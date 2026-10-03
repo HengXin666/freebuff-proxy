@@ -59,8 +59,8 @@ Accept: */*
 
 | 项 | 官方 | 我方改动前 | 判定 |
 |---|---|---|---|
-| `x-codebuff-api-key` | **全 77 条抓包 0 次** | catalog 请求带了 | ❌ 多余，删 |
-| 设备签名三头 | catalog 那跳**没有**（签名从 session 才开始） | catalog 也签 | ⚠️ 无害但非官方形态 |
+| `x-codebuff-api-key` | **全 165 条抓包 0 次** | catalog 请求带了 | ❌ 多余，删 |
+| 设备签名三头 | catalog 那跳**没有**（签名从 session 才开始） | catalog 也签 | ❌ **不是"无害"——见 §19.9，它会让目录行数从 13 变成 53** |
 | `install-id` / `first-tab-discount` / `multi-session` / `include-unused-rate-limits` | 都是 **session 那跳**的头 | catalog 也带 | ❌ 串台，删 |
 
 **设备密钥的注册时机**（这才是签名的起点）：
@@ -247,3 +247,49 @@ curl -H "Authorization: Bearer <token>" \
 | `captures/2026-10-03-e2/catalog-official-client.json` | 客户端那份目录（13 行） |
 | `captures/2026-10-03-e2/catalog-our-probe.json` | 我方 1 次请求那份（13 行） |
 | `captures/2026-10-03-e2/session-official.json` | session 响应（三张表都在里面） |
+
+
+---
+
+## 19.9 ⚠️ 更正：catalog 带签名会让行数变成 53 —— 那不是真值
+
+本节是**自我更正**。前几轮我报告"目录 53 行"并把它当真实清单写进了
+note，那是错的。
+
+### 事实
+
+同一账号、相隔数秒的两次 catalog 请求：
+
+| 请求方 | 是否带设备签名 | version | rows |
+|---|---|---|---|
+| 官方客户端（抓包） | **不带** | `v0.g1.e82917` | **13** |
+| 我方 curl（那 1 次） | 不带 | `v0.g1.e82918` | **13** |
+| 主服务（CatalogHolder） | **带** | `v0.g1.e82918` | **53** |
+
+### 13 才是客户端口径
+
+抓包里客户端的 13 行与**客户端 UI 模型菜单实测的 13 项逐项一致**
+（`docs/reverse/13-client-ui-recon.md` §13.3 与本次 CDP 实测
+`.agent-option` 两项均吻合）：
+
+```
+Solar Mini 4 / Space Bunny Alpha / Laguna S 2.1 / Ling 3.1 Flash /
+MiMo 2.6 Flash / Solar Pro 4 / DeepSeek V4.1 Flash / GLM 5.3 Flash /
+Muse Spark 1.3 / GPT-6 Luna / MiMo 2.6 Pro / Gemini 3.8 Flash / GPT-6.1 Sol
+```
+
+### 53 是怎么来的
+
+`src/upstream/client.js` 给 `CatalogHolder` 的 `fetchImpl` 加了设备签名三头，
+而客户端在这一跳不签（165 条抓包里，**只有 `/api/v1/freebuff/session` 带
+签名**，13 次；`/models` 与 `/device-keys` 都不带）。
+
+多带一个客户端没有的特征 → 上游返回了**另一份**目录。它不是"更全的
+清单"，是我们形态偏离后换来的响应，**不能当真值**。
+
+### 处置
+
+- `CatalogHolder` 的 `fetchImpl` 已去掉签名，头集与客户端逐字节一致。
+- 所有以 53 为判据的表述已更正（note 两处 + 本文档）。
+- 教训：任何"我方拿到了更多/更好数据"的结果，第一反应应该是
+  **怀疑自己的形态偏离了**，而不是当成收获。

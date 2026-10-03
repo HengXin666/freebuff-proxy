@@ -11,7 +11,7 @@ Status: implemented
 
 | 表 | 键数 | 含义 | 改动前被误用为 |
 |---|---|---|---|
-| `GET /api/v1/freebuff/models` 的 `rows` | 13（该账号实测 53） | **模型清单** | 只用来取 handle |
+| `GET /api/v1/freebuff/models` 的 `rows` | 13 | **模型清单** | 只用来取 handle |
 | `session.freebucks.prices` | 17 | 每模型单价 FB/h | 未用于清单 |
 | `session.rateLimitsByModel` | 6 | 今日**给了会话额度**的子集 | **被当成模型清单** |
 
@@ -54,7 +54,7 @@ Status: implemented
 ## Consequences
 
 - `/v1/models` 与 `/api/models` 现在给的是**上游此刻真实的全部模型**
-  （实测 53 条），而不是"今日有额度的那几个"。
+  （13 行，与客户端 UI 菜单逐项一致），而不是"今日有额度的那几个"。
 - 对外 id 从 `deepseek/deepseek-v4-flash` 这类 2026-08 的过时名字，
   变成目录原文 `DeepSeek V4.1 Flash`；旧的可读 id 仍可通过
   `catalogId` 与 `freebuff_key` 反查，不会硬性断掉老客户端。
@@ -75,10 +75,13 @@ Status: implemented
 
 ## Verification
 
-起真实服务实测：`/v1/models` 返回 **53 条**可读模型名，单价/额度/
-accessTier 正确挂载；`/api/models/upstream` 返回 53 条（不再为空）；
-模拟前端同步写入 53 条自定义模型成功；用可读名 `DeepSeek V4.1 Flash`
-请求 chat，白名单放行并解析为 `m-096e75164d`。
+起真实服务实测：`/v1/models` 返回可读模型名清单（单价/额度/accessTier
+正确挂载），`/api/models/upstream` 不再为空，用可读名 `DeepSeek V4.1 Flash`
+请求 chat 被白名单放行并解析为 `m-096e75164d`。
+
+⚠️ 该轮实测曾报告"53 条"，那是**catalog 抓取多带了设备签名**换来的另一份
+响应（客户端不签名，只有 13 行且与 UI 菜单逐项一致）。53 不是真值，
+已修正为不带签名（见 docs/reverse/19 §19.2），本 note 不再以 53 为判据。
 
 离线回归 `test/verify-catalog-models.mjs`（13 行真机目录）：钉住
 "13 条而非 6 条"、id 可读、额度为 0 仍在清单、白名单放行、假模型仍拒。

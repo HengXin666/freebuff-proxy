@@ -313,26 +313,21 @@ export function createUpstreamClient(config, token, opts = {}) {
   const catalog = new CatalogHolder({
     apiHost: apiBase,
     token,
+    /**
+     * ⚠️ catalog 这一跳**不带设备签名**。
+     *
+     * 抓包真值（2026-10-03，165 条）：客户端只有 `/api/v1/freebuff/session`
+     * 带签名三头（13 次），`/models` 与 `/device-keys` **都不带**。
+     * 官方时序是：catalog（无签名）→ device-keys → session（开始签名）。
+     *
+     * 以前这里给 catalog 也签了名 —— 后果是**拿到的行数不一样**：
+     * 同一账号同一时刻，不签名 13 行（与客户端 UI 菜单逐项一致），
+     * 带签名 53 行。53 行不是"更全的清单"，而是**我们多带了一个客户端
+     * 没有的特征后换来的另一份响应**，不能拿它当真值。
+     * 见 docs/reverse/19 §19.2。
+     */
     fetchImpl: async (url, init) => {
       const headers = { ...(init?.headers || {}) }
-      // 设备签名（目录请求也需要签名）
-      if (deviceSigner) {
-        const sigHeaders = await deviceSigner.headersFor({
-          method: init?.method || 'GET',
-          url,
-          body: init?.body || null,
-          fetchId: null, // 目录抓取时还没有 fetchId
-        })
-        logger.info('catalog fetch: adding device signature', {
-          hasKey: !!sigHeaders['x-freebuff-device-key'],
-          hasSig: !!sigHeaders['x-freebuff-device-sig'],
-          keyId: sigHeaders['x-freebuff-device-key'],
-          url,
-        })
-        Object.assign(headers, sigHeaders)
-      } else {
-        logger.warn('catalog fetch: NO device signer available')
-      }
       return fetchWithProxy(url, { ...init, headers })
     },
   })

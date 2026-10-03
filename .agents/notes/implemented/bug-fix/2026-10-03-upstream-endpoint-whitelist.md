@@ -76,5 +76,5 @@ agent-runs / chat/completions + 广告/遥测/HEAD 这些可免项）。
 - 启动日志中 `"path":"/api..."` 与 `device signature generated` **计数为 0**
   （改前每次启动至少 2 次）。
 - 未探测时 `/v1/models` 返回 `{ data: [], notProbed: true }` 且日志无请求。
-- 用户登录后点「一键刷新」→ 目录写入缓存 → `/v1/models` 返回 **53 条**
-  可读模型名，`notProbed` 消失，单价正确挂载。
+- 用户登录后点「一键刷新」→ 目录写入缓存 → `/v1/models` 返回可读模型名
+  清单，`notProbed` 消失，单价正确挂载。
