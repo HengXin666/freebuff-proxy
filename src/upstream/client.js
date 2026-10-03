@@ -279,6 +279,74 @@ function makeBunFetcher(apiBase) {
  * 经 bun 通道读一次会话（官方形态实现在 cli-bridge）。
  * 失败返回 null，调用方回落 Node 实现。
  */
+
+/**
+ * 经 bun 通道释放会话（官方形态实现在 cli-bridge）。
+ * 失败返回 null，调用方回落 Node 实现。
+ */
+function makeReleaseViaBun(token, accountId, apiBase, deviceKeyPath) {
+  let loader = null
+  return async (instanceId) => {
+    try {
+      if (loader === null) loader = import('./official-rpc.js').catch(() => null)
+      const mod = await loader
+      if (!mod?.rpcReleaseSession || !mod?.buildRpcCfg) return null
+      const cfg = await mod.buildRpcCfg(
+        { token, accountId, deviceKeyPath },
+        { upstream: { timeZone: 'Asia/Shanghai', apiBase } },
+      )
+      if (!cfg) return null
+      cfg.installId = installIdFromClientState() || null
+      cfg.apiHost = apiBase || null
+      const r = await mod.rpcReleaseSession({ cfg, instanceId })
+      if (!r?.ok) return null
+      // 上游释放成功返回空体；构造一个最小对象供调用方判定
+      try {
+        return r.text ? JSON.parse(r.text) : {}
+      } catch {
+        return {}
+      }
+    } catch {
+      return null
+    }
+  }
+}
+
+
+/**
+ * 包装 fetchImpl：device-keys 那一跳交给 bun（官方形态），其余原样。
+ *
+ * 只换传输层，不动 DeviceSigner 的注册/重试/落盘逻辑。
+ * bun 不可用或失败时回落到传入的 fallback（可用性优先）。
+ */
+function makeDeviceKeysViaBun(token, apiBase, fallback) {
+  let loader = null
+  return async (url, init) => {
+    const isDeviceKeys =
+      typeof url === 'string' && url.includes('/api/v1/freebuff/device-keys')
+    if (!isDeviceKeys || (init?.method || 'GET').toUpperCase() !== 'POST') {
+      return fallback(url, init)
+    }
+    try {
+      if (loader === null) loader = import('./official-rpc.js').catch(() => null)
+      const mod = await loader
+      if (!mod?.rpcRegisterDeviceKey) return fallback(url, init)
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {}
+      if (!body?.publicKey) return fallback(url, init)
+      const cfg = { token, apiHost: apiBase || null }
+      const r = await mod.rpcRegisterDeviceKey({ cfg, publicKey: body.publicKey })
+      if (!r?.ok) return fallback(url, init)
+      // 返回一个最小 Response，让 DeviceSigner 的既有解析逻辑照常工作
+      return new Response(JSON.stringify(r.body ?? {}), {
+        status: r.status || 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    } catch {
+      return fallback(url, init)
+    }
+  }
+}
+
 function makeSessionViaBun(token, accountId, apiBase, deviceKeyPath) {
   let loader = null
   return async () => {
@@ -330,6 +398,7 @@ export function createUpstreamClient(config, token, opts = {}) {
   const apiBase = config.upstream.apiBase
   /** 经 bun 读会话的通道（官方形态实现在 cli-bridge，这里只调端口）。 */
   const _sessionViaBun = makeSessionViaBun(token, opts.accountId, apiBase, opts.deviceKeyPath)
+  const _releaseViaBun = makeReleaseViaBun(token, opts.accountId, apiBase, opts.deviceKeyPath)
   
   logger.info('createUpstreamClient called', {
     hasDeviceKeyPath: !!opts.deviceKeyPath,
@@ -373,7 +442,14 @@ export function createUpstreamClient(config, token, opts = {}) {
           apiHost: apiBase,
           accountId: opts.accountId,
           token,
-          fetchImpl: fetchWithProxy, // 注册请求经过代理但不签名
+          /**
+           * 注册请求**走 bun**：客户端这一跳由 bun 发出，Node 会多带
+           * `accept-language` / `sec-fetch-mode`，且 UA 是 `node`。
+           *
+           * 这里不重写注册逻辑（DeviceSigner 内部不变），只把**传输层**
+           * 换成 bun：拦截 device-keys 路径，其余仍走 fetchWithProxy。
+           */
+          fetchImpl: makeDeviceKeysViaBun(token, apiBase, fetchWithProxy),
         })
       : null
   
@@ -607,6 +683,15 @@ export function createUpstreamClient(config, token, opts = {}) {
         // _sessionViaBun() 已直接返回**会话体**（或 null），不是 {ok,body} 包装
         const viaBun = await _sessionViaBun()
         if (viaBun && typeof viaBun === 'object') return viaBun
+      }
+      /**
+       * DELETE 同样走 bun：它必须带 `x-freebuff-instance-id`，否则上游 400
+       * `instance_required`、槽位退不掉（账号会一直被占）。
+       * 头与签名交给 bun 侧官方形态实现，不在主服务构造。
+       */
+      if (method === 'DELETE' && opts.instanceId) {
+        const released = await _releaseViaBun(opts.instanceId)
+        if (released != null) return released
       }
       // 头集合逐字对齐官方 jg()：Authorization + x-fb-timezone +
       // x-freebuff-first-tab-discount，POST 另带 model / wallet-spend-limit。

@@ -59,8 +59,10 @@ The string contains invalid characters.
   cli-bridge 的实现漂移。
 - **只加端口不做格式归一**：通道永远静默失败并回落 Node，等于没改 ——
   这次正是先撞上了才补的。
-- **device-keys 也一并搬**：本轮没做。它无签名需求，
-  且注册有落盘副作用，改动面更大，另做。
+- **device-keys 只搬一半**：它同样是客户端 0 次差异项，且是**签名前置**
+  （无 keyId 则 session/admission/chat 全废），一并搬了。
+  做法是把 DeviceSigner 的 `fetchImpl` 换成 bun（只换传输层，
+  不动它的注册/重试/落盘逻辑）。
 
 ## Verification
 
@@ -72,6 +74,8 @@ The string contains invalid characters.
    （对照 `docs/reverse/21` §21.3）。
 5. 真实上游回归：点「一键刷新」→ `ok: true`、`catalogRows: 13`，
    admission / chat 计数均为 0。
+6. device-keys / DELETE 均在**本地镜像**验证（镜像返回 200 且头集吻合），
+   **未对真实账号发过 DELETE**（那是写操作）。
 
 ## 教训
 

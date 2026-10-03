@@ -236,6 +236,58 @@ export async function rpcSession(params) {
   }
 }
 
+/**
+ * 注册设备公钥（**端口**）：POST /api/v1/freebuff/device-keys → 拿 keyId。
+ *
+ * 与 rpcSession 同理：不构造头，交给 bun 侧官方形态实现。
+ * 这一跳是**签名前置** —— 拿不到 keyId 则 session/admission/chat 都无法签名。
+ *
+ * @param {{ cfg: object, publicKey: string, timeoutMs?: number }} params
+ * @returns {Promise<{ ok: boolean, status?: number, keyId?: string | null, body?: any, error?: string } | null>}
+ */
+export async function rpcRegisterDeviceKey(params) {
+  const { cfg, publicKey, timeoutMs = 15_000 } = params
+  try {
+    const out = await callBun({ cfg, action: 'deviceKeys', publicKey }, timeoutMs)
+    const result = out?.result || {}
+    return {
+      ok: result.status === 200 && Boolean(result.body?.keyId),
+      status: result.status,
+      keyId: result.body?.keyId || null,
+      body: result.body ?? null,
+      error: out?.error || null,
+    }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * 释放会话（**端口**）：DELETE /api/v1/freebuff/session。
+ *
+ * ⚠️ 必须带 `x-freebuff-instance-id`，否则上游 400 `instance_required`，
+ * 槽位退不掉 → 账号一直被占（会拿到 purchase_claim_released / purchase_in_use）。
+ * 头与签名一律交给 bun 侧官方形态实现。
+ *
+ * @param {{ cfg: object, instanceId: string, timeoutMs?: number }} params
+ * @returns {Promise<{ ok: boolean, status?: number, text?: string, error?: string } | null>}
+ */
+export async function rpcReleaseSession(params) {
+  const { cfg, instanceId, timeoutMs = 20_000 } = params
+  try {
+    const out = await callBun({ cfg, action: 'release', instanceId }, timeoutMs)
+    const result = out?.result || {}
+    return {
+      ok: result.status === 200,
+      status: result.status,
+      text: result.text ?? null,
+      error: out?.error || null,
+    }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 /** 副仓库是否可用（bun 存在且可执行）。 */
 export async function rpcAvailable() {
   try {

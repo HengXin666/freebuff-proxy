@@ -342,6 +342,30 @@ class Bridge {
     return this.catalog;
   }
 
+  /**
+   * 注册设备公钥 → 拿 keyId（**签名前置**，无 keyId 则后续请求无法签名）。
+   *
+   * 头集逐字对齐抓包真值（docs/reverse/21 §21.3）：
+   *   Authorization: Bearer <token>
+   *   Content-Type: application/json
+   *   User-Agent / Accept / Accept-Encoding 由 bun 裸 fetch 提供（Bun/1.4.2）
+   * body: {"publicKey":"<base64url raw Ed25519 32B>","client":"desktop"}
+   * ⚠️ 不带 x-codebuff-api-key、不带设备签名（这一跳还没有 keyId）。
+   */
+  async registerDeviceKey(publicKey) {
+    const url = `${this.host}/api/v1/freebuff/device-keys`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        ...this.auth(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ publicKey, client: 'desktop' }),
+    });
+    const body = await res.json().catch(() => null);
+    return { status: res.status, body };
+  }
+
   async getSession() {
     const url = `${this.host}/api/v1/freebuff/session`;
     const res = await fetch(url, {
@@ -681,8 +705,12 @@ try {
   if (act !== 'catalog') await bridge.fetchCatalog();
   if (act === 'catalog') {
     out.catalog = await bridge.fetchCatalog();
+  } else if (act === 'deviceKeys') {
+    out.result = await bridge.registerDeviceKey(input.publicKey);
   } else if (act === 'session') {
     out.result = await bridge.getSession();
+  } else if (act === 'release') {
+    out.result = await bridge.release(input.instanceId);
   } else if (act === 'admit') {
     const row = bridge.catalog.rows.find((r) => r.key === input.modelKey)
       || bridge.catalog.rows.find((r) => r.handle === input.modelKey)

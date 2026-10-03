@@ -216,11 +216,12 @@ freebuff-device-v1
 | 端点 | 状态 | 说明 |
 |---|---|---|
 | `GET /models` | ✅ **一致** | 走 bun 通道，逐字节相同（`19` §19.10 / note `...catalog-request-via-bun`） |
-| `POST /device-keys` | ⚠️ **未搬** | 仍走 Node → 多 `accept-language` / `sec-fetch-mode`。
-  UA 已补 `Bun/1.4.2`、body 是官方 `client:"desktop"`；注册有落盘副作用，另做 |
+| `POST /device-keys` | ✅ **一致** | 走 bun（`rpcRegisterDeviceKey`）；注册是惰性的，
+  首次需要签名时才发 |
 | `GET /session` | ✅ **一致** | 走 bun 端口 `rpcSession()`，实测头集逐项相同（见下） |
 | `POST /admission` | ✅ 已对齐 | P0 项，见 `15` |
-| `DELETE /session` | ⚠️ 未搬 | 与 GET 同源构造，仍走 Node |
+| `DELETE /session` | ✅ **一致** | 走 bun（`rpcReleaseSession`），实测含
+  `x-freebuff-instance-id` + 签名三头 |
 | `POST /agent-runs` | ✅ 已对齐 | 3 个业务头 + desktop 世代 agentId |
 | `POST /chat/completions` | ✅ 已对齐 | 8 个业务头，实测 200 + 工具调用（`16`） |
 
