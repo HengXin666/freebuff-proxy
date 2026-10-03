@@ -1561,6 +1561,14 @@ for (const model of verifiedSpecialModels) {
     `luna 绝不允许 base2, got ${JSON.stringify(startAgentCalls)}`,
   )
   // luna-es 同样强制 base3（base3-free-luna-es，绝无 base2）
+  //
+  // ⚠️ 换模型前必须**显式释放**上一条会话。这不是测试在迁就实现，而是生产
+  // 语义：一次 admit 买断一小时且**绑定模型**（issue #24 实测——付费时段内换
+  // 模型必然把那一小时作废，且 DELETE 之后 0s/45s/90s 三次重试全部
+  // purchase_claim_released，接不回来）。所以「同一小时内跨模型可用」在生产
+  // 上不成立；此前这段测试能过，是因为 mock 上游无条件放行 admission。
+  // 这里显式释放 = 模拟"时段结束/用户主动关闭后再换模型"的真实路径。
+  await runtimes.get('u1').sessions.release()
   startAgentCalls = []
   const resEs = await chat({
     model: 'openai/gpt-5.6-luna-es',
@@ -1576,6 +1584,10 @@ for (const model of verifiedSpecialModels) {
 
 // 模型白名单：APP 里没有的模型 id 一律 400 拒绝，绝不盲发上游
 {
+  // 清掉上一用例留下的已付费会话：它绑在 luna-es 上，会让本用例的选号先撞上
+  // 「付费时段内绑别模型」（issue #24）而拿不到 400。白名单校验发生在选号之前，
+  // 但选号失败会先返回 429 —— 保持用例间状态干净，断言的才是白名单本身。
+  await runtimes.get('u1').sessions.release()
   calls = []
   completionAttempts = 0
   // 完全未知的模型 id（不在 catalog / 自定义 / 上游探测里）
@@ -2570,7 +2582,24 @@ for (const model of verifiedSpecialModels) {
   const last = await pool.acquireForModel('deepseek/deepseek-v4-flash')
   assert.equal(last.email, 'sp-c@example.com', '最后一个账号才启用 c')
 
-  // 只剩 c 可用且它持有 flash 热 session：换模型请求复用同一账号（释放旧 session）
+  /**
+   * 只剩 c 可用：换模型请求复用同一账号（释放旧 session 后 admit 新模型）。
+   *
+   * ⚠️ 前提必须是**付费时段已结束**。一次 admit 买断一小时且绑定模型，
+   * 付费时段内换模型上游必然拒（issue #24：0s/45s/90s 三次重试全部
+   * purchase_claim_released，且 DELETE 之后接不回来）。所以"同一小时内跨模型
+   * 可用"在生产上不成立——此前这段能过，是因为 mock 无条件放行 admission。
+   * 这里先把 c 的会话置为已过期，测的才是真实成立的换模型路径。
+   */
+  const cRt = pool.get('c')
+  cRt.sessions.session = {
+    ...(cRt.sessions.session || {}),
+    status: 'active',
+    model: 'deepseek/deepseek-v4-flash',
+    instanceId: 'inst-sp-c',
+    expiresAt: new Date(Date.now() - 1000).toISOString(),
+    remainingMs: 0,
+  }
   sessionPosts = 0
   const luna = await pool.acquireForModel('openai/gpt-5.6-luna')
   assert.equal(luna.email, 'sp-c@example.com', '无其他可用账号时应复用已用账号换模型')
@@ -4809,7 +4838,19 @@ for (const model of verifiedSpecialModels) {
   assert.equal(sessionPosts, 2, '免费会话剩余 <5 分钟应提前 re-admit')
 
   // 付费模型：会话剩余 4 分钟（> 60s lead）→ 仍可复用（不浪费已付费会话）
+  //
+  // ⚠️ 这里必须用**同一个模型**续期，不能换到别的模型：一次 admit 买断一小时
+  // 且绑定模型，付费时段内换模型上游必然拒（issue #24 实测 0s/45s/90s 全部
+  // purchase_claim_released 且接不回来）。换模型路径由下面的用例单独覆盖。
+  // 先验"绑在 flash 上时换 pro 会被拦"，再释放、用 pro 重新 admit 验 lead。
   sessionExpiryMs = 4 * 60_000
+  await assert.rejects(
+    () => ldSm.ensureSession('deepseek/deepseek-v4-pro'),
+    (err) => err.code === 'paid_window_model_mismatch',
+    '付费时段内换模型必须被拦（否则已买断的一小时作废且接不回来）',
+  )
+  // 用户主动关闭（或时段结束）后，同一个模型才能重新 admit
+  await ldSm.release()
   await ldSm.ensureSession('deepseek/deepseek-v4-pro')
   assert.equal(
     ldSm.isUsableForModel('deepseek/deepseek-v4-pro'),
@@ -7867,4 +7908,69 @@ console.log('smoke ok')
   assert.equal(readLogBuffer().length, 0, '清空后必须为空')
   configureLogger({ level: 'error' })
   configureLogBuffer(cap)
+}
+
+/* ================================================================
+   回归：issue #24 —— 付费时段内换模型不得释放已买断的会话
+   ================================================================ */
+{
+  const events = []
+  const up = {
+    freebuffSession: async (method, opts = {}) => {
+      events.push(method + (opts.model ? ':' + opts.model : ''))
+      if (method === 'DELETE') return { status: 'ended' }
+      if (method === 'POST') return { status: 'purchase_claim_released' }
+      return { status: 'none' }
+    },
+  }
+  const sm = new SessionManager({
+    upstream: up,
+    config: {
+      session: { reAdmitOnExpire: true, reAdmitLeadSec: 60, freeModelReAdmitLeadSec: 60 },
+      limits: {},
+    },
+    accountKey: 'paid-switch',
+  })
+  // 一条买断整小时、还差 50 分钟到期的会话
+  sm.session = {
+    status: 'active',
+    instanceId: 'inst-paid',
+    model: 'm-69307952f8',
+    admittedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 3000_000).toISOString(),
+    remainingMs: 3000_000,
+  }
+  await assert.rejects(
+    () => sm.ensureSession('mimo/mimo-v2.5'),
+    (err) => err.code === 'paid_window_model_mismatch',
+    '付费时段内换模型必须被拦',
+  )
+  /**
+   * ⚠️ 核心断言：**绝不能发 DELETE**。
+   * 改前这里无条件 `_releaseUnlocked()`，而实测 DELETE 之后接不回来
+   * （0s/45s/90s 三次重试全部 purchase_claim_released）—— 已买断的一小时
+   * 既不能用也拿不回来。
+   */
+  assert.equal(
+    events.includes('DELETE'),
+    false,
+    `付费时段内绝不能 DELETE 已付费会话，got ${JSON.stringify(events)}`,
+  )
+  assert.equal(sm.session?.instanceId, 'inst-paid', '已付费会话句柄必须原样保留')
+  assert.equal(sm.session?.status, 'active', '已付费会话状态不得被篡改')
+  assert.equal(sm.inPaidWindow(), true)
+
+  // 同一模型继续请求 → 走热路径复用（边际成本 0），零上游调用
+  events.length = 0
+  await sm.ensureSession('m-69307952f8')
+  assert.equal(events.length, 0, '同模型应纯复用，不产生任何上游调用')
+
+  // 用户主动释放（时段结束/手动关闭）后，换模型才允许 admit
+  await sm.release()
+  events.length = 0
+  await sm.ensureSession('mimo/mimo-v2.5').catch(() => {})
+  assert.ok(
+    events.some((e) => e.startsWith('POST')),
+    `释放后换模型应能 admit，got ${JSON.stringify(events)}`,
+  )
 }

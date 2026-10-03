@@ -229,6 +229,12 @@ const DICT = {
     en: 'Upstream rejected this token ({msg}). Fix: sign in again in a browser and re-import the credential; this is not rate limiting — waiting will not help.',
   },
   'account.probeFailed': { 'zh-CN': '探测失败', en: 'Probe failed' },
+  // 付费时段内会话只服务它绑定的那个模型（issue #24）
+  'account.paidWindowShort': { 'zh-CN': '本小时仅限此模型', en: 'This hour: this model only' },
+  'account.paidWindowTip': {
+    'zh-CN': '这一小时已买断给「{model}」（到期 {until}）。此时换其它模型会作废已付款的这一小时且接不回来，所以系统不会切换——请继续用该模型，或等时段结束后再换。',
+    en: 'This hour is already paid for “{model}” (until {until}). Switching to another model now voids the paid hour and cannot be undone, so the proxy will not switch — keep using this model, or switch after the window ends.',
+  },
   'account.refreshed': { 'zh-CN': '账号状态已刷新', en: 'Account status refreshed' },
   'account.probeOk': { 'zh-CN': '✅ {email} 可用 · {n} 个模型', en: '✅ {email} available · {n} models' },
   'account.probeModelList': { 'zh-CN': '：{list}', en: ': {list}' },

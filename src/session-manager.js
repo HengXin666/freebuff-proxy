@@ -719,9 +719,64 @@ export class SessionManager {
         return this.session
       }
 
-      // 持有的 slot 已不可用（模型不符 / 已过期 / 即将过期）：先释放再 admit，
-      // 平滑切换——避免带着旧 session 直接 POST 造成上游 model_locked 或排队。
+      /**
+       * 持有的 slot 已不可用（模型不符 / 已过期 / 即将过期）：先释放再 admit。
+       *
+       * ⚠️ **仍在已付费时段内时绝不释放**（issue #24）。
+       *
+       * 这段原本无条件释放，而 `_armIdleRelease` 的注释基于 24 组实测得出
+       * 完全相反的结论——那两条结论打架了很久，直到 #24 在真实部署上复现：
+       *
+       *     18:41:24  session active  expiresAt=19:41:19
+       *     18:41:28  ← 请求成功
+       *     18:41:36  releasing session before re-admit（切模型）
+       *     18:41:36  DELETE /api/v1/freebuff/session
+       *     18:41:38  slot busy; not cooling  code=purchase_claim_released
+       *
+       * 即：**已买断的那一小时被主动扔掉，新模型又没拿到**，账号进入最差状态。
+       * 且实测 DELETE 之后**接不回来**（0s / 45s / 90s 三次重试，换回原模型或
+       * 换另一个模型，全部 purchase_claim_released），直到 expiresAt 到期才恢复。
+       *
+       * 所以付费时段内换模型 = 纯亏损：已付的钱丢了、新会话拿不到、面板还显示
+       * 账号正常。正确做法是**不碰这条会话**，把请求交给别的账号（本账号的那一
+       * 小时继续服务它自己的模型）。
+       */
       if (this.hasLiveSlot() && !this.isUsableForModel(model)) {
+        /**
+         * 付费时段内的会话**不是"不可用的 slot"，是"正在生效的资产"**。
+         * 抛 paid_window_model_mismatch：上层据此跳过本账号去选下一个，
+         * 而不是冷却它（它是健康的，只是这一个小时内只能服务旧模型）。
+         */
+        // ⚠️ 只拦「模型不符」，**不拦**「即将过期需要续期」：后者是同一模型
+        // 的 re-admit（近过期续期），会话本来就该换新的，不拦它否则会让
+        // 到期前无法续期，请求撞上已失效会话。
+        const modelMismatch = Boolean(
+          this.session?.model && this.session.model !== model,
+        )
+        if (modelMismatch && this.inPaidWindow()) {
+          const left = this.paidWindowRemainingMs()
+          logger.warn('model switch inside paid window; keeping the paid session', {
+            from: this.session?.model,
+            to: model,
+            instanceId: this.session?.instanceId,
+            expiresAt: this.session?.expiresAt,
+            paidWindowLeftMin: left != null ? Math.round(left / 60000) : null,
+          })
+          throw new UpstreamError(
+            'account holds a paid session bound to another model; ' +
+              'keeping it (switching inside the paid window voids the hour)',
+            {
+              status: 409,
+              code: 'paid_window_model_mismatch',
+              body: {
+                boundModel: this.session?.model ?? null,
+                instanceId: this.session?.instanceId ?? null,
+                expiresAt: this.session?.expiresAt ?? null,
+                paidWindowRemainingMs: left,
+              },
+            },
+          )
+        }
         logger.info('releasing session before re-admit', {
           model,
           status: this.session?.status,

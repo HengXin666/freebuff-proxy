@@ -1297,12 +1297,34 @@ function buildAccountRow(a, i) {
     t('account.countsTip', { admits, reuses }) +
     (reuseRate != null ? t('account.countsRate', { rate: reuseRate }) : '') +
     t('account.countsTipTail')
+  /**
+   * ⚠️ 「这一小时已买给模型 X」必须显示出来（issue #24）。
+   *
+   * 此前这条会话显示成 `MiMo 2.6 Flash · 50 分钟`——看着完全正常，但它
+   * **只服务这一个模型**：此时请求任何别的模型都会被上游拒（实测
+   * purchase_claim_released，且 DELETE 之后接不回来），而面板仍写 status=ok。
+   * 用户对着"正常"去查一个根本没坏的账号，排障只能翻日志。
+   *
+   * 后端已给 `session.inPaidWindow`，这里据此加一行标注，把"还能用多久、
+   * 只能用哪个模型、什么时候能换"讲清楚。
+   */
+  const paidBound = a.session?.live && a.session?.inPaidWindow === true
   const sessNode = el('div', {}, [
     // 这里显示的是**给人看的模型名**：a.session.model 是目录 key
     // （m-00032eaeec），必须换成可读名（MiMo 2.6 Flash）。
     el('div', {}, a.session?.live
       ? `${modelLabel(a)} · ${fmtMs(a.session.remainingMs)}`
       : (a.session?.status === 'none' ? t('account.noActiveSession') : (a.session?.status || '—'))),
+    paidBound
+      ? el('div', {
+          class: 'badge warn',
+          style: 'font-size:11px;margin-top:2px',
+          title: t('account.paidWindowTip', {
+            model: modelLabel(a),
+            until: a.session?.expiresAt ? fmtTime(a.session.expiresAt) : '—',
+          }),
+        }, t('account.paidWindowShort'))
+      : '',
     admits + reuses > 0
       ? el('div', { class: 'muted', style: 'font-size:11px', title: countsTip },
           reuseRate != null

@@ -57,6 +57,19 @@ const SLOT_BUSY_CODES = new Set([
   'premium_slot_taken',
 ])
 
+/**
+ * 本账号**有会话但这一小时内绑在别的模型上**（issue #24）。
+ *
+ * 它不是账号故障：这条会话健康、已付费、仍在服务它自己的模型。只是"此刻
+ * 不能接这个模型"。处置与槽位忙同类（跳过、不冷却），但**原因不同**——
+ * 槽位忙是"等一等就空出来"，这个是"这一小时内都腾不出来"。
+ *
+ * ⚠️ 必须**不冷却**：冷却一个仍在正常服务旧模型的账号，等于把可用的额度
+ * 判死。上层换下一个账号即可；若池内所有账号都命中这个码，说明这一小时
+ * 内每个号都各绑一个模型，此时应如实把原因返回给用户（见 no_available_account）。
+ */
+const PAID_WINDOW_BOUND_CODES = new Set(['paid_window_model_mismatch'])
+
 /** Whole-account cooldown (any model). */
 const ACCOUNT_COOLDOWN_CODES = new Set([
   'rate_limited',
@@ -692,6 +705,18 @@ export class AccountRuntimes {
               // "rem=0 但仍可用（已付款）"与"真的用尽"，别再误报额度不足。
               expiresAt: snap.expiresAt || null,
               admittedAt: snap.admittedAt || null,
+              /**
+               * ⚠️ 「仍在这一小时已付费时段内」（issue #24）。
+               *
+               * 控制台此前只暴露 status/live/expiresAt，于是这条会话显示成
+               * "正常" —— 但它**只服务于它绑定的那个模型**，换任何别的模型
+               * 都会被拒（实测 purchase_claim_released，且接不回来）。
+               *
+               * 带上这个布尔，前端才能在账号行上如实标注"这一小时已买给
+               * 模型 X"，而不是让用户对着 status=ok 去查一个根本没坏的东西。
+               * 判不出来的会话（无 expiresAt）返回 false = 不标注。
+               */
+              inPaidWindow: rt?.sessions?.inPaidWindow?.() === true,
             }
           : null,
         // 每日免费 session 额度（来自最近一次 admit/refresh 的上游返回）
@@ -1506,7 +1531,21 @@ export class AccountRuntimes {
         // 实测反例（2026-10-03）：全新账号配额 0/6、无购买无退款，
         // 仅因上一次会话尚未释放而拿到 purchase_in_use，就被冷却
         // 到 20:20 —— 于是"刚导入的干净账号立刻不可用"。
-        if (SLOT_BUSY_CODES.has(String(err?.code))) {
+        if (PAID_WINDOW_BOUND_CODES.has(String(err?.code))) {
+          /**
+           * 该账号这一小时已买给别的模型（issue #24）。**不释放、不冷却**：
+           * 那条会话仍在服务旧模型，冷却它等于把还在生效的额度判死。
+           * 直接换下一个账号；这一个小时内它不该再被这个模型选中。
+           */
+          logger.warn('account holds a paid session for another model; skipping', {
+            key,
+            email: emailByKey.get(key),
+            code: err?.code,
+            model,
+            boundModel: err?.body?.boundModel ?? null,
+            expiresAt: err?.body?.expiresAt ?? null,
+          })
+        } else if (SLOT_BUSY_CODES.has(String(err?.code))) {
           logger.warn('account session slot busy; not cooling', {
             key,
             email: emailByKey.get(key),
@@ -1556,6 +1595,57 @@ export class AccountRuntimes {
           },
           // 必须原样带上 fatal：外层据此立即收场，不再重试换号。
           fatal: true,
+        },
+      )
+    }
+    /**
+     * 全部账号都「这一小时已买给别的模型」（issue #24）。
+     *
+     * 这是**与额度无关**的一类不可用：账号健康、有钱、有会话，只是每个号在
+     * 付费时段内各绑一个模型，此刻谁都腾不出这个模型的槽位。此前它会混进
+     * 笼统的 no_available_account，用户只能去查账号/额度——查不出任何问题，
+     * 因为**账号确实是好的**（面板也显示 ok）。
+     *
+     * 给独立错误码，并把「什么时候能恢复」说清楚：等最早的那条会话到期。
+     */
+    const allPaidBound =
+      failures.length > 0 &&
+      failures.every((f) => PAID_WINDOW_BOUND_CODES.has(f.code))
+    if (allPaidBound) {
+      // 恢复时刻 = 最早到期的那条已付费会话（批号里取最小 expiresAt）
+      let resumeAtMs = null
+      for (const f of failures) {
+        const exp = Date.parse(f?.body?.expiresAt || '')
+        if (Number.isFinite(exp) && (resumeAtMs == null || exp < resumeAtMs)) {
+          resumeAtMs = exp
+        }
+      }
+      const waitMs =
+        resumeAtMs != null ? Math.max(0, resumeAtMs - Date.now()) : null
+      throw new UpstreamError(
+        `Every account already holds a paid hour bound to another model; ` +
+          `switching now would void the hour already paid for. ` +
+          (waitMs != null
+            ? `Retry after ${new Date(resumeAtMs).toISOString()} ` +
+              `(about ${Math.ceil(waitMs / 60000)} min), or use the model each account is currently bound to.`
+            : `Retry later, or use the model each account is currently bound to.`) +
+          ` ${failures.length} account(s) tried.`,
+        {
+          status: 429,
+          code: 'paid_window_model_mismatch',
+          body: {
+            model,
+            failures: sanitizeFailuresForClient(failures),
+            reasons: countReasons(failures),
+            tried: failures.length,
+            banned: 0,
+            // 每个账号此刻绑定的模型：用户据此改用它们（而不是干等）
+            boundModels: failures
+              .map((f) => f?.body?.boundModel)
+              .filter(Boolean),
+            resumeAt: resumeAtMs != null ? new Date(resumeAtMs).toISOString() : null,
+          },
+          retryAfterMs: waitMs,
         },
       )
     }
@@ -1662,7 +1752,13 @@ export class AccountRuntimes {
         // 等它空出即可。冷却会把可用账号钉死（实测：干净账号仅因上一次会话
         // 未释放就拿到 purchase_claim_released，随即被冷却 → 立刻不可用）。
         // 与 ensureSession 里的 slotBusyCodes 同一套判据。
-        if (!opts.noCooldown && !SLOT_BUSY_CODES.has(String(opts.gateCode))) {
+        // 付费时段绑别模型（issue #24）同样不冷却：账号是健康的，只是这一小时
+        // 内腾不出这个模型的槽位。冷却会把仍在生效的额度判死。
+        if (
+          !opts.noCooldown &&
+          !SLOT_BUSY_CODES.has(String(opts.gateCode)) &&
+          !PAID_WINDOW_BOUND_CODES.has(String(opts.gateCode))
+        ) {
           logger.warn('gate is slot-busy; switching account without cooling', {
             key: opts.preferredKey,
             gateCode: opts.gateCode,
