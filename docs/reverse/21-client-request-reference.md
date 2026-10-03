@@ -216,12 +216,45 @@ freebuff-device-v1
 | 端点 | 状态 | 说明 |
 |---|---|---|
 | `GET /models` | ✅ **一致** | 走 bun 通道，逐字节相同（`19` §19.10 / note `...catalog-request-via-bun`） |
-| `POST /device-keys` | ⚠️ **未核对** | Node 发，多 `accept-language` / `sec-fetch-mode` |
-| `GET /session` | ⚠️ **未核对** | Node 发，且 UA 是 `Bun/1.3.14`（客户端实测 `Bun/1.4.2`） |
+| `POST /device-keys` | ⚠️ **未搬** | 仍走 Node → 多 `accept-language` / `sec-fetch-mode`。
+  UA 已补 `Bun/1.4.2`、body 是官方 `client:"desktop"`；注册有落盘副作用，另做 |
+| `GET /session` | ✅ **一致** | 走 bun 端口 `rpcSession()`，实测头集逐项相同（见下） |
 | `POST /admission` | ✅ 已对齐 | P0 项，见 `15` |
-| `DELETE /session` | ⚠️ 未核对 | — |
+| `DELETE /session` | ⚠️ 未搬 | 与 GET 同源构造，仍走 Node |
 | `POST /agent-runs` | ✅ 已对齐 | 3 个业务头 + desktop 世代 agentId |
 | `POST /chat/completions` | ✅ 已对齐 | 8 个业务头，实测 200 + 工具调用（`16`） |
+
+### session 改走 bun 端口（**不在主服务手写头**）
+
+曾试图在主服务里手写头去模仿客户端（删 `x-freebuff-env`、补
+`x-freebuff-client`、硬改 UA 常量…）—— 那是"自己重新实现"，已 revert
+（`48b45f2`）。
+
+正确做法是**换运行时**：Node 强制带 `accept-language` 与
+`sec-fetch-mode`（forbidden，设不掉），主服务里补头永远补不到一致。
+现在 `freebuffSession('GET')` 走 `rpcSession()` 端口，
+官方形态的实现只有一份，在 cli-bridge。
+
+⚠️ **踩到的坑**：主服务私钥落盘是 **PEM**，cli-bridge 的
+`derFromB64u()` 要 **base64url 裸 DER** → `atob()` 抛
+"The string contains invalid characters." → 整个 bun 请求**静默失败并
+回落 Node**，表现就是"通道没生效"。已在 `buildRpcCfg()` 做格式归一。
+
+⚠️ **教训**：通道接上 ≠ 通道生效。失败会静默回落，必须抓实际报文
+确认走了哪条路径。
+
+本地镜像实测 bun 通道发出的 session 头（与客户端真值逐项一致）：
+
+```
+authorization / x-freebuff-catalog-fetch / x-freebuff-catalog-protocol /
+x-freebuff-client: desktop / x-freebuff-device-key / -sig / -ts /
+x-freebuff-first-tab-discount: 0 / x-freebuff-include-unused-rate-limits: 1 /
+x-freebuff-multi-session: 1 / connection / user-agent: Bun/1.4.2 /
+accept: */* / accept-encoding: gzip, deflate, br, zstd
+```
+
+无 `x-freebuff-env`、无 `x-freebuff-compact-session`、无
+`accept-language`、无 `sec-fetch-mode`。
 
 ---
 
