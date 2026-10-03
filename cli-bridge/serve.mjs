@@ -26,73 +26,59 @@ if (!hasBun()) {
 const PORT = Number(process.env.PORT || 8791);
 const HOST_BIND = process.env.HOST || '127.0.0.1';
 
-/** 官方 base3 世代开场白（目录模式 agent 必须是它，见 docs/reverse/04）。 */
-const SYS_OPENING_BASE3 =
-  'You are Buffy, the coding agent behind Codebuff.';
-
-/**
- * 官方签名工具（名字 + 真参数 schema，双真）。
- * 零参数工具不算签名；end_turn 已被上游点名收录进 PROXY_HOLLOW_END_TURN 夹具。
- */
-const SIGNATURE_TOOLS = [
-  {
-    type: 'function',
-    function: {
-      name: 'lookup_agent_info',
-      description: 'Protocol compatibility marker. Do not call this function.',
-      parameters: {
-        type: 'object',
-        properties: {
-          agentId: {
-            type: 'string',
-            description: 'Agent ID (short local or full published format)',
-          },
-        },
-        required: ['agentId'],
-        description: 'Retrieve information about an agent by ID',
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'decide',
-      description: 'Protocol compatibility marker. Do not call this function.',
-      parameters: { type: 'object', properties: {} },
-    },
-  },
-];
-
-/** 补齐官方签名工具（不覆盖客户端已有的同名工具）。 */
-function ensureSignature(tools) {
-  if (!Array.isArray(tools) || tools.length === 0) return SIGNATURE_TOOLS;
-  const present = new Set(
-    tools.map((t) => t?.function?.name).filter(Boolean),
-  );
-  const missing = SIGNATURE_TOOLS.filter(
-    (d) => !present.has(d.function.name),
-  );
-  return [...tools, ...missing];
-}
-
-/** 保证 system 首条以官方开场白开头（同世代：base3）。 */
-function ensureOpening(messages) {
-  const list = Array.isArray(messages) ? messages.map((m) => ({ ...m })) : [];
-  const idx = list.findIndex((m) => m && m.role === 'system');
-  const prompt =
-    `${SYS_OPENING_BASE3}\n\nYou help the user with coding and technical questions. Be concise and accurate.\nFollow the user's instructions in subsequent messages.\n`;
-  if (idx === -1) return [{ role: 'system', content: prompt }, ...list];
-  const sys = list[idx];
-  const cur = typeof sys.content === 'string' ? sys.content : '';
-  if (cur.trimStart().startsWith(SYS_OPENING_BASE3)) return list;
-  list[idx] = { ...sys, content: `${prompt}${cur}` };
-  return list;
-}
-
 let CONFIG = null;
 let CATALOG = null;
 let CATALOG_AT = 0;
 const CATALOG_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * 把上游的 **SSE 流式响应**聚合成一次性结果。
+ *
+ * 为什么需要：上游是流式的（官方链路即流式，stream=false 实测 503），
+ * 而下游客户端可能要非流式。不解析的话会把 `data: {...}` 原文塞进 content，
+ * 客户端拿到一堆无法使用的文本（2026-10-03 实测踩到）。
+ *
+ * @param {string} text SSE 原文
+ * @returns {{ content: string, toolCalls: any[], id: string|null, reasoning: string }|null}
+ *   不是 SSE（或无有效块）时返回 null
+ */
+function aggregateSse(text) {
+  const src = String(text || '');
+  if (!src.includes('data:') && !src.startsWith('{')) return null
+  let content = ''
+  let reasoning = ''
+  let id = null
+  /** @type {any[]} */
+  const toolCalls = []
+  let sawChunk = false
+  for (const line of src.split('\n')) {
+    const t = line.trim()
+    if (!t.startsWith('data:')) continue
+    const payload = t.slice(5).trim()
+    if (!payload || payload === '[DONE]') continue
+    let j = null
+    try { j = JSON.parse(payload) } catch { continue }
+    if (!j || typeof j !== 'object') continue
+    sawChunk = true
+    if (j.id && !id) id = j.id
+    for (const c of j.choices || []) {
+      const d = c.delta || {}
+      if (typeof d.content === 'string') content += d.content
+      if (typeof d.reasoning_content === 'string') reasoning += d.reasoning_content
+      if (Array.isArray(d.tool_calls)) {
+        for (const tc of d.tool_calls) {
+          const i = tc.index ?? toolCalls.length
+          if (!toolCalls[i]) toolCalls[i] = { id: '', type: 'function', function: { name: '', arguments: '' } }
+          if (tc.id) toolCalls[i].id = tc.id
+          if (tc.function?.name) toolCalls[i].function.name += tc.function.name
+          if (tc.function?.arguments) toolCalls[i].function.arguments += tc.function.arguments
+        }
+      }
+    }
+  }
+  if (!sawChunk) return null
+  return { content, toolCalls: toolCalls.filter(Boolean), id, reasoning }
+}
 
 async function getCatalog(force = false) {
   const fresh = CATALOG && Date.now() - CATALOG_AT < CATALOG_TTL_MS;
@@ -176,18 +162,19 @@ const server = createServer(async (req, res) => {
           },
         });
       }
-      const messages = ensureOpening(body.messages);
-      const tools = ensureSignature(body.tools);
-
+      // ⚠️ 不再在这里拼 system / 补签名工具 / 指定 agent —— 那些是**副仓库**
+      // 的职责（官方形态只在 cli-bridge 有一份）。这里只传原始 messages/tools。
+      //
+      // ⚠️ stream 恒为 true：官方链路就是流式的，实测 stream=false 会 503。
       const out = await callBun(
         {
           cfg: CONFIG,
           action: 'full',
           modelKey: row.key,
-          agentId: 'base3-free-catalog',
-          messages,
-          tools,
-          stream: false,
+          messages: body.messages,
+          tools: body.tools,
+          layer: 'worker',
+          stream: true,
         },
         180_000,
       );
@@ -217,7 +204,29 @@ const server = createServer(async (req, res) => {
         });
       }
 
-      // 200：转成 OpenAI 形态返回
+      // 200：转成 OpenAI 形态返回。
+      // ⚠️ 上游是 SSE（stream 恒 true），非流式请求必须**先聚合**再返回，
+      // 否则会把 `data: {...}` 原文塞进 content。
+      const sse = aggregateSse(chat.text || '');
+      if (sse) {
+        const msg = { role: 'assistant', content: sse.content || '' }
+        if (sse.toolCalls.length) msg.tool_calls = sse.toolCalls
+        return json(res, 200, {
+          id: sse.id || `chatcmpl-${Date.now()}`,
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: body.model,
+          choices: [
+            {
+              index: 0,
+              message: msg,
+              finish_reason: sse.toolCalls.length ? 'tool_calls' : 'stop',
+            },
+          ],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        });
+      }
+
       let parsed = null;
       try {
         parsed = JSON.parse(chat.text || '');
@@ -276,7 +285,18 @@ const server = createServer(async (req, res) => {
   return json(res, 404, { error: { message: 'not found' } });
 });
 
-CONFIG = await loadConfig();
+// 可用环境变量指定账号（客户端未登录 / 想用另一个号时）。
+// 例：FREEBUFF_TOKEN=xxx FREEBUFF_USER_ID=xxx node serve.mjs
+//
+// 为什么需要：loadConfig() 默认读官方客户端的登录态，一台机器同时只有
+// 一个登录账号；而多账号池场景常常要显式指定用哪个号。
+const override = {}
+if (process.env.FREEBUFF_TOKEN) override.token = process.env.FREEBUFF_TOKEN
+if (process.env.FREEBUFF_USER_ID) override.userId = process.env.FREEBUFF_USER_ID
+if (process.env.FREEBUFF_INSTALL_ID) {
+  override.installId = process.env.FREEBUFF_INSTALL_ID
+}
+CONFIG = await loadConfig(override);
 server.listen(PORT, HOST_BIND, () => {
   console.log(`[cli-bridge] listening http://${HOST_BIND}:${PORT}`);
   console.log(`[cli-bridge] credential source: ${CONFIG.source} (${CONFIG.email})`);
