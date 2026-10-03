@@ -1668,8 +1668,33 @@ export class AccountRuntimes {
         { status: 401, code: 'upstream_auth_missing' },
       )
     }
-    const preferred = this._lastSuccessKey || keys[0]
-    return this.get(preferred)
+    /**
+     * 首选 key 取不到时**回落到 keys[0]**，不把"首选失效"升级成致命错误。
+     *
+     * 这里的 preferred 来自 _lastSuccessKey（历史指针，可能悬空）。它悬空时
+     * `this.get(preferred)` 抛 `Account not found`；而启动路径
+     * （buildAppContext）直接调用本函数，一抛就是"服务起不来"。
+     * 指针在构造期会被校验并清掉（见 _restoreAccountState），但**运行期**也可能
+     * 出现（并发删号、凭据文件被手工移走）；此时正确的行为是换一个能用的账号，
+     * 而不是让控制台/状态接口 500。
+     */
+    const preferred = this._lastSuccessKey && keys.includes(this._lastSuccessKey)
+      ? this._lastSuccessKey
+      : keys[0]
+    try {
+      return this.get(preferred)
+    } catch (err) {
+      // 首选账号的凭据此刻不可用（文件被移除/写坏）→ 依次尝试其余账号。
+      for (const key of keys) {
+        if (key === preferred) continue
+        try {
+          return this.get(key)
+        } catch {
+          // 继续换下一个
+        }
+      }
+      throw err
+    }
   }
 
   /**
@@ -1978,6 +2003,19 @@ export class AccountRuntimes {
     }
     if (typeof this.accountState.state.lastSuccessKey === 'string') {
       this._lastSuccessKey = this.accountState.state.lastSuccessKey
+    }
+    /**
+     * ⚠️ 账本里的 lastSuccessKey 是**历史**指针，指向的账号可能早已不在凭据目录里
+     * （用户在控制台删了旧号、或换了新号后旧凭据被清掉）。它一旦悬空，
+     * getAny() 的 `this.get(preferred)` 会抛 `Account not found`，而
+     * buildAppContext 在启动路径上**直接调用 getAny()** → 整个服务起不来
+     * （实测：重启即 `✗ 启动失败`，堆栈 app-context.js:604 → :1672 → :2107）。
+     * 账户删除路径会清这个指针（forgetAccount），但删号发生在**另一个进程**
+     * （用户在旧容器里删的号、或凭据是手工删的）时清不到，所以这里必须自愈：
+     * 指针指向的 key 不在当前凭据列表里就丢弃，getAny() 自然回落到 keys[0]。
+     */
+    if (this._lastSuccessKey && !this.allKeys().includes(this._lastSuccessKey)) {
+      this._lastSuccessKey = null
     }
   }
 
