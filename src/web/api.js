@@ -694,6 +694,19 @@ export function createWebApi(deps) {
          */
         await runtimes.refreshCatalogs?.({ force: true })
         const catalog = runtimes.catalogRows?.() || { rows: [], issuedAt: null }
+        /**
+         * 抓完目录仍为空 → **顺带刷一次会话**补额度/单价。
+         * 用户点的是「同步上游模型」，他要的是一份能用的清单
+         * （名字 + 价格 + 额度），不是只有名字的空壳。
+         * 两者都是只读 GET，且都由用户这次点击触发。
+         */
+        if (catalog.rows.length) {
+          try {
+            await probeAllAccountsSession()
+          } catch {
+            // 额度拿不到也照常返回清单
+          }
+        }
         if (!catalog.rows.length) {
           sendJson(res, 200, {
             models: [],
@@ -987,6 +1000,20 @@ export function createWebApi(deps) {
         }
       }
       let modelIds = []
+      /**
+       * 「一键刷新」= 用户主动 → 允许探测，且**目录与会话一起刷新**。
+       *
+       * ⚠️ 以前这里只跑 probeAllAccountsSession()（session GET），不抓目录；
+       * 而「同步上游模型」又只抓目录 —— 用户必须点两个按钮才凑得齐数据，
+       * 这是我自己造成的割裂。现在一次点击两件事都做完。
+       *
+       * 目录失败不拖累账号刷新（两者的失败是独立的）。
+       */
+      let catalogInfo = { rows: [], issuedAt: null, version: null }
+      try {
+        await runtimes.refreshCatalogs?.({ force: true })
+        catalogInfo = runtimes.catalogRows?.() || catalogInfo
+      } catch { /* 目录刷新失败不影响账号刷新结果 */ }
       try {
         const { session } = await probeAllAccountsSession()
         modelIds = Object.keys(session?.rateLimitsByModel || {})
@@ -1004,6 +1031,10 @@ export function createWebApi(deps) {
         modelNames: overviewModelNames(),
         upstreamModelIds: modelIds,
         upstreamModels: runtimes.modelAliases(upstreamKeys),
+        // 目录侧：让前端一次点击就能同时更新清单与额度
+        catalogRows: catalogInfo.rows?.length || 0,
+        catalogVersion: catalogInfo.version || null,
+        catalogIssuedAt: catalogInfo.issuedAt || null,
         note: '只读刷新：未创建 / 未释放任何会话，已购买的付费时段不受影响',
       })
       return true

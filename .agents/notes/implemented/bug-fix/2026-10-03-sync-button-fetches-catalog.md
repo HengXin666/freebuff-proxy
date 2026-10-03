@@ -29,10 +29,14 @@ Status: implemented
 
 ## Consequences
 
-- 「同步上游模型」点一次 = 发一次 `GET /api/v1/freebuff/models`，拿到清单
-  写入内存缓存，随后 `/v1/models` 立刻可见（不发第二次请求）。
-- 「一键刷新」维持原职责（只刷 session/额度），不重复抓目录。
-- 请求量：用户每点一次同步 = 1 次只读 GET，无 admission、无 chat。
+- 「同步上游模型」点一次 = 抓目录 + 顺带补一次 session（拿额度/单价），
+  一次点击拿到**完整清单**（名字 + 价格 + 额度）。
+- 「一键刷新」也同时抓目录与会话 —— 两个按钮都能一次搞定，不再需要
+  用户点两个才凑齐数据（这个割裂是我上一版造成的）。
+- 想更新就再点一次：`refreshCatalogs({ force: true })` 会真重抓
+  （实测连点两次 = `catalog fetched` 计数 2，不是命中缓存直接返回）。
+- 请求量：一次点击 = 2 个只读 GET（models + session），
+  无 admission、无 chat。
 
 ## Alternatives considered
 
@@ -41,6 +45,9 @@ Status: implemented
   保持"谁要清单谁抓"更直白。
 - **让 `/v1/models` 恢复自动补抓**：违反用户明确的零自动探测裁决，不行。
 - **什么都不做**：按钮永远空，等于功能报废。
+- **只让「一键刷新」抓目录、同步按钮仍读缓存**：能修，但用户点「同步
+  上游模型」却拿不到新目录，语义对不上 —— 按钮名字说的是同步上游。
+  最终两个按钮都补齐（谁点都能更新）。
 
 ## Verification
 
@@ -51,6 +58,9 @@ Status: implemented
    单价全部正确（MiMo 10 / DeepSeek 15 / GPT-6.1 Sol 100 …）。
 3. 随后 `/v1/models` 返回同样 **13 条**，`notProbed` 消失 —— 未多发请求。
 4. 日志中 `session/admission` 与 `chat/completions` 计数均为 **0**。
+5. **更新可用**：连点两次同步 → `catalog fetched` 计数 2，确认是真重抓
+   而非读缓存（版本串相同只是上游几分钟内没变版本）。
+6. 只点「一键刷新」一次 → `catalogRows: 13` + 会话刷新，两件事都完成。
 
 13 条与客户端 UI 模型菜单实测的 13 项一致（去掉 catalog 设备签名后
 不再出现 53 行那份偏离响应，见
