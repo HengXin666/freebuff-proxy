@@ -23,7 +23,6 @@ import {
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { logger } from '../util/log.js';
-import { BUN_USER_AGENT } from './official-fingerprint.js';
 
 export const FREEBUFF_DEVICE_KEYS_PATH = '/api/v1/freebuff/device-keys';
 export const DEVICE_KEY_HEADER_NAME = 'x-freebuff-device-key';
@@ -347,14 +346,6 @@ export class DeviceSigner {
           // Content-Type（抓包真值），没有 x-codebuff-api-key。
           'Authorization': `Bearer ${this.token}`,
           'Content-Type': 'application/json',
-          /**
-           * ⚠️ UA 必须是 `Bun/1.4.2`。此前不设，Node 会发 `node` ——
-           * 客户端实测与 bun 裸 fetch 都是 `Bun/1.4.2`
-           * （对照 docs/reverse/21 §21.3）。
-           */
-          'User-Agent': BUN_USER_AGENT,
-          Accept: '*/*',
-          'Accept-Encoding': 'gzip, deflate, br, zstd',
         },
         body: JSON.stringify({
           publicKey: key.publicKey,

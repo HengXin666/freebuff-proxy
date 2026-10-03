@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { freebuffAuthHeaders } from '../auth-store.js'
 import { logger } from '../util/log.js'
 import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from 'undici'
@@ -269,24 +266,6 @@ function makeBunFetcher() {
     const callBun = await loader
     if (!callBun) return null
     return callBun(input, 30_000)
-  }
-}
-
-
-/**
- * 读官方客户端登录态里的 `installId`（客户端每台机器一个，随会话请求发送）。
- *
- * 只做**只读**、best-effort：读不到返回 null（该头跳过）。
- * 不连带读 token —— 凭据仍以本仓库的 credentials/ 为准。
- * @returns {string | null}
- */
-function installIdFromClientState() {
-  try {
-    const p = join(homedir(), '.config/freebuff-desktop/state.json')
-    const st = JSON.parse(readFileSync(p, 'utf8'))
-    return typeof st?.installId === 'string' ? st.installId : null
-  } catch {
-    return null
   }
 }
 
@@ -602,9 +581,6 @@ export function createUpstreamClient(config, token, opts = {}) {
           instanceId: opts.instanceId,
           compact: opts.compact,
           walletSpendLimit: opts.walletSpendLimit,
-          // 客户端每次会话请求都带（抓包 100%，值来自登录态 installId）。
-          // 此前缺失 —— 对照 docs/reverse/21 §21.3。
-          installId: opts.installId || installIdFromClientState() || null,
         }),
         // 既有行为保留：本项目 token 由**网页登录签发**，auth-store 记录
         // 「只带 Bearer 会 401」。测试也把它钉住了（smoke: 删它有打死全部

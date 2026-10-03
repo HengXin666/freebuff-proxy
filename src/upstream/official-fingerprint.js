@@ -91,13 +91,7 @@ export function officialByokUserAgent(version = KNOWN_CLI_VERSION) {
  * 官方 CLI 的裸 fetch UA（非 chat 调用）。二进制原文：
  *   CODEBUFF_IS_BINARY:"true" 走 Bun 自带 UA；对齐 trefeon bunUserAgent。
  */
-/**
- * ⚠️ 版本号必须跟**客户端实测值**，不要用 CLI 源码里的历史值。
- * 客户端抓包（165 条）里 bun 的 UA 恒为 `Bun/1.4.2`；
- * 此前写的是 `Bun/1.3.14`（来自 CLI 侧 pinned 版本），差两个小版本 ——
- * 服务端能直接看出这不是当前客户端。
- */
-export const BUN_USER_AGENT = 'Bun/1.4.2'
+export const BUN_USER_AGENT = 'Bun/1.3.14'
 
 /**
  * 会话准入端点（**POST 专用**）。二进制原文：
@@ -123,11 +117,6 @@ export const HEADER_API_KEY = 'x-codebuff-api-key'
  *     .resolvedOptions().timeZone}}catch{return{}}}
  */
 export const HEADER_TIMEZONE = 'x-fb-timezone'
-/** desktop 客户端身份头（抓包 100% 携带）。 */
-export const HEADER_CLIENT = 'x-freebuff-client'
-export const CLIENT_DESKTOP = 'desktop'
-/** 安装实例 id（客户端 state.json 的 installId）。 */
-export const HEADER_INSTALL_ID = 'x-freebuff-install-id'
 
 /**
  * agent 步进终止哨兵。二进制原文：
@@ -180,15 +169,9 @@ export function officialSessionHeaders(method, token, opts = {}) {
   const headers = {
     Authorization: 'Bearer ' + token,
     [HEADER_FIRST_TAB_DISCOUNT]: opts.firstTabDiscount ? '1' : '0',
-    /**
-     * ⚠️ `x-freebuff-env` **已删除**：165 条客户端抓包里出现 **0 次**
-     * （对照 `docs/reverse/21` §21.3）。它来自官方 **CLI** 源码
-     * （cli/src/utils/client-environment.ts），desktop 客户端不发。
-     * 我们走 desktop 路线，带它等于自报 CLI 身份。
-     */
-    // desktop 客户端每次会话请求都带（抓包 100%）
-    [HEADER_CLIENT]: CLIENT_DESKTOP,
-    ...(opts.installId ? { [HEADER_INSTALL_ID]: opts.installId } : {}),
+    // 客户端环境描述符：官方在 session 与广告请求上都带（见
+    // cli/src/utils/client-environment.ts）。缺它就不像官方客户端。
+    [HEADER_CLIENT_ENV]: clientEnvironment(),
   }
   // ⚠️ 这组头此前只在 `cli:` 前缀时才发（按官方 **CLI** 源码
   // cli/src/utils/freebuff-session-api.ts:186-200：服务端据此认成 CLI
@@ -217,16 +200,6 @@ export function officialSessionHeaders(method, token, opts = {}) {
       if (!opts.compact) headers[HEADER_INCLUDE_UNUSED_RATE_LIMITS] = '1'
     }
   }
-  /**
-   * ⚠️ `x-freebuff-include-unused-rate-limits: 1` 是**查询形态**的头，
-   * 与有没有活跃会话**无关** —— 客户端 17 次 session GET 全带
-   * （对照 docs/reverse/21 §21.3）。
-   * 以前它被塞在 `if (opts.instanceId)` 里，于是没有会话的首次查询
-   * 反而不带这个头，与客户端相反。
-   */
-  if (method === 'GET' && !opts.compact) {
-    headers[HEADER_INCLUDE_UNUSED_RATE_LIMITS] = '1'
-  }
   const tz = localTimeZone()
   if (tz) headers[HEADER_TIMEZONE] = tz
   // 官方 **CLI** 原文（cli/src/utils/freebuff-session-api.ts:201）：
@@ -239,11 +212,9 @@ export function officialSessionHeaders(method, token, opts = {}) {
   if (opts.instanceId) {
     headers[HEADER_INSTANCE_ID] = opts.instanceId
   }
-  /**
-   * ⚠️ `x-freebuff-compact-session` **不再发送**：165 条客户端抓包 0 次
-   * （对照 docs/reverse/21 §21.3）。
-   */
-  void opts.compact
+  if (method === 'GET' && opts.compact) {
+    headers[HEADER_COMPACT_SESSION] = '1'
+  }
   if (method === 'POST') {
     if (opts.model) headers[HEADER_MODEL] = opts.model
     headers[HEADER_WALLET_SPEND_LIMIT] = String(opts.walletSpendLimit ?? 0)
