@@ -87,6 +87,26 @@ same route`（带 label 与 attempt）。排查登录抖动时可以直接看这
 **性能**：最坏情况登录耗时从 15s 变成 30s（两次 15s）。对交互式登录可接受，且只在
 第一次真的超时时才发生。
 
+**错误契约（三层，各司其职）**：
+
+- `code` —— **稳定的业务码**（`upstream_timeout` / `upstream_network`）。
+  不透 Node 底层码：本仓多处按集合匹配 `code`（`SLOT_BUSY_CODES` /
+  `UNAVAILABLE_COOLDOWN_CODES` / `EXHAUST_CODES`），裸 socket 码有误命中风险。
+- `cause` —— **底层原始错误码**（`ECONNREFUSED` / `ENOTFOUND` / `ETIMEDOUT` /
+  `timeout`）。为它扩展了 `UpstreamError` 的 extra（原为闭集 status/code/body/
+  retryAfterMs/fatal，不扩展会被静默丢弃）。
+- `message` —— 给人看，内含底层码（如 `…（ECONNREFUSED）`）。
+
+三层都**传到前端**：后端 `/api/accounts/login` 的 502 响应带 `code` 与 `cause`；
+前端 `api()` 把两者挂到 error 上（此前只传 `error` 字符串，前端想区分故障类型
+只能解析中文文案，文案一改就崩）。前端登录失败弹窗据此显示
+message + `cause:` 行 + 按 `code` 的可操作引导（新增两条 i18n 文案）。
+
+**回归防线**：`test/smoke.mjs` 新增登录链路用例，钉三件事——重试只发生一次、
+`code` 是稳定业务码、`cause` 保留底层码。反向探针：把 `code` 改回裸码后该用例
+红灯（报 `code 应为稳定业务码, got ECONNREFUSED`），还原即绿。此前 smoke **完全没有**
+登录链路的测试，这正是该缺陷当初能溜过去的原因。
+
 **留下的债（本次不修，已在 issue #22 里记录）**：
 
 1. 硬编码的 `timeoutMs: 15_000` 仍然覆盖 `config.limits.upstreamTimeoutSec`。

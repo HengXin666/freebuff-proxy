@@ -27,7 +27,7 @@ export {
 export class UpstreamError extends Error {
   /**
    * @param {string} message
-   * @param {{ status?: number, code?: string, body?: any, retryAfterMs?: number }} [extra]
+   * @param {{ status?: number, code?: string, body?: any, retryAfterMs?: number, fatal?: boolean, cause?: string }} [extra]
    */
   constructor(message, extra = {}) {
     super(message)
@@ -36,6 +36,14 @@ export class UpstreamError extends Error {
     this.code = extra.code
     this.body = extra.body
     this.retryAfterMs = extra.retryAfterMs
+    /**
+     * 底层原始错误码（ECONNREFUSED / ENOTFOUND / ETIMEDOUT …）。
+     *
+     * ⚠️ 与 `code` 分工：`code` 是**稳定的业务码**（多处按集合匹配，
+     * 不能透裸 socket 码）；`cause` 保留**原始**错误码供排障与前端细提示。
+     * 两者同时给出，`message` 里也带一份给人读。
+     */
+    this.cause = extra.cause
     // 出口级故障（地理封锁）：调度层据此**立即停止换号** —— 它是出口属性，
     // 换号只会把每个账号的额度依次买断却拿不到答案。
     // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
@@ -460,7 +468,8 @@ export function createUpstreamClient(config, token, opts = {}) {
     if (lastErr?.name === 'AbortError') {
       throw new UpstreamError(
         `上游登录请求超时（${init.timeoutMs ?? '?'}ms），请重试`,
-        { code: 'upstream_timeout' },
+        // 超时没有底层 socket 码，cause 给一个稳定的字面量，保持字段不缺
+        { code: 'upstream_timeout', cause: 'timeout' },
       )
     }
     if (lastErr?.name === 'TypeError') {
@@ -473,13 +482,14 @@ export function createUpstreamClient(config, token, opts = {}) {
        * 一来违背这里"给可诊断原因码"的承诺（前端拿到的是不稳定原语），
        * 二来将来任何按 code 匹配的逻辑都可能被误命中。
        *
-       * 底层码仍要可见 —— 放进 message（用户/运维看得到）。
-       * （不新增 `cause` 字段：`UpstreamError` 的 extra 是闭集
-       *   status/code/body/retryAfterMs/fatal，加了会被静默丢弃。）
+       * 底层码仍要可见 —— 两处都给：
+       *   1. `message` 里带一份（前端弹窗直接显示，用户/运维肉眼可见）；
+       *   2. `cause` 字段带一份（结构化，供前端程序化判断与后端排障）。
+       * `code` 保持稳定的 `upstream_network`，不透裸 socket 码。
        */
       throw new UpstreamError(
         `上游登录请求网络失败：${lastErr.message}（${lastErr.code ?? 'unknown'}）`,
-        { code: 'upstream_network' },
+        { code: 'upstream_network', cause: lastErr.code ?? undefined },
       )
     }
     throw lastErr

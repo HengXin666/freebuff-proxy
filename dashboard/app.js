@@ -155,7 +155,21 @@ async function api(path, opts = {}) {
     render()
     throw new Error(body?.error || t('login.notSignedIn'))
   }
-  if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`)
+  if (!res.ok) {
+    /**
+     * ⚠️ 除 message 外，把后端给的**结构化判据**挂在 error 上：
+     *   `code`（稳定业务码，如 upstream_timeout / upstream_network）
+     *   `cause`（底层原始码，如 ECONNREFUSED / ENOTFOUND）
+     *
+     * 以前只传 `body.error` 字符串，前端想区分故障类型只能解析中文文案，
+     * 文案一改就崩。现在调用方可以按 err.code 做不同提示。
+     */
+    const err = new Error(body?.error || `HTTP ${res.status}`)
+    err.code = body?.code ?? null
+    err.cause = body?.cause ?? null
+    err.status = res.status
+    throw err
+  }
   return body
 }
 
@@ -3123,8 +3137,26 @@ function openAddAccount() {
     )
     pollFlow(flow.id, body, backdrop)
   }).catch((err) => {
+    /**
+     * 三行信息，各司其职：
+     *   1. 标题（`account.loginStartFailed`）
+     *   2. `err.message` —— 含底层原始错误码（如 ECONNREFUSED），肉眼可见
+     *   3. 按 `err.code` 给的可操作引导（而不是让用户对着 AbortError 猜）
+     */
     body.innerHTML = ''
-    body.append(el('h3', {}, t('account.loginStartFailed')), el('p', { class: 'muted' }, err.message))
+    const hint =
+      err.code === 'upstream_timeout'
+        ? t('account.loginHintTimeout')
+        : err.code === 'upstream_network'
+          ? t('account.loginHintNetwork')
+          : null
+    body.append(
+      el('h3', {}, t('account.loginStartFailed')),
+      el('p', { class: 'muted' }, err.message),
+      // 原始错误码单独成行，便于复制排查（err.cause 来自后端 cause 字段）
+      ...(err.cause ? [el('p', { class: 'muted' }, `cause: ${err.cause}`)] : []),
+      ...(hint ? [el('p', { class: 'muted' }, hint)] : []),
+    )
   })
 }
 

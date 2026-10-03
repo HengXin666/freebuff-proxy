@@ -1517,8 +1517,22 @@ export function createWebApi(deps) {
         logger.info('web login flow started', { id: flow.id })
         sendJson(res, 200, { ok: true, flow })
       } catch (err) {
+        /**
+         * ⚠️ 除 `error`（给人看）之外，还要把**结构化判据**传给前端：
+         *
+         *   - `code`  稳定业务码：`upstream_timeout` / `upstream_network`
+         *     （来自 `fetchLoginUpstream`，见 src/upstream/client.js）。
+         *     前端据此可以做不同的提示/重试引导，而不是去匹配中文文案。
+         *   - `cause` 底层原始错误码（如 ECONNREFUSED / ENOTFOUND / ETIMEDOUT）。
+         *     `error` 字符串里已经带了它供人阅读，这里单独给一份供程序读取。
+         *
+         * 只给 error 字符串的后果：前端想区分"DNS 挂了"和"超时"只能解析中文，
+         * 文案一改就崩。两个字段都给，人和程序各自取用。
+         */
         sendJson(res, 502, {
           error: `发起登录失败: ${err instanceof Error ? err.message : String(err)}`,
+          code: err?.code ?? null,
+          cause: err?.cause ?? null,
         })
       }
       return true
