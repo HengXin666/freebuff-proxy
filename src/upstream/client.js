@@ -255,7 +255,7 @@ export function createProxyFetch(config, opts = {}) {
  * 真正的加载推迟到第一次抓取时，不阻塞客户端构造。
  * @returns {((input: object) => Promise<any>) | null}
  */
-function makeBunFetcher() {
+function makeBunFetcher(apiBase) {
   let loader = null
   return async (input) => {
     if (loader === null) {
@@ -265,12 +265,71 @@ function makeBunFetcher() {
     }
     const callBun = await loader
     if (!callBun) return null
-    return callBun(input, 30_000)
+    // 统一补 apiHost：无论调用方是否显式给，都以主服务配置为准
+    const withHost = {
+      ...input,
+      cfg: { ...(input?.cfg || {}), apiHost: input?.cfg?.apiHost || apiBase || null },
+    }
+    return callBun(withHost, 30_000)
+  }
+}
+
+
+/**
+ * 经 bun 通道读一次会话（官方形态实现在 cli-bridge）。
+ * 失败返回 null，调用方回落 Node 实现。
+ */
+function makeSessionViaBun(token, accountId, apiBase, deviceKeyPath) {
+  let loader = null
+  return async () => {
+    try {
+      if (loader === null) loader = import('./official-rpc.js').catch(() => null)
+      const mod = await loader
+      if (!mod?.rpcSession || !mod?.buildRpcCfg) return null
+      /**
+       * 复用已有的 buildRpcCfg —— 它负责从 deviceKeyPath 读 keyId/privateKey。
+       * **不在这里重写凭据装配逻辑**（官方形态的实现只有一份）。
+       */
+      const cfg = await mod.buildRpcCfg(
+        { token, accountId, deviceKeyPath },
+        { upstream: { timeZone: 'Asia/Shanghai', apiBase } },
+      )
+      if (!cfg) return null
+      // 会话这一跳客户端是带 install-id 的（chat 不带，故 buildRpcCfg 置 null）
+      cfg.installId = installIdFromClientState() || null
+      // ⚠️ 主机随主服务配置走，否则本地镜像对照会变成真打上游
+      cfg.apiHost = apiBase || null
+      const r = await mod.rpcSession({ cfg })
+      if (!r?.ok) {
+        logger.debug('session via bun failed; falling back to Node', {
+          error: r?.error || null,
+          status: r?.status ?? null,
+          hasKeyId: !!cfg.keyId,
+        })
+        return null
+      }
+      return r.body ?? null
+    } catch {
+      return null
+    }
+  }
+}
+
+/** 读官方客户端登录态里的 installId（只读 best-effort）。 */
+function installIdFromClientState() {
+  try {
+    const p = join(homedir(), '.config/freebuff-desktop/state.json')
+    const st = JSON.parse(readFileSync(p, 'utf8'))
+    return typeof st?.installId === 'string' ? st.installId : null
+  } catch {
+    return null
   }
 }
 
 export function createUpstreamClient(config, token, opts = {}) {
   const apiBase = config.upstream.apiBase
+  /** 经 bun 读会话的通道（官方形态实现在 cli-bridge，这里只调端口）。 */
+  const _sessionViaBun = makeSessionViaBun(token, opts.accountId, apiBase, opts.deviceKeyPath)
   
   logger.info('createUpstreamClient called', {
     hasDeviceKeyPath: !!opts.deviceKeyPath,
@@ -348,7 +407,7 @@ export function createUpstreamClient(config, token, opts = {}) {
      * 懒加载 cli-bridge，失败时为 null → 自动退回 Node 路径。
      * 见 docs/reverse/19 §19.10。
      */
-    bunFetch: makeBunFetcher(),
+    bunFetch: makeBunFetcher(apiBase),
     /**
      * ⚠️ catalog 这一跳**不带设备签名**。
      *
@@ -533,6 +592,22 @@ export function createUpstreamClient(config, token, opts = {}) {
      * @param {{ model?: string, instanceId?: string, compact?: boolean, signal?: AbortSignal, timeoutMs?: number, walletSpendLimit?: number, firstTabDiscount?: boolean }} [opts]
      */
     async freebuffSession(method, opts = {}) {
+      /**
+       * 只读查询（GET）优先交给 **bun 通道**执行。
+       *
+       * 为什么：Node 的内置 fetch 强制带 `accept-language` 与
+       * `sec-fetch-mode`（forbidden header，设不掉），客户端（bun）不带
+       * —— 在主服务里补头/删头永远补不到一致，只能换运行时。
+       * 官方形态的实现只有一份（cli-bridge），这里只做**端口调用**，
+       * 不复制它的头构造。见 docs/reverse/21 §21.5。
+       *
+       * bun 不可用或失败时回落到下面的 Node 实现（可用性优先）。
+       */
+      if (method === 'GET') {
+        // _sessionViaBun() 已直接返回**会话体**（或 null），不是 {ok,body} 包装
+        const viaBun = await _sessionViaBun()
+        if (viaBun && typeof viaBun === 'object') return viaBun
+      }
       // 头集合逐字对齐官方 jg()：Authorization + x-fb-timezone +
       // x-freebuff-first-tab-discount，POST 另带 model / wallet-spend-limit。
       // 见 officialSessionHeaders 与

@@ -29,6 +29,32 @@ import { callBun } from '../../cli-bridge/bridge.mjs'
  * @param {string} accountKey 凭据文件名（账号 key）
  * @returns {Promise<object|null>} null 表示拿不到凭据（调用方应回落 legacy）
  */
+
+/**
+ * 私钥格式归一：PEM / base64 / base64url → **base64url 裸 DER**（bun 侧要的）。
+ *
+ * @param {string | null | undefined} raw
+ * @returns {string | null}
+ */
+function normalizePrivateKeyForBun(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  let s = raw.trim()
+  // PEM：剥掉头尾与所有换行
+  if (s.includes('-----BEGIN')) {
+    s = s
+      .replace(/-----BEGIN [A-Z ]+-----/g, '')
+      .replace(/-----END [A-Z ]+-----/g, '')
+      .replace(/\s+/g, '')
+  }
+  // 已经是 base64url（含 - 或 _）→ 原样
+  if (/^[A-Za-z0-9_-]+$/.test(s)) return s
+  // 标准 base64 → base64url
+  if (/^[A-Za-z0-9+/=]+$/.test(s)) {
+    return s.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  }
+  return null
+}
+
 export async function buildRpcCfg(upstream, config = {}) {
   if (!upstream?.token) return null
   const cfg = {
@@ -44,9 +70,27 @@ export async function buildRpcCfg(upstream, config = {}) {
   if (p) {
     try {
       const dk = JSON.parse(await readFile(p, 'utf8'))
+      /**
+       * scope 的主机随实际 apiBase 走：本地镜像对照时也要拼对，
+       * 否则取不到 keyId → 退化成不签名（与客户端不一致）。
+       */
+      const host = config?.upstream?.apiBase || 'https://www.codebuff.com'
       cfg.keyId =
-        dk.registrations?.[`https://www.codebuff.com user:${cfg.userId}`] || null
-      cfg.privateKey = dk.privateKey || null
+        dk.registrations?.[`${host} user:${cfg.userId}`] ||
+        dk.registrations?.[`https://www.codebuff.com user:${cfg.userId}`] ||
+        null
+      /**
+       * ⚠️ 私钥格式契约：主服务落盘的是 **PEM**
+       * （`privateKeyEncoding: { type:'pkcs8', format:'pem' }`），
+       * 而 cli-bridge 的 `derFromB64u()` 要的是 **base64url 裸 DER**。
+       * 直接透传会让 bun 侧 `atob()` 抛
+       * "The string contains invalid characters." —— 整个 bun 请求失败，
+       * 静默回落 Node（表现就是"通道没生效"）。
+       *
+       * 这里做一次格式归一（**适配，不是重写签名逻辑**）：
+       * PEM → 剥头尾 → base64 → base64url。已经是 base64url 的原样透传。
+       */
+      cfg.privateKey = normalizePrivateKeyForBun(dk.privateKey)
     } catch {
       // 无设备密钥也能发（副仓库退化为不签名），不阻塞
     }
@@ -158,6 +202,37 @@ export async function rpcChat(params) {
     text: result.text,
     model: out.model,
     error: out.error,
+  }
+}
+
+/**
+ * 会话读取（**端口**）：GET /api/v1/freebuff/session。
+ *
+ * 为什么必须走这个端口而不是在主服务里自己拼头：
+ * Node 的内置 fetch 会强制带上 `accept-language` 与 `sec-fetch-mode`
+ * （后者是 forbidden header，设不掉），而客户端（bun）不带 ——
+ * 在主服务里"补头/删头"永远补不到完全一致，只有让请求跑在 bun 上才行。
+ * 官方形态的实现只有一份，在 `cli-bridge/`；本文件不复制它。
+ *
+ * 见 docs/reverse/21 §21.3（客户端真值）与 §21.5（对齐状态）。
+ *
+ * @param {{ cfg: object, timeoutMs?: number }} params
+ * @returns {Promise<{ ok: boolean, status?: number, body?: any, error?: string } | null>}
+ *   null = bun 不可用，调用方应回落到主服务自己的实现
+ */
+export async function rpcSession(params) {
+  const { cfg, timeoutMs = 30_000 } = params
+  try {
+    const out = await callBun({ cfg, action: 'session' }, timeoutMs)
+    const result = out?.result || {}
+    return {
+      ok: result.status === 200,
+      status: result.status,
+      body: result.body ?? null,
+      error: out?.error || null,
+    }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
 

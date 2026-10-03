@@ -15,7 +15,15 @@
  * stdin 也可以传。输出一行 JSON。
  */
 
-const HOST = 'https://www.codebuff.com';
+/**
+ * ⚠️ 上游主机**必须可注入**，不能硬编码。
+ *
+ * 硬编码的后果（实测踩到）：主服务把 api_base 指向本地镜像做对照验证时，
+ * bun 侧仍直连真实 codebuff.com —— 于是"本地验证"变成了"真的打到上游"，
+ * 既验证不了，又白白发出请求。
+ * 现在由调用方（cfg.apiHost）传入；缺省才回落到官方主机。
+ */
+const HOST = process.env.FREEBUFF_API_HOST || 'https://www.codebuff.com';
 
 /**
  * 官方资产加载（抓包真值，见 docs/reverse/captures/）。
@@ -261,6 +269,11 @@ function mergeOfficialTools(official, clientTools) {
 class Bridge {
   constructor(cfg) {
     this.cfg = cfg;
+    /**
+     * 每个实例按 cfg.apiHost 解析主机（不共享模块级常量）。
+     * 硬编码会让"本地镜像对照"变成"真的打到上游"。
+     */
+    this.host = cfg?.apiHost || HOST;
     this.fid = null;      // catalog fetchId
     this.catalog = null;
   }
@@ -298,7 +311,7 @@ class Bridge {
   }
 
   async fetchCatalog() {
-    const url = `${HOST}/api/v1/freebuff/models`;
+    const url = `${this.host}/api/v1/freebuff/models`;
     /**
      * ⚠️ 头集逐字对齐官方抓包（165 条里 catalog 那 1 条原样）：
      *
@@ -330,14 +343,15 @@ class Bridge {
   }
 
   async getSession() {
-    const url = `${HOST}/api/v1/freebuff/session`;
+    const url = `${this.host}/api/v1/freebuff/session`;
     const res = await fetch(url, {
       headers: {
         ...this.auth(),
         'x-freebuff-catalog-protocol': '1',
         ...(this.fid ? { 'x-freebuff-catalog-fetch': this.fid } : {}),
         'x-freebuff-client': 'desktop',
-        'x-freebuff-install-id': this.cfg.installId,
+        // ⚠️ 不要发字面量 'null'：主服务没传 installId 时整个头应省略
+        ...(this.cfg.installId ? { 'x-freebuff-install-id': this.cfg.installId } : {}),
         'x-freebuff-first-tab-discount': '0',
         'x-freebuff-multi-session': '1',
         'x-freebuff-include-unused-rate-limits': '1',
@@ -349,7 +363,7 @@ class Bridge {
 
   /** 释放会话：DELETE /api/v1/freebuff/session（带 instance-id）。 */
   async release(instanceId) {
-    const url = `${HOST}/api/v1/freebuff/session`;
+    const url = `${this.host}/api/v1/freebuff/session`;
     const res = await fetch(url, {
       method: 'DELETE',
       headers: {
@@ -379,7 +393,7 @@ class Bridge {
    * 官方源码 FREEBUFF_TAKEOVER_INSTANCE_HEADER（orchestrator.js:135252）。
    */
   async admit(row, { retries = 4, takeoverInstanceId = null } = {}) {
-    const url = `${HOST}/api/v1/freebuff/session/admission`;
+    const url = `${this.host}/api/v1/freebuff/session/admission`;
     // ⚠️ 官方是**裸 UUID**且**整场复用**（抓包 line 8/34/54 三次 admission
     // 同为 e1be7199-...，line 38 metadata 也是它）。我们此前用 `cli:<uuid>`
     // 且每次新建 —— review 指出这可能就是"购买全额退款作废"的诱因：
@@ -396,7 +410,8 @@ class Bridge {
           'x-freebuff-catalog-protocol': '1',
           'x-freebuff-catalog-fetch': this.fid,
           'x-freebuff-client': 'desktop',
-          'x-freebuff-install-id': this.cfg.installId,
+          // ⚠️ 不要发字面量 'null'：主服务没传 installId 时整个头应省略
+        ...(this.cfg.installId ? { 'x-freebuff-install-id': this.cfg.installId } : {}),
           'x-freebuff-model': row.handle,
           'x-freebuff-wallet-spend-limit': '0',
           'x-freebuff-first-tab-discount': '0',
@@ -444,7 +459,7 @@ class Bridge {
       || (layer === 'manager'
         ? 'freebuff-desktop-autorun'
         : 'freebuff-desktop-thread-local-v3');
-    const url = `${HOST}/api/v1/agent-runs`;
+    const url = `${this.host}/api/v1/agent-runs`;
     const payload = JSON.stringify({ action: 'START', agentId, ancestorRunIds: [] });
     // ⚠️ 官方 agent-runs 只有 3 个业务头（line 11/58）：
     //   content-type / authorization / x-freebuff-acting-user-id
@@ -478,7 +493,7 @@ class Bridge {
    * （取自流式响应的 chatcmpl-*）。我们此前**从不发** —— run 悬挂。
    */
   async finishRun(runId, { status = 'completed', steps = [] } = {}) {
-    const url = `${HOST}/api/v1/agent-runs`;
+    const url = `${this.host}/api/v1/agent-runs`;
     const payload = JSON.stringify({
       action: 'FINISH',
       runId,
@@ -543,7 +558,7 @@ class Bridge {
     reasoningEffort = null,
     noSend = false,
   }) {
-    const url = `${HOST}/api/v1/chat/completions`;
+    const url = `${this.host}/api/v1/chat/completions`;
     const { OFFICIAL_TOOLS, OFFICIAL_DECIDE, OFFICIAL_SYS } = await loadOfficialAssets();
 
     // 按层用官方真实工具集：

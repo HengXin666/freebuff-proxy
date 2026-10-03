@@ -347,7 +347,12 @@ export class CatalogHolder {
   async _fetchViaBun() {
     if (!this.bunFetch) return null
     try {
-      const out = await this.bunFetch({ cfg: { token: this.token }, action: 'catalog' })
+      const out = await this.bunFetch({
+        // ⚠️ apiHost 必须带走：主服务指向本地镜像做对照时，bun 侧也要
+        // 打到镜像，否则会真的请求上游。
+        cfg: { token: this.token, apiHost: this.apiHost || null },
+        action: 'catalog',
+      })
       const body = out?.catalog
       if (!body || !Array.isArray(body.rows) || !body.rows.length) return null
       if (typeof body.fetchId !== 'string' || !body.fetchId) return null
