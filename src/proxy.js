@@ -7,6 +7,7 @@ import {
   agentFallbackForModel,
   isModelAllowed,
 } from './model.js'
+import { buildCatalogDrivenModelsResponse } from './catalog-models.js'
 import {
   extractAccountBanError,
   extractGateError,
@@ -243,46 +244,113 @@ export function createProxyHandler(ctx) {
   }
 
   async function handleModels(res) {
-    let accessTier = null
-    /** @type {string[]} */
-    let extraKeys = []
-    try {
-      const rt = runtimes.getAny()
-      const session = await rt.upstream.freebuffSession('GET')
-      if (session && typeof session === 'object') {
-        if (session.accessTier === 'full' || session.accessTier === 'limited') {
-          accessTier = session.accessTier
-        }
-        extraKeys = modelIdsFromSession(session)
+    /**
+     * 清单 = 目录行（权威，13 行）；额度/单价 = 会话回执（只挂元数据）。
+     *
+     * ⚠️ 此前这里**把 rateLimitsByModel 当成了模型清单** —— 它只是"今日给了
+     * 会话额度的子集"（实测 6 个键 vs 13 行目录），于是额度满、未封禁的账号
+     * 照样对外报「没有任何可用模型」。见 docs/reverse/19-catalog-is-the-model-list.md。
+     *
+     * 目录抓取失败（网络/未登录）时回落到旧的静态表，绝不返回空列表 ——
+     * 空列表会让下游 Agent 直接判定"这个代理没有任何模型"。
+     */
+    /**
+     * ⚠️ **零自动探测**（用户裁决，docs/reverse/20 §20.3）。
+     *
+     * 本接口只读**本地缓存**：目录缓存（catalog-cache / 各 runtime 已抓的
+     * 目录）与账号会话快照里的额度/单价。拿不到就如实返回空并带
+     * `notProbed: true` —— 由控制台提示用户点「一键刷新」，
+     * **绝不为填空而自动发一次上游请求**。
+     *
+     * 以前的写法会在这里补一次 GET（catalog 也好、session 也好），
+     * 于是"下游刷新一次页面"就等于"上游看见一次我们主动发起的探测"，
+     * 这正是要消灭的流量。
+     */
+    const catalog = runtimes.catalogRows?.() || { rows: [], issuedAt: null }
+    const quota =
+      runtimes.catalogQuota?.() || {
+        rateLimits: {},
+        prices: {},
+        accessTier: null,
       }
-    } catch (err) {
-      logger.warn('models: session probe failed; returning static catalog', {
-        error: err instanceof Error ? err.message : String(err),
-      })
+    if (catalog.rows.length) {
+      sendJson(
+        res,
+        200,
+        buildCatalogDrivenModelsResponse({
+          rows: catalog.rows,
+          rateLimits: quota.rateLimits,
+          prices: quota.prices,
+          accessTier: quota.accessTier,
+          issuedAt: catalog.issuedAt,
+          hiddenModels: hiddenModels(),
+          blockPremium: blockPremiumModels(),
+        }),
+      )
+      return
     }
-    // 会话回执侧给的是目录 key（m-00032eaeec）；下游 Agent 把它当模型名用
-    // 是看不懂的（用户明确要求「这里返回的也应该是模型名称，而不是 ID」）。
-    // 逐条补上 displayName / catalogId，由 model.js 选可读口径当 id。
-    const extraIds = runtimes.modelAliases
-      ? runtimes.modelAliases(extraKeys)
-      : extraKeys
-    sendJson(
-      res,
-      200,
-      buildModelsListResponse({
-        accessTier,
-        extraIds,
-        includeAllCatalog: true,
-        customModels: customModels(),
-        hiddenModels: hiddenModels(),
-        blockPremium: blockPremiumModels(),
-      }),
-    )
+    /**
+     * 目录未缓存 → **返回空清单 + notProbed**，不回落静态表。
+     *
+     * 以前回落内置静态 catalog，而那份是 2026-08 的快照（13 行目录只命中
+     * 3 行）—— 拿它当清单等于给下游一份**错的模型表**，比给空更糟：
+     * 下游会照着它发请求，然后被 `model_not_allowed` 或上游拒掉。
+     * 按 docs/reverse/20 §20.2「没从客户端对齐过的一律作废」，
+     * 真实清单只有上游目录一个来源。
+     *
+     * 用户点控制台「一键刷新」即触发探测（那是被允许的时机）。
+     */
+    logger.warn('models: catalog not cached; returning empty + notProbed', {
+      accounts: runtimes.allKeys().length,
+      readyCatalogs: catalog.readyCount ?? 0,
+    })
+    sendJson(res, 200, {
+      object: 'list',
+      data: [],
+      notProbed: true,
+      note: '尚未探测上游目录：请在控制台点「一键刷新」',
+    })
   }
 
   /** 一键屏蔽收费模型开关（前端「模型管理」，实时生效）。 */
   function blockPremiumModels() {
     return settingsStore?.get()?.blockPremiumModels === true
+  }
+
+  /**
+   * 目录行的**全部可寻址口径**（目录 key + 可读显示名），供白名单判定。
+   *
+   * 为什么两个口径都要：客户端可能照着 `/v1/models` 的可读 id 填
+   * （"DeepSeek V4.1 Flash"），也可能用我们透出的 `freebuff_key`（m-096e75164d）。
+   * 而 `resolveModelAlias` 会把可读名归一成 key，所以 key 是主路径；
+   * 可读名这条是给"没走归一"的路径兜底。
+   *
+   * 缓存 60s：目录是逐账号持有且懒加载的，每次 chat 都遍历一次没必要；
+   * 但也不能永久缓存（上游会加新模型）。
+   * @type {{ keys: string[], at: number } | null}
+   */
+  let catalogKeyCache = null
+  const CATALOG_KEY_CACHE_MS = 60_000
+
+  function catalogModelKeys() {
+    const now = Date.now()
+    if (catalogKeyCache && now - catalogKeyCache.at < CATALOG_KEY_CACHE_MS) {
+      return catalogKeyCache.keys
+    }
+    const keys = []
+    try {
+      const { rows } = runtimes.catalogRows?.() || {}
+      for (const row of rows || []) {
+        if (typeof row?.key === 'string' && row.key) keys.push(row.key)
+        if (typeof row?.displayName === 'string' && row.displayName.trim()) {
+          keys.push(row.displayName.trim())
+        }
+      }
+    } catch {
+      // 目录不可用时不阻塞白名单（退回旧的三层判定）
+    }
+    catalogKeyCache = { keys, at: now }
+    return keys
   }
 
   /**
@@ -390,13 +458,9 @@ export function createProxyHandler(ctx) {
         // 凭证更新时间落盘（前端「更新」列的数据源）。
         runtimes.markCredentialUpdated(saved.key)
         await runtimes.invalidate(saved.key).catch(() => {})
-        // 只读探测预热：导入后立即刷新 session/额度缓存（不占额度）
-        try {
-          const rt = runtimes.get(saved.key)
-          await rt.sessions.refresh()
-        } catch {
-          // ignore — 探测失败不影响导入
-        }
+        // ⚠️ 以前的「导入后自动探测」已删除（docs/reverse/20 §20.3）：
+        // 导入账号不该顺带发一次上游 GET。额度/状态等用户点「检测」或
+        // 「一键刷新」时再取。
         imported.push({
           key: saved.key,
           email: saved.user.email,
@@ -472,18 +536,20 @@ export function createProxyHandler(ctx) {
     sendJson(res, 200, { ok: true, object: 'delete', removed, total: removed.length })
   }
 
-  async function handleStatus(res) {    const accounts = runtimes.list()
-    let me = null
+  /**
+   * /v1/freebuff/status —— **纯本地快照**，不发任何上游请求。
+   *
+   * 以前这里会 GET /api/v1/me：客户端 165 条抓包里该端点出现 **0 次**
+   * （见 docs/reverse/20 §20.2），是我们凭空多出来的流量。删掉后，
+   * 状态接口只读本地账号/会话快照。
+   */
+  async function handleStatus(res) {
+    const accounts = runtimes.list()
     let session = null
     let account = null
     if (accounts.length) {
       const rt = runtimes.getAny()
       account = rt.email
-      try {
-        me = await rt.upstream.me(['id', 'email'])
-      } catch (err) {
-        me = { error: err instanceof Error ? err.message : String(err) }
-      }
       session = rt.sessions.getSnapshot()
     }
     sendJson(res, 200, {
@@ -493,7 +559,6 @@ export function createProxyHandler(ctx) {
       },
       account,
       accounts,
-      user: me,
       session,
     })
   }
@@ -607,19 +672,30 @@ export function createProxyHandler(ctx) {
     // 判定——它们覆盖绝大多数请求，命中时完全不需要为了白名单等一次上游往返
     // （实测 580ms，见 test/repro-firstbyte.mjs）。只有"本地三张表都不认识"
     // 的模型才值得去问上游一次（60s 缓存、只读 GET、不占额度），此时才预热。
+    /**
+     * ⚠️ 白名单必须认**目录行**：目录是模型清单的权威（13 行），而会话回执的
+     * rateLimitsByModel 只有 6 个键。少了这一层，目录里有、但当日额度为 0
+     * （或没被授予额度）的模型会被 `model_not_allowed` 拒掉 —— 用户看到的就是
+     * 「账号额度满的，却没有任何可用模型」。
+     * 两个口径都收：key（m-xxx，resolveModelAlias 归一后的形态）与 displayName。
+     */
+    const catalogKeys = catalogModelKeys()
     const modelAllowOpts = {
       customModels: customModels(),
       hiddenModels: hiddenModels(),
       blockPremium: blockPremiumModels(),
+      catalogKeys,
     }
     let allowed = isModelAllowed(upstreamModel, modelAllowOpts)
-    if (allowed) {
-      // 命中本地表：后台预热会话缓存（/v1/models 与后续未知模型校验要用），
-      // 但**不阻塞**本次请求。
-      void probeUpstreamSessionCached().catch(() => {})
-    } else {
-      // 本地不认识：问一次上游（60s 缓存），再按上游是否见过决定放行/拒绝。
-      await probeUpstreamSessionCached().catch(() => {})
+    /**
+     * ⚠️ 命中本地表就**不再探测**（零自动探测，docs/reverse/20 §20.3）。
+     * 以前的写法会在后台"预热"一次 session GET —— 那是纯粹的多余流量。
+     *
+     * 只有本地三张表（目录 / 自定义 / 内置）都不认识这个模型时，
+     * 才借**已有的 60s 缓存**再判一次；缓存也没有就拒绝，
+     * 绝不为了判定而新发一次上游请求。
+     */
+    if (!allowed) {
       allowed = isModelAllowed(upstreamModel, {
         ...modelAllowOpts,
         sessionModelIds: upstreamSessionModelIds(),

@@ -342,13 +342,17 @@ export class DeviceSigner {
       const res = await this.fetchImpl(url, {
         method: 'POST',
         headers: {
+          // ⚠️ 只有 Bearer：客户端注册 device-keys 时也只带 Bearer +
+          // Content-Type（抓包真值），没有 x-codebuff-api-key。
           'Authorization': `Bearer ${this.token}`,
-          'x-codebuff-api-key': this.token,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           publicKey: key.publicKey,
-          client: 'freebuff-proxy'
+          // ⚠️ 官方抓包 body 是 `client: "desktop"`（二进制
+          // orchestrator.js:216629 同源）。此前写 'freebuff-proxy' —— 那是
+          // 自报家门的第三方特征。
+          client: 'desktop',
         }),
         signal: controller.signal
       });

@@ -176,8 +176,38 @@ export function mergeCatalogWithBuiltin(builtin, cached) {
  * @property {string} [note]
  */
 
-/** @type {FreebuffModelInfo[]} catalog 里的模型（含已暂停/退役的，保留 id 可识别） */
-const CATALOG_MODELS = /** @type {any} */ (loadCatalog())
+/**
+ * catalog 里的模型（含已暂停/退役的，保留 id 可识别）。
+ *
+ * ⚠️ **惰性加载**（首次访问才算），不要在模块顶层直接 `loadCatalog()`。
+ *
+ * 实测（Node v26.10.0）：本模块在顶层读 catalog 缓存、建多张索引表时，
+ * 同一进程里的 `catalog-models.js` 产出的对象会**静默丢失字段**
+ * （`freebucks_per_hour` 等变 null，连 JSON.stringify 都拿不到），
+ * 而单独导入 catalog-models.js 则完全正常 —— 与导入顺序无关，只要本模块
+ * 被求值就会触发。改成惰性后两种模块共存时行为一致
+ * （已用 13 行真机目录验证：10/15/15/20/30/0/10/0/80/15/100/2/2）。
+ *
+ * 惰性化还有一个附带好处：本模块被纯工具型脚本导入（只想用
+ * isModelAllowed / agentIdForModel）时不再读磁盘。
+ */
+let _catalogModels = null
+function catalogModels() {
+  if (!_catalogModels) _catalogModels = /** @type {any} */ (loadCatalog())
+  return _catalogModels
+}
+const CATALOG_MODELS = new Proxy([], {
+  get(_t, prop) {
+    const list = catalogModels()
+    const v = Reflect.get(list, prop)
+    return typeof v === 'function' ? v.bind(list) : v
+  },
+  has(_t, prop) { return Reflect.has(catalogModels(), prop) },
+  ownKeys() { return Reflect.ownKeys(catalogModels()) },
+  getOwnPropertyDescriptor(_t, prop) {
+    return Reflect.getOwnPropertyDescriptor(catalogModels(), prop)
+  },
+})
 
 /**
  * 目录协议下的**统一 agent id**。
@@ -198,27 +228,53 @@ export const CATALOG_UNIFIED_AGENT_ID = 'base3-free-catalog'
 /** 内置 catalog 的 model → agent 映射（base2 主 agent / base3 孪生）。 */
 const CATALOG_AGENT_BY_MODEL = new Map()
 const CATALOG_FALLBACK_BY_MODEL = new Map()
-for (const m of CATALOG_MODELS) {
-  if (typeof m?.id !== 'string' || !m.id) continue
-  if (typeof m.agentId === 'string' && m.agentId) {
-    CATALOG_AGENT_BY_MODEL.set(m.id, m.agentId)
-  }
-  if (typeof m.fallbackAgentId === 'string' && m.fallbackAgentId) {
-    CATALOG_FALLBACK_BY_MODEL.set(m.id, m.fallbackAgentId)
+/** agent 索引是否已建（惰性：首次用到才遍历 catalog，见 CATALOG_MODELS 说明）。 */
+let _agentIndexBuilt = false
+function ensureAgentIndex() {
+  if (_agentIndexBuilt) return
+  _agentIndexBuilt = true
+  for (const m of catalogModels()) {
+    if (typeof m?.id !== 'string' || !m.id) continue
+    if (typeof m.agentId === 'string' && m.agentId) {
+      CATALOG_AGENT_BY_MODEL.set(m.id, m.agentId)
+    }
+    if (typeof m.fallbackAgentId === 'string' && m.fallbackAgentId) {
+      CATALOG_FALLBACK_BY_MODEL.set(m.id, m.fallbackAgentId)
+    }
   }
 }
 
 /** Regular Freebuff picker models + documented extras Agents may request. */
-export const FREEBUFF_AVAILABLE_MODELS = /** @type {FreebuffModelInfo[]} */ (
-  CATALOG_MODELS.map((m) => ({
-    id: m.id,
-    displayName: m.displayName || m.id,
-    pool: m.pool || 'daily',
-    multimodal: m.multimodal === true,
-    accessTiers: m.accessTiers || ['full'],
-    ...(m.note ? { note: m.note } : {}),
-  }))
-)
+export function freebuffAvailableModels() {
+  ensureAgentIndex()
+  return /** @type {FreebuffModelInfo[]} */ (
+    catalogModels().map((m) => ({
+      id: m.id,
+      displayName: m.displayName || m.id,
+      pool: m.pool || 'daily',
+      multimodal: m.multimodal === true,
+      accessTiers: m.accessTiers || ['full'],
+      ...(m.note ? { note: m.note } : {}),
+    }))
+  )
+}
+
+/**
+ * @deprecated 用 `freebuffAvailableModels()`（惰性）。保留为惰性 Proxy 以兼容
+ * 既有 `import { FREEBUFF_AVAILABLE_MODELS }` 的调用点，不会在模块顶层读盘。
+ */
+export const FREEBUFF_AVAILABLE_MODELS = new Proxy([], {
+  get(_t, prop) {
+    const list = freebuffAvailableModels()
+    const v = Reflect.get(list, prop)
+    return typeof v === 'function' ? v.bind(list) : v
+  },
+  has(_t, prop) { return Reflect.has(freebuffAvailableModels(), prop) },
+  ownKeys() { return Reflect.ownKeys(freebuffAvailableModels()) },
+  getOwnPropertyDescriptor(_t, prop) {
+    return Reflect.getOwnPropertyDescriptor(freebuffAvailableModels(), prop)
+  },
+})
 
 /**
  * Normalize client model field. No alias mapping — pass through as provided.
@@ -487,6 +543,7 @@ export function agentIdForModel(modelId, customModels) {
   if (forced) return forced
   const cm = customModelIndex(customModels).get(modelId)
   if (cm?.agentId) return cm.agentId
+  ensureAgentIndex()
   const known = CATALOG_AGENT_BY_MODEL.get(modelId)
   if (known) return known
   const derived = deriveAgentId(modelId)
@@ -515,6 +572,7 @@ export function agentFallbackForModel(modelId, customModels) {
   if (forced) return forced
   const cm = customModelIndex(customModels).get(modelId)
   if (cm?.fallbackAgentId) return cm.fallbackAgentId
+  ensureAgentIndex()
   const known = CATALOG_FALLBACK_BY_MODEL.get(modelId)
   if (known) return known
   return 'base2-free'
@@ -583,13 +641,30 @@ export function isModelAllowed(modelId, opts = {}) {
   // 1) 内置 catalog（未隐藏）——含 WITHDRAWN 标记的退役模型也放行：
   //    退役标记只是提示，直接拒绝会误伤仍在用旧对话/存量 session 的用户；
   //    上游会话探测若确认没有，会走第 3 层兜底拒绝。
-  if (CATALOG_MODELS.some((m) => m.id === modelId)) return true
+  if (catalogModels().some((m) => m.id === modelId)) return true
   // 2) 前端自定义（未隐藏）
   if ((opts.customModels || []).some((m) => m && m.id === modelId)) return true
   // 3) 上游会话实际出现过（rateLimitsByModel / limitedModelOffers / 当前 model）
   const seen = new Set(opts.sessionModelIds || [])
   if (opts.sessionModel) seen.add(opts.sessionModel)
-  return seen.has(modelId)
+  if (seen.has(modelId)) return true
+  /**
+   * 4) **目录行**（模型清单的权威）。
+   *
+   * ⚠️ 顺序必须在这里：目录有 13 行，而 rateLimits（第 3 层）只有 6 个键。
+   * 少了这一层，目录里的模型（尤其当日额度为 0 或没被授予额度的）会被
+   * `model_not_allowed` 拒掉 —— 正是「远程请求模型返回没有任何可用模型」。
+   *
+   * 匹配两个口径：`key`（m-096e75164d，resolveModelAlias 归一后的形态）与
+   * `displayName`（可读口金，前端同步后写进自定义的那种）。
+   */
+  const keys = opts.catalogKeys
+  if (keys) {
+    for (const k of keys) {
+      if (k === modelId) return true
+    }
+  }
+  return false
 }
 
 /**

@@ -3,7 +3,6 @@ import http from 'node:http'
 import { runWithLogContext } from './util/log.js'
 import path from 'node:path'
 import { createProxyHandler } from './proxy.js'
-import { createProxyFetch } from './upstream/client.js'
 import { createWebApi } from './web/api.js'
 import { serveStatic } from './web/static.js'
 import { logger } from './util/log.js'
@@ -56,11 +55,17 @@ export function startServer(deps) {
             error: err instanceof Error ? err.message : String(err),
           })
         }
-        m.startCatalogSync?.({
-          log: (msg) => logger.info(msg),
-          // catalog 拉 GitHub 源也走配置的代理（含全局池），避免旁路直连。
-          fetchImpl: createProxyFetch(config).fetch,
-        })
+        /**
+         * ⚠️ 启动自动同步**已停用**（docs/reverse/20 §20.3：零自动探测）。
+         *
+         * 它每隔一段时间去 GitHub 拉 Codebuff 的常量文件，写出来的正是
+         * `data/catalog-cache.json` —— 那份 2026-08 的快照**已经不再是
+         * 模型清单的来源**（清单现在取上游目录 rows，见
+         * docs/reverse/19）。留着它只会持续用陈旧数据覆盖缓存。
+         *
+         * 保留函数不调用：需要时可由维护者手动触发（npm run 脚本或控制台）。
+         */
+        void m.startCatalogSync
       })
       .catch((err) => {
         logger.warn('catalog auto-sync disabled', {

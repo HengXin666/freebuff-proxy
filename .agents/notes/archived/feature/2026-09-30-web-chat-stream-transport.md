@@ -2,6 +2,8 @@
 
 Status: implemented
 
+Archived: 2026-10-03
+
 ## Problem
 
 `accessTier: limited`（非 allowlist 国家 / 任何 VPN）下，CLI 通道

@@ -17,7 +17,7 @@
     "login": "node bin/login.js",
     "doctor": "node bin/doctor.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node test/smoke.mjs",
+    "test": "node test/smoke.mjs && node test/verify-catalog-models.mjs",
     "pipeline:image": "node scripts/pipeline-image-test.mjs",
     "web": "node bin/serve.js",
     "pricing": "node bin/pricing.js",
@@ -29,7 +29,9 @@
     "verify-notes:backlinks": "node .agents/skills/hx-agent-notes/scripts/verify-backlinks.ts",
     "notes:new": "node .agents/skills/hx-agent-notes/scripts/new-note.ts",
     "notes:archive": "node .agents/skills/hx-agent-notes/scripts/archive-note.ts",
-    "notes:board": "node .agents/skills/hx-agent-notes/scripts/build-board.ts --init board.html"
+    "notes:board": "node .agents/skills/hx-agent-notes/scripts/build-board.ts --init board.html",
+    "test:smoke": "node test/smoke.mjs",
+    "test:catalog": "node test/verify-catalog-models.mjs"
   },
   "dependencies": {
     "undici": "^8.10.2",

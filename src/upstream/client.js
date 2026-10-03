@@ -349,7 +349,15 @@ export function createUpstreamClient(config, token, opts = {}) {
     if (!headers['user-agent'] && !headers['User-Agent']) {
       headers['user-agent'] = BUN_USER_AGENT
     }
-    // Login-issued tokens require x-codebuff-api-key (Bearer alone → 401).
+    /**
+     * 鉴权**只发 Bearer**。
+     *
+     * ⚠️ 以前的注释写着 "Login-issued tokens require x-codebuff-api-key
+     * (Bearer alone → 401)" —— 那是**未做单变量对照**的结论：当时同时换了
+     * token 来源与出口，401 的真实原因从未被证实是这个头。
+     * 客户端 165 条抓包里 `x-codebuff-api-key` 出现 **0 次**
+     * （docs/reverse/20 §20.4），所以按官方形态只发 Bearer。
+     */
     if (token && init.includeAuth !== false) {
       Object.assign(headers, freebuffAuthHeaders(token))
     }
@@ -437,19 +445,14 @@ export function createUpstreamClient(config, token, opts = {}) {
      */
     catalog,
 
-    async me(fields = ['id', 'email']) {
-      const res = await apiFetch(`/api/v1/me?fields=${fields.join(',')}`, {
-        method: 'GET',
-        timeoutMs: 15_000,
-      })
-      if (!res.ok) {
-        throw new UpstreamError(`GET /api/v1/me failed: ${res.status}`, {
-          status: res.status,
-          body: await safeText(res),
-        })
-      }
-      return res.json()
-    },
+    /**
+     * ⚠️ `/api/v1/me` 已从本客户端**移除**。
+     *
+     * 客户端 165 条抓包里该端点出现 **0 次**（docs/reverse/20 §20.2）：
+     * 官方客户端从不查它。它曾被用于"身份自检"，但那是我们凭空多出来的
+     * 上游流量 —— 本身就是"非客户端"信号源。需要账号身份时读本地凭据，
+     * 需要额度/状态时用 `freebuffSession('GET')`（客户端 17 次）。
+     */
 
     async loginCode(fingerprintId) {
       // 用 apiFetch（带超时 + 代理池回落）而不是裸 fetchWithProxy：
@@ -851,18 +854,6 @@ export function createUpstreamClient(config, token, opts = {}) {
         catalogFetchOnly: init.catalogFetchOnly === true,
       })
     },
-
-    /**
-     * 网页通道：走 freebuff.com 的 /api/chat/stream（cookie 鉴权）。
-     *
-     * 与 raw() 的区别不仅是端点，而是**另一个 origin + 另一套鉴权形态**：
-     * CLI 通道打 codebuff.com 带 Bearer，网页通道打 freebuff.com 带
-     * `__Secure-next-auth.session-token` cookie。实测同一账号在同一出口 IP 下，
-     * limited 档位只有网页通道能出内容。
-     *
-     * @param {{ threadId?: string|null, content: string, model: string, reasoningEffort?: string, signal?: AbortSignal, timeoutMs?: number }} params
-     * @returns {Promise<Response>} 未消费的 SSE 响应（body 交给 consumeWebStream）
-     */
 
     /**
      * 释放本 client 持有的出网资源（undici ProxyAgent / EnvHttpProxyAgent）。

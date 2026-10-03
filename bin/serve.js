@@ -396,19 +396,14 @@ async function main() {
     if (refundSweeper.unref) refundSweeper.unref()
 
     if (ctx.authEmail) {
-      logger.info('upstream auth ready', {
+      // ⚠️ 启动路径**不发任何上游请求**（用户裁决，见
+      // docs/reverse/20-upstream-endpoint-whitelist.md §20.3）。
+      // 以前的 /api/v1/me 自检已删除：客户端 165 条抓包里它出现 **0 次**，
+      // 是我们凭空多出来的流量，本身就是"非客户端"信号。
+      logger.info('upstream auth ready (no upstream request on startup)', {
         account: ctx.authEmail,
         accounts: ctx.runtimes.list().map((a) => a.email),
       })
-      // 身份自检纯属诊断信息：失败只写一行 warn，绝不挡启动。
-      void ctx.upstream
-        .me(['id', 'email'])
-        .then((me) => logger.info('upstream identity ok', { id: me.id, email: me.email }))
-        .catch((err) => {
-          logger.warn('upstream /api/v1/me check failed (continuing)', {
-            error: err instanceof Error ? err.message : String(err),
-          })
-        })
     } else {
       logger.info('no Freebuff accounts yet — add one from the web console', {
         credentialsDir: ctx.runtimes.dir,

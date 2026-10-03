@@ -11,6 +11,7 @@ import {
   CATALOG_UNIFIED_AGENT_ID,
   FREEBUFF_AVAILABLE_MODELS,
 } from '../model.js'
+import { buildCatalogDrivenModelsResponse } from '../catalog-models.js'
 import { freebuffLegacyModelDigest } from '../upstream/catalog-protocol.js'
 import {
   saveAccountUser,
@@ -511,33 +512,50 @@ export function createWebApi(deps) {
     }
 
     if (method === 'GET' && route === '/api/models') {
-      let accessTier = null
-      let extraKeys = []
-      // 沿用 60s 缓存：单次实时 GET 要走代理、往返 2-4s，而这是测试对话/模型管理
-      // 的首屏路径，必须秒开。要强制拿最新目录用「一键刷新」/「同步上游模型」，
-      // 它们走 probeAllAccountsSession() 与 probeUpstreamSessionFresh()。
-      const session = await probeUpstreamSession()
-      if (session?.accessTier === 'full' || session?.accessTier === 'limited') {
-        accessTier = session.accessTier
-      }
-      extraKeys = (session?.rateLimitsByModel
-        ? Object.keys(session.rateLimitsByModel)
-        : []
-      ).concat(session?.model ? [session.model] : [])
-      // 上游回执口径是目录 key（m-xxx）—— 与 /v1/models 同源同处理：
-      // 补 displayName / catalogId 后可读口径优先，控制台与下游 Agent
-      // 看到的都不再是裸 key（用户要求）。
-      sendJson(
-        res,
-        200,
-        buildModelsListResponse({
-          accessTier,
-          extraIds: runtimes.modelAliases(extraKeys),
-          includeAllCatalog: true,
-          customModels: modelStore ? modelStore.list() : [],
+      /**
+       * 与 /v1/models **同源**：清单取目录行，额度/单价挂上去。
+       * 此前这里从 `rateLimitsByModel` 反推清单（只有 6 个键），且只探测
+       * `getAny()` 一个账号 —— 两个入口都改成目录驱动 + 全账号并集。
+       *
+       * ⚠️ **零自动探测**（docs/reverse/20 §20.3）：只读本地缓存。
+       * 要刷新就点控制台「一键刷新」，那才发请求。
+       */
+      const catalog = runtimes.catalogRows?.() || { rows: [], issuedAt: null }
+      const quota =
+        runtimes.catalogQuota?.() || {
+          rateLimits: {},
+          prices: {},
+          accessTier: null,
+        }
+      if (catalog.rows.length) {
+        const payload = buildCatalogDrivenModelsResponse({
+          rows: catalog.rows,
+          rateLimits: quota.rateLimits,
+          prices: quota.prices,
+          accessTier: quota.accessTier,
+          issuedAt: catalog.issuedAt,
           hiddenModels: modelStore ? modelStore.hidden() : [],
-        }),
-      )
+        })
+        // 兼容字段：老的前端消费方读 upstreamModelIds / upstreamModels 标 ✅。
+        // 现在**清单以目录为准**，这两项只表示"当前有额度/有单价的 key"，
+        // 不再被当作模型清单（旧的语义正是「没有任何可用模型」的成因）。
+        sendJson(res, 200, {
+          ...payload,
+          accessTier: quota.accessTier || null,
+          upstreamModelIds: catalog.rows.map((r) => r.key),
+          upstreamModels: runtimes.modelAliases(catalog.rows.map((r) => r.key)),
+        })
+        return true
+      }
+      // 目录未缓存：返回空清单 + notProbed（**不回落 2026-08 的静态快照**，
+      // 那份数据本身就是错的来源，见 docs/reverse/20 §20.2）。
+      sendJson(res, 200, {
+        object: 'list',
+        data: [],
+        accessTier: quota.accessTier || null,
+        notProbed: true,
+        note: '尚未探测上游目录：请点「一键刷新」',
+      })
       return true
     }
 
@@ -649,7 +667,14 @@ export function createWebApi(deps) {
       return true
     }
 
-    // 上游模型探测：读上游 rateLimitsByModel 目录（走 60s 缓存，不创建 session、不占额度）。
+    /**
+     * 上游模型探测 = **目录行**（权威清单）+ 会话回执的额度/单价。
+     *
+     * ⚠️ 此前这里把 `rateLimitsByModel` 当清单：它只是"今日给了会话额度的
+     * 子集"（实测 6 个键 vs 13 行目录），于是额度满、未封禁的账号照样报
+     * 「上游暂无可用模型」，前端 `syncUpstreamModels` 直接 return。
+     * 见 docs/reverse/19-catalog-is-the-model-list.md。
+     */
     if (method === 'GET' && route === '/api/models/upstream') {
       const accounts = runtimes.list()
       if (!accounts.length) {
@@ -657,65 +682,73 @@ export function createWebApi(deps) {
         return true
       }
       try {
-        const session = await probeUpstreamSession()
-        const limits = session?.rateLimitsByModel || {}
-        // 模型单价（Freebucks/小时）：上游按会话实际占用时长结算，这正是控制台
-        // 在「额度」列要展示的口径——旧的「已用/上限 次数」已不符合计费方式。
-        const prices = session?.freebucks?.prices || {}
-        // 上游探测返回上游真实存在的全部模型（不过滤 hidden）——
-        // 「同步上游模型」要能看到并拉回上游的完整列表；
-        // 用户是否隐藏由「模型管理」的 hidden 列表独立控制。
-        //
-        // ⚠️ 两份口径并存，别互相顶替（用户要求：对外**不要**再出现 m-xxx）：
-        //   - `key`  = 目录 key（m-00032eaeec）——服务端寻址/白名单判据真值；
-        //   - `id`   = 可读模型名 `catalogId || displayName || key`，与 /v1/models
-        //              的 id 完全同源，控制台表格首列显示的就是它。
-        //   - `agentId`：本接口的条目**全部**来自会话回执/实时目录，属目录模式，
-        //     官方用的统一 agent 就是 CATALOG_UNIFIED_AGENT_ID。此前按 key 推导
-        //     出 `base2-free-m-00032eaeec` —— 上游不存在的 agent，纯噪音。
-        const models = Object.entries(limits).map(([key, info]) => {
-          const displayName = modelDisplayName(key)
-          const catalogId = catalogIdForKey(key)
+        /**
+         * ⚠️ **零自动探测**（docs/reverse/20 §20.3）：本接口只读本地缓存。
+         *
+         * 名字里的 "upstream" 是历史遗留 —— 它曾经真的去打上游。现在清单
+         * 来自已缓存的目录行，额度/单价来自已缓存的会话快照。要拿新数据
+         * 就点「一键刷新」（走 `/api/accounts/refresh`），
+         * 只有那个动作才被允许发请求。
+         */
+        const catalog = runtimes.catalogRows?.() || { rows: [], issuedAt: null }
+        if (!catalog.rows.length) {
+          sendJson(res, 200, {
+            models: [],
+            upstreamModelIds: [],
+            upstreamModels: [],
+            catalogError: true,
+            notProbed: true,
+            note: '尚未探测：请先点「一键刷新」拉取上游目录',
+          })
+          return true
+        }
+        const quota = runtimes.catalogQuota?.() || {
+          rateLimits: {},
+          prices: {},
+          accessTier: null,
+        }
+        const models = catalog.rows.map((row) => {
+          const key = row.key
+          const name = row.displayName || key
+          const info = quota.rateLimits[key] ?? null
+          const price = quota.prices[key]
           return {
             key,
-            id: catalogId || displayName || key,
-            // 回执侧 id 是目录 key（m-00032eaeec）——控制台要显示人能认的名字。
-            // catalogId 是目录侧的人类可读 id（deepseek/deepseek-v4-flash），
-            // 由 legacyDigests 反查得出；「同步上游模型」用它才能真正对上号。
-            displayName,
-            catalogId,
+            // ⚠️ id 是**可读模型名**（与 /v1/models 同源），不再是 m-xxx。
+            id: name,
+            displayName: name,
+            // catalogId 保留字段（旧消费方读它做反查）；目录新增的模型没有
+            // legacyDigests（如 Ling 3.1 Flash / Laguna S 2.1），此处为 null，
+            // 前端回落到 id 即可 —— 不要因为它为空就丢掉整行。
+            catalogId: catalogIdForKey(key) || null,
+            premium: row.premium === true,
+            access: row.access ?? null,
+            multimodal: row.multimodal === true,
+            ...(Array.isArray(row.efforts) ? { efforts: row.efforts } : {}),
+            ...(Number.isFinite(row.contextWindow)
+              ? { contextWindow: row.contextWindow }
+              : {}),
             limit: info?.limit ?? null,
             recentCount: info?.recentCount ?? null,
-            freebucksPerHour: Number.isFinite(prices[key]) ? prices[key] : null,
+            freebucksPerHour: Number.isFinite(price) ? Number(price) : null,
             pool: info?.pool ?? null,
             poolLabel: info?.poolLabel ?? null,
             resetAt: info?.resetAt ?? null,
             resetTimeZone: info?.resetTimeZone ?? null,
-            // agent **一律**是统一目录 agent，不按模型推导。
-            // 本接口的行全部以**目录 key** 为身份，而调度时 agent 由会话回执的
-            // model 决定：`snap.model` 是目录 key（m-xxx）→ proxy.js 走
-            // isCatalogMode → `base3-free-catalog`。所以这里按 catalogId 推导
-            // （如 `base2-free-deepseek-flash`）反而**不是**实际会被使用的 agent。
-            // 修复前按 key 推导出的 `base2-free-m-00032eaeec` 更是上游不存在的值。
+            // agent 一律统一目录 agent（目录模式下官方就用一个 root agent）；
+            // 按 key 推导出的 base2-free-m-xxx 上游根本不存在。
             agentId: CATALOG_UNIFIED_AGENT_ID,
             fallbackAgentId: CATALOG_UNIFIED_AGENT_ID,
           }
         })
-        // 上游此刻真实给出额度的模型清单（多账号取并集）。⚠️ upstreamModelIds
-        // 是**目录 key**（m-00032eaeec）—— 它是"上游认不认这个模型"的判据，
-        // 调度/白名单要用，所以 key 口径不动；要显示给人看用同一响应里的
-        // upstreamModels（带 displayName / catalogId）。前端测试对话按 id 匹配
-        // ✅ 标注，而 /api/models 的 id 现在是可读口径 —— 所以前端改用
-        // upstreamModels.map(catalogId || displayName || key) 对齐。
         sendJson(res, 200, {
           models,
-          accessTier: session?.accessTier ?? null,
-          upstreamModelIds: Object.keys(session?.rateLimitsByModel || {}),
-          upstreamModels: runtimes.modelAliases(
-            Object.keys(session?.rateLimitsByModel || {}),
-          ),
-          freebucks: session?.freebucks || null,
-          note: '只读探测，不创建 session',
+          accessTier: quota.accessTier || null,
+          upstreamModelIds: catalog.rows.map((r) => r.key),
+          upstreamModels: runtimes.modelAliases(catalog.rows.map((r) => r.key)),
+          catalogVersion: catalog.version || null,
+          catalogIssuedAt: catalog.issuedAt || null,
+          note: '清单来自上游目录；额度与单价来自只读探测（不创建 session）',
         })
       } catch (err) {
         sendJson(res, 502, {
@@ -777,13 +810,9 @@ export function createWebApi(deps) {
       } catch {
         // ignore
       }
-      // 只读探测预热：导入后立即刷新 session/额度缓存（不占额度）
-      try {
-        const rt = runtimes.get(saved.key)
-        await rt.sessions.refresh()
-      } catch {
-        // ignore — 探测失败不影响导入
-      }
+      // ⚠️ 以前的「导入后自动探测」已删除（docs/reverse/20 §20.3）：
+      // 导入账号不该顺带发一次上游 GET。要额度/状态，用户点「检测」
+      // 或「一键刷新」。
       logger.info('account imported via web', { key: saved.key, email: saved.user.email })
       sendJson(res, 200, { ok: true, account: saved.user.email, key: saved.key, id: saved.user.id || null })
       return true

@@ -335,6 +335,7 @@ const DICT = {
   'model.syncFail': { 'zh-CN': '同步失败: {msg}', en: 'Sync failed: {msg}' },
   'model.fetchFail': { 'zh-CN': '拉取上游失败: {msg}', en: 'Failed to fetch upstream: {msg}' },
   'model.noneUpstream': { 'zh-CN': '上游暂无可用模型', en: 'No models available upstream' },
+  'model.catalogFail': { 'zh-CN': '未能拿到上游目录: {msg}', en: 'Could not fetch upstream catalog: {msg}' },
   'model.hideConfirm': {
     'zh-CN': '确定隐藏模型 {id}？\n（内置模型隐藏后可恢复；重新同步上游会按最新列表拉回）',
     en: 'Hide model {id}?\n(A hidden built-in can be restored; syncing pulls the latest list back)',
@@ -743,6 +744,7 @@ const DICT = {
   'playground.reloadModels': { 'zh-CN': '刷新模型列表', en: 'Reload model list' },
   'playground.checkMark': { 'zh-CN': '✅ = 上游此刻给了该模型额度', en: '✅ = upstream is granting quota for this model right now' },
   'playground.catalogEmpty': { 'zh-CN': '上游目录为空：请确认账号已导入并完成一次探测', en: 'Upstream catalog is empty: import an account and run a probe first' },
+  'playground.notProbed': { 'zh-CN': '尚未探测上游目录（服务不会自动探测）：请到「账号」点「一键刷新」', en: 'Upstream catalog not probed yet (no auto-probe): click "Refresh all" under Accounts' },
   'playground.catalogLoadFail': {
     'zh-CN': '模型列表加载失败：{msg}（可点总览页「一键刷新」后重试）',
     en: 'Failed to load the model list: {msg} (retry after "Refresh all" on the Overview page)',

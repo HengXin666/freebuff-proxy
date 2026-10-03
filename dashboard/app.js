@@ -2351,6 +2351,26 @@ async function syncUpstreamModels() {
     toast(t('model.fetchFail', { msg: err.message }), true)
     return
   }
+  /**
+   * ⚠️ 「上游暂无可用模型」的触发条件必须是**目录抓取失败**，不是列表为空。
+   *
+   * 此前判的是 `models.length === 0`，而列表来自会话回执的 rateLimitsByModel
+   * （今日给了额度的子集，实测只有 6 个键）—— 额度耗尽/当日额度为 0 时它天然
+   * 为空，于是「同步」永远弹这一句，实际模型一个都没少。
+   * 后端现在在目录抓取失败时会带 `catalogError: true`。
+   */
+  if (upstream.catalogError) {
+    toast(
+      t('model.catalogFail', {
+        msg:
+          upstream.notProbed
+            ? t('playground.notProbed')
+            : upstream.note || t('model.noneUpstream'),
+      }),
+      true,
+    )
+    return
+  }
   if (!upstream.models?.length) {
     toast(t('model.noneUpstream'), true)
     return
@@ -2366,19 +2386,21 @@ async function syncUpstreamModels() {
     const merged = []
     for (const [id, m] of curById) merged.push(m) // 保留已存在的自定义/覆盖
     for (const um of upstream.models) {
-      // ⚠️ 上游回执的 um.id 是**目录 key**（m-00032eaeec），而 catalog /
-      // 自定义模型用的是人类可读 id（deepseek/deepseek-v4-flash）。
-      // 此前直接拿 key 当 id 写入，导致同步出来的条目永远匹配不到实际模型
-      // —— 表现就是「点了同步上游模型，但没生效」。
-      // 后端已用 legacyDigests 反查出 catalogId，优先用它。
-      const id = um.catalogId || um.id
+      // ⚠️ 后端现在给的 um.id 已经是**可读模型名**（目录行 displayName，
+      // 如 "DeepSeek V4.1 Flash"），不再是目录 key。
+      // catalogId 只是 legacy 反查的兼容字段，**上游新增模型没有 legacyDigests**
+      // （实测 Ling 3.1 Flash / Laguna S 2.1 都没有），此时它为空 ——
+      // 绝不能因为 catalogId 为空就丢掉整行，否则新模型永远同步不进来。
+      // 取值顺序反过来：优先 um.id（目录真值），catalogId 仅作兜底。
+      const id = um.id || um.catalogId || um.key
       if (!id) continue
       if (catalogSet.has(id)) continue // catalog 已有，不用写自定义
       const existing = curById.get(id) || {}
       merged.push({
         id,
-        displayName: existing.displayName || um.displayName || um.poolLabel || '',
-        pool: existing.pool || um.pool || '',
+        displayName: existing.displayName || um.displayName || um.id || '',
+        // 收费模型（premium）走热 session 复用调度，别按 daily 平摊到多账号
+        pool: existing.pool || (um.premium ? 'premium' : um.pool || 'daily'),
         agentId: existing.agentId || um.agentId || '',
         fallbackAgentId: existing.fallbackAgentId || um.fallbackAgentId || '',
       })
@@ -2966,6 +2988,15 @@ function upstreamReadableIds() {
     const row = byKey.get(key)
     out.add((row && (row.catalogId || row.displayName)) || key)
   }
+  /**
+   * 目录驱动口径：后端 `/api/models` 的每条自带 `rate_limit`（有额度的才有），
+   * 直接按它补充 ✅ 集合 —— 不必依赖 `upstreamModelIds` 那张单独的表。
+   * （该表以前来自 session 回执的 rateLimitsByModel，只有 6 个键，用它标注
+   * 会大面积漏标；清单现在以目录行为准。）
+   */
+  for (const m of state.catalogModels || []) {
+    if (m && m.rate_limit && m.rate_limit.limit !== 0) out.add(m.id)
+  }
   return out
 }
 
@@ -3324,11 +3355,28 @@ async function loadPlaygroundModels() {
   try {
     const list = await api('/api/models')
     models = Array.isArray(list.data) ? list.data : []
+    /**
+     * 目录驱动：把本轮模型列表留档，`upstreamReadableIds()` 据此按
+     * `rate_limit` 标 ✅（不再依赖只有 6 个键的 rateLimitsByModel）。
+     */
+    state.catalogModels = models
     if (Array.isArray(list.upstreamModelIds)) {
       state.upstreamModelIds = list.upstreamModelIds
-      upstreamIds = upstreamReadableIds()
     }
-    if (!models.length) note = t('playground.catalogEmpty')
+    if (Array.isArray(list.upstreamModels)) {
+      state.upstreamModels = list.upstreamModels
+    }
+    upstreamIds = upstreamReadableIds()
+    /**
+     * ⚠️ notProbed 与"目录为空"是两回事：前者是**还没探测**（服务不自动探测，
+     * docs/reverse/20 §20.3），出路是点「一键刷新」；后者才是真的没模型。
+     * 混为一谈会让用户以为账号有问题。
+     */
+    if (!models.length) {
+      note = list?.notProbed
+        ? t('playground.notProbed')
+        : t('playground.catalogEmpty')
+    }
   } catch (err) {
     note = t('playground.catalogLoadFail', { msg: err.message })
   }

@@ -90,12 +90,23 @@ async function main() {
     process.exitCode = 1
     return
   }
+  /**
+   * ⚠️ 不再用 GET /api/v1/me：客户端 165 条抓包里它出现 **0 次**
+   * （docs/reverse/20 §20.2）。doctor 是用户**主动**执行的诊断工具，
+   * 允许探测，但只准用客户端真实发过的端点 —— 这里改用
+   * `GET /api/v1/freebuff/session`（客户端 17 次）。
+   */
   try {
-    const me = await ctx.upstream.me(['id', 'email'])
-    console.log('GET /api/v1/me: OK', me)
+    const session = await ctx.upstream.freebuffSession('GET')
+    console.log('GET /api/v1/freebuff/session: OK', {
+      status: session?.status,
+      accessTier: session?.accessTier,
+    })
   } catch (err) {
     issues.push(
-      `GET /api/v1/me failed: ${err instanceof Error ? err.message : String(err)}`,
+      `GET /api/v1/freebuff/session failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
     )
   }
   try {

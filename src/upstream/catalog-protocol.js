@@ -32,6 +32,16 @@ export const CATALOG_PROTOCOL_VERSION = '1'
 export const HEADER_CATALOG_FETCH = 'x-freebuff-catalog-fetch'
 export const MODEL_HANDLE_PREFIX = 'fbm1.'
 
+/**
+ * 官方 catalog 抓取的客户端头（抓包真值）。
+ * 官方 `fetchOnce()` 只在 catalog 这一跳同时带 protocol + client 两件套，
+ * 其余头一概不带（见 docs/reverse/19 §19.2）。
+ */
+export const HEADER_CLIENT = 'x-freebuff-client'
+export const CLIENT_DESKTOP = 'desktop'
+/** 官方 orchestrator 由 bun 执行，bun 的裸 fetch 默认 UA 就是它。 */
+export const CATALOG_FETCH_USER_AGENT = 'Bun/1.4.2'
+
 /** 判断一个字符串是不是目录模型句柄（fbm1. 前缀）。 */
 export function isModelHandle(value) {
   return typeof value === 'string' && value.startsWith(MODEL_HANDLE_PREFIX)
@@ -84,6 +94,20 @@ export class CatalogHolder {
     this.token = opts.token
     this.fetchImpl = opts.fetchImpl || globalThis.fetch
     this.timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 20_000
+    /**
+     * 目录行全量快照（key → row 原文）。
+     *
+     * 存在的理由：目录 `rows` 才是**模型清单的权威**，而会话回执里的
+     * rateLimitsByModel 只是"今日给了额度的子集"（实测 13 行目录 vs 6 个
+     * rateLimit 键），用它反推模型清单必然漏 —— 这正是「远程请求模型返回
+     * 没有任何可用模型」的根因。见 docs/reverse/19-catalog-is-the-model-list.md。
+     *
+     * row 保留服务端原文（displayName / premium / access / efforts /
+     * contextWindow / multimodal / tagline / sortOrder / legacyDigests），
+     * 展示侧直接取用，不需要再从内置静态表反查（那份是 2026-08 快照，
+     * 13 行里只命中 3 行）。
+     */
+    this.rowByKey = new Map()
     /** @type {string|null} */
     this.fetchId = null
     /** @type {Map<string, string>} 目录 key（m-xxx）→ 句柄（fbm1.xxx） */
@@ -229,9 +253,35 @@ export class CatalogHolder {
     return handle || modelId
   }
 
-  /** 该模型 id 是否在本次目录里（有对应行）。 */
+  /** 是否已在本次目录里（有对应行）。 */
   hasModel(modelId) {
     return this.handleFor(modelId) !== modelId
+  }
+
+  /**
+   * 目录行全量（**模型清单的权威**）。
+   *
+   * 按 `sortOrder` 升序返回（与官方客户端模型菜单的顺序一致）。
+   * 每行是服务端原文，调用方直接读 displayName / premium / access 等字段，
+   * **不要**再从内置静态 catalog 反查（那份是 2026-08 快照，13 行只命中 3 行）。
+   *
+   * @returns {{ key: string, handle: string, displayName: string, tagline?: string,
+   *   premium: boolean, access: string, multimodal: boolean, efforts?: string[],
+   *   contextWindow?: number, dataUse?: string, badges?: any[],
+   *   legacyDigests?: string[], sortOrder?: number }[]}
+   */
+  rows() {
+    return [...this.rowByKey.values()].sort(
+      (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0),
+    )
+  }
+
+  /**
+   * 单个目录行（原文）。查不到返回 null。
+   * @param {string} key
+   */
+  row(key) {
+    return this.rowByKey.get(key) || null
   }
 
   /** 目录相关的两个头（未持有时返回 {}，让调用方走 legacy）。 */
@@ -280,10 +330,27 @@ export class CatalogHolder {
     try {
       const res = await this.fetchImpl(url, {
         method: 'GET',
+        // ⚠️ 头集逐字对齐官方抓包（2026-10-03，77 条里 catalog 那 1 条原样）：
+        //
+        //   Authorization: Bearer <token>
+        //   x-freebuff-catalog-protocol: 1
+        //   x-freebuff-client: desktop
+        //   User-Agent: Bun/1.4.2
+        //   Accept: * / *      （注意：原文无空格，这里加空格仅为避免块注释提前闭合）
+        //
+        // 三个此前多发的东西，全部删掉（见 docs/reverse/19 §19.2）：
+        //   - x-codebuff-api-key：全 77 条抓包出现 0 次；
+        //   - install-id / first-tab-discount / multi-session /
+        //     include-unused-rate-limits：那些是 session 那跳的头，
+        //     我们此前串台带到了 catalog 上；
+        //   - 设备签名三头：官方时序是 catalog（无签名）→ device-keys →
+        //     session（开始签名），catalog 这一跳本来就不签。
         headers: {
           authorization: `Bearer ${this.token}`,
-          'x-codebuff-api-key': this.token,
           [HEADER_CATALOG_PROTOCOL]: CATALOG_PROTOCOL_VERSION,
+          [HEADER_CLIENT]: CLIENT_DESKTOP,
+          'user-agent': CATALOG_FETCH_USER_AGENT,
+          accept: '*/*',
         },
         signal: ac.signal,
       })
@@ -317,6 +384,7 @@ export class CatalogHolder {
       this.keyByName = new Map()
       this.keyByDigest = new Map()
       this.digestByKey = new Map()
+      this.rowByKey = new Map()
       for (const m of rows) {
         if (!m || typeof m !== 'object') continue
         const key = m.key
@@ -325,6 +393,12 @@ export class CatalogHolder {
           // key 是服务端标识
           if (typeof key === 'string') this.handles.set(key, handle)
         }
+        // ⚠️ 目录行全量留档：模型清单的权威就是 rows（13 行），而会话回执的
+        // rateLimitsByModel 只有 6 个键 —— 用后者当清单会漏掉一半以上模型。
+        // 展示侧（/v1/models、控制台）直接读这份快照，不再从 2026-08 的
+        // 内置静态表反查（那份 13 行只命中 3 行）。
+        // 见 docs/reverse/19-catalog-is-the-model-list.md。
+        if (typeof key === 'string' && key) this.rowByKey.set(key, m)
         // 回执侧（session.model / rateLimitsByModel / prices）用的是 key，
         // 控制台要把 key 显示成人能认的名字 —— 目录行自带 displayName。
         if (typeof key === 'string' && typeof m.displayName === 'string' && m.displayName) {
@@ -372,11 +446,16 @@ export class CatalogHolder {
         typeof body?.recommendedKey === 'string' ? body.recommendedKey : null
       this.fallbackKey =
         typeof body?.fallbackKey === 'string' ? body.fallbackKey : null
+      // 目录签发时间（/v1/models 的 created 用它，而不是本地 Date.now()）。
+      this.issuedAt = Number.isFinite(body?.issuedAt) ? body.issuedAt : null
+      this.refreshAt = Number.isFinite(body?.refreshAt) ? body.refreshAt : null
+      this.version = typeof body?.version === 'string' ? body.version : null
       logger.info('catalog fetched', {
         fetchId: fetchId.slice(0, 24) + '...',
         handles: this.handles.size,
+        rows: this.rowByKey.size,
         recommendedKey: this.recommendedKey,
-        version: body?.version ?? null,
+        version: this.version,
       })
       return true
     } catch (err) {
