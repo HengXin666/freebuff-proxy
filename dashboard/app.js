@@ -1579,7 +1579,9 @@ async function renderProxySettings(view) {
         onchange: saveUpstreamChannelSetting,
         ...(state.me.role === 'admin' ? {} : { disabled: '' }),
       }, [
-        el('option', { value: 'legacy', ...(channel === 'legacy' ? { selected: '' } : {}) }, t('system.upstreamChannelLegacy')),
+        // legacy 已废弃：保留选项但禁用，让用户看得见"曾经有过、现在不能用"，
+        // 而不是凭空消失造成困惑。
+        el('option', { value: 'legacy', disabled: '' }, t('system.upstreamChannelLegacy')),
         el('option', { value: 'official', ...(channel === 'official' ? { selected: '' } : {}) }, t('system.upstreamChannelOfficial')),
       ]),
     ]),

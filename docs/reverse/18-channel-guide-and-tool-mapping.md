@@ -9,8 +9,13 @@
 
 | 通道 | 是什么 | 状态 |
 |---|---|---|
-| **official** | **照抄官方客户端抓包真值**：官方 37 工具、官方 system 模板、desktop 世代 agent、分层 provider | ✅ **当前默认，推荐** |
-| legacy | 旧的自拼形态（CLI 开场白 + 自编签名工具 + `base3-free-catalog`） | 回退保留 |
+| **official** | 上游请求经 **RPC 委托给副仓库（cli-bridge / bun）**：官方 37 工具、官方 system 模板、desktop 世代 agent、分层 provider | ✅ **唯一有效通道** |
+| legacy | 主服务自己拼的旧形态（CLI 开场白 + 自编签名工具 + CLI 世代 agent + 自管 session 调度） | 🚫 **已废弃，禁止调用** |
+
+> legacy 与官方抓包逐字段不符，且实测 admission 反复失败
+> （`purchase_claim_released`）。配置里若仍是 legacy，
+> `config.resolveUpstreamChannel()` 会强制回落 official 并告警；
+> 控制台下拉中该选项置灰不可选。
 
 **控制台 → 设置 → 「上游请求链路」** 可切换，立即生效、重启保持。
 
@@ -26,9 +31,17 @@
 3. **消除了身份/世代错配。** legacy 用 CLI 开场白 + CLI 世代 agent，
    但会话是 desktop 建的 —— 自己跟自己矛盾，这正是历史上多次被拒的根源。
 
-**唯一提醒**：official 在主服务（Node 侧）尚未实机验证过
-（cli-bridge 侧验证过；主服务当时被**配额**挡住，不是失败）。
-所以保留了 legacy 作为一键回退。若遇到异常，切回 legacy 即可。
+**自测结果（2026-10-03，副仓库 official 通道）**：
+
+```
+ADMIT    : 200 active
+STARTRUN : 200 runId
+CHAT     : 200
+TOOLCALL : write_file  {"path":"/tmp/selftest-proof.txt","content":"selftest-ok"}
+MESSAGE_ID: chatcmpl-3a3c37e4~...
+```
+
+即：HTTP 200 + 真实工具调用，链路打通。
 
 ## 三、区别（逐项）
 

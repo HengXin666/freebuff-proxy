@@ -26,6 +26,7 @@ import {
 } from './util/http.js'
 import { freebuffAuthHeaders } from './auth-store.js'
 import { patchLogContext } from './util/log.js'
+import { resolveUpstreamChannel } from './config.js'
 import { buildRpcCfg, rpcReuse } from './upstream/official-rpc.js'
 import {
   officialChatHeaders,
@@ -979,11 +980,12 @@ export function createProxyHandler(ctx) {
             // 会用 legacy 世代，与副仓库后续 chat 的世代打架。
             // 副仓库的 `reuse` 会自己做 startRun（desktop 世代）+ chat。
             // 见 docs/reverse/17-current-status-and-gaps.md
-            const _channel =
-              settingsStore?.get?.()?.upstreamChannel === 'official' ||
-              config.upstream?.channel === 'official'
-                ? 'official'
-                : 'legacy'
+            // legacy 已废弃（见 config.resolveUpstreamChannel）：一律 official
+            const _channel = resolveUpstreamChannel(
+              settingsStore?.get?.(),
+              config,
+              (m, f) => logger.warn(m, f),
+            )
             const agentId =
               agentOverride ||
               (isCatalogMode
@@ -1397,11 +1399,11 @@ export function createProxyHandler(ctx) {
     // 是身份/世代错配的根源。见 docs/reverse/17-current-status-and-gaps.md。
     //
     // 优先级：settingsStore（前端可调）> config.upstream.channel（兜底）。
-    const channel =
-      settingsStore?.get?.()?.upstreamChannel === 'official' ||
-      config.upstream?.channel === 'official'
-        ? 'official'
-        : 'legacy'
+    const channel = resolveUpstreamChannel(
+      settingsStore?.get?.(),
+      config,
+      (m, f) => logger.warn(m, f),
+    )
     // ⚠️ official 通道**不在这里构造**：官方形态的实现只有一份，在 cli-bridge。
     // 本函数只产出 legacy 形态；official 会在发送阶段把整条请求委托给副仓库
     // （见 forwardCompletions 里的 rpcChat 分支），避免两份实现漂移。
@@ -1650,8 +1652,11 @@ export function createProxyHandler(ctx) {
     // 副仓库不需要再买一次（一次 admit = 买断一小时）。
     // 见 docs/reverse/17-current-status-and-gaps.md
     const _official =
-      settingsStore?.get?.()?.upstreamChannel === 'official' ||
-      config.upstream?.channel === 'official'
+      resolveUpstreamChannel(
+        settingsStore?.get?.(),
+        config,
+        (m, f) => logger.warn(m, f),
+      ) === 'official'
     /** RPC 是否拿到了响应（拿到则跳过下面的 raw 重试循环）。 */
     let _rpcResponse = false
     if (_official) {

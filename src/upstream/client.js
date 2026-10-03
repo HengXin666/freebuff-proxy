@@ -548,25 +548,28 @@ export function createUpstreamClient(config, token, opts = {}) {
           compact: opts.compact,
           walletSpendLimit: opts.walletSpendLimit,
         }),
-        // ⚠️ **不加** x-codebuff-api-key。
+        // 既有行为保留：本项目 token 由**网页登录签发**，auth-store 记录
+        // 「只带 Bearer 会 401」。测试也把它钉住了（smoke: 删它有打死全部
+        // 认证的风险，未验证前不动）。
         //
-        // 官方抓包（docs/reverse/captures/2026-10-03-official-client.jsonl）
-        // 逐端点核对：session GET / admission POST / agent-runs POST
-        // **都不带**这个头，只用 `Authorization: Bearer`。
-        // 我们此前额外带上它（既有注释称"只带 Bearer 会 401"），
-        // 于是与官方形态不一致 —— 且实测主服务 admission 失败
-        // （purchase_claim_released / admit_failed），而副仓库
-        // （不带该头）同一账号同一时刻 admission 200 active。
-        //
-        // 按官方抓包为准：只带 Bearer。若后续实测确有 401 再回退并补证据。
+        // 已知与官方抓包的偏差：官方 session GET / admission POST /
+        // agent-runs POST 都不带 x-codebuff-api-key（只用 Bearer）。
+        // 但这**不是**主服务 admission 失败的原因 —— 真因曾是我自己引入的
+        // `url is not defined`（调试代码引用未定义变量），已修。
+        // 是否去掉该头需单独验证后再动。见
+        // .agents/notes/implemented/bug-fix/2026-10-03-session-header-and-model-mapping.md
+        ...freebuffAuthHeaders(token),
       }
 
       // 调试：FB_DEBUG_SESSION_HEADERS=1 时打印完整的 admission/session 头部，
       // 用于与官方抓包逐字段对比（官方 admission **不带** x-codebuff-api-key）。
+      //
+      // ⚠️ 这里曾用 `url`（未在该作用域定义）→ ReferenceError，
+      // 导致**每次** admission 抛异常、全部失败（2026-10-03 实测踩到）。
+      // 调试代码必须只用确定存在的变量，且开关默认关闭。
       if (process.env.FB_DEBUG_SESSION_HEADERS === '1') {
         logger.info('session request headers', {
           method,
-          url,
           headers: Object.fromEntries(
             Object.entries(headers).map(([k, v]) => [
               k,

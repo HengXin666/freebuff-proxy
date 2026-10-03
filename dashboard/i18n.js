@@ -426,8 +426,8 @@ const DICT = {
     en: 'Mirror the official client capture (official toolset + system + desktop-generation agent); takes effect immediately',
   },
   'system.upstreamChannelLegacy': {
-    'zh-CN': 'legacy（现有自拼形态，行为稳定）',
-    en: 'legacy (current hand-built shape, stable behaviour)',
+    'zh-CN': 'legacy（已废弃，不可选）',
+    en: 'legacy (deprecated, unavailable)',
   },
   'system.upstreamChannelOfficial': {
     'zh-CN': 'official（官方抓包照抄，2026-10-03 实测 200 + 工具调用）',

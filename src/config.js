@@ -29,15 +29,17 @@ const DEFAULTS = {
     apiBase: 'https://www.codebuff.com',
     loginBase: 'https://freebuff.com',
     /**
-     * 请求形态通道：
-     *   'legacy' —— 沿用现有自拼形态
-     *       （ensureFreebuffSystemMessages + ensureFreebuffToolSignature）。
-     *       保持默认是为了**零回归**：现有行为与测试全部不变。
-     *   'official' —— 照抄官方客户端抓包真值：官方 37 工具 /
-     *       官方 system 模板 / desktop 世代 agent / 分层 provider。
-     *       见 src/upstream/official-shape.js 与 docs/reverse/14/15/17。
-     *       2026-10-03 在 cli-bridge 上实测 200 + 工具调用；
-     *       已设为主路径；legacy 仅作回退保留。
+     * 请求形态通道。**'legacy' 已废弃**。
+     *
+     *   'official'（唯一有效值）—— 上游请求一律经 **RPC 委托给副仓库
+     *       （cli-bridge / bun）**执行：官方 37 工具、官方 system 模板、
+     *       desktop 世代 agent、分层 provider。主服务不再自己拼上游请求。
+     *       见 src/upstream/official-rpc.js 与 docs/reverse/18。
+     *   'legacy' —— **已废弃、禁止调用**：主服务自己拼的那套旧形态
+     *       （ensureFreebuffSystemMessages + ensureFreebuffToolSignature +
+     *        CLI 世代 agent + 自管 session 调度）。它与官方抓包逐字段不符，
+     *       且实测 admission 反复失败。保留该值只为兼容旧配置文件，
+     *       实际一律回落 official（见 resolveUpstreamChannel）。
      */
     channel: 'official',
     /** null → <dataDir>/credentials (legacy ./credentials kept as fallback) */
@@ -273,6 +275,31 @@ function resolveDefaultCredentialsDir(dataDir) {
  * @param {string | undefined} configPath
  * @returns {ProxyConfig & { _configPath: string, _configExists: boolean, _dataDir: string }}
  */
+/**
+ * 解析上游通道。**legacy 已废弃**：命中时强制回落 official 并告警。
+ *
+ * 为什么要硬回落而不是照旧执行：旧链路与官方抓包逐字段不符
+ * （system / 工具集 / agent 世代三处），且实测 admission 反复失败
+ * （purchase_claim_released）。继续让它被调用只会制造"看起来在跑、
+ * 实际全被拒"的假象。
+ *
+ * @param {object} settings settingsStore.get() 的结果（可为 null）
+ * @param {object} config 已加载的 config
+ * @param {(msg: string, fields?: object) => void} [warn] 告警回调
+ * @returns {'official'}
+ */
+export function resolveUpstreamChannel(settings, config, warn = () => {}) {
+  const picked =
+    settings?.upstreamChannel || config?.upstream?.channel || 'official'
+  if (picked === 'legacy') {
+    warn('upstream channel "legacy" is deprecated; using "official" instead', {
+      requested: picked,
+      forced: 'official',
+    })
+  }
+  return 'official'
+}
+
 export function loadConfig(configPath) {
   const resolvedPath =
     configPath ||
