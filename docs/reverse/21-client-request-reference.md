@@ -216,10 +216,34 @@ freebuff-device-v1
 | 端点 | 状态 | 说明 |
 |---|---|---|
 | `GET /models` | ✅ **一致** | 走 bun 通道，逐字节相同（`19` §19.10 / note `...catalog-request-via-bun`） |
-| `POST /device-keys` | ⚠️ **未核对** | Node 发，多 `accept-language` / `sec-fetch-mode` |
-| `GET /session` | ⚠️ **未核对** | Node 发，且 UA 是 `Bun/1.3.14`（客户端实测 `Bun/1.4.2`） |
+| `POST /device-keys` | ⚠️ 部分 | 头集/UA/`client:"desktop"` 已对齐；仍走 Node → 多 `accept-language` / `sec-fetch-mode` |
+| `GET /session` | ⚠️ 部分 | 头集已对齐（见下）；仍走 Node → 同上两个头 + `accept-encoding` 缺 br/zstd |
 | `POST /admission` | ✅ 已对齐 | P0 项，见 `15` |
-| `DELETE /session` | ⚠️ 未核对 | — |
+| `DELETE /session` | ✅ 头集一致 | 与 GET 同源构造；同样受 Node 两个头影响 |
+
+### 2026-10-03 本轮 session / device-keys 的头集修正（对照发现）
+
+用本地镜像抓我方实际发出后，与 `§21.3` 真值逐项 diff：
+
+| 项 | 我方（改前） | 客户端 | 处置 |
+|---|---|---|---|
+| `x-freebuff-env` | 发（CLI 源码来的） | **0 次** | ❌ 删除 |
+| `x-freebuff-compact-session` | 发 | **0 次** | ❌ 停发 |
+| `x-freebuff-client` | **缺** | desktop | ✅ 补 |
+| `x-freebuff-install-id` | **缺** | 有 | ✅ 补（读登录态 installId） |
+| `x-freebuff-include-unused-rate-limits` | 仅在有 instanceId 时发 | 查询形态恒带 | ✅ 改为 GET 恒带 |
+| `User-Agent` | `Bun/1.3.14` / `node` | `Bun/1.4.2` | ✅ 改（device-keys 也补了 UA/编码） |
+
+**剩余 3 项属 Node 运行时差异，只能靠 bun 消除**（已做决定性对照实验）：
+
+```
+Node 26   → accept-language: * / sec-fetch-mode: cors（forbidden，设不掉）
+            UA=node、accept-encoding 缺 br,zstd
+Bun 1.4.2 → 只发指定头 + connection/UA=Bun/1.4.2/accept/accept-encoding(含 br,zstd)
+```
+
+即：`sec-fetch-mode: cors` 在 Node 下**无解**（显式设空串仍为 cors）。
+要彻底一致，session / device-keys 也须改走 bun 通道（catalog 已如此）。
 | `POST /agent-runs` | ✅ 已对齐 | 3 个业务头 + desktop 世代 agentId |
 | `POST /chat/completions` | ✅ 已对齐 | 8 个业务头，实测 200 + 工具调用（`16`） |
 
