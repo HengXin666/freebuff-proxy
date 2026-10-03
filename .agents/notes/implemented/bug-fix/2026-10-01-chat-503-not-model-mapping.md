@@ -56,7 +56,7 @@ Status: implemented
   说明剩下的差异不在已测绘的字段面上；继续盲试的每一次都要付出一次 admit，
   而代价已经实测出来了（见 Consequences）。
 - **判定 503 = 出口受限，直接改用网页通道** —— `webChannelEnabled` 已实现且
-  [2026-09-30-web-chat-stream-transport.md](../feature/2026-09-30-web-chat-stream-transport.md)
+  [2026-09-30-web-chat-stream-transport.md](../../archived/feature/2026-09-30-web-chat-stream-transport.md)
   记录的正是"limited 下 CLI 通道 503、网页通道正常"。它是对照组的正确用法，
   但直接切换等于在没有对照证据时改默认行为；本次账号已被封，无法补做对照。
 - **什么都不做，保留 503 = 映射错 的旧结论** —— 会让下一个 agent 继续在已修好
@@ -94,7 +94,7 @@ Status: implemented
   legacyDigests 映射（本次实测确已生效）。
 - [2026-10-01-catalog-agent.md](2026-10-01-catalog-agent.md)：目录模式统一 agent
   （本次实测确已生效，且与开场白同代）。
-- [2026-09-30-web-chat-stream-transport.md](../feature/2026-09-30-web-chat-stream-transport.md)：
+- [2026-09-30-web-chat-stream-transport.md](../../archived/feature/2026-09-30-web-chat-stream-transport.md)：
   limited 档位下网页通道是 CLI 通道 503 的现成对照组。
 - [2026-10-01-settings-optional-chain.md](2026-10-01-settings-optional-chain.md)：
   本次排查中修掉的读开关写法（它曾让故障伪装成"上游判第三方客户端"）。

@@ -13,7 +13,7 @@ Status: implemented
 而运行时是 `false`。所以请求照旧走 CLI 通道。
 
 它掩盖了一个已经写好、且本该生效的能力：
-[2026-09-30-web-chat-stream-transport.md](../feature/2026-09-30-web-chat-stream-transport.md)
+[2026-09-30-web-chat-stream-transport.md](../../archived/feature/2026-09-30-web-chat-stream-transport.md)
 记录"同一账号同一出口，CLI 通道 503、网页通道正常"。但因为开关读不回，
 这条结论在端到端实测里**从未兑现过** —— 本次排查就因此把 503 一路误判成
 模型映射、工具指纹、凭据来源，连续三轮跑偏。
@@ -72,7 +72,7 @@ Status: implemented
 
 ## Related
 
-- [2026-09-30-web-chat-stream-transport.md](../feature/2026-09-30-web-chat-stream-transport.md)：
+- [2026-09-30-web-chat-stream-transport.md](../../archived/feature/2026-09-30-web-chat-stream-transport.md)：
   网页通道本身与其协议形态（本次才首次真正生效）。
 - [2026-10-01-chat-503-not-model-mapping.md](2026-10-01-chat-503-not-model-mapping.md)：
   503 不是模型映射的判据；本次把根因定位到通道 + 出口判定。
