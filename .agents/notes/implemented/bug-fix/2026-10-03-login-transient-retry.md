@@ -35,6 +35,12 @@ aborted」——`AbortError` 的原文，用户无法判断是超时、DNS 还�
 - 最终失败时：超时 → `code:'upstream_timeout'` 并写明实际毫秒数；
   网络层 → `code:'upstream_network'`，都带上底层 message。
 
+  ⚠️ `code` **必须是稳定的业务码**，不能透 Node 底层码（曾写成
+  `code: lastErr.code ?? 'upstream_network'`，实测透出 `ECONNREFUSED`）。
+  本仓的 `code` 是业务判据：`SLOT_BUSY_CODES` / `UNAVAILABLE_COOLDOWN_CODES` /
+  `EXHAUST_CODES` 等多处按集合匹配，裸 socket 码会带来误命中风险。
+  底层码仍可见 —— 放在 message 里。
+
 不改 `timeoutMs: 15_000`。超时本身是有意且有注释的（裸 fetch 遇到 freebuff.com
 波动会永远挂起、泄漏 socket 直到服务被拖死），调大它治不了「零回落」。
 

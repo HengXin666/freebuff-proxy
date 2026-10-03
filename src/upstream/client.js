@@ -464,9 +464,23 @@ export function createUpstreamClient(config, token, opts = {}) {
       )
     }
     if (lastErr?.name === 'TypeError') {
-      throw new UpstreamError(`上游登录请求网络失败：${lastErr.message}`, {
-        code: lastErr.code ?? 'upstream_network',
-      })
+      /**
+       * ⚠️ `code` 必须是**稳定的业务码**，不能透 Node 底层码。
+       *
+       * 本仓的 `code` 是业务判据：多处按集合匹配（`SLOT_BUSY_CODES` /
+       * `UNAVAILABLE_COOLDOWN_CODES` / `EXHAUST_CODES` …）。若把
+       * `ECONNREFUSED` / `ETIMEDOUT` 这类裸 socket 码透出去，
+       * 一来违背这里"给可诊断原因码"的承诺（前端拿到的是不稳定原语），
+       * 二来将来任何按 code 匹配的逻辑都可能被误命中。
+       *
+       * 底层码仍要可见 —— 放进 message（用户/运维看得到）。
+       * （不新增 `cause` 字段：`UpstreamError` 的 extra 是闭集
+       *   status/code/body/retryAfterMs/fatal，加了会被静默丢弃。）
+       */
+      throw new UpstreamError(
+        `上游登录请求网络失败：${lastErr.message}（${lastErr.code ?? 'unknown'}）`,
+        { code: 'upstream_network' },
+      )
     }
     throw lastErr
   }
