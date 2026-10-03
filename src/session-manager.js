@@ -742,10 +742,11 @@ export class SessionManager {
       // test/repro-firstbyte.mjs）。真正的兜底已经在上游：模型不符时 admit 会
       // 返回 model_locked，_admitUnlocked 内部会释放并重试一次。
       //
-      // 换模型时仍需先释放旧会话（上游一次只服务一个模型），这段逻辑保留。
-      if (this.hasLiveSlot() && !this.isUsableForModel(model)) {
-        await this._releaseUnlocked()
-      }
+      // 换模型时仍需先释放旧会话（上游一次只服务一个模型），这段逻辑保留在
+      // 上面的分支里。此前此处还重复了一次 `_releaseUnlocked()`：上面已经释放过，
+      // 这里 `hasLiveSlot()` 恒为 false，属于死代码。它不会多释放一次（条件恒假），
+      // 但同一个动作写两遍、且第二遍不带任何守卫，后面若有人给上面那处加守卫，
+      // 这里会静默绕过——所以删掉，只保留带上下文的那一处。
 
       return this._admitUnlocked(model)
     })
