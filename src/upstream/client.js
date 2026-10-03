@@ -258,6 +258,7 @@ export function createProxyFetch(config, opts = {}) {
 function makeBunFetcher(apiBase) {
   let loader = null
   return async (input) => {
+    if (bunEnabled() === false) return null
     if (loader === null) {
       loader = import('../../cli-bridge/bridge.mjs')
         .then((m) => (m.hasBun() ? m.callBun : null))
@@ -288,6 +289,7 @@ function makeReleaseViaBun(token, accountId, apiBase, deviceKeyPath) {
   let loader = null
   return async (instanceId) => {
     try {
+      if (!bunEnabled()) return null
       if (loader === null) loader = import('./official-rpc.js').catch(() => null)
       const mod = await loader
       if (!mod?.rpcReleaseSession || !mod?.buildRpcCfg) return null
@@ -328,6 +330,7 @@ function makeDeviceKeysViaBun(token, apiBase, fallback) {
       return fallback(url, init)
     }
     try {
+      if (!bunEnabled()) return fallback(url, init)
       if (loader === null) loader = import('./official-rpc.js').catch(() => null)
       const mod = await loader
       if (!mod?.rpcRegisterDeviceKey) return fallback(url, init)
@@ -347,10 +350,22 @@ function makeDeviceKeysViaBun(token, apiBase, fallback) {
   }
 }
 
+/**
+ * bun 通道总开关。
+ *
+ * `FREEBUFF_DISABLE_BUN=1` 时全部走 Node。
+ * 测试（mock 上游不响应 catalog，bun 侧动作会因前置 fetchCatalog 失败）
+ * 与排障时需要这个开关；生产默认启用 bun。
+ */
+function bunEnabled() {
+  return process.env.FREEBUFF_DISABLE_BUN !== '1'
+}
+
 function makeSessionViaBun(token, accountId, apiBase, deviceKeyPath) {
   let loader = null
   return async () => {
     try {
+      if (!bunEnabled()) return null
       if (loader === null) loader = import('./official-rpc.js').catch(() => null)
       const mod = await loader
       if (!mod?.rpcSession || !mod?.buildRpcCfg) return null

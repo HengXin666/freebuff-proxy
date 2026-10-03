@@ -10,6 +10,17 @@ import { SessionHandleStore } from '../src/session-handles.js'
 import { startServer } from '../src/server.js'
 import { SessionManager } from '../src/session-manager.js'
 import { requestSlotStats } from '../src/proxy.js'
+
+/**
+ * ⚠️ 冒烟测试**关闭 bun 通道**。
+ *
+ * 原因：bun 侧每个动作都会先 `fetchCatalog()`，而本文件的 mock 上游
+ * 不响应 `/api/v1/freebuff/models` → 动作整体失败 → 虽然会回落 Node，
+ * 但会让"释放/注册"这类用例变得依赖回落时序，不稳定。
+ * 冒烟测的是代理的调度与容错逻辑，不是"请求跑在哪个运行时上"——
+ * 后者由本地镜像对照（docs/reverse/21 §21.6）单独验证。
+ */
+process.env.FREEBUFF_DISABLE_BUN = '1'
 import { configureLogger } from '../src/util/log.js'
 import {
   requireModelId,
@@ -484,7 +495,14 @@ globalThis.fetch = async (url, init = {}) => {
     const userMsg = body.messages.find((m) => m.role === 'user')
     assert.ok(userMsg && String(userMsg.content).length > 0)
     assert.ok(headers.Authorization || headers.authorization)
-    assert.ok(headers['x-codebuff-api-key'] || headers['X-Codebuff-Api-Key'])
+    /**
+     * ⚠️ `x-codebuff-api-key` **必须不存在**：客户端 165 条抓包里出现 0 次
+     * （docs/reverse/20 §20.4）。以前的断言要求它必须存在，与真值相反。
+     */
+    assert.ok(
+      !headers['x-codebuff-api-key'] && !headers['X-Codebuff-Api-Key'],
+      '不得再带 x-codebuff-api-key（客户端 0 次）',
+    )
 
     // 输出预算治理（freebuff2api-wokers#8）：客户端小 max_tokens 会把思考链
     // （reasoning token 计入预算）掐断——转发上游前必须抬到 floor 并统一为
@@ -1048,11 +1066,18 @@ function chat(body, headers = {}) {
     'chat UA 必须与官方逐字一致, got ' + ua,
   )
   assert.ok(!ua.includes('/1.0.0/'), 'UA 不得再是硬编码的 1.0.0（与真 CLI 版本不符）')
-  // 已知偏差（未删）：官方 chat 只带 Authorization + user-agent，本代理仍带
-  // x-codebuff-api-key —— raw() 统一注入 freebuffAuthHeaders，而本项目 token 由网页
-  // 登录签发，auth-store 记录「只带 Bearer 会 401」。删它有打死全部认证的风险，
-  // 在未验证前不动。这里如实断言当前确实带了，把偏差钉在测试里可见。
-  assert.ok(chatCall.headers['x-codebuff-api-key'], 'chat 当前仍带 x-codebuff-api-key（已知未对齐，见 fingerprint note）')
+  /**
+   * ⚠️ `x-codebuff-api-key` 已删除，断言**不再带**。
+   *
+   * 旧注释说"删它有打死全部认证的风险（只带 Bearer 会 401）"—— 那是
+   * **未做单变量对照**的结论：当时同时换了 token 来源与出口，401 的真实
+   * 原因从未被证实是这个头。客户端 165 条抓包里它出现 0 次
+   * （docs/reverse/20 §20.4），故按官方形态只发 Bearer。
+   */
+  assert.ok(
+    !chatCall.headers['x-codebuff-api-key'],
+    'chat 不得再带 x-codebuff-api-key（客户端 0 次）',
+  )
   assert.ok(String(chatCall.headers.Authorization || chatCall.headers.authorization || '').startsWith('Bearer '), 'chat 必须带 Bearer Authorization')
   const admitCall = calls.find((c) => c.url.includes('/api/v1/freebuff/session') && c.method === 'POST')
   assert.ok(admitCall, '应发出准入请求')
@@ -1203,8 +1228,18 @@ function chat(body, headers = {}) {
   assert.equal(res.status, 200)
   const j = await res.json()
   assert.equal(j.object, 'list')
-  assert.ok(j.data.length > 0)
-  assert.ok(j.data.some((m) => m.id === 'openai/gpt-5.6-luna'))
+  /**
+   * ⚠️ 目录未抓取时**返回空清单 + notProbed**，不再回落静态 catalog。
+   *
+   * 以前这里断言"至少有内置 60 条模型"。但：
+   *   1. 内置 catalog 是 2026-08 快照（13 行实时目录只命中 3 行），
+   *      拿它当清单等于给下游一份错的模型表；
+   *   2. 服务改为**零自动探测**后，首访不再补抓目录。
+   * 现在正确行为是：空 + notProbed，由用户点「一键刷新」拉取。
+   * 清单本身的正确性由 test/verify-catalog-models.mjs 用真机目录钉住。
+   */
+  assert.equal(j.data.length, 0, '未探测时清单应为空（不回落陈旧静态表）')
+  assert.equal(j.notProbed, true, '未探测时必须带 notProbed 让前端提示刷新')
 }
 
 // /api/v1 is not public
@@ -2206,10 +2241,18 @@ for (const model of verifiedSpecialModels) {
   const rlA = rlAccounts.find((x) => x.email === 'a@example.com')
   assert.equal(rlA.available, false)
   assert.equal(rlA.cooldownCode, 'free_mode_rate_limited')
-  // 冷却时长采用上游 retry-after（60s）
+  /**
+   * 冷却时长采用上游 retry-after（60s）。
+   *
+   * ⚠️ 下限取 50s 而不是 58s：冷却是按 `Date.now() + 60_000` **设置时刻**
+   * 算的，而本断言在用例跑了一段时间后才执行（实测已过去 2.7~5.4s，
+   * 得到 54.6~57.3s 的抖动值）。拿 58s 当下限会把"执行快慢"当成缺陷，
+   * 判据应是"确实采用了 60s 而不是别的量级"—— 50s 足以区分
+   * （若误用默认 5min/15min 会远超、若用 30s 会低于）。
+   */
   const cd = rlRuntimes.cooldowns.get('a')
   assert.ok(
-    cd.until - Date.now() >= 58_000,
+    cd.until - Date.now() >= 50_000,
     `cooldown should honor retry-after 60s, got ${cd.until - Date.now()}ms`,
   )
   // 可观测性：响应头标明实际账号；换号后是 b
@@ -4141,6 +4184,14 @@ for (const model of verifiedSpecialModels) {
   capConfig.upstream.credentialsDir = capDir
   capConfig.session.pollIntervalSec = 3600
   capConfig.limits.maxConcurrentRequests = 12
+  /**
+   * ⚠️ 必须**显式**把单账号并发上限设成 3。
+   *
+   * 以前这里不设，用默认（config.js 的 `accountMaxConcurrency: 2`），
+   * 却断言"上游并发峰值应为 3" —— 测试假设与配置不一致，于是稳定失败
+   * （got 2）。实现按上限 2 跑是对的，错的只是用例没把前置条件写全。
+   */
+  capConfig.limits.accountMaxConcurrency = 3
   const capRuntimes = new AccountRuntimes(capConfig, {
     getAccountConcurrency: () => 3,   // 用户设置的每账号并发上限
   })
