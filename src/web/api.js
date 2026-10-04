@@ -11,6 +11,7 @@ import {
   buildModelsListResponse,
   CATALOG_UNIFIED_AGENT_ID,
   FREEBUFF_AVAILABLE_MODELS,
+  catalogDisplayName,
 } from '../model.js'
 import { buildCatalogDrivenModelsResponse } from '../catalog-models.js'
 import { freebuffLegacyModelDigest } from '../upstream/catalog-protocol.js'
@@ -109,13 +110,6 @@ export function createWebApi(deps) {
     return user
   }
 
-  // 上游 session 探测结果缓存（/api/models、/api/models/upstream 共用）。
-  // 每次实时 GET 上游要走代理、往返 2-4s，而 rateLimits 变化不频繁——
-  // 缓存 60s 让 playground/模型管理页秒开，同时大幅减少对上游的探测压力。
-  /** @type {{ data: any, at: number } | null} */
-  let upstreamSessionCache = null
-  const UPSTREAM_SESSION_CACHE_MS = 60_000
-
   /**
    * 目录 key（m-096e75164d）→ 内置 catalog 的人类可读 id
    * （deepseek/deepseek-v4-flash），查不到返回 null。
@@ -203,33 +197,26 @@ export function createWebApi(deps) {
     return out
   }
 
-  async function probeUpstreamSession(force = false) {
-    const now = Date.now()
-    if (!force && upstreamSessionCache && now - upstreamSessionCache.at < UPSTREAM_SESSION_CACHE_MS) {
-      return upstreamSessionCache.data
-    }
-    const accounts = runtimes.list()
-    if (!accounts.length) return null
-    try {
-      const rt = runtimes.getAny()
-      const session = await rt.upstream.freebuffSession('GET')
-      upstreamSessionCache = { data: session, at: now }
-      return session
-    } catch {
-      return null
-    }
-  }
-
-  // 显式刷新上游探测（单账号检测 / 探测刷新按钮用）：跳过缓存强制 GET
-  async function probeUpstreamSessionFresh() {
-    return probeUpstreamSession(true)
-  }
+  /**
+   * ⚠️ 已删除 `upstreamSessionCache`（60s）+ `probeUpstreamSession()` +
+   * `probeUpstreamSessionFresh()` —— 与 `proxy.js` 那份是**同一类死缓存**
+   * （2026-10-04 盲审发现漏删）。
+   *
+   * 证据（可复核）：
+   *   - `probeUpstreamSessionFresh` 全仓无调用者，只被定义；
+   *   - `probeUpstreamSession` 只被前者调用；
+   *   - 所以 `upstreamSessionCache` **只被写、从不被读** —— 唯一读点在那两个
+   *     死函数里。`probeAllAccountsSession` 第 272 行的写入是纯无用功。
+   *
+   * 用户裁决：只有对外/内部/上游三层，中间不允许缓存层。
+   * 会话探测的唯一合法时机是**用户主动刷新**（docs/reverse/20 §20.3），
+   * 那时数据由 `probeAllAccountsSession` 直接返回，不需要经过缓存中转。
+   */
 
   /**
-   * 逐账号探测并把各自的 rateLimitsByModel **取并集**，得到一个"整个账号池此刻
+   * 逐账号探测把各自的 rateLimitsByModel **取并集**，得到"整个账号池此刻
    * 被授予了哪些模型"的合并视图（多账号池里不同号被授予的模型不同，只看一个号
-   * 会漏）。结果写回 upstreamSessionCache，所以下游 /api/models、
-   * /api/models/upstream 立刻能看到新目录。
+   * 会漏）。
    * 单个账号失败不影响其它账号：失败记进 failures，不整体报错。
    */
   async function probeAllAccountsSession() {
@@ -268,7 +255,6 @@ export function createWebApi(deps) {
       rateLimitsByModel: Object.fromEntries(limits),
       model: base?.model || [...limits.keys()][0] || null,
     }
-    upstreamSessionCache = { data: session, at: Date.now() }
     return { session, failures }
   }
 
@@ -764,7 +750,12 @@ export function createWebApi(deps) {
         }
         const models = catalog.rows.map((row) => {
           const key = row.key
-          const name = row.displayName || key
+          /**
+           * ⚠️ 名称走**单一真源**（catalogDisplayName），不在这里另写
+           * `row.displayName || key`。对外展示必须与 /v1/models 严格 1:1，
+           * 两处各写一份实现就是口径漂移的温床。
+           */
+          const name = catalogDisplayName(row)
           const info = quota.rateLimits[key] ?? null
           const price = quota.prices[key]
           return {

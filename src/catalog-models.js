@@ -1,3 +1,6 @@
+// 模型名称的**单一真源**：对外名称只在这里定义（见 catalogDisplayName 的注释）
+import { catalogDisplayName } from './model.js'
+
 /**
  * 目录驱动的模型表 —— **模型清单的权威**。
  *
@@ -99,10 +102,8 @@ export function buildCatalogDrivenModelsResponse(input = {}) {
       if (!row || typeof row !== 'object') return false
       const key = typeof row.key === 'string' ? row.key : ''
       if (!key) return false
-      const name =
-        typeof row.displayName === 'string' && row.displayName.trim()
-          ? row.displayName.trim()
-          : key
+      // 名称走单一真源（catalogDisplayName），不在这里另写一份口径
+      const name = catalogDisplayName(row)
       // 隐藏/屏蔽按两个口径都判：控制台提交的是可读 id，调度白名单认 key。
       if (hidden.has(name) || hidden.has(key)) return false
       if (blockPremium && row.premium === true) return false
@@ -111,10 +112,7 @@ export function buildCatalogDrivenModelsResponse(input = {}) {
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
     .map((row) => {
       const key = String(row.key)
-      const name =
-        typeof row.displayName === 'string' && row.displayName.trim()
-          ? row.displayName.trim()
-          : key
+      const name = catalogDisplayName(row)
       const limit = rateLimits[key] ?? null
       const price = prices[key] ?? null
       /**

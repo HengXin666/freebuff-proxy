@@ -1,7 +1,6 @@
 import {
   requireModelId,
   buildModelsListResponse,
-  modelIdsFromSession,
   agentIdForModel,
   CATALOG_UNIFIED_AGENT_ID,
   agentFallbackForModel,
@@ -90,47 +89,17 @@ export function createProxyHandler(ctx) {
   }
 
   /**
-   * 上游会话探测的轻量缓存（60s）：白名单校验用它判断"上游会话实际出现过
-   * 哪些模型"，避免每次 chat 请求都实时打上游。探测失败不影响主流程。
-   * @type {{ ids: string[], model: string | null, at: number } | null}
+   * ⚠️ 已删除 `probeUpstreamSessionCached()` 及其 60s 缓存。
+   *
+   * 它做过两件都错的事：
+   *   1. **主动打上游** —— 白名单校验时 GET /session，与「零自动探测」
+   *      （docs/reverse/20 §20.3：只有用户主动刷新才准探测）直接冲突；
+   *   2. **无调用点** —— 是死代码，却留着"随时会被重新接上"的隐患。
+   *
+   * 白名单判定所需的模型 id 现在**全部来自本地**：目录行（catalogKeys）、
+   * 内置 catalog、前端自定义、隐藏表。拿不到就是拿不到，如实拒绝，
+   * 不为判定而发上游请求。
    */
-  let sessionProbeCache = null
-  const SESSION_PROBE_CACHE_MS = 60_000
-
-  async function probeUpstreamSessionCached() {
-    const now = Date.now()
-    if (
-      sessionProbeCache &&
-      now - sessionProbeCache.at < SESSION_PROBE_CACHE_MS
-    ) {
-      return sessionProbeCache
-    }
-    try {
-      const rt = runtimes.getAny()
-      const session = await rt.upstream.freebuffSession('GET')
-      sessionProbeCache = {
-        ids: modelIdsFromSession(session),
-        model:
-          session && typeof session === 'object' && typeof session.model === 'string'
-            ? session.model
-            : null,
-        at: now,
-      }
-    } catch {
-      sessionProbeCache = { ids: [], model: null, at: now }
-    }
-    return sessionProbeCache
-  }
-
-  /** 上游会话出现过/限流表里的模型 id（白名单校验用）。 */
-  function upstreamSessionModelIds() {
-    return sessionProbeCache?.ids || []
-  }
-
-  /** 上游会话当前模型（白名单校验用）。 */
-  function upstreamSessionModel() {
-    return sessionProbeCache?.model ?? null
-  }
 
   function authorize(req, res) {
     const keys = config.server.apiKeys || []
@@ -320,23 +289,22 @@ export function createProxyHandler(ctx) {
   /**
    * 目录行的**全部可寻址口径**（目录 key + 可读显示名），供白名单判定。
    *
-   * 为什么两个口径都要：客户端可能照着 `/v1/models` 的可读 id 填
-   * （"DeepSeek V4.1 Flash"），也可能用我们透出的 `freebuff_key`（m-096e75164d）。
-   * 而 `resolveModelAlias` 会把可读名归一成 key，所以 key 是主路径；
-   * 可读名这条是给"没走归一"的路径兜底。
+   * 客户端可能照着 `/v1/models` 的可读名填（"DeepSeek V4.1 Flash"），
+   * 也可能用我们透出的 `freebuff_key`（m-096e75164d）。两个都收。
    *
-   * 缓存 60s：目录是逐账号持有且懒加载的，每次 chat 都遍历一次没必要；
-   * 但也不能永久缓存（上游会加新模型）。
-   * @type {{ keys: string[], at: number } | null}
+   * ⚠️ **不设缓存**（用户裁决：只有对外/内部/上游三层，中间不允许有缓存层）。
+   *
+   * 此前这里有 60s 缓存，制造过一个真实事故：服务刚启动时目录尚未加载
+   * （零自动探测，要等首次用到才抓），那一刻缓存了**空数组**，于是 60 秒内
+   * **所有**模型都被 `model_not_allowed` 拒掉 —— 用户的客户端配的是目录 key
+   * `m-096e75164d`，直接报 400。表现还"时好时坏"（缓存过期后目录已加载则正常），
+   * 实测等过 60s 重试同一请求即恢复正常，证实缓存是唯一变量。
+   *
+   * 现在直接读 `catalogRows()`：它是**内存里的现成对象**（各 runtime 已抓的
+   * 目录行的并集），取一次就是遍历几十个元素，没有 I/O、没有网络。
+   * 为省这点遍历而引入"过期/空值/时序"三类 bug，不划算。
    */
-  let catalogKeyCache = null
-  const CATALOG_KEY_CACHE_MS = 60_000
-
   function catalogModelKeys() {
-    const now = Date.now()
-    if (catalogKeyCache && now - catalogKeyCache.at < CATALOG_KEY_CACHE_MS) {
-      return catalogKeyCache.keys
-    }
     const keys = []
     try {
       const { rows } = runtimes.catalogRows?.() || {}
@@ -347,9 +315,8 @@ export function createProxyHandler(ctx) {
         }
       }
     } catch {
-      // 目录不可用时不阻塞白名单（退回旧的三层判定）
+      // 目录不可用时不阻塞白名单（退回其它三层判定）
     }
-    catalogKeyCache = { keys, at: now }
     return keys
   }
 
@@ -669,9 +636,8 @@ export function createProxyHandler(ctx) {
     // 滞后，硬拒绝会误伤合法新模型），只对上游明确说"没有"的模型硬拒绝。
     //
     // 顺序很重要（性能）：**先**用本地三张表（catalog / 前端自定义 / 隐藏）
-    // 判定——它们覆盖绝大多数请求，命中时完全不需要为了白名单等一次上游往返
-    // （实测 580ms，见 test/repro-firstbyte.mjs）。只有"本地三张表都不认识"
-    // 的模型才值得去问上游一次（60s 缓存、只读 GET、不占额度），此时才预热。
+    // 这一层**纯本地**：目录行 / 前端自定义 / 内置 catalog / 隐藏表。
+    // 不探测、不缓存、不发上游请求（零自动探测，docs/reverse/20 §20.3）。
     /**
      * ⚠️ 白名单必须认**目录行**：目录是模型清单的权威（13 行），而会话回执的
      * rateLimitsByModel 只有 6 个键。少了这一层，目录里有、但当日额度为 0
@@ -680,27 +646,49 @@ export function createProxyHandler(ctx) {
      * 两个口径都收：key（m-xxx，resolveModelAlias 归一后的形态）与 displayName。
      */
     const catalogKeys = catalogModelKeys()
-    const modelAllowOpts = {
+    let allowed = isModelAllowed(upstreamModel, {
       customModels: customModels(),
       hiddenModels: hiddenModels(),
       blockPremium: blockPremiumModels(),
       catalogKeys,
-    }
-    let allowed = isModelAllowed(upstreamModel, modelAllowOpts)
+    })
     /**
-     * ⚠️ 命中本地表就**不再探测**（零自动探测，docs/reverse/20 §20.3）。
-     * 以前的写法会在后台"预热"一次 session GET —— 那是纯粹的多余流量。
+     * ⚠️ **目录还没加载时，先加载一次再判**，不要直接拒。
      *
-     * 只有本地三张表（目录 / 自定义 / 内置）都不认识这个模型时，
-     * 才借**已有的 60s 缓存**再判一次；缓存也没有就拒绝，
-     * 绝不为了判定而新发一次上游请求。
+     * 这是冷启动 400 的真正根因（不是缓存 —— 缓存已删）：
+     * 目录是懒加载的（零自动探测，要等真正用到才抓），所以**服务启动后的
+     * 第一个请求**面对的是空目录 → `catalogKeys` 为空 → 任何模型都不在白名单
+     * → 400 `model_not_allowed`。实测：冷启动立刻用目录 key 请求 = 400；
+     * 等一次请求把目录抓完后再试 = 正常进入调度（返回额度类错误）。
+     *
+     * 「先加载再判」与「零自动探测」**不冲突**：这条路径是**用户正在发
+     * 真实请求**才走到，抓目录本来就是该请求必须的前置（admission 要用
+     * 目录句柄），不是为了"探测"而多发请求。docs/reverse/20 §20.3 禁止的是
+     * 启动/导入/首访模型表时空跑一次上游 —— 那是无请求驱动的流量。
+     *
+     * 只在**目录为空**时做（正常路径零开销），且失败照旧拒绝（不猜模型）。
      */
-    if (!allowed) {
-      allowed = isModelAllowed(upstreamModel, {
-        ...modelAllowOpts,
-        sessionModelIds: upstreamSessionModelIds(),
-        sessionModel: upstreamSessionModel(),
-      })
+    if (!allowed && catalogKeys.length === 0) {
+      try {
+        await runtimes.refreshCatalogs?.({ force: false })
+      } catch {
+        // 抓不到就是抓不到：下面照旧拒绝，不猜模型
+      }
+      const reloaded = catalogModelKeys()
+      if (reloaded.length) {
+        allowed = isModelAllowed(upstreamModel, {
+          customModels: customModels(),
+          hiddenModels: hiddenModels(),
+          blockPremium: blockPremiumModels(),
+          catalogKeys: reloaded,
+        })
+        if (allowed) {
+          logger.info('model allowed after lazy catalog load', {
+            model: upstreamModel,
+            catalogRows: reloaded.length / 2,
+          })
+        }
+      }
     }
     if (!allowed) {
       logger.warn('model not allowed; rejecting before upstream', {

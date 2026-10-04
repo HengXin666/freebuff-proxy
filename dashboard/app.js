@@ -38,8 +38,9 @@ const state = {
   modelNames: {},
   /**
    * 上游此刻给了额度的模型的「可读三件套」：`{key, displayName, catalogId}`。
-   * /api/models 的 id 现在是可读口径（catalogId 或 displayName），而
-   * upstreamModelIds 是目录 key —— 标注 ✅ 时必须用这张表换算，否则永远对不上。
+   * /api/models 的 id 是**可读名**（口径 = `displayName || key`，与后端
+   * `catalogDisplayName()` 同源），而 upstreamModelIds 是目录 key ——
+   * 标注 ✅ 时必须用这张表换算，否则永远对不上。
    */
   upstreamModels: [],
 }
@@ -2363,8 +2364,8 @@ async function renderModelSettings(view) {
    * 那些上游根本没有的条目**调用必然失败**，却在列表里与可用模型长得一模一样
    * —— 纯粹是误导。所以每一行都必须能一眼看出它在不在上游目录里。
    *
-   * 匹配按**可读 id**（与 /v1/models 同源）比对；目录 key（m-xxx）作兜底，
-   * 因为旧自定义条目可能只存了 key。
+   * 匹配按**可读名**（与 /v1/models 同源，口径 `displayName || key`）比对；
+   * 目录 key（m-xxx）作兜底，因为旧自定义条目可能只存了 key。
    */
   const upstreamIdSet = new Set(
     (upstream.models || []).map((m) => m.id || m.catalogId || m.key).filter(Boolean),
@@ -2463,7 +2464,7 @@ async function renderModelSettings(view) {
           // 视觉上必须与可用模型区分开，否则用户仍会一个个去试。
           style: isLiveUpstream(m) ? null : 'opacity:.45',
         }, [
-          // 首列是**对外模型名**（catalogId || displayName），与 /v1/models 的 id 同源；
+          // 首列是**对外模型名**（口径 `displayName || key`，与 /v1/models 的 id 同源）；
           // 目录 key（m-00032eaeec）退到 title 里 —— 排障时仍要能对上上游日志，
           // 但不该再出现在页面上（用户要求）。见
           // .agents/notes/implemented/bug-fix/2026-10-03-readable-model-id-unification.md
@@ -3282,7 +3283,7 @@ function applyModelNames(payload) {
  *
  * 后端两个字段口径不同：`upstreamModelIds` 是目录 key（m-00032eaeec，判据真值），
  * `upstreamModels` 是带 catalogId/displayName 的三件套。而 /v1/models 的 id 由
- * `catalogId || displayName || key` 决定（见 src/model.js）。测试对话的下拉按
+ * `displayName || key` 决定（见 src/model.js 的 catalogDisplayName）。下拉按
  * `m.id` 比对打 ✅，所以这里必须做同样的换算，否则一个 ✅ 也标不出来。
  * @returns {Set<string>}
  */
@@ -3292,7 +3293,18 @@ function upstreamReadableIds() {
   const out = new Set()
   for (const key of keys) {
     const row = byKey.get(key)
-    out.add((row && (row.catalogId || row.displayName)) || key)
+    /**
+     * ⚠️ 必须与后端的名称口径**逐字一致**：`displayName || key`。
+     *
+     * 此前这里写的是 `catalogId || displayName`，而**后端 `/api/models/upstream`
+     * 的 `id` 用的是 `displayName`**（`catalogId` 只是 legacy 反查的并列字段，
+     * 值其实是另一个东西 —— 实测 id='MiMo 2.6 Flash' 而 catalogId='mimo/mimo-v2.5'）。
+     * 两边算出不同的 id → 测试对话下拉的 ✅ 一个也标不出来。
+     *
+     * 与 `src/model.js` 的 `catalogDisplayName()` 同源：displayName 优先，
+     * 缺失才回退 key（不凭空编名字）。
+     */
+    out.add((row && (row.displayName || row.key)) || key)
   }
   /**
    * 目录驱动口径：后端 `/api/models` 的每条自带 `rate_limit`（有额度的才有），
