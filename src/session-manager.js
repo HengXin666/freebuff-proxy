@@ -463,7 +463,37 @@ export class SessionManager {
         stale: true,
       }
     }
-    const price = typeof fb.prices?.[model] === 'number' ? fb.prices[model] : null
+    /**
+     * ⚠️ **价格表查找必须走模型标识归一**（2026-10-04 实测缺陷）。
+     *
+     * 上游价格表（`freebucks.prices`）的键是**上游模型 id**
+     * （`deepseek/deepseek-v4-flash`），而调度传进来的 `model` 通常是
+     * **目录 key**（`m-096e75164d`）—— 直接用 `fb.prices[model]` 查不到，
+     * 于是 `price` 为 null → 走进上面的 `unmetered` 分支**恒放行**，
+     * 额度闸门形同虚设（实测：测试用例里 `freebucksFor` 判 `known:false`
+     * 导致闸门不拦，用例失去意义）。
+     *
+     * 用注入的 `resolveModelAlias`（同一唯一真源）把两侧都归一到目录 key 再比。
+     */
+    const normModel = (v) =>
+      typeof this.resolveModelAlias === 'function' ? this.resolveModelAlias(v) : v
+    const wantModel = normModel(model)
+    let price = null
+    {
+      const prices = fb.prices || {}
+      // ① 先按原样查（快路径：键已是同形态时零开销）
+      if (typeof prices[model] === 'number') price = prices[model]
+      else {
+        // ② 逐键归一再比（价格表很小，逐键成本可忽略）
+        for (const [k, v] of Object.entries(prices)) {
+          if (typeof v !== 'number') continue
+          if (normModel(k) === wantModel) {
+            price = v
+            break
+          }
+        }
+      }
+    }
     if (price == null) {
       return {
         known: true,

@@ -2174,6 +2174,22 @@ for (const model of verifiedSpecialModels) {
   sessionPosts = 0
   completionAttempts = 0
   calls = []
+  /**
+   * ⚠️ **必须先对一次账**（等价于控制台点过「刷新」，或本进程此前建过会话）。
+   *
+   * 否则本账号在调度眼里是"余额未知"（`freebucksFor().known === false`），
+   * 额度闸门恒放行 —— 用例就变成"无闸门时能不能建会话"，测不到本用例的主旨，
+   * 而且**不可证伪**（短路掉 paidUpstream 逻辑后仍然全绿，实测踩到过）。
+   *
+   * 对账后：`balance 0 / 每日池 0/25` 已知 → 闸门即将拒绝 →
+   * 只有"清单里那条能接管的已付费会话"能救它。
+   */
+  await upRuntimes.get('paid').sessions.refresh()
+  assert.equal(
+    upRuntimes.get('paid').sessions.freebucksFor(MODEL_ID).affordable,
+    false,
+    '对照前提：对账后必须已知"买不起"（否则本用例测不到额度闸门）',
+  )
 
   const upRes = await fetch(`http://127.0.0.1:${upPort}/v1/chat/completions`, {
     method: 'POST',

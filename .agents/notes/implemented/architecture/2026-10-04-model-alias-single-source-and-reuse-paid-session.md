@@ -130,3 +130,35 @@ legacy id —— 于是 `holderFor('m-096e75164d')` 与清单里的
 本次先纠正了我自己两处错误：
 1. 把"日志条数"当成"请求数"，据此说"13 秒内几百次请求"（实际 13 个请求）。
 2. 自写 `_modelAliases()` 制造第二真源 —— 仓库本就有 `resolveModelAlias`。
+
+## 追加修复：价格表查找的标识归一 + `return rt` 跳过 ensureSession
+
+（2026-10-05 实测追查，两个都是真 bug）
+
+### 一、`freebucks.prices` 的键是**上游 id**，而查的是**目录 key**
+
+`freebucksFor(model)` 里 `fb.prices[model]` 直查 —— 而价格表的键是上游 id
+（`deepseek/deepseek-v4-flash`），传进来的 `model` 通常是目录 key
+（`m-096e75164d`）→ **查不到 → `price: null` → 走 `unmetered` 分支恒放行**
+→ 两道额度闸门形同虚设（实测：测试里 `freebucksFor` 判 `known:false`，
+用例失去意义）。
+
+修：用注入的 `resolveModelAlias` 把价格表键与入参都归一到目录 key 再比
+（快路径先原样查，命中即返回）。
+
+### 二、`checkPaidUpstream()` 命中后 `return rt`，**跳过了 `ensureSession`**
+
+`acquireForModel` 的契约是"**只选号，不建会话**" —— 真正建/接管会话发生在
+它**更下方**的 `rt.sessions.ensureSession(model)`。早期版本在闸门处
+`return rt` 直接返回 runtime，等于跳过 ensureSession →
+**会话从未建立/接管 → 报 `no_session`**（实测测试红在 429）。
+
+修：只**跳过闸门**（`!paidTakeover && ...`），放行选号让它照常走到
+`ensureSession` —— 那里会用 `holderFor()` 带 takeover 头接管，不新买。
+
+### 三、`hasInventorySnapshot()` 前置过严（已移除）
+
+早期怕"`GET /session` 会建会话"而要求"已有快照"才探测，实测这让
+**从未对过账的账号**（新部署/刚导入）永远探不到 —— 而那恰恰是最需要探测的
+场景。只读取形态（带 instanceId 的 `include-unused-rate-limits`）在真实上游
+不建会话。

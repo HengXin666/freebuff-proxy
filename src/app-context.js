@@ -1596,18 +1596,16 @@ export class AccountRuntimes {
         if (paidUpstream) return true
         if (rt.sessions.holderFor(model)) {
           paidUpstream = true
-        } else if (rt.sessions.hasInventorySnapshot?.()) {
+        } else {
           /**
-           * ⚠️ **只在已有清单快照时才补探测**（不能凭空发起第一次）。
+           * 本地上次快照没命中 → 补一次**只读探测**（`GET /session`，不建会话、
+           * 不扣费）。这是唯一能看见"别的部署建的会话"的途径。
            *
-           * 原因：`refresh()` 走 `GET /session`，而官方建会话路径上这个 GET
-           * **会建出会话**（`_apply` 直接吃 active 回执）。若在"额度不足"时
-           * 凭空探测，就会为一个**还没决定要买**的请求造出一条会话，
-           * 接着污染后续调度（实测：把既有"5xx 换号"用例打红，因为凭空多出
-           * 一条绑在别的模型上的会话 → `paid_window_model_mismatch`）。
-           *
-           * 有快照才补：说明本次进程此前已经和上游对过账（admit/refresh 过），
-           * 此时的探测只是"刷新一份已知存在的表"，不会凭空造会话。
+           * ⚠️ 早期版本额外要求 `hasInventorySnapshot()` 为真（怕 GET 建出会话），
+           * 实测那会让**从未对有账的账号**永远探不到 —— 而它恰恰是最需要探测的
+           * 场景（新部署/刚导入，本地什么都没有）。只读取形态（带 instanceId 的
+           * `include-unused-rate-limits`）在真实上游不建会话；测试里那个"GET 会
+           * 建会话"的 mock 是 `get_claim_admit` 专用形态，与这里不同。
            */
           await rt.sessions.refresh().catch(() => {})
           paidUpstream = !!rt.sessions.holderFor(model)
@@ -1664,10 +1662,28 @@ export class AccountRuntimes {
         const quotaLooksBlocked =
           (units?.known && units.exhausted) ||
           (fbGate?.known && fbGate.affordable === false)
-        if (quotaLooksBlocked && (await checkPaidUpstream())) {
-          return rt
+        /**
+         * ★ **额度闸门即将拒绝时，先问上游"有没有我能接管的已付费会话"**
+         * （2026-10-04 铁律：一次 admit 买断一小时，这一小时内继续发请求边际
+         * 成本为 0；`balance: 0` 只说明"再买一条买不起"，不代表那一小时不能用）。
+         *
+         * ⚠️ **只跳过闸门，绝不在这里 `return rt`**（实测踩到）：
+         * `acquireForModel` 的契约是"**只选号，不建会话**" —— 真正建/接管会话
+         * 在本函数**更下方**的 `rt.sessions.ensureSession(model)`。早期版本在这里
+         * return，等于跳过 ensureSession → 会话从未接管 → 报 `no_session`
+         * （实测测试红在 429）。正确做法是放行选号，让它走到 ensureSession ——
+         * 那里会用 `holderFor()` 带 takeover 头接管，不新买。
+         */
+        const paidTakeover = quotaLooksBlocked && (await checkPaidUpstream())
+        if (paidTakeover) {
+          logger.info('quota gate bypassed: a reusable paid session holds upstream', {
+            key,
+            email: emailByKey.get(key),
+            model,
+            holderInstanceId: rt.sessions.holderFor(model),
+          })
         }
-        if (units?.known && units.exhausted) {
+        if (!paidTakeover && units?.known && units.exhausted) {
           failures.push({
             key,
             email: emailByKey.get(key),
@@ -1690,7 +1706,7 @@ export class AccountRuntimes {
         //    实测 deepseek-v4-flash 在 units=0.1/6 完全没超标的情况下仍被拒，
         //    理由是 freebucksShortfall{price,balance}。所以两道闸门都必须过。
         const fb = rt.sessions.freebucksFor?.(model)
-        if (fb?.known && fb.affordable === false) {
+        if (!paidTakeover && fb?.known && fb.affordable === false) {
           failures.push({
             key,
             email: emailByKey.get(key),
