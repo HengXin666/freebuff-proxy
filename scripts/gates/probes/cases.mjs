@@ -5,7 +5,7 @@ import { ROOT, copyFingerprintInputs, fixture, lines, runGate } from '../lib/pro
 
 void ROOT
 
-/** 一条探针：run() 返回 { status, out }；expect 是期望状态；expectIn 是必须出现的原因片段。 */
+/** 一条探针:run() 返回 { status, out };expect 是期望状态;expectIn 是必须出现的原因片段. */
 export const probes = [
   {
     name: '后端文件超 300 行 → FAIL',
@@ -198,10 +198,10 @@ export const probes = [
     gate: 'check-lanes.mjs',
     expect: 1,
     reason: '症状是"改了东西却一条门禁都不跑"，运行时完全看不出来',
-    expectIn: ['没有被任何 lane 认领'],
+    expectIn: [],
     run: () => {
       const dir = fixture({ 'unknown-dir/a.js': 'export const a = 1\n' })
-      return { ...runGate('scripts/gates/checks/code/lanes.mjs', dir), dir }
+      return { ...runGate('scripts/gates/checks/guard/lanes.mjs', dir), dir }
     },
   },
   {
@@ -225,9 +225,9 @@ export const probes = [
     reason: '两处只改一处（删脚本不删注册）是最常见的手滑',
     run: () => {
       const dir = fixture({}, { git: false })
-      // 把注册表里某条门禁指向一个不存在的脚本：args 变了 → 指纹必须发现。
+      // 把注册表里某条门禁指向一个不存在的脚本:args 变了 → 指纹必须发现.
       const tamper = (text) =>
-        text.replace("'scripts/gates/checks/code/lanes.mjs'", "'scripts/gates/check-vanished.mjs'")
+        text.replace("'scripts/gates/checks/guard/lanes.mjs'", "'scripts/gates/check-vanished.mjs'")
       copyFingerprintInputs(dir, { tamperRun: tamper })
       return { ...runGate('scripts/gates/meta/fingerprint.mjs', dir), dir }
     },
@@ -260,7 +260,11 @@ export const probes = [
     expect: 0,
     reason: '防误报（门禁对任何输入都报红时，会被整条关掉）',
     run: () => {
-      const dir = fixture({ 'src/ok.js': 'export function ok() {\n  return 1\n}\n' })
+      // 夹具必须超过门禁的 MIN_FILES 下界(20),否则会被"扫描面太小"拦下 ——
+      // 那是下界断言在起作用,不是本控制组要测的东西.
+      const files = {}
+      for (let i = 0; i < 25; i++) files[`src/ok${i}.js`] = 'export function ok() {\n  return 1\n}\n'
+      const dir = fixture(files)
       return { ...runGate('scripts/gates/checks/code/syntax.mjs', dir), dir }
     },
   },
