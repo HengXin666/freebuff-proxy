@@ -26,7 +26,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildCatalogFromSources } from '../../src/catalog/parser.mjs'
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const OUT = path.join(ROOT, 'src', 'catalog', 'freebuff-catalog.json')
 
 const args = process.argv.slice(2)
