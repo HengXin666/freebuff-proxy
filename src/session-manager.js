@@ -474,20 +474,39 @@ export class SessionManager {
         resetAt: fb.daily?.resetAt || null,
       }
     }
+    /**
+     * ★ **免费模型（`price === 0`）不受任何 Freebucks 闸门约束**。
+     *
+     * 实测（2026-10-04 用户指出）：上游价格表里有 `price: 0` 的免费模型
+     * （`upstage/solar-mini4`、`stealth/space-bunny-alpha`）。既然它**不花钱**，
+     * 余额/每日池耗尽就与它无关 —— 用"没钱"去拒绝一个免费模型是纯粹的自伤：
+     * 用户明明能用，却被我们自己的闸门挡住。
+     *
+     * 旧行为：两道闸门（dailyExhausted / shortOnBalance）对 `price: 0` 一样生效
+     * —— `Number(fb.balance) < 0` 为 false 尚可，但 `dailyRemaining <= 0` 会把
+     * 账号直接判死，免费模型一并被排除（用户原话："免费的给它排除了，
+     * 我都不知道怎么想的"）。
+     *
+     * ⚠️ 注意判据是 **`price === 0`**（不是"price 缺失"）：
+     * 缺失（`price == null`）在上面的 `unmetered` 分支已放行并**明确标注**，
+     * 那是"上游没给价"的未知态；这里是"上游明确标价 0"的已知免费态。
+     */
+    const isFreeModel = price === 0
     const monthlySpent =
-      fb.monthly != null && Number(fb.monthly.remainingUsd) <= 0
+      !isFreeModel && fb.monthly != null && Number(fb.monthly.remainingUsd) <= 0
     // 条件①：今日池跑完（`limit > 0` 才算真的有池子，避免把 limit=0 的
     // "没有池子" 误判成"池子跑完"）。resetAt 已过在上面就 return 了，所以这里
     // 的 remaining 一定是未重置周期的数字。quotaExempt 账号不受任何池限制。
     const dailyLimit = Number(fb.daily?.limit)
     const dailyRemaining = Number(fb.daily?.remaining)
     const dailyExhausted =
+      !isFreeModel &&
       Number.isFinite(dailyLimit) &&
       dailyLimit > 0 &&
       Number.isFinite(dailyRemaining) &&
       dailyRemaining <= 0
-    // 条件②：余额买不起本次请求
-    const shortOnBalance = Number(fb.balance) < price
+    // 条件②：余额买不起本次请求（免费模型恒买得起 —— 它不花钱）
+    const shortOnBalance = !isFreeModel && Number(fb.balance) < price
     const exempt = fb.quotaExempt === true
     const affordable =
       exempt || (!dailyExhausted && !shortOnBalance && !monthlySpent)

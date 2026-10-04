@@ -9122,3 +9122,43 @@ console.log('smoke ok')
     `必须带上占用者做 takeover 复用，got ${JSON.stringify(calls.map((c) => c.method + (c.takeoverInstanceId ? '+tk' : '')))}`,
   )
 }
+
+/* ================================================================
+   免费模型（price === 0）不受 Freebucks 闸门约束
+   ================================================================ */
+{
+  /**
+   * 用户报（2026-10-04）：「有些会话它的购买是免费的，而你这个筛选判断就把免费的
+   * 给它排除了……你就硬说他是没有余额，就不参与判断了，怎么能够这样？」
+   *
+   * 上游价格表里确实有 `price: 0` 的免费模型（实测 `upstage/solar-mini4`、
+   * `stealth/space-bunny-alpha`）。既然它**不花钱**，"余额 0 / 每日池耗尽"就与它
+   * 无关 —— 用"没钱"拒绝一个免费模型是纯自伤：用户明明能用，被我们自己的闸门挡住。
+   *
+   * ⚠️ 但**只豁免"钱"**：会话次数（`rateLimitsByModel`）是上游的独立额度，
+   * 免费模型同样受它约束（实测这两个免费模型也是 `2.5/6`）。
+   *
+   * ⚠️ 反向探针：去掉 `isFreeModel` 对 dailyExhausted/shortOnBalance 的短路后
+   * 本用例必须变红。
+   */
+  const sm = new SessionManager({
+    upstream: { freebuffSession: async () => null },
+    config: { session: {}, limits: {} },
+    accountKey: 'free-model',
+  })
+  sm.freebucks = {
+    balance: 0,
+    daily: { limit: 25, remaining: 0, resetAt: '2099-01-01T16:00:00.000Z' },
+    prices: { 'upstage/solar-mini4': 0, 'mimo/mimo-v2.5': 10 },
+  }
+  const free = sm.freebucksFor('upstage/solar-mini4')
+  assert.equal(free.affordable, true, '免费模型（price 0）必须放行 —— 它不花钱')
+  assert.equal(free.reason, null, '免费模型不该有拒绝原因')
+  const paid = sm.freebucksFor('mimo/mimo-v2.5')
+  assert.equal(paid.affordable, false, '对照：付费模型余额不足仍应拒绝')
+  assert.equal(paid.reason, 'daily_exhausted', '对照：原因应为日池耗尽')
+  // 对照：次数闸门对免费模型**仍然生效**（不是"免费就无限制"）
+  sm.quota = { byModel: { 'upstage/solar-mini4': { recentCount: 6, limit: 6 } } }
+  const u = sm.sessionUnitsFor('upstage/solar-mini4')
+  assert.equal(u.exhausted, true, '免费模型仍受会话次数闸门约束（上游的独立额度）')
+}
