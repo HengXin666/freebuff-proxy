@@ -1364,6 +1364,55 @@ function buildAccountRow(a, i) {
    * 后端已给 `session.inPaidWindow`，这里据此加一行标注，把"还能用多久、
    * 只能用哪个模型、什么时候能换"讲清楚。
    */
+/**
+ * 渲染**上游的会话清单**（`session.inventory`）—— 跨部署可见的那份。
+ *
+ * 数据源：上游 `GET /session` 回执的 `desktopPurchases`（每次 admit / 一键刷新
+ * 随回执刷新）。槽位 `slotLimit:1`，被别处占着时请求会撞 `purchase_capacity`，
+ * 而本地账本会说"没有会话" —— 这行就是用来消除那个困惑的。
+ *
+ * 标注「本机」：把每个占用者的 `holderInstanceId` 与本地会话的 instanceId 比，
+ * 相同即本机建的（这样用户一眼看出"占着槽位的是不是我自己"）。
+ * @param {any} a 账号行（`runtimes.list()` 的一项）
+ * @returns {any[]} 若干 DOM 节点
+ */
+function renderUpstreamInventory(a) {
+  const inv = a?.session?.inventory
+  const purchases = Array.isArray(inv?.purchases) ? inv.purchases : []
+  if (!purchases.length) return []
+  const mine = a?.session?.instanceId || null
+  const now = Date.now()
+  const live = purchases.filter(
+    (p) => !p.expiresAt || Date.parse(p.expiresAt) > now,
+  )
+  if (!live.length) return []
+  const nodes = [
+    el('div', { class: 'muted', style: 'font-size:11px;margin-top:2px' },
+      t('account.upstreamInventory', { n: live.length })),
+  ]
+  for (const p of live) {
+    const isMine = mine && p.holderInstanceId === mine
+    // 模型名走统一映射（目录 key → 可读名），不再把 m-xxx 弹给用户
+    const name = modelNameFor(p.model) || p.model || '?'
+    nodes.push(
+      el('div', {
+        class: 'muted',
+        style: 'font-size:11px',
+        title: t('account.upstreamInventoryTip', {
+          holder: p.holderInstanceId || '—',
+          until: p.expiresAt ? fmtTime(p.expiresAt) : '—',
+        }),
+      }, [
+        el('span', { class: isMine ? 'badge ok' : 'badge warn' },
+          isMine ? t('account.inventoryMine') : t('account.inventoryOther')),
+        ' ',
+        `${name} · ${p.expiresAt ? fmtMs(Date.parse(p.expiresAt) - now) : '—'}`,
+      ]),
+    )
+  }
+  return nodes
+}
+
   const paidBound = a.session?.live && a.session?.inPaidWindow === true
   const sessNode = el('div', {}, [
     // 这里显示的是**给人看的模型名**：a.session.model 是目录 key
@@ -1387,6 +1436,18 @@ function buildAccountRow(a, i) {
             ? t('account.boughtReuse', { admits, reuses, rate: reuseRate })
             : t('account.bought', { admits }))
       : '',
+    /**
+     * ★ **上游的会话清单**（跨部署可见）。
+     *
+     * 用户诉求：「即便分布式部署，你在本地建的会话，我在远程也能读到」。
+     * 数据来自上游 `GET /session` 回执的 `desktopPurchases`——每次 admit/一键刷新
+     * 都会随回执更新，所以刷新即可看到**别的部署**建的会话。
+     *
+     * 为什么要显示：槽位 `slotLimit:1`，被别处占着时请求会撞
+     * `purchase_capacity`，而本地账本显示"没有会话" —— 用户完全无从判断。
+     * 这里如实列出占用者与到期时间，并标出「是不是本机建的」（instanceId 对比）。
+     */
+    ...renderUpstreamInventory(a),
   ])
   const sess = sessNode
   // 探测失败原因（country_blocked 强风控 / rate_limited / banned / 凭证无效…）

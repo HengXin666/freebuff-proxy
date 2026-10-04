@@ -861,6 +861,15 @@ export class AccountRuntimes {
                * 判不出来的会话（无 expiresAt）返回 false = 不标注。
                */
               inPaidWindow: rt?.sessions?.inPaidWindow?.() === true,
+              /**
+               * ★ 上游的**会话清单**（跨部署可见）—— 用户诉求：「即便分布式部署，
+               * 你在本地建的会话，我在远程也能读到」。
+               *
+               * 数据来自 `GET /session` 回执的 `desktopPurchases` /
+               * `desktopSessionCounts`（每次 admit/refresh 都会随回执刷新）。
+               * 前端据此显示"哪个模型被谁占着、什么时候到期"。
+               */
+              inventory: snap.inventory || null,
             }
           : null,
         // 每日免费 session 额度（来自最近一次 admit/refresh 的上游返回）

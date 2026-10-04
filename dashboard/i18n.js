@@ -230,6 +230,17 @@ const DICT = {
   },
   'account.probeFailed': { 'zh-CN': '探测失败', en: 'Probe failed' },
   // 付费时段内会话只服务它绑定的那个模型（issue #24）
+  // ── 上游会话清单（跨部署可见）────────────────────────────────
+  'account.upstreamInventory': {
+    'zh-CN': '上游占用中（{n}）— 含其它部署建的会话',
+    en: 'Held upstream ({n}) — includes sessions from other deployments',
+  },
+  'account.inventoryMine': { 'zh-CN': '本机', en: 'this host' },
+  'account.inventoryOther': { 'zh-CN': '其它部署', en: 'other host' },
+  'account.upstreamInventoryTip': {
+    'zh-CN': '占用者 instanceId: {holder}\n到期: {until}\n槽位上限为 1，被占时新请求会被上游拒（purchase_capacity）',
+    en: 'Holder instanceId: {holder}\nExpires: {until}\nSlot limit is 1; while held, new requests are rejected upstream (purchase_capacity)',
+  },
   'account.paidWindowShort': { 'zh-CN': '本小时仅限此模型', en: 'This hour: this model only' },
   'account.paidWindowTip': {
     'zh-CN': '这一小时已买断给「{model}」（到期 {until}）。此时换其它模型会作废已付款的这一小时且接不回来，所以系统不会切换——请继续用该模型，或等时段结束后再换。',

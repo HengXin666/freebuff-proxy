@@ -100,7 +100,11 @@ admission 的 POST 在发之前先 `holderFor(model)`：若占用者存在且**�
 - **本地/远程不再"互相看不见"**：`holderFor()` 读的是上游清单。
 - **首次 POST 可能多一个头**；不带 takeover 的形态不变（保持官方默认）。
 - **`desktopPurchases` 会过期**：靠 `expiresAt > now` 过滤；过期项不参与占用判定。
-- 面板未改：本次只做**能力 + 调度接线**，未在前端展示会话清单（可作后续）。
+- **面板已展示会话清单**（同次改动补齐）：`getSnapshot()` 带出 `inventory`
+  （`purchases` + `sessionCounts`）→ `app-context.list()` 的 `session.inventory`
+  → 前端账号行渲染「上游占用中（N）」+ 每条的
+  「本机 / 其它部署」+ 模型名 + 剩余时长。刷新即更新（走 `_apply`）。
+  用户据此一眼看出"占着槽位的是不是我自己、还能占多久"。
 
 ## Evidence
 

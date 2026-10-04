@@ -8458,3 +8458,54 @@ console.log('smoke ok')
     `**首次** POST 就该带 takeover（官方 knownHolder 的用法），got ${JSON.stringify(calls.map((c) => c.method + (c.takeoverInstanceId ? '+tk' : '')))}`,
   )
 }
+
+/* ================================================================
+   刷新（refresh）必须把上游会话清单带进快照 → 前端可显示
+   ================================================================ */
+{
+  /**
+   * 用户诉求：「刷新的时候就知道有多少个会话清单，并且显示在前端」。
+   *
+   * 上游 `GET /session` 回执带 `desktopPurchases`（含**别的部署**建的会话）→
+   * `_absorbInventory` 吸收 → `getSnapshot().inventory` 带出去 → 前端渲染。
+   *
+   * ⚠️ 反向探针：把 `_absorbInventory` 从 refresh 路径拿掉后本用例必须变红。
+   */
+  const OTHER = 'other-deployment-inst'
+  const up = {
+    freebuffSession: async (method) => {
+      if (method === 'GET') {
+        return {
+          status: 'none',
+          desktopPurchases: [
+            { model: 'm-00032eaeec', expiresAt: new Date(Date.now() + 3600_000).toISOString(), holderInstanceId: OTHER },
+          ],
+          desktopSessionCounts: { premium: 1, unlimited: 0, nextExpiryAt: null },
+        }
+      }
+      return { status: 'none' }
+    },
+  }
+  const sm = new SessionManager({
+    upstream: up,
+    config: { session: { reAdmitOnExpire: true, reAdmitLeadSec: 60, freeModelReAdmitLeadSec: 60 }, limits: {} },
+    accountKey: 'inventory-refresh',
+  })
+  await sm.refresh()
+  const snap = sm.getSnapshot()
+  assert.ok(
+    snap?.inventory,
+    '快照必须带 inventory（前端靠它显示会话清单）',
+  )
+  assert.equal(
+    snap.inventory.purchases.length,
+    1,
+    `刷新后清单里应有 1 条（别的部署建的），got ${JSON.stringify(snap.inventory.purchases)}`,
+  )
+  assert.equal(
+    snap.inventory.purchases[0].holderInstanceId,
+    OTHER,
+    '清单里必须如实带上占用者 instanceId（前端据此标"本机/其它部署"）',
+  )
+  assert.ok(snap.inventory.sessionCounts, '会话计数也要带出去')
+}

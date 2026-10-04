@@ -574,6 +574,15 @@ export class SessionManager {
       admitCount: this.admitCount,
       reuseCount: this.reuseCount,
     }
+    /**
+     * 上游的**会话清单**一并带进快照 —— 前端据此显示"这一小时买给了谁、
+     * 什么时候到期"，从而**分布式部署下能看到对方建的会话**（用户诉求）。
+     * 见 `_absorbInventory` 与 `holderFor`。
+     */
+    const inventory = {
+      purchases: this.desktopPurchases || [],
+      sessionCounts: this.desktopSessionCounts || null,
+    }
     if (!s) {
       return {
         status: 'none',
@@ -581,6 +590,7 @@ export class SessionManager {
         freebucks: this.freebucks,
         lastRefund: this.lastRefund,
         lastProbe: this.lastProbe,
+        inventory,
         ...counts,
       }
     }
@@ -596,6 +606,7 @@ export class SessionManager {
       freebucks: this.freebucks,
       lastRefund: this.lastRefund,
       lastProbe: this.lastProbe,
+      inventory,
       ...counts,
     }
   }
