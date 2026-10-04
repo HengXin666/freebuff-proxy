@@ -1,6 +1,6 @@
-# 03 — 会话建立（admission）：实测与坑位
+# 03 — 会话建立(admission):实测与坑位
 
-源码：`orchestrator.js:207120-207200`（`postSessionAdmission` / `getSession`）
+源码:`orchestrator.js:207120-207200`(`postSessionAdmission` / `getSession`)
 
 ## 3.1 端点
 
@@ -11,7 +11,7 @@ DELETE /api/v1/freebuff/session              # 释放
 DELETE /api/v1/freebuff/session/attempt      # 释放（带 attemptId 时）
 ```
 
-## 3.2 admission 请求头（官方逐字清单）
+## 3.2 admission 请求头(官方逐字清单)
 
 ```js
 {
@@ -21,7 +21,7 @@ DELETE /api/v1/freebuff/session/attempt      # 释放（带 attemptId 时）
   "x-freebuff-catalog-fetch":    catalog.fetchId,
   "x-freebuff-client":           "desktop",
   "x-freebuff-install-id":       installId,
-  "x-freebuff-model":            catalog.handleFor(model),   // ⚠️ handle，不是 key
+  "x-freebuff-model":            catalog.handleFor(model),   //  handle，不是 key
   "x-freebuff-wallet-spend-limit": "0",
   "x-freebuff-first-tab-discount": "0",
   "x-freebuff-instance-id":      instanceId,
@@ -31,30 +31,30 @@ DELETE /api/v1/freebuff/session/attempt      # 释放（带 attemptId 时）
 }
 ```
 
-## 3.3 ⚠️ 关键坑：admission 用 handle，chat 用 key
+## 3.3  关键坑:admission 用 handle,chat 用 key
 
-实测（同一账号、同一 catalog）：
+实测(同一账号,同一 catalog):
 
 | 位置 | 传 handle (`fbm1.xxx`) | 传 key (`m-xxx`) |
 |---|---|---|
-| `x-freebuff-model`（admission） | **200 active** ✅ | 409 `freebuff_catalog_stale` ❌ |
-| chat 的 `model` 字段 | **通过模型校验** ✅ | 409 `session_model_mismatch` ❌ |
+| `x-freebuff-model`(admission) | **200 active**  | 409 `freebuff_catalog_stale`  |
+| chat 的 `model` 字段 | **通过模型校验**  | 409 `session_model_mismatch`  |
 
-> 这是本次逆向最反直觉的一点：两个端点对"模型是什么"的表示法要求相反。
-> 官方源码里 `modelHeader = catalog.handleFor(model)` —— admission 走 handle 映射。
+> 这是本次逆向最反直觉的一点:两个端点对"模型是什么"的表示法要求相反.
+> 官方源码里 `modelHeader = catalog.handleFor(model)` —— admission 走 handle 映射.
 
-## 3.4 错误码对照（实测）
+## 3.4 错误码对照(实测)
 
 | 状态 | error | 含义 | 处置 |
 |---|---|---|---|
-| 409 | `purchase_capacity` | 免费模式瞬时容量排队 | **可重试**：实测重试第 4 次即 200 active |
-| 409 | `freebuff_catalog_stale` | model 表示法错 / fetchId 与目录不匹配 | 改传 handle；重新拉目录 |
-| 403 | `banned` | 账号被封（第三方客户端） | 换号；见 §3.6 |
+| 409 | `purchase_capacity` | 免费模式瞬时容量排队 | **可重试**:实测重试第 4 次即 200 active |
+| 409 | `freebuff_catalog_stale` | model 表示法错 / fetchId 与目录不匹配 | 改传 handle;重新拉目录 |
+| 403 | `banned` | 账号被封(第三方客户端) | 换号;见 §3.6 |
 | 428 | `waiting_room_required` | 没有活跃会话就发 chat | 先 admission |
-| 409 | `session_model_mismatch` | chat 的模型与会话绑定的不一致 | chat 改传 handle（或重开会话） |
+| 409 | `session_model_mismatch` | chat 的模型与会话绑定的不一致 | chat 改传 handle(或重开会话) |
 | 503 | `The model is temporarily unavailable` | 上游模型侧暂时不可用 | 换模型 / 稍后重试 |
 
-## 3.5 GET session 回执（本机实测，limited 档）
+## 3.5 GET session 回执(本机实测,limited 档)
 
 ```jsonc
 {
@@ -75,21 +75,21 @@ DELETE /api/v1/freebuff/session/attempt      # 释放（带 attemptId 时）
 }
 ```
 
-`prices` 是**每小时 Freebucks 单价**。0 价的模型（如 `m-22ff70c712`）不消耗额度。
+`prices` 是**每小时 Freebucks 单价**.0 价的模型(如 `m-22ff70c712`)不消耗额度.
 
 ## 3.6 `403 {"status":"banned"}` —— 本次任务起点
 
-实测：用仓库凭据 `1e600b3a`（llh282000500@gmail.com）打 admission：
+实测:用仓库凭据 `1e600b3a`(llh282000500@gmail.com)打 admission:
 ```
 403 {"status":"banned","desktopSessionCounts":{...},"desktopPurchases":[],"desktopRefunds":[]}
 ```
-而**同一时刻**用官方客户端登录态 `54393a42`（loli@woa.qzz.io）打：
+而**同一时刻**用官方客户端登录态 `54393a42`(loli@woa.qzz.io)打:
 ```
 200 {"status":"active","accessTier":"limited",...}
 ```
 
-即：**ban 是账号级、且已发生**；不是请求形态问题。
-（`extractAccountBanError` 归一 `account_suspended`/`banned`/`country_blocked` → `banned`。）
+即:**ban 是账号级,且已发生**;不是请求形态问题.
+(`extractAccountBanError` 归一 `account_suspended`/`banned`/`country_blocked` → `banned`.)
 
-⚠️ 因此"让仓库用这条链路"的**前提是仓库持有未被封的凭据**，
-协议正确不能救一个已被封的账号。
+ 因此"让仓库用这条链路"的**前提是仓库持有未被封的凭据**,
+协议正确不能救一个已被封的账号.

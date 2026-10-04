@@ -30,6 +30,30 @@ jobs:
       - run: npm test
       - run: npm run typecheck
 
+  # 代码质量红线（体量/目录/函数/注释/格式/类型棘轮 + lane 覆盖 + 接线指纹）。
+  #
+  # 为什么单独成一关而不是塞进 test：这六类判据是**结构性**的（文件行数、目录
+  # 文件数、函数长度），跑得比 jest/vitest 快得多，失败了人一眼就知道该拆哪个文件；
+  # 与 test 混在一起会让真正的原因被几百行测试输出淹没。
+  #
+  # 元门禁（指纹 + 负向探针）也在这里跑：负向探针要起几十个子进程，不进 pre-commit，
+  # 由 CI 与手动命令承担 —— 它证明的是门禁真的会红，没有它，红线集会静默退化。
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 代码质量红线
+        run: npm run check:gates
+      - name: 元门禁（接线指纹：门禁被摘掉/阈值被放松必须被发现）
+        run: npm run check:gates:fingerprint
+      - name: 负向探针（每条判据的违规组必须 FAIL、控制组必须 PASS）
+        run: npm run check:gates:probe
+
   # 多语言红线：控制台文案一旦有人图快直接写中文字面量，多语言会**静默退化**
   # —— 中文用户看不出问题，英文用户看到一块中文，且 review 极难发现。
   # 这里用机器钉死三条线：
@@ -76,7 +100,7 @@ jobs:
         with:
           node-version: 22
       - name: Build image and verify it actually boots
-        run: node scripts/pipeline-image-test.mjs
+        run: node scripts/ci/pipeline-image-test.mjs
 
   # 发版门禁：tag（v*）必须与 package.json 版本一致，否则直接失败。
   # 这是「发版必须更新版本号」的强制保障——漏 bump 版本就推 tag 会在这一步被拦下。
@@ -98,7 +122,7 @@ jobs:
         id: verify
 
   build-push:
-    needs: [test, image-boot, i18n, contract]
+    needs: [test, image-boot, i18n, contract, quality]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -148,7 +172,7 @@ jobs:
           fi
           VERSION="${VERSION#v}"
           SHA="${{ github.sha }}"
-          node scripts/inject-version.mjs --version "${VERSION}" --repo "https://github.com/${{ github.repository }}"
+          node scripts/release/inject-version.mjs --version "${VERSION}" --repo "https://github.com/${{ github.repository }}"
           # 额外把 commit sha 也带上，便于追版本来源
           node -e "const fs=require('fs');const p='dashboard/version.json';const j=JSON.parse(fs.readFileSync(p));j.commit='${SHA}';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
           cat dashboard/version.json

@@ -18,9 +18,9 @@ import { FREEBUFF_AVAILABLE_MODELS } from './model.js'
 import { logger, runWithLogContext } from './util/log.js'
 
 /**
- * 账号级冷却里“被上游拒付/封禁”的那几种 code。
- * 控制台的可用判定与选号调度用**同一套** code：banned / rate_limited 等
- * 一旦命中，账号既不参与调度、也不该被显示成可用。
+ * 账号级冷却里"被上游拒付/封禁"的那几种 code.
+ * 控制台的可用判定与选号调度用同一套 code:banned / rate_limited 等
+ * 一旦命中,账号既不参与调度,也不该被显示成可用.
  */
 const UNAVAILABLE_COOLDOWN_CODES = new Set([
   'banned',
@@ -45,24 +45,24 @@ const SWITCHABLE_CODES = new Set([
 ])
 
 /**
- * 槽位占用类：不是账号故障，而是"槽位正在被用 / 声明刚被释放"。
- * 冷却它们 = 把可用账号钉死。两处判据必须一致（ensureSession 与
- * reacquireAfterGate）。见
+ * 槽位占用类:不是账号故障,而是"槽位正在被用 / 声明刚被释放".
+ * 冷却它们 = 把可用账号钉死.两处判据必须一致(ensureSession 与
+ * reacquireAfterGate).见
  * .agents/notes/implemented/bug-fix/2026-10-03-model-name-fallback-and-slot-no-cooldown.md
  */
 /**
- * 「槽位忙」类错误 —— 处置是**跳过该账号、不冷却**（等它空出来即可）。
+ * [槽位忙]类错误 —— 处置是跳过该账号,不冷却(等它空出来即可).
  *
- * ⚠️ `purchase_claim_released` **已从这里移出**（2026-10-04）。
+ *  purchase_claim_released 已从这里移出(2026-10-04).
  *
- * 它此前被当成"槽位忙、等一等就好"，于是**永远卡在同一个已作废的 instanceId 上**：
- * 实测连续三个模型全部返回该码（其中单价 0 的模型也失败 —— 证明卡的不是钱），
- * 直到 expiresAt 到期才"恢复"。
+ * 它此前被当成"槽位忙,等一等就好",于是永远卡在同一个已作废的 instanceId 上:
+ * 实测连续三个模型全部返回该码(其中单价 0 的模型也失败 —— 证明卡的不是钱),
+ * 直到 expiresAt 到期才"恢复".
  *
- * 官方真值（`orchestrator.js:208166-208176`）：这个码的处置是
- * **删掉那条作废的 claim → 换全新 instanceId → 重试一次**（`rotated`）。
- * 现在由 `SessionManager._admitUnlocked` 内部完成轮换，**不再向上暴露**
- * 给调度层当"跳过"处理。
+ * 官方真值(orchestrator.js:208166-208176):这个码的处置是
+ * 删掉那条作废的 claim → 换全新 instanceId → 重试一次(rotated).
+ * 现在由 SessionManager._admitUnlocked 内部完成轮换,不再向上暴露
+ * 给调度层当"跳过"处理.
  */
 const SLOT_BUSY_CODES = new Set([
   'purchase_capacity',
@@ -71,15 +71,15 @@ const SLOT_BUSY_CODES = new Set([
 ])
 
 /**
- * 本账号**有会话但这一小时内绑在别的模型上**（issue #24）。
+ * 本账号有会话但这一小时内绑在别的模型上(issue #24).
  *
- * 它不是账号故障：这条会话健康、已付费、仍在服务它自己的模型。只是"此刻
- * 不能接这个模型"。处置与槽位忙同类（跳过、不冷却），但**原因不同**——
- * 槽位忙是"等一等就空出来"，这个是"这一小时内都腾不出来"。
+ * 它不是账号故障:这条会话健康,已付费,仍在服务它自己的模型.只是"此刻
+ * 不能接这个模型".处置与槽位忙同类(跳过,不冷却),但原因不同——
+ * 槽位忙是"等一等就空出来",这个是"这一小时内都腾不出来".
  *
- * ⚠️ 必须**不冷却**：冷却一个仍在正常服务旧模型的账号，等于把可用的额度
- * 判死。上层换下一个账号即可；若池内所有账号都命中这个码，说明这一小时
- * 内每个号都各绑一个模型，此时应如实把原因返回给用户（见 no_available_account）。
+ *  必须不冷却:冷却一个仍在正常服务旧模型的账号,等于把可用的额度
+ * 判死.上层换下一个账号即可;若池内所有账号都命中这个码,说明这一小时
+ * 内每个号都各绑一个模型,此时应如实把原因返回给用户(见 no_available_account).
  */
 const PAID_WINDOW_BOUND_CODES = new Set(['paid_window_model_mismatch'])
 
@@ -98,48 +98,48 @@ const DEFAULT_COOLDOWN_MS = 60_000
 const BANNED_COOLDOWN_MS = DAY_MS
 
 /**
- * 账号级 chat 并发信号量（公平 FIFO + 有界等待）：
- * 默认容量 1（一个账号同一时间只处理一个 chat，避免上游会话不稳定时
- * 并发互相干扰/顶号）；可在控制台「负载均衡」调大（一个账号可同时
- * 转发多个 SSE 响应流，实测同一 instanceId 支持并发 chat）。
- * timeoutMs=0 表示无限等待；持锁者受 streamIdleTimeoutSec / 各 HTTP 阶段
- * 超时约束，无限等待在实际运行中是有上界的。
+ * 账号级 chat 并发信号量(公平 FIFO + 有界等待):
+ * 默认容量 1(一个账号同一时间只处理一个 chat,避免上游会话不稳定时
+ * 并发互相干扰/顶号);可在控制台[负载均衡]调大(一个账号可同时
+ * 转发多个 SSE 响应流,实测同一 instanceId 支持并发 chat).
+ * timeoutMs=0 表示无限等待;持锁者受 streamIdleTimeoutSec / 各 HTTP 阶段
+ * 超时约束,无限等待在实际运行中是有上界的.
  */
 class ChatMutex {
   /**
-   * @param {number} [capacity] 同一账号最大并发 chat 数（>=1）
+   * @param {number} [capacity] 同一账号最大并发 chat 数(>=1)
    */
   constructor(capacity = 1) {
     this._capacity = Math.max(1, Math.floor(capacity) || 1)
-    /** 当前在途 chat 数（含已授予的等待者）。 */
+    /** 当前在途 chat 数(含已授予的等待者). */
     this._held = 0
     /** @type {Array<{resolve: Function, reject: Function, timer: NodeJS.Timeout | null}>} */
     this._queue = []
   }
 
-  /** 是否已达到并发上限（不再有可用槽位）。 */
+  /** 是否已达到并发上限(不再有可用槽位). */
   get busy() {
     return this._held >= this._capacity
   }
 
-  /** 当前在途 chat 数（监控用）。 */
+  /** 当前在途 chat 数(监控用). */
   get inFlight() {
     return this._held
   }
 
-  /** 排队等待槽位的请求数（监控/空闲释放判断用）。 */
+  /** 排队等待槽位的请求数(监控/空闲释放判断用). */
   get queued() {
     return this._queue.length
   }
 
-  /** 当前并发上限（监控用）。 */
+  /** 当前并发上限(监控用). */
   get capacity() {
     return this._capacity
   }
 
   /**
-   * 动态调整并发上限（控制台保存后立即生效）。已授予的在途不受影响；
-   * 调大时立即把空出的槽位授予排队的等待者。
+   * 动态调整并发上限(控制台保存后立即生效).已授予的在途不受影响;
+   * 调大时立即把空出的槽位授予排队的等待者.
    * @param {number} n
    */
   setCapacity(n) {
@@ -185,8 +185,8 @@ class ChatMutex {
   }
 
   /**
-   * 全部断开重连时调用：清空在途计数并立即放行所有排队等待者
-   * （等待者会在 chat 流程里重新检查 session 并 re-admit，不会卡死）。
+   * 全部断开重连时调用:清空在途计数并立即放行所有排队等待者
+   * (等待者会在 chat 流程里重新检查 session 并 re-admit,不会卡死).
    */
   reset() {
     this._held = 0
@@ -215,20 +215,20 @@ class ChatMutex {
 }
 
 /**
- * Multi-account pool. 账号以「account key」标识：
- * key = Freebuff 用户 id（优先），无 id（历史数据）回落邮箱。
- * GitHub / Google 登录同一邮箱但 id 不同 → 两个独立账号，互不覆盖。
+ * Multi-account pool. 账号以[account key]标识:
+ * key = Freebuff 用户 id(优先),无 id(历史数据)回落邮箱.
+ * GitHub / Google 登录同一邮箱但 id 不同 → 两个独立账号,互不覆盖.
  */
 /**
- * 对外响应里的失败明细：**只保留 code**，去掉 key / email / message。
+ * 对外响应里的失败明细:只保留 code,去掉 key / email / message.
  *
- * 为什么：429 响应会被下游 Agent 客户端原样转发、落进别人的日志与报错堆栈。
- * 带上 `email` 等于把整个账号池的邮箱清单发给调用方（PII 泄露）；
- * 带上 `key`（凭据文件名/账号 id）等于泄露凭据目录结构。
- * 管理员要看明细请用控制台（登录后）或服务端日志 —— 那里是完整且脱敏的。
+ * 为什么:429 响应会被下游 Agent 客户端原样转发,落进别人的日志与报错堆栈.
+ * 带上 email 等于把整个账号池的邮箱清单发给调用方(PII 泄露);
+ * 带上 key(凭据文件名/账号 id)等于泄露凭据目录结构.
+ * 管理员要看明细请用控制台(登录后)或服务端日志 —— 那里是完整且脱敏的.
  *
- * 保留 code 是因为**错误码分类**依赖它：全 `banned`、全 `freebucks_exhausted`、
- * 全 `session_budget_exhausted` 会得出不同的顶层 code 与建议动作。
+ * 保留 code 是因为错误码分类依赖它:全 banned,全 freebucks_exhausted,
+ * 全 session_budget_exhausted 会得出不同的顶层 code 与建议动作.
  * @param {Array<{ code?: string }>} failures
  * @returns {Array<{ code: string }>}
  */
@@ -237,7 +237,7 @@ function sanitizeFailuresForClient(failures) {
 }
 
 /**
- * 失败原因聚合（code → 数量），给调用方一个"为什么全挂了"的可读概览。
+ * 失败原因聚合(code → 数量),给调用方一个"为什么全挂了"的可读概览.
  * @param {Array<{ code?: string }>} failures
  * @returns {Record<string, number>}
  */
@@ -251,46 +251,46 @@ function countReasons(failures) {
 }
 
 /**
- * 把「Freebucks 这笔账」聚合成**纯数值**，带进 429 错误体。
+ * 把[Freebucks 这笔账]聚合成纯数值,带进 429 错误体.
  *
- * 为什么要它（2026-10-04 真实部署）：用户刷新看到余额 25，发一个请求失败后
- * 再发就一直 429 —— 错误只说 `no_available_account` / `freebucks_exhausted`，
- * 既不告诉**这次花了多少**、也不说**什么时候恢复**。用户因此判断不了"是账号
- * 坏了还是额度没了"，只能反复重试（每试一次都在烧钱）。
+ * 为什么要它(2026-10-04 真实部署):用户刷新看到余额 25,发一个请求失败后
+ * 再发就一直 429 —— 错误只说 no_available_account / freebucks_exhausted,
+ * 既不告诉这次花了多少,也不说什么时候恢复.用户因此判断不了"是账号
+ * 坏了还是额度没了",只能反复重试(每试一次都在烧钱).
  *
- * 根子在语义：**一次 admit = 买断一整小时**，当场扣掉整小时单价，不是按用量
- * 扣。所以"25"是每日池的上限而非余额，一个请求就能打光 —— 这个机制不写进
- * 回执，用户永远只能靠猜。
+ * 根子在语义:一次 admit = 买断一整小时,当场扣掉整小时单价,不是按用量
+ * 扣.所以"25"是每日池的上限而非余额,一个请求就能打光 —— 这个机制不写进
+ * 回执,用户永远只能靠猜.
  *
- * ⚠️ 脱敏纪律（与 sanitizeFailuresForClient / maskEmail 同源）：**只带聚合
- * 数值，绝不带 key / email / 账号标识** —— 429 响应会被下游整段转发与打日志，
- * 带标识等于泄露账号池规模。
+ *  脱敏纪律(与 sanitizeFailuresForClient / maskEmail 同源):只带聚合
+ * 数值,绝不带 key / email / 账号标识 —— 429 响应会被下游整段转发与打日志,
+ * 带标识等于泄露账号池规模.
  *
  * @param {Array<{ freebucks?: object }>} failures
- * @returns {object | null} 没有任何额度信息时返回 null（不塞空壳字段）
+ * @returns {object | null} 没有任何额度信息时返回 null(不塞空壳字段)
  */
 function summarizeFreebucks(failures, ctx = null, model = null) {
   const rows = (failures || []).filter(
     (f) => f?.freebucks && typeof f.freebucks === 'object',
   )
   /**
-   * 失败项上没挂账时，**回查 runtime 现取**。
+   * 失败项上没挂账时,回查 runtime 现取.
    *
-   * 只在 failures 里挂是不够的（实测漏了）：额度拦截会走多条路径——
-   * 选号闸门（`freebucksFor` 判定 affordable=false）、admit 失败后的
-   * 通用 err 分支、冷却分支…… 只在其中一条挂上，用户换个触发路径
-   * 就又拿不到数字。这里以 failures 为准，缺失时按 key 现取一份，
-   * 保证**任何**触发路径下 429 都带着这笔账。
+   * 只在 failures 里挂是不够的(实测漏了):额度拦截会走多条路径——
+   * 选号闸门(freebucksFor 判定 affordable=false),admit 失败后的
+   * 通用 err 分支,冷却分支...... 只在其中一条挂上,用户换个触发路径
+   * 就又拿不到数字.这里以 failures 为准,缺失时按 key 现取一份,
+   * 保证任何触发路径下 429 都带着这笔账.
    */
   if (!rows.length && ctx && typeof ctx.get === 'function' && model) {
     /**
-     * ⚠️ 必须用**目录 key** 查价，不能拿可读名。
+     *  必须用目录 key 查价,不能拿可读名.
      *
-     * `freebucksFor()` 按目录 key（m-096e75164d）在 prices 表里取值；
-     * 传可读名（"DeepSeek V4.1 Flash"）取不到 → price=null 被当成
-     * "不计费模型"，于是回执里出现 `price 0 / dailyLimit 0` 这种假数字
-     * （实测踩到）。选号闸门那边传的是已归一化的 key，所以这里也必须
-     * 走同一个 `resolveModelAlias()` 口径（可读名 → 目录 key）。
+     * freebucksFor() 按目录 key(m-096e75164d)在 prices 表里取值;
+     * 传可读名("DeepSeek V4.1 Flash")取不到 → price=null 被当成
+     * "不计费模型",于是回执里出现 price 0 / dailyLimit 0 这种假数字
+     * (实测踩到).选号闸门那边传的是已归一化的 key,所以这里也必须
+     * 走同一个 resolveModelAlias() 口径(可读名 → 目录 key).
      */
     const modelKey =
       typeof ctx.resolveModelAlias === 'function'
@@ -320,17 +320,17 @@ function summarizeFreebucks(failures, ctx = null, model = null) {
   }
   if (!rows.length) return null
   /**
-   * ⚠️ **逐账号列出各自的账**，不再只报"最差那个"。
+   *  逐账号列出各自的账,不再只报"最差那个".
    *
-   * 旧实现取"余额最小"的一份当代表 —— 多账号池下这会**直接误导用户**：
-   * 实测用户看到页面显示 A 号有 10 FB，而 429 的错误体里报
-   * `balance 0 / dailyLimit 25`（那是 B 号的账），于是"明明有钱却说额度不足"。
-   * 每个账号的额度是独立的，错配任何一个都会让人往错方向查。
+   * 旧实现取"余额最小"的一份当代表 —— 多账号池下这会直接误导用户:
+   * 实测用户看到页面显示 A 号有 10 FB,而 429 的错误体里报
+   * balance 0 / dailyLimit 25(那是 B 号的账),于是"明明有钱却说额度不足".
+   * 每个账号的额度是独立的,错配任何一个都会让人往错方向查.
    *
-   * 所以给出 `accounts: [{price, balance, dailyRemaining, dailyLimit,
-   * resetAt, reason}]`，一一对应 failures（同一个顺序）。
-   * 同时保留顶层平铺字段（取最差那份）**仅为兼容既有消费方**，
-   * 并在注释里标明它是汇总值而非某个具体账号。
+   * 所以给出 accounts: [{price, balance, dailyRemaining, dailyLimit,
+   * resetAt, reason}],一一对应 failures(同一个顺序).
+   * 同时保留顶层平铺字段(取最差那份)仅为兼容既有消费方,
+   * 并在注释里标明它是汇总值而非某个具体账号.
    */
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null)
   const accounts = rows.map((r) => ({
@@ -341,7 +341,7 @@ function summarizeFreebucks(failures, ctx = null, model = null) {
     resetAt: r.freebucks?.resetAt || null,
     reason: r.freebucks?.reason || null,
   }))
-  // 汇总（兼容字段）：取余额/日池最小的那份 —— 它最先卡住请求
+  // 汇总(兼容字段):取余额/日池最小的那份 —— 它最先卡住请求
   let worst = null
   for (const a of accounts) {
     if (!worst) { worst = a; continue }
@@ -358,8 +358,8 @@ function summarizeFreebucks(failures, ctx = null, model = null) {
     resetAt: worst?.resetAt || null,
     reason: worst?.reason || null,
     /**
-     * 一句话把机制说清：**买断制**，一次请求扣整小时单价。
-     * 用户看到"刚才还有 25"却失败，缺的正是这句话。
+     * 一句话把机制说清:买断制,一次请求扣整小时单价.
+     * 用户看到"刚才还有 25"却失败,缺的正是这句话.
      */
     note:
       'One admit buys a whole hour: the model\'s hourly price is charged upfront, ' +
@@ -368,8 +368,8 @@ function summarizeFreebucks(failures, ctx = null, model = null) {
 }
 
 /**
- * 邮箱脱敏：保留域名、掩码本地部分（`a***e@gmail.com`）。
- * 日志与 UI 展示用 —— 排障要能区分"哪个号"，但不能白给完整地址。
+ * 邮箱脱敏:保留域名,掩码本地部分(ae@gmail.com).
+ * 日志与 UI 展示用 —— 排障要能区分"哪个号",但不能白给完整地址.
  * @param {string} [email]
  * @returns {string}
  */
@@ -390,27 +390,27 @@ export class AccountRuntimes {
   /**
    * @param {import('./config.js').ProxyConfig} config
    * @param {{ getAccountConcurrency?: () => number, getSchedulingMode?: () => 'sticky' | 'spread', getSessionSettings?: () => { idleReleaseSec?: number, maxNewSessionsPerRequest?: number } | null, getCustomModels?: () => { id: string, pool?: string, agentId?: string, fallbackAgentId?: string, displayName?: string, multimodal?: boolean, note?: string }[] }} [opts]
-   *   getAccountConcurrency: 每个账号的并发上限来源（控制台设置/配置），
-   *   默认取 config.limits.accountMaxConcurrency。
-   *   getSchedulingMode: 账号调度模式来源（控制台设置），默认 'sticky'。
-   *   sticky = 并发上限是**溢出**阈值（满员先排队）；spread = 并发优先（满员即换号）。
-   *   getCustomModels: 前端「模型管理」的自定义模型列表（覆盖内置目录），
-   *   影响 agent id 解析。
+   *   getAccountConcurrency: 每个账号的并发上限来源(控制台设置/配置),
+   *   默认取 config.limits.accountMaxConcurrency.
+   *   getSchedulingMode: 账号调度模式来源(控制台设置),默认 'sticky'.
+   *   sticky = 并发上限是溢出阈值(满员先排队);spread = 并发优先(满员即换号).
+   *   getCustomModels: 前端[模型管理]的自定义模型列表(覆盖内置目录),
+   *   影响 agent id 解析.
    */
   constructor(config, opts = {}) {
     this.config = config
     this.dir = resolveCredentialsDir(config)
     /**
-     * 上游会话句柄的持久化索引（/data/sessions.json）：admit/释放都落盘，
-     * 进程退出/换容器后仍能凭 instanceId 去 DELETE 释放槽位；释放失败的句柄也
-     * 留在这里等下次清理（绝不丢 = 绝不留下无法寻址的计费孤儿）。
+     * 上游会话句柄的持久化索引(/data/sessions.json):admit/释放都落盘,
+     * 进程退出/换容器后仍能凭 instanceId 去 DELETE 释放槽位;释放失败的句柄也
+     * 留在这里等下次清理(绝不丢 = 绝不留下无法寻址的计费孤儿).
      */
     this.handleStore = new SessionHandleStore(resolveSessionIndexPath(config))
     /**
-     * 账号运行状态的持久化账本（/data/account-state.json）：加入/封禁时间、
-     * 请求数、最近使用、冷却、Freebucks 余额与单价、每日额度、最近探测结果。
-     * 这些原本只在内存里，一次重启就全丢——重启后控制台分不出"干净的未用号"
-     * 和"已经打废的号"，且 freebucks 归零会让"买不起就别 admit"的闸门失效。
+     * 账号运行状态的持久化账本(/data/account-state.json):加入/封禁时间,
+     * 请求数,最近使用,冷却,Freebucks 余额与单价,每日额度,最近探测结果.
+     * 这些原本只在内存里,一次重启就全丢——重启后控制台分不出"干净的未用号"
+     * 和"已经打废的号",且 freebucks 归零会让"买不起就别 admit"的闸门失效.
      */
     this.accountState = new AccountStateStore(resolveAccountStatePath(config))
     this._getAccountConcurrency =
@@ -418,10 +418,10 @@ export class AccountRuntimes {
         ? opts.getAccountConcurrency
         : () => this.config.limits.accountMaxConcurrency || 1
     /**
-     * 账号调度模式来源（控制台「账号调度」实时生效）：'sticky'（默认）| 'spread'。
-     *   sticky = 并发上限是**溢出**阈值：满员先在原账号有界排队，超时才换号；
-     *   spread = 并发优先：空闲账号排前面，满员立即溢出（不为并发干等）。
-     * 缺省 / 非法值一律回落 sticky——**升级不改变既有行为**。
+     * 账号调度模式来源(控制台[账号调度]实时生效):'sticky'(默认)| 'spread'.
+     *   sticky = 并发上限是溢出阈值:满员先在原账号有界排队,超时才换号;
+     *   spread = 并发优先:空闲账号排前面,满员立即溢出(不为并发干等).
+     * 缺省 / 非法值一律回落 sticky——升级不改变既有行为.
      */
     this._getSchedulingMode =
       typeof opts.getSchedulingMode === 'function'
@@ -432,8 +432,8 @@ export class AccountRuntimes {
         ? opts.getCustomModels
         : () => []
     /**
-     * 前端「额度保护」设置来源（settings.json，实时生效）：
-     * idleReleaseSec / maxNewSessionsPerRequest。缺省回落 config.yaml。
+     * 前端[额度保护]设置来源(settings.json,实时生效):
+     * idleReleaseSec / maxNewSessionsPerRequest.缺省回落 config.yaml.
      */
     this._getSessionSettings =
       typeof opts.getSessionSettings === 'function'
@@ -449,47 +449,47 @@ export class AccountRuntimes {
     this._rr = 0
     /** Serialize account selection + session admission on cold start. */
     this._acquireMutex = Promise.resolve()
-    /** 账号级 chat 串行化锁（key → ChatMutex），跨 runtime 重建保持同一账号互斥。 */
+    /** 账号级 chat 串行化锁(key → ChatMutex),跨 runtime 重建保持同一账号互斥. */
     this.chatLocks = new Map()
     this._lastSuccessKey = null
     /** Per-account success counters (in-memory, for load-balance visibility). */
     this.stats = { total: 0, byKey: new Map() }
     /**
-     * 每个账号最近一次被选中/成功的时间戳（粘性调度的核心输入）：
-     * 优先继续用刚用过的账号，而不是轮换到下一个健康账号。
+     * 每个账号最近一次被选中/成功的时间戳(粘性调度的核心输入):
+     * 优先继续用刚用过的账号,而不是轮换到下一个健康账号.
      * @type {Map<string, number>}
      */
     this._lastUsedAt = new Map()
     /**
-     * 「已选中、但还没拿到 chat 锁」的预留数（key → 计数）。
+     * [已选中,但还没拿到 chat 锁]的预留数(key → 计数).
      *
-     * 为什么必须有它：选号（candidateKeys）发生在**拿 chat 锁之前**，此刻
-     * `chatLock.inFlight` 还是 0。于是 N 个并发请求会**同时**看到"这个账号很空"，
-     * 全部选中同一个账号——spread（并发优先）模式形同虚设（smoke 的
-     * fb-proxy-spread 用例就是这么抓到的：4 路并发全挤在 A 上）。
-     * 预留数让"刚被选中、马上要占用一个槽位"的请求也能被其他请求看见。
+     * 为什么必须有它:选号(candidateKeys)发生在拿 chat 锁之前,此刻
+     * chatLock.inFlight 还是 0.于是 N 个并发请求会同时看到"这个账号很空",
+     * 全部选中同一个账号——spread(并发优先)模式形同虚设(smoke 的
+     * fb-proxy-spread 用例就是这么抓到的:4 路并发全挤在 A 上).
+     * 预留数让"刚被选中,马上要占用一个槽位"的请求也能被其他请求看见.
      * @type {Map<string, number>}
      */
     this._reserved = new Map()
     /**
-     * 预留的兜底释放定时器：请求中途异常退出（选号后未走完 chat 流程）也不该
-     * 把账号永久标记为"满"。超时自动归还，绝不会泄漏成"账号永远满员"。
+     * 预留的兜底释放定时器:请求中途异常退出(选号后未走完 chat 流程)也不该
+     * 把账号永久标记为"满".超时自动归还,绝不会泄漏成"账号永远满员".
      * @type {Map<string, NodeJS.Timeout>}
      */
     this._reserveTimers = new Map()
-    // 必须在**所有**上述容器（cooldowns/stats/_lastUsedAt）初始化之后回灌，
-    // 否则账本里存着的计数/冷却没有地方放（早先放在构造函数开头，smoke 直接
-    // 以 "Cannot read properties of undefined" 抓到）。
+    // 必须在所有上述容器(cooldowns/stats/_lastUsedAt)初始化之后回灌,
+    // 否则账本里存着的计数/冷却没有地方放(早先放在构造函数开头,smoke 直接
+    // 以 "Cannot read properties of undefined" 抓到).
     this._restoreAccountState()
   }
 
   /**
-   * 在所有已知 runtime 的目录持有者上依次尝试解析，返回第一个非空结果。
+   * 在所有已知 runtime 的目录持有者上依次尝试解析,返回第一个非空结果.
    *
-   * 为什么抽出来：目录表要**双向**用（key → 显示名 / key → 可读 id /
-   * 显示名 → key），每种都各写一遍遍历会分成三份几乎相同的代码 ——
-   * 而它们的失效条件完全一样（没抓过目录 / 该行不在这份目录里）。
-   * 单个 runtime 抛错不影响其它账号（多账号池里目录是逐账号持有的）。
+   * 为什么抽出来:目录表要双向用(key → 显示名 / key → 可读 id /
+   * 显示名 → key),每种都各写一遍遍历会分成三份几乎相同的代码 ——
+   * 而它们的失效条件完全一样(没抓过目录 / 该行不在这份目录里).
+   * 单个 runtime 抛错不影响其它账号(多账号池里目录是逐账号持有的).
    * @param {(catalog: any) => string | null | undefined} fn
    * @returns {string | null}
    */
@@ -506,17 +506,17 @@ export class AccountRuntimes {
   }
 
   /**
-   * 目录 key / 上游 legacy id / 可读名 → **人类可读显示名**。
+   * 目录 key / 上游 legacy id / 可读名 → 人类可读显示名.
    *
-   * 这是**展示侧的公开入口**（web 层要显示模型名时用它，不要自己遍历
-   * runtime 的 catalog —— 那是重复实现，曾出现过两份口径不一致）。
+   * 这是展示侧的公开入口(web 层要显示模型名时用它,不要自己遍历
+   * runtime 的 catalog —— 那是重复实现,曾出现过两份口径不一致).
    *
-   * 上游回执侧（session.model / rateLimitsByModel / prices）用的全是目录 key，
-   * 而会话清单（desktopPurchases[].model）用的是**上游 legacy id**，
-   * 两种形式都要能显示成人能认的名字 —— 所以内部先做归一（`keyForName`
-   * 已支持三种形式），再查 displayName。
+   * 上游回执侧(session.model / rateLimitsByModel / prices)用的全是目录 key,
+   * 而会话清单(desktopPurchases[].model)用的是上游 legacy id,
+   * 两种形式都要能显示成人能认的名字 —— 所以内部先做归一(keyForName
+   * 已支持三种形式),再查 displayName.
    *
-   * 取不到就返回 null（调用方回落原值，绝不因为取不到名字就让整行渲染失败）。
+   * 取不到就返回 null(调用方回落原值,绝不因为取不到名字就让整行渲染失败).
    * @param {string} key
    * @returns {string | null}
    */
@@ -526,12 +526,12 @@ export class AccountRuntimes {
   }
 
   /**
-   * 目录 key（m-00032eaeec）→ 人类可读显示名（MiMo 2.6 Flash）。
+   * 目录 key(m-00032eaeec)→ 人类可读显示名(MiMo 2.6 Flash).
    *
-   * 上游回执侧（session.model / rateLimitsByModel / prices）用的全是目录 key，
-   * 控制台要显示人能认的名字。目录行自带 displayName，抓目录时就缓存在
-   * CatalogHolder.displayNames 里；取不到就返回 null（调用方回落原 key，
-   * 绝不因为取不到名字就让整行渲染失败）。
+   * 上游回执侧(session.model / rateLimitsByModel / prices)用的全是目录 key,
+   * 控制台要显示人能认的名字.目录行自带 displayName,抓目录时就缓存在
+   * CatalogHolder.displayNames 里;取不到就返回 null(调用方回落原 key,
+   * 绝不因为取不到名字就让整行渲染失败).
    * @param {string} key
    * @returns {string | null}
    */
@@ -539,15 +539,15 @@ export class AccountRuntimes {
     if (typeof key !== 'string' || !key) return null
     const fromCatalog = this._fromCatalogs((cat) => cat?.displayNameForKey?.(key))
     if (fromCatalog) return fromCatalog
-    // ⚠️ 兜底：实时目录未抓取时（服务刚启动、或该 runtime 的 catalog 尚未
-    // fetch），displayNameForKey 一律返回 null —— 于是总览的额度列、模型列
-    // 会渲染成裸目录 key（m-096e75164d），用户根本认不出是哪个模型。
+    //  兜底:实时目录未抓取时(服务刚启动,或该 runtime 的 catalog 尚未
+    // fetch),displayNameForKey 一律返回 null —— 于是总览的额度列,模型列
+    // 会渲染成裸目录 key(m-096e75164d),用户根本认不出是哪个模型.
     //
-    // 实测（2026-10-03）：账号池额度键全是 m-xxx，而 /api/overview 的
-    // modelNames 为 null，界面显示裸 key。
+    // 实测(2026-10-03):账号池额度键全是 m-xxx,而 /api/overview 的
+    // modelNames 为 null,界面显示裸 key.
     //
-    // 兜底手法与 _modelCatalogId 一致：用目录 key 的 legacyDigest 反查内置
-    // 静态表，命中则取其 displayName。不做模糊匹配。
+    // 兜底手法与 _modelCatalogId 一致:用目录 key 的 legacyDigest 反查内置
+    // 静态表,命中则取其 displayName.不做模糊匹配.
     const digest = this._fromCatalogs((cat) => cat?.digestForKey?.(key))
     if (digest) {
       for (const m of FREEBUFF_AVAILABLE_MODELS) {
@@ -560,11 +560,11 @@ export class AccountRuntimes {
   }
 
   /**
-   * 目录 key（m-00032eaeec）→ **人类可读目录 id**（deepseek/deepseek-v4-flash）。
+   * 目录 key(m-00032eaeec)→ 人类可读目录 id(deepseek/deepseek-v4-flash).
    *
-   * 上游目录只列 key 与 legacy 摘要，不列可读 id；所以先用摘要命中目录行，
-   * 再拿摘要去内置 catalog 反查。查不到返回 null —— 上游新模型（内置目录尚未
-   * 收录）本来就只有 key，调用方自行回落。
+   * 上游目录只列 key 与 legacy 摘要,不列可读 id;所以先用摘要命中目录行,
+   * 再拿摘要去内置 catalog 反查.查不到返回 null —— 上游新模型(内置目录尚未
+   * 收录)本来就只有 key,调用方自行回落.
    * @param {string} key
    * @returns {string | null}
    */
@@ -579,11 +579,11 @@ export class AccountRuntimes {
   }
 
   /**
-   * 人类可读显示名（MiMo 2.6 Flash）→ 目录 key（m-00032eaeec）。
+   * 人类可读显示名(MiMo 2.6 Flash)→ 目录 key(m-00032eaeec).
    *
-   * 下游 Agent 手里只有 `/v1/models` 的 id 与 display_name，照着 display_name
-   * 填 `model` 是很自然的用法；而上游只认 key/句柄。这里把显示名落回 key，
-   * 再走既有的 handleFor 映射。查不到返回 null（不改变原值）。
+   * 下游 Agent 手里只有 /v1/models 的 id 与 display_name,照着 display_name
+   * 填 model 是很自然的用法;而上游只认 key/句柄.这里把显示名落回 key,
+   * 再走既有的 handleFor 映射.查不到返回 null(不改变原值).
    * @param {string} name
    * @returns {string | null}
    */
@@ -593,12 +593,12 @@ export class AccountRuntimes {
   }
 
   /**
-   * 把一组上游模型标识（目录 key）补全成「对外展示三件套」：
-   * `{ key, displayName, catalogId }`。
+   * 把一组上游模型标识(目录 key)补全成[对外展示三件套]:
+   * { key, displayName, catalogId }.
    *
-   * `/v1/models` 与 `/api/models/upstream` 都要这三样：key 是服务端寻址真值，
-   * displayName 给人看，catalogId 是人类可读的请求口径。三者一起下发，
-   * 下游照着任何一个填 `model` 都能被解析回去（见 proxy.js 的 chat 入口解析）。
+   * /v1/models 与 /api/models/upstream 都要这三样:key 是服务端寻址真值,
+   * displayName 给人看,catalogId 是人类可读的请求口径.三者一起下发,
+   * 下游照着任何一个填 model 都能被解析回去(见 proxy.js 的 chat 入口解析).
    * @param {string[]} keys
    * @returns {{ key: string, displayName: string | null, catalogId: string | null }[]}
    */
@@ -616,15 +616,15 @@ export class AccountRuntimes {
   }
 
   /**
-   * **模型清单（权威）**：聚合所有账号已抓取的目录行。
+   * 模型清单(权威):聚合所有账号已抓取的目录行.
    *
-   * 为什么不能用 modelAliases(rateLimitsByModel) 代替：
+   * 为什么不能用 modelAliases(rateLimitsByModel) 代替:
    * 会话回执的 rateLimitsByModel 只是"今日给了会话额度的子集" —— 实测同一份
-   * session 响应里目录有 13 行、rateLimits 只有 6 个键。把模型清单建在那上面，
-   * 表现就是「账号额度是满的，但一个模型都没有」。
+   * session 响应里目录有 13 行,rateLimits 只有 6 个键.把模型清单建在那上面,
+   * 表现就是[账号额度是满的,但一个模型都没有].
    *
-   * 为什么取并集：目录是**逐账号**持有的（每个 runtime 各抓一次），任一账号
-   * 抓失败都不该让清单退化成空。并集按 key 去重，同 key 取第一条。
+   * 为什么取并集:目录是逐账号持有的(每个 runtime 各抓一次),任一账号
+   * 抓失败都不该让清单退化成空.并集按 key 去重,同 key 取第一条.
    *
    * @returns {{ rows: any[], issuedAt: number | null, version: string | null, accountCount: number, readyCount: number }}
    */
@@ -655,14 +655,14 @@ export class AccountRuntimes {
   }
 
   /**
-   * 确保所有账号都抓过目录（模型清单的前置条件）。
+   * 确保所有账号都抓过目录(模型清单的前置条件).
    *
-   * 为什么需要：目录是**懒加载**的（第一次用到才抓），而 `/v1/models` 常常是
-   * 服务启动后的第一个请求 —— 那一刻 `catalogRows()` 必然是空的，清单会退化成
-   * 「没有任何可用模型」。所以清单接口必须先补一次抓取。
+   * 为什么需要:目录是懒加载的(第一次用到才抓),而 /v1/models 常常是
+   * 服务启动后的第一个请求 —— 那一刻 catalogRows() 必然是空的,清单会退化成
+   * [没有任何可用模型].所以清单接口必须先补一次抓取.
    *
-   * 逐账号 best-effort：任一账号失败不影响其它账号（多账号池里不同号的出口
-   * 信誉不同，抓不通是常态）。
+   * 逐账号 best-effort:任一账号失败不影响其它账号(多账号池里不同号的出口
+   * 信誉不同,抓不通是常态).
    *
    * @param {{ force?: boolean }} [opts]
    * @returns {Promise<{ ok: number, failed: number }>}
@@ -672,13 +672,13 @@ export class AccountRuntimes {
     let failed = 0
     const jobs = []
     /**
-     * ⚠️ **冷启动时 `byKey` 是空的**（runtime 懒创建），直接遍历它等于"一次都不抓"
-     * —— 实测（2026-10-04 容器端到端）：新部署第一个请求拿不到目录 →
-     * 全部模型被判 `model_not_allowed`（400）。
+     *  冷启动时 byKey 是空的(runtime 懒创建),直接遍历它等于"一次都不抓"
+     * —— 实测(2026-10-04 容器端到端):新部署第一个请求拿不到目录 →
+     * 全部模型被判 model_not_allowed(400).
      *
-     * 所以先按**凭据文件列表**把 runtime 建出来（`this.get()` 会懒创建），
-     * 再抓。这与"零自动探测"不冲突：调用方只在**用户正在发真实请求**时走到这里
-     * （目录是该请求的必要前置，admission 要用目录句柄）。
+     * 所以先按凭据文件列表把 runtime 建出来(this.get() 会懒创建),
+     * 再抓.这与"零自动探测"不冲突:调用方只在用户正在发真实请求时走到这里
+     * (目录是该请求的必要前置,admission 要用目录句柄).
      */
     try {
       for (const row of this.list()) this.get(row.key)
@@ -705,20 +705,20 @@ export class AccountRuntimes {
   }
 
   /**
-   * 账号池此刻的**额度与单价**（目录 key → 信息），逐账号取并集。
+   * 账号池此刻的额度与单价(目录 key → 信息),逐账号取并集.
    *
-   * 与 catalogRows() 分工：清单来自目录，额度/单价来自 session 回执。
-   * 两者是三张不同的表（目录 13 行 / prices 17 键 / rateLimits 6 键），
-   * 合并展示但**不互相顶替**。
+   * 与 catalogRows() 分工:清单来自目录,额度/单价来自 session 回执.
+   * 两者是三张不同的表(目录 13 行 / prices 17 键 / rateLimits 6 键),
+   * 合并展示但不互相顶替.
    *
    * @returns {{ rateLimits: Map<string, any>, prices: Map<string, number>, accessTier: string | null }}
    */
   catalogQuota() {
     /**
-     * ⚠️ 两张表都用**普通对象**，不用 Map。
-     * 实测：把这批数据以 Map 形式传进 model.js 并在循环里取值，会出现
-     * "第一条有值、批量全 undefined" 的不可复现行为（同一份数据换成普通
-     * 对象下标取值则全部正确）。统一用对象口径，行为确定。
+     *  两张表都用普通对象,不用 Map.
+     * 实测:把这批数据以 Map 形式传进 model.js 并在循环里取值,会出现
+     * "第一条有值,批量全 undefined" 的不可复现行为(同一份数据换成普通
+     * 对象下标取值则全部正确).统一用对象口径,行为确定.
      */
     /** @type {Record<string, any>} */
     const rateLimits = {}
@@ -729,7 +729,7 @@ export class AccountRuntimes {
       const snap = rt?.sessions?.getSnapshot?.()
       const byModel = snap?.quota?.byModel || {}
       for (const [id, info] of Object.entries(byModel)) {
-        // 同 key 取 limit 更大的那份（多账号池里不同号被授予的额度不同）
+        // 同 key 取 limit 更大的那份(多账号池里不同号被授予的额度不同)
         const cur = rateLimits[id]
         if (!cur || (info?.limit ?? 0) > (cur?.limit ?? 0)) rateLimits[id] = info
       }
@@ -737,8 +737,8 @@ export class AccountRuntimes {
       for (const [id, v] of Object.entries(p)) {
         if (Number.isFinite(v) && prices[id] === undefined) prices[id] = Number(v)
       }
-      // accessTier 在 snapshot.session 上（不是 snapshot 顶层）——
-      // _apply 里写的是 this.session = { status, ..., accessTier }。
+      // accessTier 在 snapshot.session 上(不是 snapshot 顶层)——
+      // _apply 里写的是 this.session = { status, ..., accessTier }.
       const tier = snap?.session?.accessTier || snap?.accessTier
       if (!accessTier && (tier === 'full' || tier === 'limited')) accessTier = tier
     }
@@ -746,17 +746,17 @@ export class AccountRuntimes {
   }
 
   /**
-   * 把客户端给的 `model` 值归一到**调度口径**。
+   * 把客户端给的 model 值归一到调度口径.
    *
-   * `/v1/models` 现在对外给的是可读 id（catalogId 或 displayName），所以下游
-   * 有三条合法写法都可能到这儿：
+   * /v1/models 现在对外给的是可读 id(catalogId 或 displayName),所以下游
+   * 有三条合法写法都可能到这儿:
    *
-   *   - 目录 key（m-096e75164d）—— 老客户端/我们自己下发的 `freebuff_key`，原样保留；
-   *   - 人类可读 id（deepseek/deepseek-v4-flash）—— 原样保留（调度与句柄映射都认它）；
-   *   - 显示名（'Solar Pro 4'）—— 内置 catalog 里没有这个写法，必须落回目录 key，
-   *     否则白名单会拒、会话也会绑错模型。
+   *   - 目录 key(m-096e75164d)—— 老客户端/我们自己下发的 freebuff_key,原样保留;
+   *   - 人类可读 id(deepseek/deepseek-v4-flash)—— 原样保留(调度与句柄映射都认它);
+   *   - 显示名('Solar Pro 4')—— 内置 catalog 里没有这个写法,必须落回目录 key,
+   *     否则白名单会拒,会话也会绑错模型.
    *
-   * 查不到映射时**原样返回**：宁可让它照旧走白名单报错，也不猜一个模型出来。
+   * 查不到映射时原样返回:宁可让它照旧走白名单报错,也不猜一个模型出来.
    * @param {string} model
    * @returns {string}
    */
@@ -764,11 +764,11 @@ export class AccountRuntimes {
     if (typeof model !== 'string') return model
     const key = model.trim()
     if (!key) return model
-    // 已是目录 key：服务端标识，原样用。
+    // 已是目录 key:服务端标识,原样用.
     if (/^m-[0-9a-z]+$/i.test(key)) return key
-    // 已是句柄：交由 catalog.handleFor 原样透传。
+    // 已是句柄:交由 catalog.handleFor 原样透传.
     if (key.startsWith('fbm1.')) return key
-    // 显示名 → 目录 key（大小写/首尾空白不敏感）。
+    // 显示名 → 目录 key(大小写/首尾空白不敏感).
     const byName = this._modelKeyForName(key)
     if (byName) return byName
     return model
@@ -780,11 +780,11 @@ export class AccountRuntimes {
       const cd = this.cooldowns.get(a.key)
       const cooling = Boolean(cd && cd.until > now)
       /**
-       * 账号状态分档（用户要求：一键刷新后至少能区分 ban 与正常）：
-       *   - banned：账号生命周期终点（账本里有 bannedAt，或当前冷却 code = banned），
-       *     不可自行恢复，只能换号/等平台解封；
-       *   - unavailable：限流 / 额度 / IP 上限等**暂时**拒付，冷却到期即可恢复；
-       * 其余仍算 available（含只有 per-model 冷却的账号）。
+       * 账号状态分档(用户要求:一键刷新后至少能区分 ban 与正常):
+       *   - banned:账号生命周期终点(账本里有 bannedAt,或当前冷却 code = banned),
+       *     不可自行恢复,只能换号/等平台解封;
+       *   - unavailable:限流 / 额度 / IP 上限等暂时拒付,冷却到期即可恢复;
+       * 其余仍算 available(含只有 per-model 冷却的账号).
        */
       const coolingCode = cooling ? cd.code || null : null
       const banned =
@@ -794,14 +794,14 @@ export class AccountRuntimes {
       const rt = this.byKey.get(a.key)
       const snap = rt?.sessions?.getSnapshot?.()
       const chatLock = this.chatLocks.get(a.key)
-      // 账本记录（生命周期/时间轴）：account() 会按需创建并盖上导入时间。
+      // 账本记录(生命周期/时间轴):account() 会按需创建并盖上导入时间.
       const rec = this.accountState.account(a.key, this._importedAtHint(a.key))
       return {
         ...a,
         lastUsed: this._lastSuccessKey === a.key,
-        // available 保持原语义（无账号级冷却）不动，避免改动既有消费者；
-        // banned / unavailable 是新增的**更细粒度**分档，控制台按它们区分
-        // "封禁"与"暂时被拒"，API 侧仍可只看 available。
+        // available 保持原语义(无账号级冷却)不动,避免改动既有消费者;
+        // banned / unavailable 是新增的更细粒度分档,控制台按它们区分
+        // "封禁"与"暂时被拒",API 侧仍可只看 available.
         available: !cooling,
         banned,
         unavailable,
@@ -809,55 +809,55 @@ export class AccountRuntimes {
         cooldownUntil: cooling ? new Date(cd.until).toISOString() : null,
         cooldownCode: cooling ? cd.code : null,
         requests: this.stats.byKey.get(a.key) || 0,
-        // 账号生命周期（持久化账本）：加入时间 / 封禁时间。重启后仍在，
-        // 控制台据此区分"从未使用过 / 正在调度 / 额度不足 / 已被封禁"。
+        // 账号生命周期(持久化账本):加入时间 / 封禁时间.重启后仍在,
+        // 控制台据此区分"从未使用过 / 正在调度 / 额度不足 / 已被封禁".
         firstSeenAt:
           this.accountState.account(a.key, this._importedAtHint(a.key))
             ?.firstSeenAt || null,
         bannedAt: this.accountState.account(a.key)?.bannedAt || null,
-        // 退款流水（最近 100 条）+ 累计对账：回答"退款到底成没成功、金额对不对"
+        // 退款流水(最近 100 条)+ 累计对账:回答"退款到底成没成功,金额对不对"
         refunds: this.accountState.refunds(a.key).slice(0, 20),
         refundTotal: this.accountState.account(a.key)?.refundTotal ?? 0,
         refundExpectedTotal:
           this.accountState.account(a.key)?.refundExpectedTotal ?? 0,
         refundPendingCount:
           this.accountState.account(a.key)?.refundPendingCount ?? 0,
-        // session_units 口径的应退（上游会立即兑现的那本账；与 Freebucks 的
-        // refundExpectedTotal 区分开——后者长期停留在 pending）。
+        // session_units 口径的应退(上游会立即兑现的那本账;与 Freebucks 的
+        // refundExpectedTotal 区分开——后者长期停留在 pending).
         refundUnitsExpectedTotal:
           this.accountState.account(a.key)?.refundUnitsExpectedTotal ?? 0,
-        // 是否被使用过（粘性调度：未用过的账号排最后启用）+ 最近使用时间
+        // 是否被使用过(粘性调度:未用过的账号排最后启用)+ 最近使用时间
         used: this.everUsed(a.key),
         lastUsedAt: this._lastUsedAt.has(a.key)
           ? new Date(this._lastUsedAt.get(a.key)).toISOString()
           : null,
-        // ── 时间轴（全部持久化在 /data/account-state.json）──────────────
-        // importedAt：导入时间（老账号回落 firstSeenAt）；
-        // credentialUpdatedAt：凭证（token）最后一次被写入的时刻；
-        // scheduledMs / schedulingSince：累计调度时长 + 本轮起算点（实时）。
+        // ── 时间轴(全部持久化在 /data/account-state.json)──────────────
+        // importedAt:导入时间(老账号回落 firstSeenAt);
+        // credentialUpdatedAt:凭证(token)最后一次被写入的时刻;
+        // scheduledMs / schedulingSince:累计调度时长 + 本轮起算点(实时).
         importedAt: rec?.importedAt || rec?.firstSeenAt || null,
         credentialUpdatedAt: rec?.credentialUpdatedAt || null,
         scheduledMs: Number(rec?.scheduledMs) || 0,
         schedulingSince: rec?.schedulingSince || null,
         lastScheduledAt: rec?.lastScheduledAt || null,
-        // 本轮实时调度时长：有在途流时 = now - 起算点（前端无需自己算时钟）
+        // 本轮实时调度时长:有在途流时 = now - 起算点(前端无需自己算时钟)
         currentSchedulingMs: rt?.sessions?.currentSchedulingMs?.() || 0,
-        // 负载均衡监控：当前在途 SSE 流数 / 账号并发上限（+ 已预留未拿锁的）
+        // 负载均衡监控:当前在途 SSE 流数 / 账号并发上限(+ 已预留未拿锁的)
         inFlight: chatLock?.inFlight || 0,
         reserved: this.reservedCount(a.key),
         effectiveLoad: (chatLock?.inFlight || 0) + this.reservedCount(a.key),
         concurrency: chatLock?.capacity || this._accountConcurrency(),
         effectiveProxy: rt?.effectiveProxy || null,
-        // 最近一次探测（refresh GET / probe）结果：让控制台展示"为什么刷新失败"
-        // （country_blocked 强风控 / rate_limited / banned / 凭证无效…）
+        // 最近一次探测(refresh GET / probe)结果:让控制台展示"为什么刷新失败"
+        // (country_blocked 强风控 / rate_limited / banned / 凭证无效...)
         lastProbe: snap?.lastProbe || null,
         session: snap
           ? {
               status: snap.status,
               model: snap.model,
-              // 回执里的 model 是**目录 key**（m-00032eaeec）；控制台要显示
-              // 人能认的名字（MiMo 2.6 Flash）。这个字段只用于展示 ——
-              // 请求/寻址仍必须用 snap.model（key 本身）。
+              // 回执里的 model 是目录 key(m-00032eaeec);控制台要显示
+              // 人能认的名字(MiMo 2.6 Flash).这个字段只用于展示 ——
+              // 请求/寻址仍必须用 snap.model(key 本身).
               // 桥接依据见
               // .agents/notes/implemented/bug-fix/2026-10-02-catalog-key-display-name-bridge.md
               modelDisplayName: snap.model
@@ -865,44 +865,44 @@ export class AccountRuntimes {
                 : null,
               remainingMs: snap.remainingMs,
               live: snap.live,
-              // 付费时段的终点：一次 admit = 买断一小时，控制台据此区分
-              // "rem=0 但仍可用（已付款）"与"真的用尽"，别再误报额度不足。
+              // 付费时段的终点:一次 admit = 买断一小时,控制台据此区分
+              // "rem=0 但仍可用(已付款)"与"真的用尽",别再误报额度不足.
               expiresAt: snap.expiresAt || null,
               admittedAt: snap.admittedAt || null,
               /**
-               * ⚠️ 「仍在这一小时已付费时段内」（issue #24）。
+               *  仍在这一小时已付费时段内.
                *
-               * 控制台此前只暴露 status/live/expiresAt，于是这条会话显示成
-               * "正常" —— 但它**只服务于它绑定的那个模型**，换任何别的模型
-               * 都会被拒（实测 purchase_claim_released，且接不回来）。
+               * 控制台此前只暴露 status/live/expiresAt,于是这条会话显示成
+               * "正常" —— 但它只服务于它绑定的那个模型,换任何别的模型
+               * 都会被拒(实测 purchase_claim_released,且接不回来).
                *
-               * 带上这个布尔，前端才能在账号行上如实标注"这一小时已买给
-               * 模型 X"，而不是让用户对着 status=ok 去查一个根本没坏的东西。
-               * 判不出来的会话（无 expiresAt）返回 false = 不标注。
+               * 带上这个布尔,前端才能在账号行上如实标注"这一小时已买给
+               * 模型 X",而不是让用户对着 status=ok 去查一个根本没坏的东西.
+               * 判不出来的会话(无 expiresAt)返回 false = 不标注.
                */
               inPaidWindow: rt?.sessions?.inPaidWindow?.() === true,
               /**
-               * ★ 上游的**会话清单**（跨部署可见）—— 用户诉求：「即便分布式部署，
-               * 你在本地建的会话，我在远程也能读到」。
+               *  上游的会话清单(跨部署可见)—— 用户诉求:[即便分布式部署,
+               * 你在本地建的会话,我在远程也能读到].
                *
-               * 数据来自 `GET /session` 回执的 `desktopPurchases` /
-               * `desktopSessionCounts`（每次 admit/refresh 都会随回执刷新）。
-               * 前端据此显示"哪个模型被谁占着、什么时候到期"。
+               * 数据来自 GET /session 回执的 desktopPurchases /
+               * desktopSessionCounts(每次 admit/refresh 都会随回执刷新).
+               * 前端据此显示"哪个模型被谁占着,什么时候到期".
                */
               inventory: snap.inventory || null,
             }
           : null,
-        // 每日免费 session 额度（来自最近一次 admit/refresh 的上游返回）
+        // 每日免费 session 额度(来自最近一次 admit/refresh 的上游返回)
         quota: snap?.quota || null,
-        // Freebucks 计量（2026-09 改版）：余额 / 每日池 / 每模型 session 单价。
-        // 控制台据此显示"这个号还剩多少、这个模型一次多少钱"。
+        // Freebucks 计量(2026-09 改版):余额 / 每日池 / 每模型 session 单价.
+        // 控制台据此显示"这个号还剩多少,这个模型一次多少钱".
         freebucks: snap?.freebucks || null,
-        // 最近一次早退 DELETE 的退款回执（空闲释放/换号释放都会产生）
+        // 最近一次早退 DELETE 的退款回执(空闲释放/换号释放都会产生)
         lastRefund: snap?.lastRefund || null,
-        // ── 「我们在省钱」的只读证据 ─────────────────────────────
-        // admitCount = 真买过几条计费会话（每条 = 实付一整小时）；
-        // reuseCount = 命中有可用会话、直接白用了几次（边际成本 0）。
-        // 复用率 = reuse / (reuse + admit)，即"省掉的重买比例"。
+        // ── [我们在省钱]的只读证据 ─────────────────────────────
+        // admitCount = 真买过几条计费会话(每条 = 实付一整小时);
+        // reuseCount = 命中有可用会话,直接白用了几次(边际成本 0).
+        // 复用率 = reuse / (reuse + admit),即"省掉的重买比例".
         admitCount: snap?.admitCount ?? 0,
         reuseCount: snap?.reuseCount ?? 0,
       }
@@ -910,7 +910,7 @@ export class AccountRuntimes {
   }
 
   /**
-   * @param {string} key 账号 key（id 或历史邮箱）
+   * @param {string} key 账号 key(id 或历史邮箱)
    */
   get(key) {
     const user = readAccountUser(this.dir, key)
@@ -931,32 +931,32 @@ export class AccountRuntimes {
       return existing
     }
     if (existing) {
-      // 账号信息变更（token/代理）：旧 runtime 立即让位，session 等在途
-      // 请求结束后再优雅释放（避免掐断正在传输的 SSE；等待方会在 chat
-      // 流程通过 isCurrentRuntime 检测到已被顶替并重新选号）。
+      // 账号信息变更(token/代理):旧 runtime 立即让位,session 等在途
+      // 请求结束后再优雅释放(避免掐断正在传输的 SSE;等待方会在 chat
+      // 流程通过 isCurrentRuntime 检测到已被顶替并重新选号).
       this._disposeRuntime(existing, 'account credentials/proxy changed')
       this.byKey.delete(accountKey)
     }
 
     /**
-     * ⚠️ runtime 创建期间的日志（`createUpstreamClient called` /
-     * `DeviceSigner constructed` / `device key registered` …）此前**没有账号
-     * 归属**：它们发生在 SessionManager 存在之前，而日志上下文只在 chat 路径
-     * （proxy.js `patchLogContext`）被写上。控制台上就是一批无主的
-     * "createUpstreamClient called" —— 用户看到的"奇奇怪怪的东西"正是它。
-     * 这里把整段创建包进本账号的上下文，与 SessionManager 内部保持一致。
+     *  runtime 创建期间的日志(createUpstreamClient called /
+     * DeviceSigner constructed / device key registered ...)此前没有账号
+     * 归属:它们发生在 SessionManager 存在之前,而日志上下文只在 chat 路径
+     * (proxy.js patchLogContext)被写上.控制台上就是一批无主的
+     * "createUpstreamClient called" —— 用户看到的"奇奇怪怪的东西"正是它.
+     * 这里把整段创建包进本账号的上下文,与 SessionManager 内部保持一致.
      */
     const ctx = { account: user.email || accountKey, key: accountKey }
     const upstream = runWithLogContext(ctx, () =>
       createUpstreamClient(this.config, user.authToken, {
         proxy: user.proxy || null,
-        // ⚠️ accountId 用于两处，语义不同但都需要**账号 user id**：
-        //   1) 代理池稳定分配（同一账号固定出口）
-        //   2) 官方 chat 的 x-freebuff-acting-user-id（真机抓包确认是 user id）
-        // 用 user.id 而不是 accountKey —— accountKey 是凭据文件名（可能是邮箱）。
+        //  accountId 用于两处,语义不同但都需要账号 user id:
+        //   1) 代理池稳定分配(同一账号固定出口)
+        //   2) 官方 chat 的 x-freebuff-acting-user-id(真机抓包确认是 user id)
+        // 用 user.id 而不是 accountKey —— accountKey 是凭据文件名(可能是邮箱).
         accountId: user.id || accountKey,
-        // 设备签名密钥落盘位置：与上游官方 CLI 同款（每账号一个文件）。
-        // 上游据此判定「是不是注册过的真客户端」——见 src/upstream/device-signing.js
+        // 设备签名密钥落盘位置:与上游官方 CLI 同款(每账号一个文件).
+        // 上游据此判定[是不是注册过的真客户端]——见 src/upstream/device-signing.js
         deviceKeyPath: path.join(
           this.config.server.dataDir,
           'device-keys',
@@ -969,35 +969,35 @@ export class AccountRuntimes {
       config: this.config,
       accountKey,
       /**
-       * ⚠️ 日志上下文的 `account` 字段在这里**按账号固定注入**。
+       *  日志上下文的 account 字段在这里按账号固定注入.
        *
-       * 此前只有 proxy.js 在 chat 路径上 `patchLogContext({ account })`，
-       * 于是**探测/刷新/选号/空闲释放**这些路径产生的日志 `account` 全是空
-       * —— 控制台「日志」页的账号筛选永远筛不出东西，多账号池排障时几十条
-       * 无主记录交织（正是用户报的"又不能基于账号进行筛选"）。
+       * 此前只有 proxy.js 在 chat 路径上 patchLogContext({ account }),
+       * 于是探测/刷新/选号/空闲释放这些路径产生的日志 account 全是空
+       * —— 控制台[日志]页的账号筛选永远筛不出东西,多账号池排障时几十条
+       * 无主记录交织(正是用户报的"又不能基于账号进行筛选").
        *
-       * SessionManager 自己不知道邮箱（它只拿到 accountKey，而 key 可能是
-       * UUID），所以由这里把可读的邮箱一并给它，logger 自动带上。
+       * SessionManager 自己不知道邮箱(它只拿到 accountKey,而 key 可能是
+       * UUID),所以由这里把可读的邮箱一并给它,logger 自动带上.
        */
       logContext: { account: user.email || accountKey, key: accountKey },
-      // 句柄变更落盘（track/clear/orphan）——见 SessionHandleStore。
+      // 句柄变更落盘(track/clear/orphan)——见 SessionHandleStore.
       onSessionChange: (ev) => this.handleStore.handleEvent(ev),
       /**
-       * 模型标识归一（目录 key / 上游 id / 可读名 → 目录 key）。
+       * 模型标识归一(目录 key / 上游 id / 可读名 → 目录 key).
        *
-       * 上游会话清单里的 `model` 是**上游 id**（`deepseek/deepseek-v4-flash`），
-       * 而调度内部用**目录 key**（`m-096e75164d`）—— 两侧标识不同，严格相等
-       * 永远匹配不上，于是"面板能显示那条已付费会话、调度却看不见它"，
-       * 白白去别处买新的（用户当场指出：展示了却不复用 = 白花钱）。
+       * 上游会话清单里的 model 是上游 id(deepseek/deepseek-v4-flash),
+       * 而调度内部用目录 key(m-096e75164d)—— 两侧标识不同,严格相等
+       * 永远匹配不上,于是"面板能显示那条已付费会话,调度却看不见它",
+       * 白白去别处买新的(用户当场指出:展示了却不复用 = 白花钱).
        *
-       * 复用仓库**既有的唯一映射真源** `resolveModelAlias()`，绝不另写第二套。
-       * 绑定 `this` 是因为它要读本 AppContext 的目录表。
+       * 复用仓库既有的唯一映射真源 resolveModelAlias(),绝不另写第二套.
+       * 绑定 this 是因为它要读本 AppContext 的目录表.
        */
       resolveModelAlias: (m) => this.resolveModelAlias(m),
-      // 账号账目落盘（freebucks/quota/lastProbe）——见 AccountStateStore。
+      // 账号账目落盘(freebucks/quota/lastProbe)——见 AccountStateStore.
       onStateChange: (snap) => this._persistAccountState(accountKey, snap),
       getSessionSettings: this._getSessionSettings,
-      // 该账号还有在途/排队的 chat 时，空闲释放让路（见 SessionManager._armIdleRelease）
+      // 该账号还有在途/排队的 chat 时,空闲释放让路(见 SessionManager._armIdleRelease)
       hasPendingUser: () => {
         const lock = this.chatLocks.get(accountKey)
         return Boolean(lock && (lock.inFlight > 0 || lock.queued > 0))
@@ -1009,7 +1009,7 @@ export class AccountRuntimes {
       email: user.email,
       authToken: user.authToken,
       proxy: user.proxy || null,
-      /** 实际生效的出网代理（全局池分配 / 账号覆盖 / env） */
+      /** 实际生效的出网代理(全局池分配 / 账号覆盖 / env) */
       effectiveProxy: upstream.proxyUrl || null,
       user,
       upstream,
@@ -1017,16 +1017,16 @@ export class AccountRuntimes {
       source: `credentials:${accountKey}`,
     }
     this.byKey.set(accountKey, runtime)
-    // 账本回灌（freebucks/quota/lastProbe/冷却）：必须在这里做，不能只在构造
-    // 函数里做——runtime 是**懒创建**的，构造函数执行时 byKey 还是空的。
-    // freebucks 尤其关键：它让"余额买不起就别 admit"的闸门在重启后依然生效。
+    // 账本回灌(freebucks/quota/lastProbe/冷却):必须在这里做,不能只在构造
+    // 函数里做——runtime 是懒创建的,构造函数执行时 byKey 还是空的.
+    // freebucks 尤其关键:它让"余额买不起就别 admit"的闸门在重启后依然生效.
     this._hydrateRuntime(runtime)
     this.accountState.patch(accountKey, { email: user.email })
     return runtime
   }
 
   /**
-   * 把账本里某账号的状态灌回它的 runtime（懒创建时调用）+ 内存冷却表。
+   * 把账本里某账号的状态灌回它的 runtime(懒创建时调用)+ 内存冷却表.
    * @param {{ key: string, sessions: import('./session-manager.js').SessionManager, email?: string }} runtime
    */
   _hydrateRuntime(runtime) {
@@ -1048,11 +1048,11 @@ export class AccountRuntimes {
       const now = Date.now()
       const prefix = `${key}\0`
       for (const [k, cd] of Object.entries(cds)) {
-        // 必须精确匹配账号 key 或 `key\0model`：用 startsWith(key) 会让账号
-        // "ab" 的冷却灌进账号 "a"（前缀撞车，单字符 key 的测试测不出来）。
+        // 必须精确匹配账号 key 或 key\0model:用 startsWith(key) 会让账号
+        // "ab" 的冷却灌进账号 "a"(前缀撞车,单字符 key 的测试测不出来).
         if (k !== key && !k.startsWith(prefix)) continue
         const until = Number(cd?.until)
-        // 过期的冷却直接丢：重启不该把号永久锁死。
+        // 过期的冷却直接丢:重启不该把号永久锁死.
         if (!Number.isFinite(until) || until <= now) continue
         this.cooldowns.set(k, { until, code: cd.code ?? null, model: cd.model })
       }
@@ -1060,9 +1060,9 @@ export class AccountRuntimes {
   }
 
   /**
-   * "这个号什么时候进来的"——取凭据文件的创建时间（birthtime，回退 mtime）。
-   * 为什么不直接用"账本第一次看到它"：老账号升级到本账本时会被记成今天刚
-   * 加入，控制台的"从未使用 / 老号"分区就全错了。
+   * "这个号什么时候进来的"——取凭据文件的创建时间(birthtime,回退 mtime).
+   * 为什么不直接用"账本第一次看到它":老账号升级到本账本时会被记成今天刚
+   * 加入,控制台的"从未使用 / 老号"分区就全错了.
    * @param {string} key
    * @returns {string | null}
    */
@@ -1077,18 +1077,18 @@ export class AccountRuntimes {
     }
   }
 
-  /** 账号 key 列表（id 优先，历史账号为邮箱）。 */
+  /** 账号 key 列表(id 优先,历史账号为邮箱). */
   allKeys() {
     return listAccounts(this.dir).map((a) => a.key)
   }
 
-  /** 每个账号的当前并发上限（控制台设置，实时生效）。 */
+  /** 每个账号的当前并发上限(控制台设置,实时生效). */
   _accountConcurrency() {
     const n = this._getAccountConcurrency()
     return Number.isFinite(n) && n >= 1 ? Math.min(16, Math.floor(n)) : 1
   }
 
-  /** 当前调度模式：'sticky'（默认）| 'spread'。非法值一律回落 sticky。 */
+  /** 当前调度模式:'sticky'(默认)| 'spread'.非法值一律回落 sticky. */
   schedulingMode() {
     try {
       return this._getSchedulingMode?.() === 'spread' ? 'spread' : 'sticky'
@@ -1098,16 +1098,16 @@ export class AccountRuntimes {
   }
 
   /**
-   * 丢弃一个 runtime 时的统一收尾：先优雅释放它的上游会话（要用它的
-   * upstream 出网），**会话收尾后再关闭出网 agent**，否则 keep-alive
-   * socket 会随"更新凭证/导入账号/改代理池"的次数一直累积（运行越久越慢）。
-   * 全程不阻塞调用方（fire-and-forget），失败只记日志。
+   * 丢弃一个 runtime 时的统一收尾:先优雅释放它的上游会话(要用它的
+   * upstream 出网),会话收尾后再关闭出网 agent,否则 keep-alive
+   * socket 会随"更新凭证/导入账号/改代理池"的次数一直累积(运行越久越慢).
+   * 全程不阻塞调用方(fire-and-forget),失败只记日志.
    * @param {any} rt
    * @param {string} why
    */
   _disposeRuntime(rt, why) {
     if (!rt) return
-    /** 会话已尽量释放（或本来就没会话）→ 释放出网资源。 */
+    /** 会话已尽量释放(或本来就没会话)→ 释放出网资源. */
     const closeUpstream = () => {
       try {
         const p = rt.upstream?.close?.()
@@ -1126,7 +1126,7 @@ export class AccountRuntimes {
       })
     }
     if (pending && typeof pending.then === 'function') {
-      // 必须等会话释放（它要用 upstream 出网）再关 agent，否则 DELETE 会失败。
+      // 必须等会话释放(它要用 upstream 出网)再关 agent,否则 DELETE 会失败.
       pending.then(closeUpstream, (err) => {
         logger.warn(`${why}; deferred session release failed`, {
           key: rt.key,
@@ -1150,41 +1150,41 @@ export class AccountRuntimes {
     return lock
   }
 
-  /** 账号当前是否已达到并发上限（无可用 chat 槽位）。 */
+  /** 账号当前是否已达到并发上限(无可用 chat 槽位). */
   isChatBusy(key) {
     return this.chatLocks.get(key)?.busy || false
   }
 
-  /** 账号当前在途 chat 数（监控用）。 */
+  /** 账号当前在途 chat 数(监控用). */
   chatInFlight(key) {
     return this.chatLocks.get(key)?.inFlight || 0
   }
 
-  /** 预留的兜底存活时长：足够走完"选号 → 拿 chat 锁"，又不会让泄漏永久化。 */
+  /** 预留的兜底存活时长:足够走完"选号 → 拿 chat 锁",又不会让泄漏永久化. */
   static get RESERVE_TTL_MS() {
     return 90_000
   }
 
-  /** 被选中但还没拿到 chat 锁的请求数（spread 排序用）。 */
+  /** 被选中但还没拿到 chat 锁的请求数(spread 排序用). */
   reservedCount(key) {
     return this._reserved.get(key) || 0
   }
 
-  /** 该账号当前"实际占用 + 已预留"的槽位估计（spread 排序的 load）。 */
+  /** 该账号当前"实际占用 + 已预留"的槽位估计(spread 排序的 load). */
   effectiveLoad(key) {
     return this.chatInFlight(key) + this.reservedCount(key)
   }
 
   /**
-   * 预留一个 chat 槽位意向（选号成功后由 chat 流程调用）。
-   * 返回幂等的释放函数：拿到 chat 锁后调用它把预留交还给真实在途计数。
+   * 预留一个 chat 槽位意向(选号成功后由 chat 流程调用).
+   * 返回幂等的释放函数:拿到 chat 锁后调用它把预留交还给真实在途计数.
    * @param {string} key
    * @returns {() => void}
    */
   reserveSlot(key) {
     if (!key) return () => {}
     this._reserved.set(key, (this._reserved.get(key) || 0) + 1)
-    // 兜底 TTL：请求异常退出/进程卡住也不会把账号永久标成满员。
+    // 兜底 TTL:请求异常退出/进程卡住也不会把账号永久标成满员.
     if (!this._reserveTimers.has(key)) {
       const t = setTimeout(() => {
         this._reserveTimers.delete(key)
@@ -1211,7 +1211,7 @@ export class AccountRuntimes {
   }
 
   /**
-   * 获取账号的 chat 并发槽位。
+   * 获取账号的 chat 并发槽位.
    * @param {string} key
    * @param {number} timeoutMs 0 = 无限等待
    * @returns {Promise<() => void>}
@@ -1259,8 +1259,8 @@ export class AccountRuntimes {
 
     if (code === 'banned') {
       ms = Math.max(ms, BANNED_COOLDOWN_MS)
-      // 封禁是账号生命周期的终点：不只冷却，还要记下"什么时候开始被封的"
-      // （chat 阶段撞到 banned 与探测发现 banned 同等重要，控制台分区靠它）。
+      // 封禁是账号生命周期的终点:不只冷却,还要记下"什么时候开始被封的"
+      // (chat 阶段撞到 banned 与探测发现 banned 同等重要,控制台分区靠它).
       const rec = this.accountState.account(key, this._importedAtHint(key))
       if (rec && !rec.bannedAt) {
         this.accountState.patch(key, { bannedAt: new Date().toISOString() })
@@ -1294,8 +1294,8 @@ export class AccountRuntimes {
   }
 
   /**
-   * 更新"最后成功账号"（粘性调度核心输入）并落盘。
-   * 集中一处：原先有 4 个赋值点，只有 1 个写了账本，重启后粘性就跑了。
+   * 更新"最后成功账号"(粘性调度核心输入)并落盘.
+   * 集中一处:原先有 4 个赋值点,只有 1 个写了账本,重启后粘性就跑了.
    * @param {string} key
    */
   _setLastSuccessKey(key) {
@@ -1309,8 +1309,8 @@ export class AccountRuntimes {
     this.stats.total += 1
     this.stats.byKey.set(key, (this.stats.byKey.get(key) || 0) + 1)
     this._lastUsedAt.set(key, Date.now())
-    // 请求计数/最近使用落盘：重启后「用过没有 / 最近什么时候用的」不该归零，
-    // 否则粘性调度会把已经打过废的账号当成全新账号重新启用一遍。
+    // 请求计数/最近使用落盘:重启后[用过没有 / 最近什么时候用的]不该归零,
+    // 否则粘性调度会把已经打过废的账号当成全新账号重新启用一遍.
     this.accountState.patch(key, {
       requests: this.stats.byKey.get(key) || 0,
       lastUsedAt: new Date(this._lastUsedAt.get(key)).toISOString(),
@@ -1333,27 +1333,27 @@ export class AccountRuntimes {
   }
 
   /**
-   * 选号排序（2026-09 Freebucks 改版 + 参考项目 ADR-0012 反封控契约）：
+   * 选号排序(2026-09 Freebucks 改版 + 参考项目 ADR-0012 反封控契约):
    *
-   * **粘性优先 / drain, not rotate**——把请求集中到尽可能少的账号上，用尽
-   * （限流 / 额度耗尽 / 冷却 / 满员排队超时）才换下一个；**从未用过的账号
-   * 排最后**，只有已用账号都不可用时才启用。上游把"轮换健康账号"直接当作
-   * 账号农场特征（ADR-0012: cycling healthy keys looks like account farming），
-   * 而 Freebucks 按会话占用时长计费，换号 = 新买一条计费行。
+   * 粘性优先 / drain, not rotate——把请求集中到尽可能少的账号上,用尽
+   * (限流 / 额度耗尽 / 冷却 / 满员排队超时)才换下一个;从未用过的账号
+   * 排最后,只有已用账号都不可用时才启用.上游把"轮换健康账号"直接当作
+   * 账号农场特征(ADR-0012: cycling healthy keys looks like account farming),
+   * 而 Freebucks 按会话占用时长计费,换号 = 新买一条计费行.
    *
-   * 排序维度（从前到后）：
-   *   1. tier（会话状态）：同模型热 session（复用零成本）> 冷账号 > 活跃 session
-   *      绑在别的模型上（换模型要释放它）。冷账号优先于"杀掉另一个模型的热会话"，
-   *      否则多模型交替会在同一账号上反复 release/admit（每次都买一条计费会话）；
-   *   2. used：同一 tier 内**已用过的账号 > 从未用过的账号**（不轻易碰新账号）；
-   *   3. busy：优先有空闲槽位的。满员账号**不再一律排最后**——它只要属于已用账号，
-   *      仍排在"从未用过的账号"之前，新请求会在它上面做一次有界排队（省一条计费
-   *      会话），超时后由 proxy.js 加进 skipKeys 才真正溢出；
-   *   4. lastUsedAt 倒序（粘性：优先继续用刚用过的那个）；
-   *   5. 在途少 > 额度耗尽 > 余额不足 > 轮询（平局打破）。
+   * 排序维度(从前到后):
+   *   1. tier(会话状态):同模型热 session(复用零成本)> 冷账号 > 活跃 session
+   *      绑在别的模型上(换模型要释放它).冷账号优先于"杀掉另一个模型的热会话",
+   *      否则多模型交替会在同一账号上反复 release/admit(每次都买一条计费会话);
+   *   2. used:同一 tier 内已用过的账号 > 从未用过的账号(不轻易碰新账号);
+   *   3. busy:优先有空闲槽位的.满员账号不再一律排最后——它只要属于已用账号,
+   *      仍排在"从未用过的账号"之前,新请求会在它上面做一次有界排队(省一条计费
+   *      会话),超时后由 proxy.js 加进 skipKeys 才真正溢出;
+   *   4. lastUsedAt 倒序(粘性:优先继续用刚用过的那个);
+   *   5. 在途少 > 额度耗尽 > 余额不足 > 轮询(平局打破).
    * @param {string} model
-   * @param {{ skipKeys?: Set<string> }} [opts] skipKeys：本次请求已经排队超时过的
-   *   账号，不再重复选中（否则会一直排在第一位反复等）。
+   * @param {{ skipKeys?: Set<string> }} [opts] skipKeys:本次请求已经排队超时过的
+   *   账号,不再重复选中(否则会一直排在第一位反复等).
    */
   candidateKeys(model, opts = {}) {
     const keys = this.allKeys()
@@ -1378,25 +1378,25 @@ export class AccountRuntimes {
       const live = sessions?.hasLiveSlot?.() === true
       const sameModel = snap?.model === model
       const chatLock = this.chatLocks.get(key)
-      // inFlight = 已拿到 chat 锁的真实在途；load 还要算上"刚被选中、正在拿锁"
-      // 的预留，否则 N 个并发请求会同时看到一个"空账号"而全部挤上去。
+      // inFlight = 已拿到 chat 锁的真实在途;load 还要算上"刚被选中,正在拿锁"
+      // 的预留,否则 N 个并发请求会同时看到一个"空账号"而全部挤上去.
       const inFlight = chatLock?.inFlight || 0
       const load = inFlight + this.reservedCount(key)
       const capacity = chatLock?.capacity || this._accountConcurrency()
-      // Freebucks 余额买不起该模型（balance < prices[model]）→ 排到最后：
-      // 调度不会为了它白开一条计费 session（上游反正也会 429）。
+      // Freebucks 余额买不起该模型(balance < prices[model])→ 排到最后:
+      // 调度不会为了它白开一条计费 session(上游反正也会 429).
       const fbInfo = sessions?.freebucksFor?.(model)
       const unaffordable = fbInfo?.known && fbInfo.affordable === false ? 1 : 0
-      // session_units 用尽的账号也排到最后（两本账都扣，units 没了同样会被上游拒）。
+      // session_units 用尽的账号也排到最后(两本账都扣,units 没了同样会被上游拒).
       const unitsInfo = sessions?.sessionUnitsFor?.(model)
       const unitsOut = unitsInfo?.known && unitsInfo.exhausted ? 1 : 0
       const used = this.everUsed(key, sessions)
-      // tier 按"会话状态"分（与 used 无关）：
-      //   0 = 同模型热 session（复用零成本）
-      //   1 = 冷账号（没有活跃会话）或同模型即将过期
-      //   2 = 活跃 session 绑在别的模型上（换模型要释放它）
-      // 先按 tier 排：冷账号优先于"杀掉另一个模型的热会话"——否则多模型
-      // 交替使用会在同一个账号上反复 release/admit（每次都是一条计费会话）。
+      // tier 按"会话状态"分(与 used 无关):
+      //   0 = 同模型热 session(复用零成本)
+      //   1 = 冷账号(没有活跃会话)或同模型即将过期
+      //   2 = 活跃 session 绑在别的模型上(换模型要释放它)
+      // 先按 tier 排:冷账号优先于"杀掉另一个模型的热会话"——否则多模型
+      // 交替使用会在同一个账号上反复 release/admit(每次都是一条计费会话).
       const otherModelLive = live && sameModel === false
       const busyNearExpiry =
         live && sameModel && !usable && (sessions?.inFlightCount?.() || 0) > 0
@@ -1409,7 +1409,7 @@ export class AccountRuntimes {
       candidates.push({
         key,
         tier,
-        // 已用过的账号优先于从未用过的（同一 tier 内）——"最少换号"的核心
+        // 已用过的账号优先于从未用过的(同一 tier 内)——"最少换号"的核心
         used: used ? 0 : 1,
         busy: load >= capacity ? 1 : 0,
         lastUsedAt: this._lastUsedAt.get(key) || 0,
@@ -1420,37 +1420,37 @@ export class AccountRuntimes {
         rotation: i,
       })
     }
-    // ── 调度模式（控制台「账号调度」，默认 sticky）────────────────────
-    // sticky（drain, not rotate）：并发上限是**溢出**阈值——满员先原账号排队，
-    //   超时才换号；"从未用过的账号"排最后。最少换号 = 最少新建计费会话。
-    // spread（并发优先）：**有空闲槽位的账号提到最前**，满员立即溢出；
-    //   只有所有账号都满员时才排队。这样"设了并发 2 却只开 1 个号"不再发生。
+    // ── 调度模式(控制台[账号调度],默认 sticky)────────────────────
+    // sticky(drain, not rotate):并发上限是溢出阈值——满员先原账号排队,
+    //   超时才换号;"从未用过的账号"排最后.最少换号 = 最少新建计费会话.
+    // spread(并发优先):有空闲槽位的账号提到最前,满员立即溢出;
+    //   只有所有账号都满员时才排队.这样"设了并发 2 却只开 1 个号"不再发生.
     //
-    // ⚠️ spread 下 busy 必须**排在 used 之前**：否则"已用但满员"的账号会一直
-    // 压住"空闲但从没用过"的账号，新号永远等不到——那正是用户抱怨的现象。
-    // spread 仍然保留 tier 优先（同模型热 session 复用零成本），只是把
-    // "有空闲槽位的冷账号"提前到"满员的已用账号"之前。
+    //  spread 下 busy 必须排在 used 之前:否则"已用但满员"的账号会一直
+    // 压住"空闲但从没用过"的账号,新号永远等不到——那正是用户抱怨的现象.
+    // spread 仍然保留 tier 优先(同模型热 session 复用零成本),只是把
+    // "有空闲槽位的冷账号"提前到"满员的已用账号"之前.
     const spread = this.schedulingMode() === 'spread'
     if (process.env.FB_DEBUG_SCHED) {
       console.error("[sched] mode=" + (spread ? "spread" : "sticky"))
     }
     candidates.sort(
       (a, b) =>
-        // 1) 首要维度：sticky 看「能不能复用」(tier)，spread 看「有没有空位」(busy)。
-        //    spread 下 busy 必须排第一：否则「带着热 session 但已满员」的账号
-        //    会一直压住「空闲的冷账号」，新号永远轮不到——那正是用户抱怨的
-        //    「设了并发 2 却只开一个号」。热 session 复用的省钱收益在 spread
-        //    模式下**主动让位**给并发（这正是用户切这个模式的目的）。
+        // 1) 首要维度:sticky 看能不能复用,spread 看有没有空位.
+        //    spread 下 busy 必须排第一:否则[带着热 session 但已满员]的账号
+        //    会一直压住[空闲的冷账号],新号永远轮不到——那正是用户抱怨的
+        //    [设了并发 2 却只开一个号].热 session 复用的省钱收益在 spread
+        //    模式下主动让位给并发(这正是用户切这个模式的目的).
         (spread ? a.busy - b.busy || a.tier - b.tier : a.tier - b.tier) ||
-        // 2) 同一梯队里：已用过的账号 > 从未用过的账号（不轻易碰新账号）
+        // 2) 同一梯队里:已用过的账号 > 从未用过的账号(不轻易碰新账号)
         a.used - b.used ||
-        // 3) sticky：优先有空闲槽位，其次粘性（最近用过的优先）；
-        //    spread：随后按在途数平摊（同 busy 档内继续摊薄）
+        // 3) sticky:优先有空闲槽位,其次粘性(最近用过的优先);
+        //    spread:随后按在途数平摊(同 busy 档内继续摊薄)
         (spread ? 0 : a.busy - b.busy) ||
         (spread ? a.load - b.load : b.lastUsedAt - a.lastUsedAt) ||
         a.load - b.load ||
         a.exhausted - b.exhausted ||
-        // 余额买不起 / 时长额度用尽的账号排最后（复用它的热 session 仍优先——不计费）
+        // 余额买不起 / 时长额度用尽的账号排最后(复用它的热 session 仍优先——不计费)
         a.unaffordable - b.unaffordable ||
         a.unitsOut - b.unitsOut ||
         a.rotation - b.rotation,
@@ -1464,9 +1464,9 @@ export class AccountRuntimes {
   }
 
   /**
-   * 该账号是否"被使用过"：有过 admit / 有活跃 session / 发过请求。
-   * 从未用过的账号在选号里排最后——只在已用账号都不可用（冷却/额度耗尽/
-   * 满员排队超时）时才启用，避免把每个账号都摸一遍（账号农场特征）。
+   * 该账号是否"被使用过":有过 admit / 有活跃 session / 发过请求.
+   * 从未用过的账号在选号里排最后——只在已用账号都不可用(冷却/额度耗尽/
+   * 满员排队超时)时才启用,避免把每个账号都摸一遍(账号农场特征).
    * @param {string} key
    * @param {import('./session-manager.js').SessionManager} [sessions]
    */
@@ -1479,15 +1479,15 @@ export class AccountRuntimes {
   }
 
   /**
-   * 选号并确保会话（粘性优先，见 candidateKeys）：
-   * 同模型热 session > 已用过的账号（最近用过的优先）> 从未用过的账号；
-   * 冷却 / 余额不足 / 新会话预算耗尽的账号跳过。
+   * 选号并确保会话(粘性优先,见 candidateKeys):
+   * 同模型热 session > 已用过的账号(最近用过的优先)> 从未用过的账号;
+   * 冷却 / 余额不足 / 新会话预算耗尽的账号跳过.
    * @param {string} model
    * @param {{ sessionBudget?: { remaining: number | null }, skipKeys?: Set<string> }} [opts]
-   *   sessionBudget: 本次下游请求还能新建几个上游会话（Freebucks 计费单位）。
-   *   **remaining 为 null 表示不限额**（控制台预算设为 0 = 不限），恒放行且不递减。
-   *   复用已有热 session 不消耗预算；预算耗尽后只允许复用，不再 admit。
-   *   skipKeys: 本次请求已排队超时过的账号，不再重复选中。
+   *   sessionBudget: 本次下游请求还能新建几个上游会话(Freebucks 计费单位).
+   *   remaining 为 null 表示不限额(控制台预算设为 0 = 不限),恒放行且不递减.
+   *   复用已有热 session 不消耗预算;预算耗尽后只允许复用,不再 admit.
+   *   skipKeys: 本次请求已排队超时过的账号,不再重复选中.
    */
   async acquireForModel(model, opts = {}) {
     return this._withAcquireLock(() =>
@@ -1516,11 +1516,11 @@ export class AccountRuntimes {
     const order = this.candidateKeys(model, { skipKeys: opts.skipKeys })
     /** @type {Array<{ key: string, email?: string, code?: string, message: string }>} */
     const failures = []
-    /** 出口级故障（如地理封锁）的首条记录：出现即停止选号。 */
+    /** 出口级故障(如地理封锁)的首条记录:出现即停止选号. */
     let fatalFailure = null
 
-    // 全部账号都在冷却/无可用账号时，把冷却明细带进报错（而不是 "Tried 0"），
-    // 让用户一眼看出每个账号冷却到几点、因为什么。
+    // 全部账号都在冷却/无可用账号时,把冷却明细带进报错(而不是 "Tried 0"),
+    // 让用户一眼看出每个账号冷却到几点,因为什么.
     if (!order.length) {
       for (const key of keys) {
         if (this.isCoolingDown(key, model)) {
@@ -1563,9 +1563,9 @@ export class AccountRuntimes {
           ...(err?.fatal === true ? { fatal: true } : {}),
         }
         failures.push(rec)
-        // 出口级故障（地理封锁）：所有账号共享同一出口，继续换号只会把每个
-        // 账号的 Freebucks 依次买断（一次 admit = 一整小时）却拿不到答案。
-        // 立即停止选号，把原因原样交给用户 —— 出路是换代理，不是换号。
+        // 出口级故障(地理封锁):所有账号共享同一出口,继续换号只会把每个
+        // 账号的 Freebucks 依次买断(一次 admit = 一整小时)却拿不到答案.
+        // 立即停止选号,把原因原样交给用户 —— 出路是换代理,不是换号.
         // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
         if (err?.fatal === true) {
           fatalFailure = rec
@@ -1576,20 +1576,20 @@ export class AccountRuntimes {
 
       const reusable = rt.sessions.isUsableForModel(model)
       /**
-       * ★ **「上游有没有一条我能接管的已付费会话」——惰性查询**（2026-10-04 铁律）。
+       *  [上游有没有一条我能接管的已付费会话]——惰性查询(2026-10-04 铁律).
        *
-       * 一次 admit 买断一小时，这一小时内继续发请求**边际成本为 0**；
-       * 而 `balance: 0` 只说明"再买一条买不起"，**不代表已付费的会话不能用**。
-       * 所以额度闸门只该约束"新买一条"，绝不能把一条**已付过钱**的会话挡在外面。
+       * 一次 admit 买断一小时,这一小时内继续发请求边际成本为 0;
+       * 而 balance: 0 只说明"再买一条买不起",不代表已付费的会话不能用.
+       * 所以额度闸门只该约束"新买一条",绝不能把一条已付过钱的会话挡在外面.
        *
-       * ⚠️ **必须是惰性的**（只在额度闸门即将拒绝时才查）：
-       * 首版把它放在热路径上无条件执行，结果每个请求都多发一次
-       * `GET /session`，而且那个 GET 在官方建会话路径上会**建出会话** ——
-       * 凭空造出一条 `model=A` 的会话，紧接着请求模型 B 就撞
-       * `paid_window_model_mismatch`（实测把既有测试打红）。
+       *  必须是惰性的(只在额度闸门即将拒绝时才查):
+       * 首版把它放在热路径上无条件执行,结果每个请求都多发一次
+       * GET /session,而且那个 GET 在官方建会话路径上会建出会话 ——
+       * 凭空造出一条 model=A 的会话,紧接着请求模型 B 就撞
+       * paid_window_model_mismatch(实测把既有测试打红).
        *
-       * 清单可能过期（**另一个部署**刚买的），所以只有在本地上次快照没命中时
-       * 才补一次只读探测；探测天然被"额度即将拒绝"这个罕见状态限制频率。
+       * 清单可能过期(另一个部署刚买的),所以只有在本地上次快照没命中时
+       * 才补一次只读探测;探测天然被"额度即将拒绝"这个罕见状态限制频率.
        */
       let paidUpstream = false
       const checkPaidUpstream = async () => {
@@ -1598,14 +1598,14 @@ export class AccountRuntimes {
           paidUpstream = true
         } else {
           /**
-           * 本地上次快照没命中 → 补一次**只读探测**（`GET /session`，不建会话、
-           * 不扣费）。这是唯一能看见"别的部署建的会话"的途径。
+           * 本地上次快照没命中 → 补一次只读探测(GET /session,不建会话,
+           * 不扣费).这是唯一能看见"别的部署建的会话"的途径.
            *
-           * ⚠️ 早期版本额外要求 `hasInventorySnapshot()` 为真（怕 GET 建出会话），
-           * 实测那会让**从未对有账的账号**永远探不到 —— 而它恰恰是最需要探测的
-           * 场景（新部署/刚导入，本地什么都没有）。只读取形态（带 instanceId 的
-           * `include-unused-rate-limits`）在真实上游不建会话；测试里那个"GET 会
-           * 建会话"的 mock 是 `get_claim_admit` 专用形态，与这里不同。
+           *  早期版本额外要求 hasInventorySnapshot() 为真(怕 GET 建出会话),
+           * 实测那会让从未对有账的账号永远探不到 —— 而它恰恰是最需要探测的
+           * 场景(新部署/刚导入,本地什么都没有).只读取形态(带 instanceId 的
+           * include-unused-rate-limits)在真实上游不建会话;测试里那个"GET 会
+           * 建会话"的 mock 是 get_claim_admit 专用形态,与这里不同.
            */
           await rt.sessions.refresh().catch(() => {})
           paidUpstream = !!rt.sessions.holderFor(model)
@@ -1625,54 +1625,54 @@ export class AccountRuntimes {
         return paidUpstream
       }
       /**
-       * 额度闸门（units / freebucks / 新会话预算）**只约束"新买一条"**。
-       * 只有在**真的要新买**时才去问上游"有没有可接管的已付费会话"
-       * （惰性 —— 热路径与可用账号路径零开销），有则跳过闸门直接复用。
+       * 额度闸门(units / freebucks / 新会话预算)只约束"新买一条".
+       * 只有在真的要新买时才去问上游"有没有可接管的已付费会话"
+       * (惰性 —— 热路径与可用账号路径零开销),有则跳过闸门直接复用.
        */
       /**
-       * ⚠️ 只在**额度真的不够**时才去问上游"有没有可接管的已付费会话"。
+       *  只在额度真的不够时才去问上游"有没有可接管的已付费会话".
        *
-       * 不能写成 `reusable || await checkPaidUpstream()` —— 那样对**额度充足**的
-       * 普通请求也会多发一次 `GET /session`，而那个 GET 在官方建会话路径上会
-       * **建出会话**（`mockMode='get_claim_admit'` 的 GET 直接回 active），
-       * 于是凭空多出一条会话去撞 `paid_window_model_mismatch`（实测把既有测试打红）。
+       * 不能写成 reusable || await checkPaidUpstream() —— 那样对额度充足的
+       * 普通请求也会多发一次 GET /session,而那个 GET 在官方建会话路径上会
+       * 建出会话(mockMode='get_claim_admit' 的 GET 直接回 active),
+       * 于是凭空多出一条会话去撞 paid_window_model_mismatch(实测把既有测试打红).
        *
-       * 正确触发条件：本账号**买不起**（两道额度闸门任一命中）。那时才值得多一次
-       * 只读探测 —— 因为它可能揭示"钱虽花完、但那一小时还在"。
+       * 正确触发条件:本账号买不起(两道额度闸门任一命中).那时才值得多一次
+       * 只读探测 —— 因为它可能揭示"钱虽花完,但那一小时还在".
        */
       if (!reusable) {
         // 上游对"余额不够"的判定就两条——额度跑完 / 本次请求所需 Freebucks
-        // 高于剩余额度——命中任一条就可能直接封号，所以**只在真的要新买一条
-        // 计费会话时**才拦。注意不能提到 reusable 判断之外：活跃的同模型热
-        // session 在 admit 时就已经预扣了整小时，复用它不再产生费用，拦下来
-        // 反而等于把已经付过的钱丢掉、再去别的号上买一条新的。
-        // ① session_units 闸门（时长预算）：一个会话**两本账都扣**（一手实测），
-        //    所以 units 不够时同样不该去买——上游会用 rate_limited 拒掉，
-        //    白白一次 admit 往返。⚠️ recentCount 是小数，比较用 >=。
+        // 高于剩余额度——命中任一条就可能直接封号,所以只在真的要新买一条
+        // 计费会话时才拦.注意不能提到 reusable 判断之外:活跃的同模型热
+        // session 在 admit 时就已经预扣了整小时,复用它不再产生费用,拦下来
+        // 反而等于把已经付过的钱丢掉,再去别的号上买一条新的.
+        // ① session_units 闸门(时长预算):一个会话两本账都扣(一手实测),
+        //    所以 units 不够时同样不该去买——上游会用 rate_limited 拒掉,
+        //    白白一次 admit 往返. recentCount 是小数,比较用 >=.
         const units = rt.sessions.sessionUnitsFor?.(model)
         const fbGate = rt.sessions.freebucksFor?.(model)
         /**
-         * ★ **两道额度闸门任一即将拒绝时，先问上游"有没有可接管的已付费会话"**
-         * （2026-10-04 铁律：`balance: 0` 只说明"再买一条买不起"，
-         * **不代表已付费的那一小时不能用**；面板都能显示它，调度就必须能用它）。
+         *  两道额度闸门任一即将拒绝时,先问上游"有没有可接管的已付费会话"
+         * (2026-10-04 铁律:balance: 0 只说明"再买一条买不起",
+         * 不代表已付费的那一小时不能用;面板都能显示它,调度就必须能用它).
          *
-         * 放在这里（而不是函数开头）是刻意的：只有**真的要新买一条**时才付这次
-         * 只读探测的成本。额度充足的普通请求零开销。
+         * 放在这里(而不是函数开头)是刻意的:只有真的要新买一条时才付这次
+         * 只读探测的成本.额度充足的普通请求零开销.
          */
         const quotaLooksBlocked =
           (units?.known && units.exhausted) ||
           (fbGate?.known && fbGate.affordable === false)
         /**
-         * ★ **额度闸门即将拒绝时，先问上游"有没有我能接管的已付费会话"**
-         * （2026-10-04 铁律：一次 admit 买断一小时，这一小时内继续发请求边际
-         * 成本为 0；`balance: 0` 只说明"再买一条买不起"，不代表那一小时不能用）。
+         *  额度闸门即将拒绝时,先问上游"有没有我能接管的已付费会话"
+         * (2026-10-04 铁律:一次 admit 买断一小时,这一小时内继续发请求边际
+         * 成本为 0;balance: 0 只说明"再买一条买不起",不代表那一小时不能用).
          *
-         * ⚠️ **只跳过闸门，绝不在这里 `return rt`**（实测踩到）：
-         * `acquireForModel` 的契约是"**只选号，不建会话**" —— 真正建/接管会话
-         * 在本函数**更下方**的 `rt.sessions.ensureSession(model)`。早期版本在这里
-         * return，等于跳过 ensureSession → 会话从未接管 → 报 `no_session`
-         * （实测测试红在 429）。正确做法是放行选号，让它走到 ensureSession ——
-         * 那里会用 `holderFor()` 带 takeover 头接管，不新买。
+         *  只跳过闸门,绝不在这里 return rt(实测踩到):
+         * acquireForModel 的契约是"只选号,不建会话" —— 真正建/接管会话
+         * 在本函数更下方的 rt.sessions.ensureSession(model).早期版本在这里
+         * return,等于跳过 ensureSession → 会话从未接管 → 报 no_session
+         * (实测测试红在 429).正确做法是放行选号,让它走到 ensureSession ——
+         * 那里会用 holderFor() 带 takeover 头接管,不新买.
          */
         const paidTakeover = quotaLooksBlocked && (await checkPaidUpstream())
         if (paidTakeover) {
@@ -1702,9 +1702,9 @@ export class AccountRuntimes {
           })
           continue
         }
-        // ② Freebucks 闸门（货币预算）：**这才是上游真正的拒付/封号判据**——
-        //    实测 deepseek-v4-flash 在 units=0.1/6 完全没超标的情况下仍被拒，
-        //    理由是 freebucksShortfall{price,balance}。所以两道闸门都必须过。
+        // ② Freebucks 闸门(货币预算):这才是上游真正的拒付/封号判据——
+        //    实测 deepseek-v4-flash 在 units=0.1/6 完全没超标的情况下仍被拒,
+        //    理由是 freebucksShortfall{price,balance}.所以两道闸门都必须过.
         const fb = rt.sessions.freebucksFor?.(model)
         if (!paidTakeover && fb?.known && fb.affordable === false) {
           failures.push({
@@ -1713,9 +1713,9 @@ export class AccountRuntimes {
             code: 'freebucks_exhausted',
             reason: fb.reason || null,
             /**
-             * 把这笔账挂在 failure 上：顶层错误体据此聚合出"花了多少 /
-             * 剩多少 / 何时恢复"（见 summarizeFreebucks）。
-             * 只带数值、不带标识 —— 脱敏由聚合那一步负责。
+             * 把这笔账挂在 failure 上:顶层错误体据此聚合出"花了多少 /
+             * 剩多少 / 何时恢复"(见 summarizeFreebucks).
+             * 只带数值,不带标识 —— 脱敏由聚合那一步负责.
              */
             freebucks: {
               price: fb.price ?? null,
@@ -1745,11 +1745,11 @@ export class AccountRuntimes {
           })
           continue
         }
-        // 新会话预算：上游按会话占用时长计费，一个失败的下游请求不该把
-        // 多个账号各买一条计费会话（issue #7）。被上游拒绝的 admit
-        // （rate_limited 等）不占额度，所以只在这里做「还有没有预算」的预检，
-        // 真正扣减在 admit 成功之后。
-        // remaining === null = 不限额（控制台的 0 = 不限）：恒放行，不判耗尽。
+        // 新会话预算:上游按会话占用时长计费,一个失败的下游请求不该把
+        // 多个账号各买一条计费会话(issue #7).被上游拒绝的 admit
+        // (rate_limited 等)不占额度,所以只在这里做[还有没有预算]的预检,
+        // 真正扣减在 admit 成功之后.
+        // remaining === null = 不限额(控制台的 0 = 不限):恒放行,不判耗尽.
         // 见 .agents/notes/implemented/bug-fix/2026-09-24-zero-session-budget-means-unlimited.md
         if (
           opts.sessionBudget &&
@@ -1771,8 +1771,8 @@ export class AccountRuntimes {
       try {
         const reusedSession = reusable
         await rt.sessions.ensureSession(model)
-        // 只有真的新建了计费会话才扣预算（复用热 session / 被拒绝的 admit 不扣）。
-        // remaining === null（0 = 不限）不递减：它不是一个会被用尽的额度。
+        // 只有真的新建了计费会话才扣预算(复用热 session / 被拒绝的 admit 不扣).
+        // remaining === null(0 = 不限)不递减:它不是一个会被用尽的额度.
         if (
           !reusedSession &&
           opts.sessionBudget &&
@@ -1783,13 +1783,13 @@ export class AccountRuntimes {
         }
         this.clearCooldown(key, model)
         this._setLastSuccessKey(key)
-        // 指针推进到"被选中账号"的下一位：冷却账号被跳过时依然保持公平轮询
-        // （若只按 +1 推进，跳过冷却账号会让列表末尾的账号被选中两次）。
+        // 指针推进到"被选中账号"的下一位:冷却账号被跳过时依然保持公平轮询
+        // (若只按 +1 推进,跳过冷却账号会让列表末尾的账号被选中两次).
         this._rr = (keys.indexOf(key) + 1) % Math.max(keys.length, 1)
         this._recordSuccess(key)
-        // 预留一个槽位意向：选号发生在拿 chat 锁**之前**，"刚被选中、正在拿锁"
-        // 的请求必须被后续并发请求看见，否则 spread 模式会全部挤到同一个账号上。
-        // 调用方拿到 chat 锁（或请求失败）后必须调用 rt.releaseReservedSlot()。
+        // 预留一个槽位意向:选号发生在拿 chat 锁之前,"刚被选中,正在拿锁"
+        // 的请求必须被后续并发请求看见,否则 spread 模式会全部挤到同一个账号上.
+        // 调用方拿到 chat 锁(或请求失败)后必须调用 rt.releaseReservedSlot().
         rt.releaseReservedSlot = this.reserveSlot(key)
         logger.info('selected account for model', {
           key,
@@ -1809,29 +1809,29 @@ export class AccountRuntimes {
           ...(err?.fatal === true ? { fatal: true } : {}),
         }
         failures.push(rec)
-        // 出口级故障（地理封锁）：**出口**属性不是账号属性 —— 所有账号共享同一
-        // 出口，换号只会把每个账号的 Freebucks 依次买断（一次 admit = 一整小时）
-        // 却永远拿不到答案。也不该冷却账号（它不是账号的错）。
-        // 立即停止选号，把原因原样交给用户：出路是换代理，不是换号。
+        // 出口级故障(地理封锁):出口属性不是账号属性 —— 所有账号共享同一
+        // 出口,换号只会把每个账号的 Freebucks 依次买断(一次 admit = 一整小时)
+        // 却永远拿不到答案.也不该冷却账号(它不是账号的错).
+        // 立即停止选号,把原因原样交给用户:出路是换代理,不是换号.
         // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
         if (err?.fatal === true) {
           fatalFailure = rec
           break
         }
-        // ⚠️ 槽位占用类**不该冷却账号**：它不是账号故障，而是"槽位正在被用"
-        // —— 等它空出即可。冷却会把一个**可用**账号钉死一段时间，
-        // 表现为"明明有号却全都冷却中"。AGENTS.md 对 purchase_capacity
-        // 已有明确规定；purchase_in_use / purchase_claim_released /
-        // premium_slot_taken 属同一类（见 client.js 409 状态全集注释）。
+        //  槽位占用类不该冷却账号:它不是账号故障,而是"槽位正在被用"
+        // —— 等它空出即可.冷却会把一个可用账号钉死一段时间,
+        // 表现为"明明有号却全都冷却中".AGENTS.md 对 purchase_capacity
+        // 已有明确规定;purchase_in_use / purchase_claim_released /
+        // premium_slot_taken 属同一类(见 client.js 409 状态全集注释).
         //
-        // 实测反例（2026-10-03）：全新账号配额 0/6、无购买无退款，
-        // 仅因上一次会话尚未释放而拿到 purchase_in_use，就被冷却
-        // 到 20:20 —— 于是"刚导入的干净账号立刻不可用"。
+        // 实测反例(2026-10-03):全新账号配额 0/6,无购买无退款,
+        // 仅因上一次会话尚未释放而拿到 purchase_in_use,就被冷却
+        // 到 20:20 —— 于是"刚导入的干净账号立刻不可用".
         if (PAID_WINDOW_BOUND_CODES.has(String(err?.code))) {
           /**
-           * 该账号这一小时已买给别的模型（issue #24）。**不释放、不冷却**：
-           * 那条会话仍在服务旧模型，冷却它等于把还在生效的额度判死。
-           * 直接换下一个账号；这一个小时内它不该再被这个模型选中。
+           * 该账号这一小时已买给别的模型(issue #24).不释放,不冷却:
+           * 那条会话仍在服务旧模型,冷却它等于把还在生效的额度判死.
+           * 直接换下一个账号;这一个小时内它不该再被这个模型选中.
            */
           logger.warn('account holds a paid session for another model; skipping', {
             key,
@@ -1843,13 +1843,13 @@ export class AccountRuntimes {
           })
         } else if (SLOT_BUSY_CODES.has(String(err?.code))) {
           /**
-           * ⚠️ 必须把**上游回执的细节**记下来（2026-10-04 教训）。
+           *  必须把上游回执的细节记下来(2026-10-04 教训).
            *
-           * `purchase_capacity` / `purchase_in_use` / `premium_slot_taken` 的
-           * 回执里带 `currentInstanceId` / `nextExpiryAt` / `slotLimit` ——
-           * 那是**定位"槽位被谁占"的唯一线索**。此前只记 code，于是用户遇到
-           * 「上游说 status:none、balance 15，本地却一直 slot busy」时
-           * 完全查不出是谁占的（我为此白查了一轮）。
+           * purchase_capacity / purchase_in_use / premium_slot_taken 的
+           * 回执里带 currentInstanceId / nextExpiryAt / slotLimit ——
+           * 那是定位"槽位被谁占"的唯一线索.此前只记 code,于是用户遇到
+           * [上游说 status:none,balance 15,本地却一直 slot busy]时
+           * 完全查不出是谁占的(我为此白查了一轮).
            */
           const b = err?.body && typeof err.body === 'object' ? err.body : {}
           logger.warn('account session slot busy; not cooling', {
@@ -1880,14 +1880,14 @@ export class AccountRuntimes {
       }
     }
 
-    // 全部账号都是"余额买不起"时给出**独立错误码**：这跟"账号都在冷却/没号"
-    // 是完全不同的处境（前者等每日池刷新就好，后者要加号/等冷却），调用方与
-    // 控制台不该看到同一个笼统的 no_available_account。
-    // 两本账任一耗尽都算"额度用尽"（与分开的闸门一一对应）：
-    //   freebucks_exhausted = 货币预算不够（上游真正的拒付判据）
+    // 全部账号都是"余额买不起"时给出独立错误码:这跟"账号都在冷却/没号"
+    // 是完全不同的处境(前者等每日池刷新就好,后者要加号/等冷却),调用方与
+    // 控制台不该看到同一个笼统的 no_available_account.
+    // 两本账任一耗尽都算"额度用尽"(与分开的闸门一一对应):
+    //   freebucks_exhausted = 货币预算不够(上游真正的拒付判据)
     //   units_exhausted     = 时长预算用尽
-    // 出口级故障（地理封锁）：它是**出口**属性不是账号属性，换号无意义。
-    // 必须原样抛出（带 countryCode），让用户知道该换代理而不是去查账号。
+    // 出口级故障(地理封锁):它是出口属性不是账号属性,换号无意义.
+    // 必须原样抛出(带 countryCode),让用户知道该换代理而不是去查账号.
     // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
     if (fatalFailure) {
       throw new UpstreamError(
@@ -1895,8 +1895,8 @@ export class AccountRuntimes {
         {
           status: 403,
           code: fatalFailure.code,
-          // 出口级故障：原因要让用户看懂（该换代理而非换号），但仍不给
-          // 账号标识 —— 它是出口的属性，与具体哪个账号无关。
+          // 出口级故障:原因要让用户看懂(该换代理而非换号),但仍不给
+          // 账号标识 —— 它是出口的属性,与具体哪个账号无关.
           body: {
             model,
             failures: [{ code: fatalFailure.code }],
@@ -1904,26 +1904,26 @@ export class AccountRuntimes {
             tried: 1,
             egress: true,
           },
-          // 必须原样带上 fatal：外层据此立即收场，不再重试换号。
+          // 必须原样带上 fatal:外层据此立即收场,不再重试换号.
           fatal: true,
         },
       )
     }
     /**
-     * 全部账号都「这一小时已买给别的模型」（issue #24）。
+     * 全部账号都这一小时已买给别的模型.
      *
-     * 这是**与额度无关**的一类不可用：账号健康、有钱、有会话，只是每个号在
-     * 付费时段内各绑一个模型，此刻谁都腾不出这个模型的槽位。此前它会混进
-     * 笼统的 no_available_account，用户只能去查账号/额度——查不出任何问题，
-     * 因为**账号确实是好的**（面板也显示 ok）。
+     * 这是与额度无关的一类不可用:账号健康,有钱,有会话,只是每个号在
+     * 付费时段内各绑一个模型,此刻谁都腾不出这个模型的槽位.此前它会混进
+     * 笼统的 no_available_account,用户只能去查账号/额度——查不出任何问题,
+     * 因为账号确实是好的(面板也显示 ok).
      *
-     * 给独立错误码，并把「什么时候能恢复」说清楚：等最早的那条会话到期。
+     * 给独立错误码,并把[什么时候能恢复]说清楚:等最早的那条会话到期.
      */
     const allPaidBound =
       failures.length > 0 &&
       failures.every((f) => PAID_WINDOW_BOUND_CODES.has(f.code))
     if (allPaidBound) {
-      // 恢复时刻 = 最早到期的那条已付费会话（批号里取最小 expiresAt）
+      // 恢复时刻 = 最早到期的那条已付费会话(批号里取最小 expiresAt)
       let resumeAtMs = null
       for (const f of failures) {
         const exp = Date.parse(f?.body?.expiresAt || '')
@@ -1950,7 +1950,7 @@ export class AccountRuntimes {
             reasons: countReasons(failures),
             tried: failures.length,
             banned: 0,
-            // 每个账号此刻绑定的模型：用户据此改用它们（而不是干等）
+            // 每个账号此刻绑定的模型:用户据此改用它们(而不是干等)
             boundModels: failures
               .map((f) => f?.body?.boundModel)
               .filter(Boolean),
@@ -1964,10 +1964,10 @@ export class AccountRuntimes {
     const allExhausted =
       failures.length > 0 &&
       failures.every((f) => EXHAUST_CODES.has(f.code))
-    // 全部账号都只是被「本次请求的新会话预算」拦下：这是**本地**请求级限制，
-    // 不是账号不可用，更不是上游没额度。必须给独立错误码——否则用户看到的是
-    // 笼统的 no_available_account，会去查账号/额度，而真正该做的是重试（下个请求
-    // 重新拿到预算）或调高控制台「额度保护」→ 单请求新会话上限。
+    // 全部账号都只是被[本次请求的新会话预算]拦下:这是本地请求级限制,
+    // 不是账号不可用,更不是上游没额度.必须给独立错误码——否则用户看到的是
+    // 笼统的 no_available_account,会去查账号/额度,而真正该做的是重试(下个请求
+    // 重新拿到预算)或调高控制台[额度保护]→ 单请求新会话上限.
     // 见 .agents/notes/implemented/bug-fix/2026-09-24-zero-session-budget-means-unlimited.md
     const allBudgetExhausted =
       failures.length > 0 &&
@@ -1994,33 +1994,33 @@ export class AccountRuntimes {
       )
     }
     if (allExhausted) {
-      // ⚠️ 顶层 message 也**不能**拼 failures 的原始 message：那条 message 里
-      // 可能带邮箱/账号标识，而 message 是下游最先看到、最容易被整段转发的字段。
-      // 这里只给聚合概览（几个账号、什么类型），明细看 details.reasons。
+      //  顶层 message 也不能拼 failures 的原始 message:那条 message 里
+      // 可能带邮箱/账号标识,而 message 是下游最先看到,最容易被整段转发的字段.
+      // 这里只给聚合概览(几个账号,什么类型),明细看 details.reasons.
       const summary = Object.entries(countReasons(failures))
         .map(([c, n]) => `${c}×${n}`)
         .join(', ')
-      // 两个闸门都命中时用更中性的 freebucks_exhausted 保持兼容（既有调用方/测试
-      // 认这个码）；只有全是 units 用尽时才报 units_exhausted。
+      // 两个闸门都命中时用更中性的 freebucks_exhausted 保持兼容(既有调用方/测试
+      // 认这个码);只有全是 units 用尽时才报 units_exhausted.
       const onlyUnits = failures.every((f) => f.code === 'units_exhausted')
       const code = onlyUnits ? 'units_exhausted' : 'freebucks_exhausted'
       /**
-       * ★ **全池额度耗尽 = 终态，必须一次就收场**（2026-10-04 真实事故）。
+       *  全池额度耗尽 = 终态,必须一次就收场(2026-10-04 真实事故).
        *
-       * 旧行为：这里抛单账号级的 `freebucks_exhausted`，而外层
-       * `shouldSwitchAccountOnError(429, …)` 把 429 判成"该换号" →
-       * **再轮一遍全部账号** → 全部买不起 → 再抛同样的错 → 循环到 maxAttempts。
-       * 实测（远程日志 14:01:47-14:02:00）：13 个客户端请求，每个都白轮 3 次，
-       * 每次都要遍历所有账号查额度 —— 而这些日志本身把日志缓冲冲爆了，
-       * 导致用户事后**查不到更早的排障记录**（这是我加日志缓冲太小之外的连带伤害）。
+       * 旧行为:这里抛单账号级的 freebucks_exhausted,而外层
+       * shouldSwitchAccountOnError(429, ...) 把 429 判成"该换号" →
+       * 再轮一遍全部账号 → 全部买不起 → 再抛同样的错 → 循环到 maxAttempts.
+       * 实测(远程日志 14:01:47-14:02:00):13 个客户端请求,每个都白轮 3 次,
+       * 每次都要遍历所有账号查额度 —— 而这些日志本身把日志缓冲冲爆了,
+       * 导致用户事后查不到更早的排障记录(这是我加日志缓冲太小之外的连带伤害).
        *
-       * 现在：这是**聚合结论**（遍历完所有账号才得出），不是某个账号的瞬时故障 ——
-       * 换号不可能改变它（池子里每一个都被检查过了）。所以：
-       *   1) 附上 `no_available_account` 这个**终态语义**（外层 isTerminal 直接返回）；
-       *   2) 带上 `resetAt`，让下游知道**何时**能恢复，而不是盲目重试。
+       * 现在:这是聚合结论(遍历完所有账号才得出),不是某个账号的瞬时故障 ——
+       * 换号不可能改变它(池子里每一个都被检查过了).所以:
+       *   1) 附上 no_available_account 这个终态语义(外层 isTerminal 直接返回);
+       *   2) 带上 resetAt,让下游知道何时能恢复,而不是盲目重试.
        *
-       * 注意保留 `code`（freebucks_exhausted / units_exhausted）以兼容既有消费方，
-       * 只在消息与 body 里补终态信息 —— 判据由 `terminalExhausted` 标记表达。
+       * 注意保留 code(freebucks_exhausted / units_exhausted)以兼容既有消费方,
+       * 只在消息与 body 里补终态信息 —— 判据由 terminalExhausted 标记表达.
        */
       throw new UpstreamError(
         `No Freebuff account can afford model ${model} (${onlyUnits ? 'session units' : 'Freebucks'} exhausted). ${failures.length} account(s) tried (${summary}).` +
@@ -2029,8 +2029,8 @@ export class AccountRuntimes {
           status: 429,
           code,
           /**
-           * 终态标记：**池内每个账号都因额度被拒**，重试（换号/同号）都不会成功。
-           * 外层 proxy.js 据此直接返回，不再轮 maxAttempts 轮。
+           * 终态标记:池内每个账号都因额度被拒,重试(换号/同号)都不会成功.
+           * 外层 proxy.js 据此直接返回,不再轮 maxAttempts 轮.
            */
           terminalExhausted: true,
           body: {
@@ -2046,23 +2046,23 @@ export class AccountRuntimes {
       )
     }
     /**
-     * 笼统兜底：`no_available_account`。
+     * 笼统兜底:no_available_account.
      *
-     * ⚠️ 这里**也必须**带上额度账。真实部署里最常见的就是这个码：账号没封
-     * （banned=0）、没冷却，只是余额买不起下一个小时。此前它只回"没有可用
-     * 账号"，用户据此去查账号/凭证 —— 查不出任何问题，只能反复重试。
-     * 带上 balance / price / resetAt 后，这句话才自解释。
+     *  这里也必须带上额度账.真实部署里最常见的就是这个码:账号没封
+     * (banned=0),没冷却,只是余额买不起下一个小时.此前它只回"没有可用
+     * 账号",用户据此去查账号/凭证 —— 查不出任何问题,只能反复重试.
+     * 带上 balance / price / resetAt 后,这句话才自解释.
      */
     const fbSummary = summarizeFreebucks(failures, this, model)
     /**
-     * ⚠️ message 里**逐账号列出**每一笔账，不再只报"最差那个"。
+     *  message 里逐账号列出每一笔账,不再只报"最差那个".
      *
-     * 实测误导（2026-10-04 用户报）：池里 3 个号，其中**有 15 点**的那个被
-     * 正常放行、卡在槽位；而 message 只报 `balance 0 < price 15`（那是另外两个
-     * 0 余额号的账）→ 用户看到"页面明明显示 15，却说我一点都没有"。
+     * 实测误导(2026-10-04 用户报):池里 3 个号,其中有 15 点的那个被
+     * 正常放行,卡在槽位;而 message 只报 balance 0 < price 15(那是另外两个
+     * 0 余额号的账)→ 用户看到"页面明明显示 15,却说我一点都没有".
      *
-     * 数字必须与账号一一对应才不误导。message 不写邮箱（那是 PII，
-     * 且 message 最容易被整段转发），只按序号列出每笔账。
+     * 数字必须与账号一一对应才不误导.message 不写邮箱(那是 PII,
+     * 且 message 最容易被整段转发),只按序号列出每笔账.
      */
     const ledger = (fbSummary?.accounts || [])
       .map(
@@ -2095,11 +2095,11 @@ export class AccountRuntimes {
   }
 
   /**
-   * 换号/重试选号：
-   * - switchAccount（429/5xx/403 账号级故障）→ 冷却当前账号，然后换下一个账号；
-   *   noCooldown（如 free_mode_capacity_deferred 瞬时容量）→ 不冷却，优先复用热 session；
-   * - 纯 gate 错误（session_expired/superseded 等）→ 同号强制 re-admit 一次（不冷却），
-   *   失败则换号。
+   * 换号/重试选号:
+   * - switchAccount(429/5xx/403 账号级故障)→ 冷却当前账号,然后换下一个账号;
+   *   noCooldown(如 free_mode_capacity_deferred 瞬时容量)→ 不冷却,优先复用热 session;
+   * - 纯 gate 错误(session_expired/superseded 等)→ 同号强制 re-admit 一次(不冷却),
+   *   失败则换号.
    * @param {string} model
    * @param {{ preferredKey?: string | null, gateCode?: string | null, retryAfterMs?: number | null, switchAccount?: boolean, noCooldown?: boolean }} [opts]
    */
@@ -2115,12 +2115,12 @@ export class AccountRuntimes {
         opts.switchAccount ||
         (opts.gateCode && SWITCHABLE_CODES.has(opts.gateCode))
       ) {
-        // ⚠️ 槽位占用类**不冷却**：它不是账号故障，只是"槽位正在被用"，
-        // 等它空出即可。冷却会把可用账号钉死（实测：干净账号仅因上一次会话
-        // 未释放就拿到 purchase_claim_released，随即被冷却 → 立刻不可用）。
-        // 与 ensureSession 里的 slotBusyCodes 同一套判据。
-        // 付费时段绑别模型（issue #24）同样不冷却：账号是健康的，只是这一小时
-        // 内腾不出这个模型的槽位。冷却会把仍在生效的额度判死。
+        //  槽位占用类不冷却:它不是账号故障,只是"槽位正在被用",
+        // 等它空出即可.冷却会把可用账号钉死(实测:干净账号仅因上一次会话
+        // 未释放就拿到 purchase_claim_released,随即被冷却 → 立刻不可用).
+        // 与 ensureSession 里的 slotBusyCodes 同一套判据.
+        // 付费时段绑别模型(issue #24)同样不冷却:账号是健康的,只是这一小时
+        // 内腾不出这个模型的槽位.冷却会把仍在生效的额度判死.
         if (
           !opts.noCooldown &&
           !SLOT_BUSY_CODES.has(String(opts.gateCode)) &&
@@ -2141,16 +2141,16 @@ export class AccountRuntimes {
             model,
           )
         } else if (opts.switchAccount) {
-          // noCooldown 且 switchAccount（free_mode_capacity_deferred /
-          // account_busy / runtime_superseded）：**不是真故障**。
-          // 分两种情况：
-          // 1) account_busy / runtime_superseded：调用方（chat 流程）**未持有**
-          //    原账号的锁（acquire 超时 / 已被顶替），此时 busy 判断是准确的
-          //    ——原账号在途已满时不再把它钉住，走全新选号让有空闲槽位的账号
-          //    承接（并发上限即"满了换号"的阈值，见 candidateKeys）。
-          // 2) 其他瞬时 gate（capacity_deferred 等）：调用方**仍持有**原账号的
-          //    锁，busy 是"自己在用自己"造成的误判——session 仍可复用时直接
-          //    复用，不为瞬时容量无谓新建计费 session。
+          // noCooldown 且 switchAccount(free_mode_capacity_deferred /
+          // account_busy / runtime_superseded):不是真故障.
+          // 分两种情况:
+          // 1) account_busy / runtime_superseded:调用方(chat 流程)未持有
+          //    原账号的锁(acquire 超时 / 已被顶替),此时 busy 判断是准确的
+          //    ——原账号在途已满时不再把它钉住,走全新选号让有空闲槽位的账号
+          //    承接(并发上限即"满了换号"的阈值,见 candidateKeys).
+          // 2) 其他瞬时 gate(capacity_deferred 等):调用方仍持有原账号的
+          //    锁,busy 是"自己在用自己"造成的误判——session 仍可复用时直接
+          //    复用,不为瞬时容量无谓新建计费 session.
           try {
             const rt = this.get(opts.preferredKey)
             const callerHoldsLock =
@@ -2171,8 +2171,8 @@ export class AccountRuntimes {
       } else {
         try {
           const rt = this.get(opts.preferredKey)
-          // 非 session-gate 的失败（5xx / 网络抖动 / 上游瞬时故障）在同一账号上
-          // 重试：会话还能用就直接复用——绝不为了重试再买一条计费 session。
+          // 非 session-gate 的失败(5xx / 网络抖动 / 上游瞬时故障)在同一账号上
+          // 重试:会话还能用就直接复用——绝不为了重试再买一条计费 session.
           if (
             (!opts.gateCode || !isSessionRecoverableGate(opts.gateCode)) &&
             rt.sessions.isUsableForModel(model)
@@ -2181,33 +2181,33 @@ export class AccountRuntimes {
             this._setLastSuccessKey(opts.preferredKey)
             return rt
           }
-          // 同账号 gate 重试时，调用方（chat 流程）已持有该账号的串行化锁，
-          // 不会与另一个在途 chat 冲突，可直接 forceReadmit。
+          // 同账号 gate 重试时,调用方(chat 流程)已持有该账号的串行化锁,
+          // 不会与另一个在途 chat 冲突,可直接 forceReadmit.
           //
-          // 但 forceReadmit 会**新买一条计费会话**（先 DELETE 再 admit），所以
-          // 必须先过额度闸门：余额买不起还去 admit，正好命中上游"请求所需
-          // Freebucks 高于余额 → 直接封号"的判定。买不起就冷却该号并交给下面的
-          // 全新选号去挑一个买得起的账号。
-          // 同号重试会**新买一条**计费会话，所以两本账都要先过。
+          // 但 forceReadmit 会新买一条计费会话(先 DELETE 再 admit),所以
+          // 必须先过额度闸门:余额买不起还去 admit,正好命中上游"请求所需
+          // Freebucks 高于余额 → 直接封号"的判定.买不起就冷却该号并交给下面的
+          // 全新选号去挑一个买得起的账号.
+          // 同号重试会新买一条计费会话,所以两本账都要先过.
           //
           /**
-           * ⚠️ **428 必须排在两道额度闸门之前**（2026-10-05 真实事故修正，二次修复）。
+           *  428 必须排在两道额度闸门之前(2026-10-05 真实事故修正,二次修复).
            *
-           * 这道判断原本写在两个闸门**之后**，与它自己的注释（"必须在 freebucks
-           * 闸门之前判断 428"）自相矛盾 —— 于是续用被"买不起"拦死：
+           * 这道判断原本写在两个闸门之后,与它自己的注释("必须在 freebucks
+           * 闸门之前判断 428")自相矛盾 —— 于是续用被"买不起"拦死:
            *
-           *   远程实测（2026-10-04T18:52:34Z，账号 llh282000500）：
+           *   远程实测(2026-10-04T18:52:34Z,账号 llh282000500):
            *     admit         200  扣 15 Freebucks → 余额 25→10
            *     chat          428  waiting_room_required
            *     skip re-admit: freebucks cannot afford model  balance 10 < price 15  ← 被这里拦下
            *     account cooling down  code=freebucks_exhausted
            *     → 全池没有买得起的号 → 客户端 429 rate_limit_error
            *
-           * 而 428 的正确处置是 `readmitToContinue()`：**带同一 instanceId +
-           * purchase-continuity 续用那一小时，不产生任何新的购买**。既然不花钱，
-           * "买不起"就与它无关 —— 用"余额不足"把它拦下，等于把刚付过款的那一小时
-           * 白扔掉，还顺手把唯一有钱的号冷却掉（用户观感：花了 15 点、一次都没用上、
-           * 账号还进冷却）。
+           * 而 428 的正确处置是 readmitToContinue():带同一 instanceId +
+           * purchase-continuity 续用那一小时,不产生任何新的购买.既然不花钱,
+           * "买不起"就与它无关 —— 用"余额不足"把它拦下,等于把刚付过款的那一小时
+           * 白扔掉,还顺手把唯一有钱的号冷却掉(用户观感:花了 15 点,一次都没用上,
+           * 账号还进冷却).
            */
           if (opts.gateCode === 'waiting_room_required') {
             const cont = await rt.sessions.readmitToContinue(model)
@@ -2221,7 +2221,7 @@ export class AccountRuntimes {
               })
               return rt
             }
-            // 续用没成：**保留会话现场**抛出，让上层换号；绝不在此释放
+            // 续用没成:保留会话现场抛出,让上层换号;绝不在此释放
             throw new UpstreamError(
               `waiting_room_required: could not continue the existing session (${cont.reason || 'not_active'})`,
               { status: 428, code: 'waiting_room_required' },
@@ -2252,9 +2252,9 @@ export class AccountRuntimes {
               { status: 429, code: 'freebucks_exhausted' },
             )
           }
-          // 428 已在上方先行处理（续用不花钱，必须先于额度闸门）。
-          // 走到这里的是**其它**需换号的 gate：forceReadmit 先 DELETE 再 admit，
-          // 会新买一条计费会话 —— 两道闸门刚已确认买得起，这一步才安全。
+          // 428 已在上方先行处理(续用不花钱,必须先于额度闸门).
+          // 走到这里的是其它需换号的 gate:forceReadmit 先 DELETE 再 admit,
+          // 会新买一条计费会话 —— 两道闸门刚已确认买得起,这一步才安全.
           await rt.sessions.forceReadmit(model)
           this.clearCooldown(opts.preferredKey, model)
           this._setLastSuccessKey(opts.preferredKey)
@@ -2272,11 +2272,11 @@ export class AccountRuntimes {
   }
 
   /**
-   * 释放某账号的上游会话（早退 DELETE → session_units **当场**按实际占用退还；
-   * Freebucks 侧回 freebucksRefundPending，由待结算队列持续重放追问）。
-   * 两本账并行扣费，一手实测见 docs/evidence/ledger-session-units-vs-freebucks.json。
-   * 换号/冷却时调用：失败账号的会话没人再用，留着只会白占一个上游会话槽位；
-   * 有在途流时等它结束再释放（releaseWhenIdle），绝不掐断正在传输的 SSE。
+   * 释放某账号的上游会话(早退 DELETE → session_units 当场按实际占用退还;
+   * Freebucks 侧回 freebucksRefundPending,由待结算队列持续重放追问).
+   * 两本账并行扣费,一手实测见 docs/evidence/ledger-session-units-vs-freebucks.json.
+   * 换号/冷却时调用:失败账号的会话没人再用,留着只会白占一个上游会话槽位;
+   * 有在途流时等它结束再释放(releaseWhenIdle),绝不掐断正在传输的 SSE.
    * @param {string} key
    */
   releaseSession(key) {
@@ -2312,14 +2312,14 @@ export class AccountRuntimes {
       )
     }
     /**
-     * 首选 key 取不到时**回落到 keys[0]**，不把"首选失效"升级成致命错误。
+     * 首选 key 取不到时回落到 keys[0],不把"首选失效"升级成致命错误.
      *
-     * 这里的 preferred 来自 _lastSuccessKey（历史指针，可能悬空）。它悬空时
-     * `this.get(preferred)` 抛 `Account not found`；而启动路径
-     * （buildAppContext）直接调用本函数，一抛就是"服务起不来"。
-     * 指针在构造期会被校验并清掉（见 _restoreAccountState），但**运行期**也可能
-     * 出现（并发删号、凭据文件被手工移走）；此时正确的行为是换一个能用的账号，
-     * 而不是让控制台/状态接口 500。
+     * 这里的 preferred 来自 _lastSuccessKey(历史指针,可能悬空).它悬空时
+     * this.get(preferred) 抛 Account not found;而启动路径
+     * (buildAppContext)直接调用本函数,一抛就是"服务起不来".
+     * 指针在构造期会被校验并清掉(见 _restoreAccountState),但运行期也可能
+     * 出现(并发删号,凭据文件被手工移走);此时正确的行为是换一个能用的账号,
+     * 而不是让控制台/状态接口 500.
      */
     const preferred = this._lastSuccessKey && keys.includes(this._lastSuccessKey)
       ? this._lastSuccessKey
@@ -2327,7 +2327,7 @@ export class AccountRuntimes {
     try {
       return this.get(preferred)
     } catch (err) {
-      // 首选账号的凭据此刻不可用（文件被移除/写坏）→ 依次尝试其余账号。
+      // 首选账号的凭据此刻不可用(文件被移除/写坏)→ 依次尝试其余账号.
       for (const key of keys) {
         if (key === preferred) continue
         try {
@@ -2341,10 +2341,10 @@ export class AccountRuntimes {
   }
 
   /**
-   * 该 runtime 是否仍是该账号当前缓存的 runtime。
-   * 代理/账号信息切换后旧 runtime 会被顶替（byKey 指向新 runtime），
-   * chat 流程借此识别"排队等锁期间已被切换"的请求并重新选号，
-   * 而不是拿着旧出口的 runtime 去撞已被释放的旧 session。
+   * 该 runtime 是否仍是该账号当前缓存的 runtime.
+   * 代理/账号信息切换后旧 runtime 会被顶替(byKey 指向新 runtime),
+   * chat 流程借此识别"排队等锁期间已被切换"的请求并重新选号,
+   * 而不是拿着旧出口的 runtime 去撞已被释放的旧 session.
    * @param {{ key: string }} rt
    */
   isCurrentRuntime(rt) {
@@ -2352,9 +2352,9 @@ export class AccountRuntimes {
   }
 
   /**
-   * 丢弃单个账号的缓存 runtime（删除/改代理后调用，让新状态立即生效）。
-   * 立即让位（新请求走新 runtime），旧 session 等在途 SSE 结束后优雅释放，
-   * 避免把正在传输的连接掐断。
+   * 丢弃单个账号的缓存 runtime(删除/改代理后调用,让新状态立即生效).
+   * 立即让位(新请求走新 runtime),旧 session 等在途 SSE 结束后优雅释放,
+   * 避免把正在传输的连接掐断.
    * @param {string} key
    */
   async invalidate(key) {
@@ -2365,25 +2365,25 @@ export class AccountRuntimes {
   }
 
   /**
-   * 全部断开重连（比重启更轻量）：释放所有账号的 session（清理死任务），
-   * 并重置账号并发信号量（放行等待者，等待者会在 chat 流程重新 re-admit）。
-   * 不重启进程；下一个请求自动 admit 全新 session。
+   * 全部断开重连(比重启更轻量):释放所有账号的 session(清理死任务),
+   * 并重置账号并发信号量(放行等待者,等待者会在 chat 流程重新 re-admit).
+   * 不重启进程;下一个请求自动 admit 全新 session.
    * @returns {Promise<Array<{key: string, email?: string, ok: boolean, error?: string}>>}
    */
   async reconnectAll() {
-    // 并发信号量与 runtime 的并集：无账号凭据的锁（如单元测试）也要重置
+    // 并发信号量与 runtime 的并集:无账号凭据的锁(如单元测试)也要重置
     const keys = [...new Set([...this.chatLocks.keys(), ...this.byKey.keys()])]
     const results = await Promise.all(
       keys.map(async (key) => {
         const rt = this.byKey.get(key)
         try {
-          // 严格释放：等到上游确认结束或退避重试耗尽，失败带上原因——绝不
-          // "报成功但其实没删掉"（删不掉 = 白白多扣一小时，见 issue #7）。
+          // 严格释放:等到上游确认结束或退避重试耗尽,失败带上原因——绝不
+          // "报成功但其实没删掉"(删不掉 = 白白多扣一小时,见 issue #7).
           const rel = rt
             ? await rt.sessions.releaseStrict()
             : { ok: true, attempts: 0 }
-          // 信号量重置：清空在途计数并放行排队等待者（等待者会在 chat
-          // 流程重新检查 session 并 re-admit，不会卡死）
+          // 信号量重置:清空在途计数并放行排队等待者(等待者会在 chat
+          // 流程重新检查 session 并 re-admit,不会卡死)
           this.chatLocks.get(key)?.reset()
           return {
             key,
@@ -2411,9 +2411,9 @@ export class AccountRuntimes {
   }
 
   /**
-   * 代理池变更后调用：立即重建所有缓存 runtime（新出口对新请求生效），
+   * 代理池变更后调用:立即重建所有缓存 runtime(新出口对新请求生效),
    * 旧 runtime 的 session 等在途 SSE 结束后在后台优雅释放——不再像以前
-   * 那样直接 DELETE，避免把正在传输的流掐断导致客户端永久卡住。
+   * 那样直接 DELETE,避免把正在传输的流掐断导致客户端永久卡住.
    */
   async invalidateProxies() {
     const oldRuntimes = [...this.byKey.values()]
@@ -2427,16 +2427,16 @@ export class AccountRuntimes {
   }
 
   /**
-   * 扫尾：把上次进程遗留 / 本次释放失败的会话句柄逐个 DELETE 拿退款。
-   * 失败的保留在 sessions.json 里等下次机会——绝不静默丢弃。
+   * 扫尾:把上次进程遗留 / 本次释放失败的会话句柄逐个 DELETE 拿退款.
+   * 失败的保留在 sessions.json 里等下次机会——绝不静默丢弃.
    *
-   * ⚠️ **必须周期性调用，不能只在启动时调一次。** 上游对"提前结束"的会话会回
-   * `freebucksRefundPending: true`（结算未完成，"拿同一个 instanceId 再来取"）。
-   * 官方客户端在 pending 期间**每 3 秒无限重放**直到拿到终态；而本服务原先只在
-   * **启动时**扫一次，进程不重启就再也没人去取这些结算——这正是"退款总额永远是 0"
-   * 最可疑的工程原因（不是上游不退，是我们问得太早且没再问）。
-   * @param {{budgetMs?: number}} [opts] 本次扫尾的总预算（启动路径必须传，
-   *   否则一个连不通的上游能把启动卡住）。
+   *  必须周期性调用,不能只在启动时调一次. 上游对"提前结束"的会话会回
+   * freebucksRefundPending: true(结算未完成,"拿同一个 instanceId 再来取").
+   * 官方客户端在 pending 期间每 3 秒无限重放直到拿到终态;而本服务原先只在
+   * 启动时扫一次,进程不重启就再也没人去取这些结算——这正是"退款总额永远是 0"
+   * 最可疑的工程原因(不是上游不退,是我们问得太早且没再问).
+   * @param {{budgetMs?: number}} [opts] 本次扫尾的总预算(启动路径必须传,
+   *   否则一个连不通的上游能把启动卡住).
    * @returns {Promise<{cleaned: number, failed: number, skipped: number, deferred: number}>}
    */
   async cleanupOrphanSessions(opts = {}) {
@@ -2451,17 +2451,17 @@ export class AccountRuntimes {
   }
 
   /**
-   * 扫尾：把上次进程遗留 / 本次释放失败的会话句柄逐个 DELETE 取回执。
-   * 失败的保留在 sessions.json 里等下次机会——绝不静默丢弃。
+   * 扫尾:把上次进程遗留 / 本次释放失败的会话句柄逐个 DELETE 取回执.
+   * 失败的保留在 sessions.json 里等下次机会——绝不静默丢弃.
    *
-   * ⚠️ **必须周期性调用，不能只在启动时调一次。** 上游对"提前结束"的会话会回
-   * `freebucksRefundPending: true`——它的语义是"最终用量还没算完，用同一个 instance
-   * 再问一次回执"，**不是"不退"**（这层误解曾让我们得出错误结论并发版，见
-   * docs/account-scheduling-and-refund.md §3 的纠错）。官方客户端在 pending 期间
-   * **每 3 秒重放**直到拿到终态；只在启动时扫一次 = 进程不重启就再也没人问过，
-   * 那笔已经预扣的 Freebucks 会一直挂在 pending 里。
-   * @param {{budgetMs?: number}} [opts] 本次扫尾的总预算（启动路径必须传，
-   *   否则一个连不通的上游能把启动卡住）。
+   *  必须周期性调用,不能只在启动时调一次. 上游对"提前结束"的会话会回
+   * freebucksRefundPending: true——它的语义是"最终用量还没算完,用同一个 instance
+   * 再问一次回执",不是"不退"(这层误解曾让我们得出错误结论并发版,见
+   * docs/account-scheduling-and-refund.md §3 的纠错).官方客户端在 pending 期间
+   * 每 3 秒重放直到拿到终态;只在启动时扫一次 = 进程不重启就再也没人问过,
+   * 那笔已经预扣的 Freebucks 会一直挂在 pending 里.
+   * @param {{budgetMs?: number}} [opts] 本次扫尾的总预算(启动路径必须传,
+   *   否则一个连不通的上游能把启动卡住).
    * @returns {Promise<{cleaned: number, failed: number, skipped: number, deferred: number}>}
    */
   async cleanupOrphanSessions(opts = {}) {
@@ -2476,9 +2476,9 @@ export class AccountRuntimes {
   }
 
   /**
-   * **追问待结算退款**（钱，不是槽位）：对每个挂起的 instance 重放一次 DELETE
-   * 取终态回执，拿到才出队。由 serve.js 的低频定时器周期调用，进程不重启也会
-   * 持续追问——这是"退款到底回没回来"能否成立的关键工程条件。
+   * 追问待结算退款(钱,不是槽位):对每个挂起的 instance 重放一次 DELETE
+   * 取终态回执,拿到才出队.由 serve.js 的低频定时器周期调用,进程不重启也会
+   * 持续追问——这是"退款到底回没回来"能否成立的关键工程条件.
    * @param {{budgetMs?: number}} [opts]
    * @returns {Promise<{settled:number, pending:number, failed:number, skipped:number, deferred:number}>}
    */
@@ -2494,10 +2494,10 @@ export class AccountRuntimes {
   }
 
   /**
-   * 严格释放全部账号（「断开全部连接」/「重启服务」/进程退出用）：
-   * 与 fire-and-forget 的 releaseSession 不同，这里**等到每条会话都确认结束
-   * 或重试耗尽**才返回，并给出逐账号明细——绝不"报成功其实没删掉"。
-   * 失败的句柄仍留在 sessions.json，由下次启动扫尾继续清理。
+   * 严格释放全部账号([断开全部连接]/[重启服务]/进程退出用):
+   * 与 fire-and-forget 的 releaseSession 不同,这里等到每条会话都确认结束
+   * 或重试耗尽才返回,并给出逐账号明细——绝不"报成功其实没删掉".
+   * 失败的句柄仍留在 sessions.json,由下次启动扫尾继续清理.
    * @param {{waitInFlightMs?: number}} [opts]
    * @returns {Promise<{ok: boolean, released: number, failed: Array<{key: string, instanceId?: string, error?: string}>}>}
    */
@@ -2509,7 +2509,7 @@ export class AccountRuntimes {
     const results = await Promise.all(
       runtimes.map(async (rt) => {
         if (waitMs > 0) {
-          // 等在途 SSE 结束（有界）：不掐断正在传输的流，超时就继续释放。
+          // 等在途 SSE 结束(有界):不掐断正在传输的流,超时就继续释放.
           await rt.sessions._waitForIdle(waitMs)
         }
         try {
@@ -2544,10 +2544,10 @@ export class AccountRuntimes {
   }
 
   /**
-   * 把内存里的账号状态写进账本：
-   *   - _persistCooldowns(key)：某账号整组冷却（账号级 + 各模型级）
-   *   - _persistAccountState(key, snap)：freebucks / quota / lastProbe
-   * 都在热路径上调用，落盘本身由 AccountStateStore 去抖合并，不阻塞转发。
+   * 把内存里的账号状态写进账本:
+   *   - _persistCooldowns(key):某账号整组冷却(账号级 + 各模型级)
+   *   - _persistAccountState(key, snap):freebucks / quota / lastProbe
+   * 都在热路径上调用,落盘本身由 AccountStateStore 去抖合并,不阻塞转发.
    * @param {string} key
    */
   _persistCooldowns(key) {
@@ -2568,19 +2568,19 @@ export class AccountRuntimes {
    */
   _persistAccountState(key, snap) {
     if (!key || !snap) return
-    // 退款流水单独走账本（追加重试/金额对账用），不混进字段快照。
+    // 退款流水单独走账本(追加重试/金额对账用),不混进字段快照.
     if (snap.refund) {
       this.accountState.recordRefund(key, snap.refund)
       return
     }
-    // 调度时长单独累加（不能走 patch：patch 是覆盖语义，会把累计值抹掉）。
+    // 调度时长单独累加(不能走 patch:patch 是覆盖语义,会把累计值抹掉).
     if (typeof snap.schedulingMs === 'number') {
       this.accountState.recordScheduling(key, snap.schedulingMs)
       return
     }
     const fields = {}
-    // 本轮调度的起算点（可空 = 本轮已结束）：落盘后控制台能区分
-    // "刚才还在干活" / "从来没被调度过"。
+    // 本轮调度的起算点(可空 = 本轮已结束):落盘后控制台能区分
+    // "刚才还在干活" / "从来没被调度过".
     if (snap.schedulingSince !== undefined) {
       fields.schedulingSince = snap.schedulingSince
     }
@@ -2589,7 +2589,7 @@ export class AccountRuntimes {
     if (snap.lastProbe !== undefined) fields.lastProbe = snap.lastProbe
     const user = this.byKey.get(key)?.user
     if (user?.email) fields.email = user.email
-    // 封禁是账号生命周期的终点，值得额外记一笔（"什么时候开始被 ban 的"）。
+    // 封禁是账号生命周期的终点,值得额外记一笔("什么时候开始被 ban 的").
     if (fields.lastProbe?.ok === false && fields.lastProbe.code === 'banned') {
       if (!this.accountState.account(key)?.bannedAt) {
         fields.bannedAt = fields.lastProbe.at || new Date().toISOString()
@@ -2599,10 +2599,10 @@ export class AccountRuntimes {
   }
 
   /**
-   * 启动时回灌账本：冷却、请求计数、最近使用、freebucks/quota/探测结果。
-   * 只回灌**尚未过期**的冷却（过期的直接丢弃，否则重启会把账号永久锁死）。
-   * 回灌 freebucks 尤其关键：它让"余额买不起就别 admit"这道闸门在重启后
-   * 依然生效，而不是失忆放行去撞已知余额不足的账号。
+   * 启动时回灌账本:冷却,请求计数,最近使用,freebucks/quota/探测结果.
+   * 只回灌尚未过期的冷却(过期的直接丢弃,否则重启会把账号永久锁死).
+   * 回灌 freebucks 尤其关键:它让"余额买不起就别 admit"这道闸门在重启后
+   * 依然生效,而不是失忆放行去撞已知余额不足的账号.
    */
   _restoreAccountState() {
     const valid = new Set(this.allKeys())
@@ -2620,8 +2620,8 @@ export class AccountRuntimes {
       }
       const usedAt = rec.lastUsedAt ? Date.parse(rec.lastUsedAt) : NaN
       if (Number.isFinite(usedAt)) this._lastUsedAt.set(key, usedAt)
-      // 上一进程的"本轮调度起算点"必须清掉：那个进程已经死了，在途流也没了，
-      // 留着会让控制台显示一个假的"本轮已运行 3 天"。累计时长 scheduledMs 保留。
+      // 上一进程的"本轮调度起算点"必须清掉:那个进程已经死了,在途流也没了,
+      // 留着会让控制台显示一个假的"本轮已运行 3 天".累计时长 scheduledMs 保留.
       if (rec.schedulingSince) {
         rec.schedulingSince = null
         this.accountState.touch()
@@ -2648,14 +2648,14 @@ export class AccountRuntimes {
       this._lastSuccessKey = this.accountState.state.lastSuccessKey
     }
     /**
-     * ⚠️ 账本里的 lastSuccessKey 是**历史**指针，指向的账号可能早已不在凭据目录里
-     * （用户在控制台删了旧号、或换了新号后旧凭据被清掉）。它一旦悬空，
-     * getAny() 的 `this.get(preferred)` 会抛 `Account not found`，而
-     * buildAppContext 在启动路径上**直接调用 getAny()** → 整个服务起不来
-     * （实测：重启即 `✗ 启动失败`，堆栈 app-context.js:604 → :1672 → :2107）。
-     * 账户删除路径会清这个指针（forgetAccount），但删号发生在**另一个进程**
-     * （用户在旧容器里删的号、或凭据是手工删的）时清不到，所以这里必须自愈：
-     * 指针指向的 key 不在当前凭据列表里就丢弃，getAny() 自然回落到 keys[0]。
+     *  账本里的 lastSuccessKey 是历史指针,指向的账号可能早已不在凭据目录里
+     * (用户在控制台删了旧号,或换了新号后旧凭据被清掉).它一旦悬空,
+     * getAny() 的 this.get(preferred) 会抛 Account not found,而
+     * buildAppContext 在启动路径上直接调用 getAny() → 整个服务起不来
+     * (实测:重启即  启动失败,堆栈 app-context.js:604 → :1672 → :2107).
+     * 账户删除路径会清这个指针(forgetAccount),但删号发生在另一个进程
+     * (用户在旧容器里删的号,或凭据是手工删的)时清不到,所以这里必须自愈:
+     * 指针指向的 key 不在当前凭据列表里就丢弃,getAny() 自然回落到 keys[0].
      */
     if (this._lastSuccessKey && !this.allKeys().includes(this._lastSuccessKey)) {
       this._lastSuccessKey = null
@@ -2663,9 +2663,9 @@ export class AccountRuntimes {
   }
 
   /**
-   * 忘记某账号（被删除时调用）：把它的账本记录一并清掉。
-   * 不清的话 account-state.json 会随着删号无限增长，而且下次 prune 之前
-   * 控制台仍会从账本里读出这些幽灵账号的"历史"。
+   * 忘记某账号(被删除时调用):把它的账本记录一并清掉.
+   * 不清的话 account-state.json 会随着删号无限增长,而且下次 prune 之前
+   * 控制台仍会从账本里读出这些幽灵账号的"历史".
    * @param {string} key
    */
   forgetAccount(key) {
@@ -2674,7 +2674,7 @@ export class AccountRuntimes {
     if (accounts[key]) {
       delete accounts[key]
     }
-    // 历史邮箱 key 同属一个账号时一并清掉（旧布局凭据）。
+    // 历史邮箱 key 同属一个账号时一并清掉(旧布局凭据).
     this.stats.byKey.delete(key)
     this._lastUsedAt.delete(key)
     if (this._lastSuccessKey === key) this._lastSuccessKey = null
@@ -2686,9 +2686,9 @@ export class AccountRuntimes {
   }
 
   /**
-   * 记一笔"凭证更新时间"（导入 / 重新登录 / 更新 token 后调用）。
-   * 所有写凭据的入口（网页导入、浏览器登录回调、开放 API 导入）都要调，
-   * 否则前端「更新」列对某些入口永远是空的。
+   * 记一笔"凭证更新时间"(导入 / 重新登录 / 更新 token 后调用).
+   * 所有写凭据的入口(网页导入,浏览器登录回调,开放 API 导入)都要调,
+   * 否则前端[更新]列对某些入口永远是空的.
    * @param {string} key
    */
   markCredentialUpdated(key) {
@@ -2696,7 +2696,7 @@ export class AccountRuntimes {
     this.accountState.recordCredentialUpdate(key)
   }
 
-  /** 账本 + 句柄索引一起冲刷落盘（进程退出/重启前调用）。 */
+  /** 账本 + 句柄索引一起冲刷落盘(进程退出/重启前调用). */
   flushState() {
     try {
       this.accountState.flush()
@@ -2709,14 +2709,14 @@ export class AccountRuntimes {
     /** @type {{ok: boolean, released: number, failed: any[]}} */
     let rel = { ok: true, released: 0, failed: [] }
     if (strict) {
-      // 进程退出：等到真的删掉或重试耗尽（句柄已落盘，失败也能下次扫尾）。
+      // 进程退出:等到真的删掉或重试耗尽(句柄已落盘,失败也能下次扫尾).
       try {
         rel = await this.releaseAllStrict()
       } catch (err) {
         logger.warn('strict session release on shutdown failed', {
           error: err instanceof Error ? err.message : String(err),
         })
-        // 退回逐账号 shutdown（各自尽力 DELETE 一次）
+        // 退回逐账号 shutdown(各自尽力 DELETE 一次)
         const tasks = [...this.byKey.values()].map((rt) => rt.sessions.shutdown())
         await Promise.allSettled(tasks)
         this.byKey.clear()
@@ -2726,7 +2726,7 @@ export class AccountRuntimes {
     const tasks = [...this.byKey.values()].map((rt) => rt.sessions.shutdown())
     await Promise.allSettled(tasks)
     this.flushState()
-    // 关闭所有出网 agent（keep-alive socket），别把句柄留给进程退出流程。
+    // 关闭所有出网 agent(keep-alive socket),别把句柄留给进程退出流程.
     await Promise.allSettled(
       [...this.byKey.values()].map((rt) => rt.upstream?.close?.()),
     )
@@ -2736,11 +2736,11 @@ export class AccountRuntimes {
 }
 
 /**
- * 会话句柄索引（sessions.json）落盘位置。
+ * 会话句柄索引(sessions.json)落盘位置.
  *
- * 必须和**凭据目录**放一起：同一个 dataDir 可能被两个服务共用（本仓库的
- * `data/` 与上层 rotator 的 `../data/`），句柄索引跟着凭据走才不会各自
- * 持有一份互相看不见的孤儿；也保证"删容器不丢数据"的 /data 约定成立。
+ * 必须和凭据目录放一起:同一个 dataDir 可能被两个服务共用(本仓库的
+ * data/ 与上层 rotator 的 ../data/),句柄索引跟着凭据走才不会各自
+ * 持有一份互相看不见的孤儿;也保证"删容器不丢数据"的 /data 约定成立.
  * @param {import('./config.js').ProxyConfig} config
  */
 function resolveSessionIndexPath(config) {
@@ -2748,15 +2748,15 @@ function resolveSessionIndexPath(config) {
 }
 
 /**
- * 账号状态账本（account-state.json）落盘位置——与 sessions.json / 凭据同目录，
- * 同样是"删容器不丢数据"的 /data 约定。
+ * 账号状态账本(account-state.json)落盘位置——与 sessions.json / 凭据同目录,
+ * 同样是"删容器不丢数据"的 /data 约定.
  * @param {import('./config.js').ProxyConfig} config
  */
 function resolveAccountStatePath(config) {
   return path.join(accountStateDir(config), 'account-state.json')
 }
 
-/** 凭据目录的父目录（= /data）；凭据目录本身不叫 credentials 时就用它自己。 */
+/** 凭据目录的父目录(= /data);凭据目录本身不叫 credentials 时就用它自己. */
 function accountStateDir(config) {
   const credDir = resolveCredentialsDir(config)
   const parent = path.dirname(credDir)

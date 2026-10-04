@@ -1,43 +1,43 @@
 /**
- * 上游「外来客户端」判据的本地镜像 —— **单一真源**。
+ - 上游[外来客户端]判据的本地镜像 —— 单一真源.
  *
- * 为什么需要它：上游按「请求形态是否来自官方客户端」决定降级（把请求改投一个小模型，
- * 或在该 slug 不可路由时以 404 失败），而判据的公开出处只剩源码：
- *   common/src/constants/foreign-client-signals.ts
- *   （2026-09-19 取，sha256 505f9b42af1758b5403233737251b231a9369a312dbe4dcde6ceeed538589da9）
- * 上游已把文档化的 docs/freebuff-abuse-detection.md 从仓库撤下。上游改规则后必须回来重对；
- * 取舍与实测见 .agents/notes/implemented/bug-fix/2026-09-19-genuine-tool-signature.md。
+ - 为什么需要它:上游按[请求形态是否来自官方客户端]决定降级(把请求改投一个小模型,
+ - 或在该 slug 不可路由时以 404 失败),而判据的公开出处只剩源码:
+ - common/src/constants/foreign-client-signals.ts
+ - (2026-09-19 取,sha256 505f9b42af1758b5403233737251b231a9369a312dbe4dcde6ceeed538589da9)
+ - 上游已把文档化的 docs/freebuff-abuse-detection.md 从仓库撤下.上游改规则后必须回来重对;
+ - 取舍与实测见 .agents/notes/implemented/bug-fix/2026-09-19-genuine-tool-signature.md.
  *
- * 本地只把它用于**可观测性**与「该注入什么签名工具」——判定权永远在上游。
+ - 本地只把它用于可观测性与[该注入什么签名工具]——判定权永远在上游.
  *
- * 差分验证方法：把上游那份源码与本模块并排加载（node --import <ts-loader> + zod@4），
- * 逐用例比对 detectForeignClient 的 signal 与 evidence，并比常量集与参数名表。
+ - 差分验证方法:把上游那份源码与本模块并排加载(node --import <ts-loader> + zod@4),
+ - 逐用例比对 detectForeignClient 的 signal 与 evidence,并比常量集与参数名表.
  */
 
-/** 判据源码 sha256：上游改动后这里必须一起更新（对照实验的版本锚点）。 */
+/** 判据源码 sha256:上游改动后这里必须一起更新(对照实验的版本锚点). */
 export const FOREIGN_CLIENT_SIGNALS_SOURCE_SHA256 =
   '505f9b42af1758b5403233737251b231a9369a312dbe4dcde6ceeed538589da9'
 
 /**
- * 降级目标模型。上游原话：OpenRouter 的 :free 变体，降级请求不花上游的推理预算。
- * 它**不是错误响应** —— 上游不回 4xx，而是把请求送给这个小模型；该 slug 不可路由时
- * （实测经 OpenRouter 回 404）才以 404 形式失败，下游桥接层再把那个 404 崩成 502 空体。
+ - 降级目标模型.上游原话:OpenRouter 的 :free 变体,降级请求不花上游的推理预算.
+ - 它不是错误响应 —— 上游不回 4xx,而是把请求送给这个小模型;该 slug 不可路由时
+ - (实测经 OpenRouter 回 404)才以 404 形式失败,下游桥接层再把那个 404 崩成 502 空体.
  */
 export const FREEBUFF_DOWNGRADE_MODEL_ID = 'inclusionai/ling-3.0-tiny:free'
 
-/** 上游在 toolNames 之外自定义的工具名（Freebuff Desktop autorun agent 的 decide）。 */
+/** 上游在 toolNames 之外自定义的工具名(Freebuff Desktop autorun agent 的 decide). */
 export const FREEBUFF_CUSTOM_TOOL_NAMES = ['decide']
 
 /**
- * 我们定义、但其它 agent harness 也发的工具名 —— 上游的**排除表**：
- * 这些名字不构成签名（否则会把 opencode / Cline / Codex 自己人判成第三方）。
+ - 我们定义,但其它 agent harness 也发的工具名 —— 上游的排除表:
+ - 这些名字不构成签名(否则会把 opencode / Cline / Codex 自己人判成第三方).
  */
 export const GENERIC_TOOL_NAMES = ['write_file', 'web_search', 'glob', 'skill', 'apply_patch']
 
 /**
- * 只要出现**任意一个**就判「外来」，无论请求还带了什么（包括我们的真签名工具）。
- * 上游原话：这是我们都不发的 harness 的工具名 —— Claude Code 的 PascalCase 核心工具、
- * Codex / OpenClaw / opencode 的专有名。按 harness 分组，保留上游的注释顺序。
+ - 只要出现任意一个就判[外来],无论请求还带了什么(包括我们的真签名工具).
+ - 上游原话:这是我们都不发的 harness 的工具名 —— Claude Code 的 PascalCase 核心工具,
+ - Codex / OpenClaw / opencode 的专有名.按 harness 分组,保留上游的注释顺序.
  */
 export const FOREIGN_HARNESS_TOOL_NAMES_BY_HARNESS = Object.freeze({
   'claude-code': Object.freeze([
@@ -55,14 +55,14 @@ export const FOREIGN_HARNESS_TOOL_NAMES_BY_HARNESS = Object.freeze({
 })
 
 /**
- * 扁平查询集 —— 与上游 `FOREIGN_HARNESS_TOOL_NAMES` 同名同义（它只维护这一个 Set）。
- * 上面的分组表只为可读性，判定一律走这里。
+ - 扁平查询集 —— 与上游 FOREIGN_HARNESS_TOOL_NAMES 同名同义(它只维护这一个 Set).
+ - 上面的分组表只为可读性,判定一律走这里.
  */
 export const FOREIGN_HARNESS_TOOL_NAMES = new Set(
   Object.values(FOREIGN_HARNESS_TOOL_NAMES_BY_HARNESS).flat(),
 )
 
-/** 只出现在第三方 harness 的 system prompt 里、我们从不写的短语。 */
+/** 只出现在第三方 harness 的 system prompt 里,我们从不写的短语. */
 export const FOREIGN_HARNESS_PROMPT_MARKERS = Object.freeze([
   'You are Claude Code',
   "Anthropic's official CLI",
@@ -71,12 +71,12 @@ export const FOREIGN_HARNESS_PROMPT_MARKERS = Object.freeze([
 ])
 
 /**
- * 官方每个工具在 wire 上的**顶层参数名**（由上游 toolParams 逐个 z.toJSONSchema 提取，
- * 2026-09-19）。上游签名校验的基准：送来的 schema 顶层参数名必须是这里的**子集** ——
- * 子集而非相等，落后一个版本的官方客户端缺一个新增可选字段仍应放行。
+ - 官方每个工具在 wire 上的顶层参数名(由上游 toolParams 逐个 z.toJSONSchema 提取,
+ - 2026-09-19).上游签名校验的基准:送来的 schema 顶层参数名必须是这里的子集 ——
+ - 子集而非相等,落后一个版本的官方客户端缺一个新增可选字段仍应放行.
  *
- * 只有顶层名字参与判定；窗口版与旧版 read_files 的差异在 paths 内部。
- * 空数组 = 官方零参数工具（end_turn / task_completed）—— 它们**永远不算签名**。
+ - 只有顶层名字参与判定;窗口版与旧版 read_files 的差异在 paths 内部.
+ - 空数组 = 官方零参数工具(end_turn / task_completed)—— 它们永远不算签名.
  */
 export const OFFICIAL_TOOL_PARAMETER_KEYS = Object.freeze({
   add_message: ['content', 'role'],
@@ -91,8 +91,8 @@ export const OFFICIAL_TOOL_PARAMETER_KEYS = Object.freeze({
   composio_multi_execute_tool: ['session_id', 'sync_response_to_workbench', 'thought', 'tools'],
   composio_search_tools: ['model', 'queries', 'session'],
   create_plan: ['path', 'plan'],
-  // decide 不在上游 toolParams 里（canonicalToolParameterKeys 返回 null）：它靠自定义名放行，
-  // 所以**不在这张表里** —— 与「零参数（有表但为空）」是两种情形，判定语义不同。
+  // decide 不在上游 toolParams 里(canonicalToolParameterKeys 返回 null):它靠自定义名放行,
+  // 所以不在这张表里 —— 与[零参数(有表但为空)]是两种情形,判定语义不同.
   end_turn: [],
   find_files: ['prompt'],
   glob: ['cwd', 'max_results', 'pattern'],
@@ -124,12 +124,12 @@ export const OFFICIAL_TOOL_PARAMETER_KEYS = Object.freeze({
 })
 
 /**
- * 官方**零参数**工具的描述原文（2026-09-19 取自上游 toolParams，逐字）。
+ - 官方零参数工具的描述原文(2026-09-19 取自上游 toolParams,逐字).
  *
- * 为什么单独存：零参数工具没有结构可校验（复制的名字加 {} 与真货逐字节相同），
- * 上游 `isGenuineSignatureTool` 因此**永不认可**它们；只有在 `isHollowSignatureTool`
- * 里退而比对描述 —— 而那一条官方明说「只喂日志、不强制」，所以描述改动不会罚到
- * 落后一个版本的官方客户端。这里存它，只为让本地日志与上游日志说同一件事。
+ - 为什么单独存:零参数工具没有结构可校验(复制的名字加 {} 与真货逐字节相同),
+ - 上游 isGenuineSignatureTool 因此永不认可它们;只有在 isHollowSignatureTool
+ - 里退而比对描述 —— 而那一条官方明说[只喂日志,不强制],所以描述改动不会罚到
+ - 落后一个版本的官方客户端.这里存它,只为让本地日志与上游日志说同一件事.
  */
 export const OFFICIAL_ZERO_PARAM_TOOL_DESCRIPTIONS = Object.freeze({
   end_turn: "Only use this tool to hand control back to the user.\n\n- When to use: after you have completed a meaningful chunk of work and you are either (a) fully done, or (b) explicitly waiting for the user's next message.\n- Do NOT use: as a stop token mid-work, to pause between tool calls, to wait for tool results, or to \"check in\" unnecessarily.\n- Before calling: finish all pending steps, resolve tool results, and include any outputs the user needs to review.\n- Effect: Signals the UI to wait for the user's reply; any pending tool results will be ignored.\n\n*INCORRECT USAGE*:\n<some_tool_that_produces_results_params_example>\n{\n  \"query\": \"some example search term\"\n}\n</some_tool_that_produces_results_params_example>\n\n<end_turn_params_example>\n{}\n</end_turn_params_example>\n\n*CORRECT USAGE*:\nAll done! Would you like some more help with xyz?\n\n<end_turn_params_example>\n{}\n</end_turn_params_example>",
@@ -137,15 +137,15 @@ export const OFFICIAL_ZERO_PARAM_TOOL_DESCRIPTIONS = Object.freeze({
 })
 
 /**
- * 客户端工具名 → 官方工具名的**下行映射表**。
+ - 客户端工具名 → 官方工具名的下行映射表.
  *
- * 与 `cli-bridge/upstream.mjs` 的 `MAP_TOOLS` **必须保持一致**（同一张表两处用：
- * bun 侧做下行映射发请求，Node 侧据它做上行还原）。
- * 两侧一致性由 `test/verify-tool-name-mapping.mjs` 扫描校验。
+ - 与 cli-bridge/upstream.mjs 的 MAP_TOOLS 必须保持一致(同一张表两处用:
+ - bun 侧做下行映射发请求,Node 侧据它做上行还原).
+ - 两侧一致性由 test/verify-tool-name-mapping.mjs 扫描校验.
  *
- * 为什么需要：上游官方工具集是**固定 37 个**，里面没有 `bash`/`edit`/`read`/
- * `write`/`skill` 这些下游 harness 的常用名。实测把第三方工具原样追加后，
- * 上游回 `503`（同会话同模型不带工具则是 200）。
+ - 为什么需要:上游官方工具集是固定 37 个,里面没有 bash/edit/read/
+ - write/skill 这些下游 harness 的常用名.实测把第三方工具原样追加后,
+ - 上游回 503(同会话同模型不带工具则是 200).
  */
 export const CLIENT_TO_OFFICIAL_TOOL = Object.freeze({
   bash: 'run_terminal_command',
@@ -185,15 +185,15 @@ export const CLIENT_TO_OFFICIAL_TOOL = Object.freeze({
 })
 
 /**
- * 把上游返回的 `tool_calls` 里的**官方工具名还原成下游认识的名字**（上行方向）。
+ - 把上游返回的 tool_calls 里的官方工具名还原成下游认识的名字(上行方向).
  *
- * 与下行映射配对：下行把 `bash`→`run_terminal_command`，上行就还原回 `bash`，
- * 使下游拿到的工具名与它自己声明的完全一致，可直接派发。
+ - 与下行映射配对:下行把 bash→run_terminal_command,上行就还原回 bash,
+ - 使下游拿到的工具名与它自己声明的完全一致,可直接派发.
  *
- * 官方原生名（下游没声明过）**原样保留** —— 不猜、不丢。
+ - 官方原生名(下游没声明过)原样保留 —— 不猜,不丢.
  *
- * @param {any} body 上游响应体（chat.completion，含 choices[].message.tool_calls）
- * @returns {any} 原地修改后的 body（同时返回，便于链式使用）
+ - @param {any} body 上游响应体(chat.completion,含 choices[].message.tool_calls)
+ - @returns {any} 原地修改后的 body(同时返回,便于链式使用)
  */
 export function unmapToolCallsInBody(body) {
   if (!body || typeof body !== 'object') return body
@@ -204,12 +204,12 @@ export function unmapToolCallsInBody(body) {
   const choices = Array.isArray(body.choices) ? body.choices : []
   for (const ch of choices) {
     /**
-     * ⚠️ 必须同时处理**两种形态**（实测踩到）：
-     *   - 非流式：`choices[].message.tool_calls[].function.name`
-     *   - **SSE 流式**：`choices[].delta.tool_calls[].function.name`
-     *     （首片给 name、后续片只给 arguments）
-     * 只处理 message 会让流式响应**一条都不还原**（实测 changed:false），
-     * 下游拿到官方名 `write_file` 而不是它声明的 `write`。
+     - 必须同时处理两种形态(实测踩到):
+     - - 非流式:choices[].message.tool_calls[].function.name
+     - - SSE 流式:choices[].delta.tool_calls[].function.name
+     - (首片给 name,后续片只给 arguments)
+     - 只处理 message 会让流式响应一条都不还原(实测 changed:false),
+     - 下游拿到官方名 write_file 而不是它声明的 write.
      */
     for (const holder of [ch?.message, ch?.delta]) {
       const tc = holder?.tool_calls
@@ -223,10 +223,10 @@ export function unmapToolCallsInBody(body) {
   return body
 }
 
-/** 官方全部工具名（上游 toolNames，含 composio 元工具）。 */
+/** 官方全部工具名(上游 toolNames,含 composio 元工具). */
 export const OFFICIAL_TOOL_NAMES = Object.freeze(Object.keys(OFFICIAL_TOOL_PARAMETER_KEYS))
 
-/** 上游用于签名的名字集：官方工具名去掉 generic，再加入自定义名。 */
+/** 上游用于签名的名字集:官方工具名去掉 generic,再加入自定义名. */
 export const FREEBUFF_SIGNATURE_TOOL_NAMES = Object.freeze(
   OFFICIAL_TOOL_NAMES.filter((n) => !GENERIC_TOOL_NAMES.includes(n)).concat(
     FREEBUFF_CUSTOM_TOOL_NAMES,
@@ -234,11 +234,11 @@ export const FREEBUFF_SIGNATURE_TOOL_NAMES = Object.freeze(
 )
 
 /**
- * 一个 JSON-Schema 的顶层属性名集合；不是对象 schema（缺失 / 字符串 / 数组）时返回 null。
- * 与上游 schemaPropertyKeys 同义：读 properties，并递归并入 anyOf / oneOf / allOf
- * 各分支的 properties（z.toJSONSchema 对联合类型产出的就是这个形状）。
- * @param {unknown} schema
- * @returns {Set<string> | null}
+ - 一个 JSON-Schema 的顶层属性名集合;不是对象 schema(缺失 / 字符串 / 数组)时返回 null.
+ - 与上游 schemaPropertyKeys 同义:读 properties,并递归并入 anyOf / oneOf / allOf
+ - 各分支的 properties(z.toJSONSchema 对联合类型产出的就是这个形状).
+ - @param {unknown} schema
+ - @returns {Set<string> | null}
  */
 export function schemaPropertyKeys(schema) {
   if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
@@ -261,16 +261,16 @@ export function schemaPropertyKeys(schema) {
 }
 
 /**
- * 送来的工具是不是「货真价实的」官方签名工具（上游 isGenuineSignatureTool 同义）。
+ - 送来的工具是不是[货真价实的]官方签名工具(上游 isGenuineSignatureTool 同义).
  *
- * 三种情形：
- *   - 自定义名（decide）：官方没有 schema 可比，按名字放行。
- *   - 官方定义且**有参数**：schema 非空，且顶层参数名是官方参数名的子集。
- *   - 官方定义但**无参数**（end_turn / task_completed）：**永远不算** —— 复制的名字
- *     加 {} 与真货逐字节相同，没有结构可验证，官方不接受，我们也别指望它能过。
+ - 三种情形:
+ - - 自定义名(decide):官方没有 schema 可比,按名字放行.
+ - - 官方定义且有参数:schema 非空,且顶层参数名是官方参数名的子集.
+ - - 官方定义但无参数(end_turn / task_completed):永远不算 —— 复制的名字
+ - 加 {} 与真货逐字节相同,没有结构可验证,官方不接受,我们也别指望它能过.
  *
- * @param {{ name?: unknown, parameters?: unknown }} tool
- * @returns {boolean}
+ - @param {{ name?: unknown, parameters?: unknown }} tool
+ - @returns {boolean}
  */
 export function isGenuineSignatureTool(tool) {
   const name = tool && typeof tool.name === 'string' ? tool.name : ''
@@ -287,12 +287,12 @@ export function isGenuineSignatureTool(tool) {
 }
 
 /**
- * 顶着官方签名名字、却不是官方东西的「洗白形态」——**只用于日志/可观测性**，
- * 不参与任何判定（上游也是这么用的）。零参数工具官方无法背书，于是退而看描述；
- * 也正因为它只喂日志，官方才不强制它，落后一个版本的官方客户端也不会因此被罚。
+ - 顶着官方签名名字,却不是官方东西的[洗白形态]——只用于日志/可观测性,
+ - 不参与任何判定(上游也是这么用的).零参数工具官方无法背书,于是退而看描述;
+ - 也正因为它只喂日志,官方才不强制它,落后一个版本的官方客户端也不会因此被罚.
  *
- * @param {{ name?: unknown, parameters?: unknown }} tool
- * @returns {boolean}
+ - @param {{ name?: unknown, parameters?: unknown }} tool
+ - @returns {boolean}
  */
 export function isHollowSignatureTool(tool) {
   const name = tool && typeof tool.name === 'string' ? tool.name : ''
@@ -300,10 +300,10 @@ export function isHollowSignatureTool(tool) {
   if (FREEBUFF_CUSTOM_TOOL_NAMES.includes(name)) return false
   const ours = OFFICIAL_TOOL_PARAMETER_KEYS[name]
   if (!ours) return false
-  // 有参数的工具：不是真货就是空心。
+  // 有参数的工具:不是真货就是空心.
   if (ours.length > 0) return !isGenuineSignatureTool(tool)
-  // 零参数工具：没有结构可校验，退而比对描述 —— 这正是代理注入的空心 end_turn
-  // 会露馅的地方（上游夹具 PROXY_HOLLOW_END_TURN 用的就是这一句）。
+  // 零参数工具:没有结构可校验,退而比对描述 —— 这正是代理注入的空心 end_turn
+  // 会露馅的地方(上游夹具 PROXY_HOLLOW_END_TURN 用的就是这一句).
   const shipped = OFFICIAL_ZERO_PARAM_TOOL_DESCRIPTIONS[name]
   if (typeof shipped !== 'string') return false
   const got = tool.description
@@ -311,9 +311,9 @@ export function isHollowSignatureTool(tool) {
 }
 
 /**
- * 从 OpenAI 形状的 tools 数组读出 { name, parameters }。
- * @param {unknown} tools
- * @returns {Array<{ name: string, parameters?: unknown, description?: unknown }>}
+ - 从 OpenAI 形状的 tools 数组读出 { name, parameters }.
+ - @param {unknown} tools
+ - @returns {Array<{ name: string, parameters?: unknown, description?: unknown }>}
  */
 export function readOfferedTools(tools) {
   if (!Array.isArray(tools)) return []
@@ -328,10 +328,10 @@ export function readOfferedTools(tools) {
 }
 
 /**
- * 任一 system 消息里的外来 harness 身份标记；取不到返回 null。
- * 只看 system 角色 —— 用户把 Claude Code 的记录粘进对话里绝不该被判外来。
- * @param {unknown} messages
- * @returns {string | null}
+ - 任一 system 消息里的外来 harness 身份标记;取不到返回 null.
+ - 只看 system 角色 —— 用户把 Claude Code 的记录粘进对话里绝不该被判外来.
+ - @param {unknown} messages
+ - @returns {string | null}
  */
 export function findForeignHarnessPromptMarker(messages) {
   if (!Array.isArray(messages)) return null
@@ -360,17 +360,17 @@ export function findForeignHarnessPromptMarker(messages) {
 }
 
 /**
- * 上游 detectForeignFreebuffClient 的同义实现：判断一个 free-mode 请求是不是来自
- * 别人的客户端。**本地只用于可观测性**（日志 + 响应头），判定权永远在上游；
- * 与上游保持同义，是为了让「正在被降级」在出问题时能被看见。
+ - 上游 detectForeignFreebuffClient 的同义实现:判断一个 free-mode 请求是不是来自
+ - 别人的客户端.本地只用于可观测性(日志 + 响应头),判定权永远在上游;
+ - 与上游保持同义,是为了让[正在被降级]在出问题时能被看见.
  *
- * 顺序本身就是安全故事（与上游一致）：外来工具名 / system 身份标记**压倒一切** ——
- * 带了官方真工具也照样判外来；之后「带了工具就必须有一个真签名」。无工具时的两个
- * 信号上游**只报不罚**，这里同样只报。
+ - 顺序本身就是安全故事(与上游一致):外来工具名 / system 身份标记压倒一切 ——
+ - 带了官方真工具也照样判外来;之后[带了工具就必须有一个真签名].无工具时的两个
+ - 信号上游只报不罚,这里同样只报.
  *
- * @param {{ tools?: unknown, messages?: unknown, temperature?: unknown, top_p?: unknown, max_tokens?: unknown }} body
- * @param {boolean} [isRootAgent]
- * @returns {{ signal: string | null, toolCount: number, sampleToolNames: string[], hollowToolNames: string[], foreignToolNames: string[] }}
+ - @param {{ tools?: unknown, messages?: unknown, temperature?: unknown, top_p?: unknown, max_tokens?: unknown }} body
+ - @param {boolean} [isRootAgent]
+ - @returns {{ signal: string | null, toolCount: number, sampleToolNames: string[], hollowToolNames: string[], foreignToolNames: string[] }}
  */
 export function detectForeignClient(body, isRootAgent = false) {
   const offered = readOfferedTools(body?.tools)
@@ -411,7 +411,7 @@ export function detectForeignClient(body, isRootAgent = false) {
   return { signal: null, ...evidence }
 }
 
-/** 上游会**据此降级**的信号（其余只报不罚）。 */
+/** 上游会据此降级的信号(其余只报不罚). */
 export const ENFORCED_FOREIGN_SIGNALS = Object.freeze([
   'foreign_toolset',
   'foreign_tool_names',
@@ -419,22 +419,22 @@ export const ENFORCED_FOREIGN_SIGNALS = Object.freeze([
 ])
 
 /**
- * 我们注入的官方签名工具 —— **按上游判据逐字构造**。
+ - 我们注入的官方签名工具 —— 按上游判据逐字构造.
  *
- * 为什么不是补一个空心 end_turn：上游 2026-09-17 起要求签名工具「名字 + 真实参数
- * schema」双真，零参数工具**永远不算签名**；上游还把「往 tools 末尾补空心 end_turn」
- * 这种形态逐字收进测试夹具（PROXY_HOLLOW_END_TURN）并在注释里点名 freebuff-proxy。
+ - 为什么不是补一个空心 end_turn:上游 2026-09-17 起要求签名工具[名字 + 真实参数
+ - schema]双真,零参数工具永远不算签名;上游还把[往 tools 末尾补空心 end_turn]
+ - 这种形态逐字收进测试夹具(PROXY_HOLLOW_END_TURN)并在注释里点名 freebuff-proxy.
  *
- * 两个都带、任一通过即可（上游是 some()）：decide 走自定义名放行，
- * lookup_agent_info 走真实 schema 子集 —— 任一条规则变化，都还有另一条兜住。
+ - 两个都带,任一通过即可(上游是 some()):decide 走自定义名放行,
+ - lookup_agent_info 走真实 schema 子集 —— 任一条规则变化,都还有另一条兜住.
  *
- * description 故意写成「别调用」：上游对**有参数**的工具只比对 schema、不比对描述
- * （描述只在零参数工具上用于日志），所以这里可以自由取舍；而一个真诚邀请模型调用的
- * 描述，会让模型真的去调一个下游客户端根本不认识的名字。
+ - description 故意写成[别调用]:上游对有参数的工具只比对 schema,不比对描述
+ - (描述只在零参数工具上用于日志),所以这里可以自由取舍;而一个真诚邀请模型调用的
+ - 描述,会让模型真的去调一个下游客户端根本不认识的名字.
  */
 export const FREEBUFF_SIGNATURE_TOOL_DEFINITIONS = Object.freeze([
-  // 首位 = 主签名：带真实参数 schema，走上游的「schema 子集」判定。
-  // 排在首位是因为它承载结构证据，而 decide 只是名字层面的兜底。
+  // 首位 = 主签名:带真实参数 schema,走上游的[schema 子集]判定.
+  // 排在首位是因为它承载结构证据,而 decide 只是名字层面的兜底.
   Object.freeze({
     type: 'function',
     function: Object.freeze({
@@ -453,7 +453,7 @@ export const FREEBUFF_SIGNATURE_TOOL_DEFINITIONS = Object.freeze([
       }),
     }),
   }),
-  // 兜底 = 官方自定义工具名（上游对自定义名不查 schema）。
+  // 兜底 = 官方自定义工具名(上游对自定义名不查 schema).
   Object.freeze({
     type: 'function',
     function: Object.freeze({

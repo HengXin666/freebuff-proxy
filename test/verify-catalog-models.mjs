@@ -1,14 +1,14 @@
 /**
- * 离线验证：目录驱动模型表（不发任何网络请求）。
+ - 离线验证:目录驱动模型表(不发任何网络请求).
  *
- * 输入是**真机抓包**留下的两份原文：
- *   docs/reverse/captures/2026-10-03-e2/catalog-official-client.json  （目录 13 行）
- *   docs/reverse/captures/2026-10-03-e2/session-official.json         （额度/单价）
+ - 输入是真机抓包留下的两份原文:
+ - docs/reverse/captures/2026-10-03-e2/catalog-official-client.json  (目录 13 行)
+ - docs/reverse/captures/2026-10-03-e2/session-official.json         (额度/单价)
  *
- * 钉死三件事（用户报的「没有任何可用模型」全部源于它们被搞反）：
- *   1. 清单来自目录行（13 条），不是 rateLimitsByModel（6 条）；
- *   2. 对外 id 是可读模型名，不是 m-xxx；
- *   3. 白名单放行目录里的模型（含当日额度为 0 的）。
+ - 钉死三件事(用户报的[没有任何可用模型]全部源于它们被搞反):
+ - 1. 清单来自目录行(13 条),不是 rateLimitsByModel(6 条);
+ - 2. 对外 id 是可读模型名,不是 m-xxx;
+ - 3. 白名单放行目录里的模型(含当日额度为 0 的).
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -33,23 +33,23 @@ const raw = buildCatalogDrivenModelsResponse({
   issuedAt: cat.issuedAt,
 })
 /**
- * ⚠️ 结果必须**过一遍 JSON 往返**再断言。
+ - 结果必须过一遍 JSON 往返再断言.
  *
- * 实测（Node v26.10.0）：直接从返回对象点读 `entry.freebuffs_per_hour`
- * 得到 undefined，而 `Object.entries(entry)` 与 `JSON.stringify(entry)`
- * 都能拿到正确的值 —— 属性确实存在且有值，只是属性访问读不到。
+ - 实测(Node v26.10.0):直接从返回对象点读 entry.freebuffs_per_hour
+ - 得到 undefined,而 Object.entries(entry) 与 JSON.stringify(entry)
+ - 都能拿到正确的值 —— 属性确实存在且有值,只是属性访问读不到.
  *
- * 生产路径走的是 `sendJson()` → `JSON.stringify()`，所以**线上行为不受
- * 影响**；这里是测试脚本为绕开该运行时怪癖而做的规整化，不是掩盖缺陷。
+ - 生产路径走的是 sendJson() → JSON.stringify(),所以线上行为不受
+ - 影响;这里是测试脚本为绕开该运行时怪癖而做的规整化,不是掩盖缺陷.
  */
 
 /**
- * 读字段：优先点读，取不到就从序列化快照里取。
+ - 读字段:优先点读,取不到就从序列化快照里取.
  *
- * 背景（已查实）：本脚本与 model.js 同进程、且在进程早期调用时，返回对象
- * 的部分字段会出现"键存在、点读为 undefined"的现象（V8 与模块求值副作用
- * 相关）。**真实服务链路不受影响** —— 起服务实测 /v1/models 返回 53 条，
- * 单价/额度/accessTier 全部正确。这里用快照兜底，保证断言判据稳定。
+ - 背景(已查实):本脚本与 model.js 同进程,且在进程早期调用时,返回对象
+ - 的部分字段会出现"键存在,点读为 undefined"的现象(V8 与模块求值副作用
+ - 相关).真实服务链路不受影响 —— 起服务实测 /v1/models 返回 53 条,
+ - 单价/额度/accessTier 全部正确.这里用快照兜底,保证断言判据稳定.
  */
 function pick(obj, key) {
   const direct = obj[key]
@@ -60,10 +60,10 @@ function pick(obj, key) {
 
 const out = JSON.parse(JSON.stringify(raw))
 
-// ── 1) 清单 = 目录行（13 条），不是 rateLimits（6 条）──────────────
+// ── 1) 清单 = 目录行(13 条),不是 rateLimits(6 条)──────────────
 assert.equal(out.data.length, 13, '13 行目录必须产出 13 条，而不是 rateLimits 的 6 条')
 
-// ── 2) id 全部可读，且都能反查回服务端 key ────────────────────────
+// ── 2) id 全部可读,且都能反查回服务端 key ────────────────────────
 for (const m of out.data) {
   assert.ok(!/^m-[0-9a-f]+$/.test(pick(m, 'id')), `id 不得是目录 key: ${pick(m, 'id')}`)
   assert.ok(pick(m, 'freebuff_key'), `${pick(m, 'id')} 必须带 freebuff_key`)
@@ -93,7 +93,7 @@ for (const name of [
   assert.ok(out.data.find((m) => pick(m, 'id') === name), `目录里的 ${name} 必须在清单里`)
 }
 
-// ── 5) 白名单：目录里的模型必须放行（key 与可读名两个口径）─────────
+// ── 5) 白名单:目录里的模型必须放行(key 与可读名两个口径)─────────
 const keys = []
 for (const row of cat.rows) {
   keys.push(row.key)
@@ -106,7 +106,7 @@ for (const row of cat.rows) {
     `放行可读名 ${row.displayName}`,
   )
 }
-// 未收录的仍要拒（保护账号不被盲发探测）
+// 未收录的仍要拒(保护账号不被盲发探测)
 assert.equal(isModelAllowed('totally/fake-model-xyz', { catalogKeys: keys }), false)
 // hidden 生效
 assert.equal(
@@ -126,7 +126,7 @@ const noPremium = JSON.parse(
 assert.equal(noPremium.data.length, 8, '屏蔽 premium 后应剩 8 条')
 assert.equal(noPremium.data.some((m) => pick(m, 'premium')), false)
 
-console.log('✅ 目录驱动模型表验证通过（13 条，全部可读名）')
+console.log(' 目录驱动模型表验证通过（13 条，全部可读名）')
 for (const m of out.data) {
   console.log(
     `   ${String(pick(m, 'id')).padEnd(20)} ${pick(m, 'freebuff_key')} ${pick(m, 'premium') ? '收费' : '免费'} ` +

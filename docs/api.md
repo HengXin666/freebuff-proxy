@@ -1,5 +1,7 @@
 # 下游 Agent 接入与开放 API
 
+> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 真源: api
 > 本文是 [freebuff-proxy](../README.md) 的详细文档之一。chat/completions 行为、全部路由表、开放 API 批量导入/删除账号。
 > 快速上手 / 一键部署请看 [主页 README](../README.md)。
 ## 下游 Agent 接入
@@ -38,7 +40,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   | `GET /v1/models` | 可用模型目录 |
   | `GET /v1/freebuff/status` | 当前账号与 session 快照 |
   | `GET /v1/freebuff/accounts` | 账号列表与冷却状态 |
-  | `POST /v1/freebuff/accounts/import` | **开放 API 导入账号**（Bearer API Key，单/批量，导入后自动探测预热） |
+  | `POST /v1/freebuff/accounts/import` | **开放 API 导入账号**（Bearer API Key，单/批量；**导入后不发上游请求** —— 零自动探测，见 `docs/reverse/20-upstream-endpoint-whitelist.md` §20.3） |
   | `DELETE /v1/freebuff/accounts` | **开放 API 删除账号**（按 email/id/key，空 body 清空全部） |
   | `POST /v1/freebuff/session/end` | 释放全部 session |
   | `POST /v1/chat/completions` | 主路径（session + 透传） |

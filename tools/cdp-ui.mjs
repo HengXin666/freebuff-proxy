@@ -1,16 +1,16 @@
 /**
- * cdp.mjs — 只操作官方客户端 UI 的工具（不发任何上游协议请求）。
+ - cdp.mjs — 只操作官方客户端 UI 的工具(不发任何上游协议请求).
  *
- * 约束：本文件只做 CDP 驱动（读 DOM / 点击 / 输入），
- * 绝不直接向 codebuff.com 发请求。所有"侦查"通过观察客户端自身行为完成。
+ - 约束:本文件只做 CDP 驱动(读 DOM / 点击 / 输入),
+ - 绝不直接向 codebuff.com 发请求.所有"侦查"通过观察客户端自身行为完成.
  *
- * 用法：
- *   node cdp.mjs eval  '<JS 表达式>'
- *   node cdp.mjs click '<CSS 选择器>'
- *   node cdp.mjs type  '<CSS 选择器>' '<文本>'
- *   node cdp.mjs send  '<CSS 选择器>' '<文本>'   # 输入后按 Enter
- *   node cdp.mjs shot  <输出路径>                 # 截图
- *   node cdp.mjs text  [尾部字符数]
+ - 用法:
+ - node cdp.mjs eval  '<JS 表达式>'
+ - node cdp.mjs click '<CSS 选择器>'
+ - node cdp.mjs type  '<CSS 选择器>' '<文本>'
+ - node cdp.mjs send  '<CSS 选择器>' '<文本>'   # 输入后按 Enter
+ - node cdp.mjs shot  <输出路径>                 # 截图
+ - node cdp.mjs text  [尾部字符数]
  */
 const [mode, a1, a2] = process.argv.slice(2);
 

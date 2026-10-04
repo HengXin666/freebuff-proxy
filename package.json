@@ -18,7 +18,7 @@
     "doctor": "node bin/doctor.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node test/smoke.mjs && node test/smoke-frontend.mjs && node test/verify-model-name-chain.mjs && node test/verify-catalog-models.mjs && node test/verify-model-mapping-truth.mjs && node test/verify-tool-name-mapping.mjs",
-    "pipeline:image": "node scripts/pipeline-image-test.mjs",
+    "pipeline:image": "node scripts/ci/pipeline-image-test.mjs",
     "web": "node bin/serve.js",
     "pricing": "node bin/pricing.js",
     "verify-notes": "node .agents/skills/hx-agent-notes/scripts/verify-all.ts",
@@ -32,9 +32,15 @@
     "notes:board": "node .agents/skills/hx-agent-notes/scripts/build-board.ts --init board.html",
     "test:smoke": "node test/smoke.mjs",
     "test:catalog": "node test/verify-catalog-models.mjs",
-    "gen:contract": "node scripts/gen-upstream-contract.mjs",
+    "gen:contract": "node scripts/catalog/gen-upstream-contract.mjs",
     "check:contract": "node scripts/check-upstream-contract.mjs",
-    "check:all": "npm run check:contract && npm run test:catalog && npm run typecheck && npm run test:smoke"
+    "check:all": "npm run check:gates && npm run check:contract && npm run test:catalog && npm run typecheck && npm run test:smoke",
+    "check:gates": "node scripts/gates/run.mjs",
+    "check:gates:commit": "node scripts/gates/run.mjs pre-commit",
+    "check:gates:push": "node scripts/gates/run.mjs pre-push",
+    "check:gates:fingerprint": "node scripts/gates/meta/fingerprint.mjs",
+    "check:gates:fingerprint:update": "node scripts/gates/meta/fingerprint.mjs --update",
+    "check:gates:probe": "node scripts/gates/probe-gates.mjs"
   },
   "dependencies": {
     "undici": "^8.10.2",

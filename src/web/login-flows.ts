@@ -1,0 +1,293 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import crypto from 'node:crypto'
+import { randomUUID } from 'node:crypto'
+import { createUpstreamClient } from '../upstream/client.js'
+import {
+  generateFingerprintId,
+  saveAccountUser,
+  accountKeyOf,
+} from '../auth-store.js'
+import { logger } from '../util/log.js'
+import {
+  readJsonFileState,
+  noteDataFile,
+  noteDroppedEntries,
+  invalidShape,
+  ensureObjectEntries,
+  dumpDroppedEntries,
+  isPlainRecord,
+} from '../util/json-store.js'
+
+/**
+ * Web-driven Freebuff login flow ("callback" style):
+ *
+ *   1. admin starts a flow → server asks Freebuff for a CLI login URL
+ *   2. admin opens the URL in THEIR OWN browser (never in the container)
+ *   3. server polls Freebuff /api/auth/cli/status until the browser
+ *      callback authorizes the code
+ *   4. credential is saved to <credentialsDir>/<email>.json and the flow
+ *      flips to done
+ *
+ * Flows persist to <dataDir>/login-flows.json so restarts don't lose them.
+ */
+/** 一条等待确认的 CLI 登录流程. */
+interface LoginFlow {
+  id: string
+  status: 'pending' | 'done' | 'expired' | 'cancelled'
+  loginUrl: string
+  fingerprintId: string
+  fingerprintHash?: string
+  expiresAt?: unknown
+  createdAt: string
+  error: string | null
+  user: { key: string, id: string | null, email: string, name?: string } | null
+}
+
+/** 构造选项. */
+interface LoginFlowOptions {
+  file: string
+  credentialsDir: string
+  config: any
+  onCredentialSaved?: ((key: string) => void) | null
+}
+
+export class LoginFlowManager {
+  declare file: string
+  declare credentialsDir: string
+  declare config: any
+  declare _onCredentialSaved: ((key: string) => void) | null
+  declare flows: Map<string, LoginFlow>
+  declare loadStatus: 'ok' | 'missing' | 'invalid'
+  declare loadReason: string | null
+  declare droppedEntries: number
+  declare droppedBackup: string | null
+  declare _polling: boolean
+  declare _poller: ReturnType<typeof setInterval> | null
+
+  /**
+   * @param {LoginFlowOptions} opts
+   */
+  constructor({ file, credentialsDir, config, onCredentialSaved = null }: LoginFlowOptions) {
+    this.file = file
+    this.credentialsDir = credentialsDir
+    this.config = config
+    /**
+     * 凭证落盘后的回调（记「凭证更新时间」到账号账本）。
+     * 用回调而不是直接持有 AccountRuntimes：登录流程只关心登录，账本是上层的事。
+     */
+    this._onCredentialSaved =
+      typeof onCredentialSaved === 'function' ? onCredentialSaved : null
+    /** @type {Map<string, any>} */
+    this.flows = new Map()
+    /** 装载结果（'ok' | 'missing' | 'invalid'）：损坏 = 等待中的登录流程全丢
+     * （重新发起即可，不致命），但要在自检里看得见。 */
+    this.loadStatus = 'missing'
+    this.loadReason = null
+    /** 被丢弃的非法条目数 + 留证文件（flows 里曾有 null/无 id 的条目）。 */
+    this.droppedEntries = 0
+    this.droppedBackup = null
+    this.load()
+    /** 上一轮 pollAll 是否还在跑（上游慢/挂起时防止每 4s 再堆一轮并发轮询）。 */
+    this._polling = false
+    this._poller = setInterval(() => {
+      if (this._polling) return
+      this._polling = true
+      this.pollAll()
+        .catch((err) => {
+          logger.warn('login flow poller error', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        })
+        .finally(() => {
+          this._polling = false
+        })
+    }, 4000)
+    this._poller.unref?.()
+  }
+
+  /** @returns {import('../util/json-store.js').JsonFileState} */
+  load() {
+    let st = readJsonFileState(this.file)
+    if (st.status === 'ok' && st.data?.flows !== undefined && !Array.isArray(st.data.flows)) {
+      st = invalidShape('flows 不是数组')
+    }
+    // 逐条校验：数组里混进 null 时原先 f.id 直接 TypeError（启动期抛，
+    // 进程还没监听端口就退出）。这里改为丢弃坏条目 + 留证，绝不整数组信任。
+    if (st.status === 'ok') {
+      const raw = Array.isArray(st.data?.flows) ? st.data.flows : []
+      const checked = ensureObjectEntries(
+        st.data,
+        'flows',
+        (f) => isPlainRecord(f) && typeof f.id === 'string' && f.id.trim().length > 0,
+      )
+      for (const f of checked.items) this.flows.set(f.id, f)
+      if (checked.dropped) {
+        this.droppedEntries = checked.dropped
+        this.droppedBackup = dumpDroppedEntries(
+          this.file,
+          raw.filter((f: unknown) => !checked.items.includes(f)),
+        )
+        noteDroppedEntries(this.file, checked.dropped, checked.reason, this.droppedBackup)
+        logger.warn('数据文件含非法条目: 登录流程（已丢弃并留证）', {
+          file: this.file,
+          dropped: checked.dropped,
+          reason: checked.reason,
+          backup: this.droppedBackup,
+        })
+      }
+    } else if (st.status === 'invalid') {
+      logger.warn('数据文件损坏: 登录流程', { file: this.file, reason: st.reason })
+    }
+    noteDataFile(this.file, st)
+    this.loadStatus = st.status
+    this.loadReason = st.status === 'invalid' ? st.reason : null
+    return st
+  }
+
+  /** @returns {void} */
+  save() {
+    fs.mkdirSync(path.dirname(this.file), { recursive: true })
+    const tmp = `${this.file}.tmp`
+    fs.writeFileSync(
+      tmp,
+      JSON.stringify(
+        { version: 1, flows: [...this.flows.values()] },
+        null,
+        2,
+      ),
+      { mode: 0o600 },
+    )
+    fs.renameSync(tmp, this.file)
+  }
+
+  /**
+   * Start a new login flow.
+   * @returns {Promise<{id: string, loginUrl: string, status: string, createdAt: string, expiresAt: string}>}
+   */
+  /** @returns {Promise<Record<string, unknown>>} */
+  async start() {
+    const upstream = createUpstreamClient(this.config, '')
+    const fingerprintId = generateFingerprintId()
+    const code = await upstream.loginCode(fingerprintId)
+    if (!code?.loginUrl) {
+      throw new Error('Freebuff 登录接口未返回 loginUrl')
+    }
+    const flow: LoginFlow = {
+      id: randomUUID(),
+      status: 'pending',
+      loginUrl: code.loginUrl,
+      fingerprintId,
+      fingerprintHash: code.fingerprintHash,
+      expiresAt: code.expiresAt,
+      createdAt: new Date().toISOString(),
+      error: null,
+      user: null,
+    }
+    this.flows.set(flow.id, flow)
+    this.save()
+    logger.info('login flow started', {
+      id: flow.id,
+      expiresAt: flow.expiresAt,
+    })
+    return this.publicFlow(flow)
+  }
+
+  /** @returns {Record<string, unknown> | null} */
+  get(id: string) {
+    const flow = this.flows.get(id) || null
+    return flow ? this.publicFlow(flow) : null
+  }
+
+  /** @returns {Array<Record<string, unknown>>} */
+  list() {
+    return [...this.flows.values()]
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      .map((f) => this.publicFlow(f))
+  }
+
+  /** @returns {boolean} */
+  cancel(id: string) {
+    const flow = this.flows.get(id)
+    if (!flow) return false
+    if (flow.status === 'pending') {
+      flow.status = 'cancelled'
+      this.save()
+    }
+    return true
+  }
+
+  /** @returns {Record<string, unknown>} */
+  publicFlow(flow: LoginFlow) {
+    const { fingerprintHash, fingerprintId, ...rest } = flow
+    return {
+      ...rest,
+      user: flow.user
+        ? {
+            key: accountKeyOf(flow.user),
+            id: flow.user.id || null,
+            email: flow.user.email,
+            name: flow.user.name,
+          }
+        : null,
+    }
+  }
+
+  /** @returns {Promise<void>} */
+  async pollAll() {
+    const now = Date.now()
+    for (const flow of this.flows.values()) {
+      if (flow.status !== 'pending') continue
+      if (flow.expiresAt && expirationMs(flow.expiresAt) <= now) {
+        flow.status = 'expired'
+        flow.error = '登录链接已过期，请重新发起'
+        this.save()
+        continue
+      }
+      try {
+        const upstream = createUpstreamClient(this.config, '')
+        const st = await upstream.loginStatus({
+          fingerprintId: flow.fingerprintId,
+          fingerprintHash: flow.fingerprintHash,
+          expiresAt: flow.expiresAt,
+        })
+        if (st?.user?.authToken) {
+          const saved = saveAccountUser(this.credentialsDir, st.user)
+          // 记「凭证更新时间」：浏览器登录回调也是写凭据的入口之一。
+          try {
+            this._onCredentialSaved?.(saved.key)
+          } catch {
+            // 可观测性失败不影响登录完成
+          }
+          flow.status = 'done'
+          flow.user = { key: saved.key, id: saved.user.id || null, email: saved.user.email, name: saved.user.name }
+          flow.error = null
+          this.save()
+          logger.info('login flow completed', {
+            id: flow.id,
+            key: saved.key,
+            email: saved.user.email,
+          })
+        }
+      } catch (err) {
+        flow.error = err instanceof Error ? err.message : String(err)
+        // keep polling; transient network errors are common
+      }
+    }
+  }
+
+  /** @returns {void} */
+  shutdown() {
+    clearInterval(this._poller ?? undefined)
+    this._poller = null
+  }
+}
+
+
+function expirationMs(value: unknown): number {
+  if (typeof value === 'number') return value
+  const numeric = Number(value)
+  if (Number.isFinite(numeric) && numeric > 0) return numeric
+  const parsed = Date.parse(String(value))
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY
+}

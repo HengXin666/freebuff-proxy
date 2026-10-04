@@ -2,6 +2,8 @@
 
 > 本文是 [freebuff-proxy](../README.md) 的详细文档之一。粘性优先（drain, not rotate）调度、Freebucks 额度口径、额度保护、工具签名兼容。
 > 快速上手 / 一键部署请看 [主页 README](../README.md)。
+> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 真源: scheduling
 ## 多账号池与热 session 优先调度
 
 ### 账号池自动切号
@@ -12,8 +14,10 @@
   403 账号级封禁都会按上游 `Retry-After` 冷却当前账号并**换号重试**（最多试到账号数，封顶 5 次），
   而不是把错误直接甩给下游；4xx 客户端错误（400/401/404/422）不换号。
 - **换号不再"每个账号都买一条计费会话"**（2026-09 Freebucks 改版）：上游按模型单价（N/h）
-  **预扣整小时**，提前 DELETE 会按**实际占用时长退还**未用部分（2026-09-13 结论反转，
-  见 [account-scheduling-and-refund.md](./account-scheduling-and-refund.md) §3）。
+  **预扣整小时**（一次 admit = 买断一小时，当场扣满，回执带 `expiresAt`），这一小时内继续
+  发请求**边际成本为 0**；提前 DELETE **拿不回 Freebucks**（只回 `freebucksRefundPending`，
+  实测重开直接吃 `rate_limited` + `freebucksShortfall`，见下方「额度保护」与
+  [account-scheduling-and-refund.md](./account-scheduling-and-refund.md) §3）。
   因此单个下游请求最多新建 `limits.max_new_sessions_per_request`（默认 2）条会话——复用热 session 和
   被上游拒绝的 admit 都不占预算；换号前失败账号的会话仍会立即早退 DELETE（结束会话、释放上游
   会话槽位），网络类瞬时故障先在同一账号上重试一次（复用热 session，不新建）。
@@ -79,14 +83,15 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
 
 - **Freebucks 计量模型**（上游 `freebucks.prices` 里有价格的模型）：每个模型有单价
   （N Freebucks/小时），**admit 一次就按整小时单价买断**——之后用 3 秒还是 59 分钟扣的一样多，
-  **提前 DELETE 不退**（响应里的 `freebucksRefund` 实测恒为 0，见
+  **提前 DELETE 拿不回**（只回 `freebucksRefundPending`，实测重开吃
+  `rate_limited` + `freebucksShortfall`；见
   [account-scheduling-and-refund.md](./account-scheduling-and-refund.md) §3）；每日池在
   **太平洋午夜**重置。`freebucks.balance`（可花费余额）/ `daily.remaining`（今日池剩余）
   除以单价就是"还能用多久"（控制台直接折算成分钟）。
 - **未计量模型**（`prices` 里没有该模型）：仍按 **模型 × 每日** 限次
   （上游 `rateLimitsByModel`，如 `limit: 6 / recentCount: 已用 / resetAt: 重置时间`）。
 
-> ⚠️ 2026-08-09 实时探测：`deepseek/deepseek-v4-flash` 与
+>  2026-08-09 实时探测：`deepseek/deepseek-v4-flash` 与
 > `mimo/mimo-v2.5` 已重新出现在上游 `rateLimitsByModel` 中（当时为 6 次/天）。
 > 代理不对它们做不限量豁免，始终以上游实时返回的限额为准。
 
@@ -145,24 +150,23 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
   **同号重试（`forceReadmit`）也走同一道闸门**——它会先 DELETE 再 admit，等于新买一条计费
   会话，不过闸就等于拿真钱去撞"余额不够"的封号判定。
 - **换号即释放**：账号级故障换号前，先把失败账号的会话早退 DELETE（结束会话、释放上游
-  会话槽位，并取回未用时长对应的 Freebucks）。
-  > ✅ **退款结论已反转（2026-09-13）**：早退 DELETE **会按实际占用时长退还 Freebucks**。
+  会话槽位）。
+  >  **退款口径（2026-09-14 一手实测定案）**：早退 DELETE **拿不回 Freebucks**。
   >
-  > 我们原先的"实测结案：不退"是**证据不足的误判**：实验只测了占用 3 分钟 + 重放 20 分钟，
-  > 而结算要跨到窗口结束才落地，且把 `freebucksRefundPending`（= 结算未完成）读成了
-  > "结构上不退"。
+  > 2026-09-13 曾据官方类型 + issue #1337 把结论"反转"成"会退"，**2026-09-14 的一手实测
+  > 推翻了它**：账号 `lolid8faw4er` / 模型 `upstage/solar-pro4`（纯 Freebucks 计费）
+  > admit 后 `rem 5→0`，25s 后 DELETE 只回 `{freebucksRefundPending:true}`（无金额），
+  > +20/+40/+60/+120s 重放 DELETE ×2 仍无金额，**重开同模型直接吃
+  > `rate_limited` + `freebucksShortfall`** —— 钱确实没了。
   >
-  > 反证（一手）：上游 issue **#1337** 用户实测早退产生的 pending refund **确实到账**、
-  > 落在每日池且可跨日叠加；issue **#1324** 里用户对"cancel early 拿回点数"是正常预期；
-  > 官方类型 `FreebuffDesktopRefundInfo` 明确写着 *"emitted only after the reversal ledger
-  > entry and purchase marker commit"* 并带 `poolDate`；参考实现 trefeon/freebuff-proxy
-  > 的 README 直接写 *"refunded on early `DELETE`"*。
+  > 与 `session_units` 那本账形成**不对称**：units 早退是当场按比例退的（实测 `1.1 → 0.2`）。
+  > 而实测 24 个「账号 × 模型」组合里 **22 个是 Freebucks 先见底**，所以早退等于拿稀缺的账
+  > 去省不稀缺的账。
   >
-  > 因此：**早退只省槽位，不省 Freebucks**（实测 pending 未到账）；本服务仍用同一个
-  > `instanceId` **持续重放 DELETE** 直到拿到终态回执（含 0——0 才是真的退 0），
-  > 但**付费时段内不为空闲而释放**。
-  > 完整证据链与纠错过程见
-  > [account-scheduling-and-refund.md](./account-scheduling-and-refund.md) §3。
+  > 因此：**早退只省槽位，不省 Freebucks**；本服务仍用同一个 `instanceId` **持续重放 DELETE**
+  > 直到拿到终态回执（含 0——0 才是真的退 0），但**付费时段内不为空闲而释放**。
+  > 决策记录见 `.agents/notes/implemented/architecture/2026-09-14-paid-hour-hold.md`，
+  > 完整证据链见 [account-scheduling-and-refund.md](./account-scheduling-and-refund.md) §3。
 - **全部账号都买不起时给独立错误码**：`429 freebucks_exhausted`（而非笼统的
   `no_available_account`）——两者处境完全不同：前者等每日池刷新即可，后者要加号或等冷却。
   调用方与控制台据此区分，不必去猜。

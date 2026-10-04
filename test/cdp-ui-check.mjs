@@ -1,4 +1,4 @@
-// CDP 前端 UI 验证：登录 → 逐路由检查 select 样式 / 模型管理 / 负载均衡 UI。
+// CDP 前端 UI 验证:登录 → 逐路由检查 select 样式 / 模型管理 / 负载均衡 UI.
 // 用法: node test/cdp-ui-check.mjs <cdpPort> <baseUrl> [password]
 import { createRequire } from 'node:module'
 
@@ -51,7 +51,7 @@ async function evalJs(expr) {
   return r.result?.result?.value
 }
 
-// 登录（通过页面 fetch 或直接 cookie 注入）
+// 登录(通过页面 fetch 或直接 cookie 注入)
 const login = await evalJs(`(async () => {
   const r = await fetch('${baseUrl}/api/auth/login', {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -61,7 +61,7 @@ const login = await evalJs(`(async () => {
 })()`)
 console.log('login:', JSON.stringify(login))
 
-// 登录后刷新页面（SPA 重新拉 /api/me 进入已登录态）
+// 登录后刷新页面(SPA 重新拉 /api/me 进入已登录态)
 await cdp('Page.navigate', { url: `${baseUrl}/#overview` })
 await new Promise((r) => setTimeout(r, 1500))
 
@@ -103,7 +103,7 @@ results.models = await evalJs(`(() => {
   }
 })()`)
 
-// 用户管理路由（角色 select）
+// 用户管理路由(角色 select)
 await cdp('Page.navigate', { url: `${baseUrl}/#users` })
 await new Promise((r) => setTimeout(r, 1200))
 results.users = await evalJs(`(() => {

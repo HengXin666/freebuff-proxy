@@ -1,10 +1,10 @@
 import http from 'node:http'
 
 /**
- * 真实 HTTP mock 上游（供"真实代理链路"测试使用）：
- * 复用 smoke.mjs 的模块级计数器与 mockMode；通过 opts 传入闭包共享。
- * 行为与 smoke.mjs 全局 fetch mock 的 ok/hold_once 路径保持一致。
- * @param {{ sessionPosts: () => number, bumpSessionPosts: () => void, bumpSessionDeletes: () => void, completionAttempts: () => number, bumpCompletionAttempts: () => void, getMockMode: () => string, holdStreamControllers: unknown[] }} state
+ - 真实 HTTP mock 上游(供"真实代理链路"测试使用):
+ - 复用 smoke.mjs 的模块级计数器与 mockMode;通过 opts 传入闭包共享.
+ - 行为与 smoke.mjs 全局 fetch mock 的 ok/hold_once 路径保持一致.
+ - @param {{ sessionPosts: () => number, bumpSessionPosts: () => void, bumpSessionDeletes: () => void, completionAttempts: () => number, bumpCompletionAttempts: () => void, getMockMode: () => string, holdStreamControllers: unknown[] }} state
  */
 export async function createMockUpstreamServer(state) {
   const server = http.createServer((req, res) => {
@@ -24,8 +24,8 @@ export async function createMockUpstreamServer(state) {
         if (path === '/api/v1/me') {
           return json({ id: 'u1', email: 'a@b.c' })
         }
-        // 官方 POST 准入端点是 .../session/admission（不是 .../session）；
-        // 这个真实 HTTP mock 必须跟着走，否则测的就不是一个真实的链路。
+        // 官方 POST 准入端点是 .../session/admission(不是 .../session);
+        // 这个真实 HTTP mock 必须跟着走,否则测的就不是一个真实的链路.
         // 见 .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md
         if (path === '/api/v1/freebuff/session/admission' && method === 'POST') {
           state.bumpSessionPosts()
@@ -70,8 +70,8 @@ export async function createMockUpstreamServer(state) {
           const body = JSON.parse(bodyText || '{}')
           state.bumpCompletionAttempts()
           if (state.getMockMode() === 'hold_once' && state.completionAttempts() === 1 && body.stream) {
-            // 先发响应头 + 首 chunk，保持连接打开（模拟长流），
-            // 由测试通过 state.holdResponses 显式释放（写 [DONE] 并结束）。
+            // 先发响应头 + 首 chunk,保持连接打开(模拟长流),
+            // 由测试通过 state.holdResponses 显式释放(写 [DONE] 并结束).
             res.writeHead(200, { 'content-type': 'text/event-stream' })
             res.write('data: {"id":"c1","object":"chat.completion.chunk","choices":[{"delta":{"content":"hi"}}]}\n\n')
             state.holdResponses.push(res)
@@ -99,7 +99,7 @@ export async function createMockUpstreamServer(state) {
 }
 
 /**
- * 最小 HTTP 转发代理：把绝对形式请求转发到目标主机（供"真实代理链路"测试）。
+ - 最小 HTTP 转发代理:把绝对形式请求转发到目标主机(供"真实代理链路"测试).
  */
 export async function createForwardProxy() {
   const server = http.createServer((req, res) => {

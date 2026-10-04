@@ -12,13 +12,13 @@ import { SessionManager } from '../src/session-manager.js'
 import { requestSlotStats } from '../src/proxy.js'
 
 /**
- * ⚠️ 冒烟测试**关闭 bun 通道**。
+ * - 冒烟测试关闭 bun 通道.
  *
- * 原因：bun 侧每个动作都会先 `fetchCatalog()`，而本文件的 mock 上游
- * 不响应 `/api/v1/freebuff/models` → 动作整体失败 → 虽然会回落 Node，
- * 但会让"释放/注册"这类用例变得依赖回落时序，不稳定。
- * 冒烟测的是代理的调度与容错逻辑，不是"请求跑在哪个运行时上"——
- * 后者由本地镜像对照（docs/reverse/21 §21.6）单独验证。
+ * - 原因:bun 侧每个动作都会先 fetchCatalog(),而本文件的 mock 上游
+ * - 不响应 /api/v1/freebuff/models → 动作整体失败 → 虽然会回落 Node,
+ * 但会让"释放/注册"这类用例变得依赖回落时序,不稳定.
+ * 冒烟测的是代理的调度与容错逻辑,不是"请求跑在哪个运行时上"——
+ * 后者由本地镜像对照(docs/reverse/21 §21.6)单独验证.
  */
 process.env.FREEBUFF_DISABLE_BUN = '1'
 import { configureLogger } from '../src/util/log.js'
@@ -61,7 +61,7 @@ import {
   detectForeignClient,
   isGenuineSignatureTool,
 } from '../src/upstream/foreign-client-signals.js'
-import { SettingsStore } from '../src/web/settings-store.js'
+import { SettingsStore } from '../src/web/settings-store.ts'
 import { ModelStore } from '../src/web/model-store.js'
 import { UserStore } from '../src/web/user-store.js'
 import { ProxyStore } from '../src/web/proxy-store.js'
@@ -156,7 +156,7 @@ configureLogger({ level: 'error' })
   )
   assert.match(sse, /"name":"delegate_task"/)
 
-  // 已有同名工具时选择无冲突别名，不能覆盖客户端自己的 spawn_subagent。
+  // 已有同名工具时选择无冲突别名,不能覆盖客户端自己的 spawn_subagent.
   assert.equal(
     chooseHermesDelegateAlias([
       { type: 'function', function: { name: 'delegate_task' } },
@@ -172,58 +172,58 @@ let calls = []
 let mockMode = 'ok'
 let sessionPosts = 0
 /**
- * `claim_released` 场景用：记录**已经作废过**的 instanceId。
- * 同一个 id 第二次出现就放行 —— 用来验证实现确实**换了新 id**（而不是原地重试）。
+ * - claim_released 场景用:记录已经作废过的 instanceId.
+ * - 同一个 id 第二次出现就放行 —— 用来验证实现确实换了新 id(而不是原地重试).
  */
 const claimReleasedSeen = new Set()
 let sessionDeletes = 0
 let completionAttempts = 0
-/** 历次 startAgentRun 使用的 agentId（agent 兜底/退役验证用）。 */
+/** 历次 startAgentRun 使用的 agentId(agent 兜底/退役验证用). */
 let startAgentCalls = []
-/** 会话有效期（毫秒）：近过期/重连测试用 */
+/** 会话有效期(毫秒):近过期/重连测试用 */
 let sessionExpiryMs = 3600_000
 /**
- * 模拟上游 Freebucks 计量块（2026-09 改版）：设成对象后，每个 session 响应
- * （POST/GET/DELETE）都会带上它；null = 老上游（无计量，不拦截）。
+ * 模拟上游 Freebucks 计量块(2026-09 改版):设成对象后,每个 session 响应
+ * (POST/GET/DELETE)都会带上它;null = 老上游(无计量,不拦截).
  * @type {null | { balance: number, daily?: any, wallet?: any, prices?: Record<string, number>, quotaExempt?: boolean, planId?: string | null }}
  */
 let mockFreebucks = null
 /**
- * 真实链路复现：**余额 0，但上游会话清单里有一条同模型、未过期的已付费会话**
- * （`desktopPurchases[].holderInstanceId`，可能是**别的部署**建的）。
+ * - 真实链路复现:余额 0,但上游会话清单里有一条同模型,未过期的已付费会话
+ * - (desktopPurchases[].holderInstanceId,可能是别的部署建的).
  *
- * 置成对象后：
- *   - `GET /freebuff/session` 回 `status: none` + 一份**买不起**的 Freebucks
- *     （balance 0 / 每日池 0/25），`listed=true` 时另带上面那条会话的清单；
- *   - `POST /session/admission` 镜像上游槽位语义：**不带**占用者 id 的 takeover
- *     一律回 `purchase_capacity`（槽位被占），带了才移交槽位。
+ * 置成对象后:
+ * - - GET /freebuff/session 回 status: none + 一份买不起的 Freebucks
+ * - (balance 0 / 每日池 0/25),listed=true 时另带上面那条会话的清单;
+ * - - POST /session/admission 镜像上游槽位语义:不带占用者 id 的 takeover
+ * - 一律回 purchase_capacity(槽位被占),带了才移交槽位.
  *
- * ⚠️ 与 `mockFreebucks` 分开是刻意的：那个变量会被**所有** session 回执
- * （含 POST admission）带上，用它表达"余额 0"会把用例变成"admit 也失败"，
- * 测不到「闸门放行 → takeover 复用」这条链路。
+ * - 与 mockFreebucks 分开是刻意的:那个变量会被所有 session 回执
+ * (含 POST admission)带上,用它表达"余额 0"会把用例变成"admit 也失败",
+ * 测不到[闸门放行 → takeover 复用]这条链路.
  * @type {null | { holderInstanceId: string, model: string, listed: boolean,
- *   freebucks: { balance: number, daily: any, prices: Record<string, number> } }}
+ * freebucks: { balance: number, daily: any, prices: Record<string, number> } }}
  */
 let mockPaidTakeover = null
 
-/** 每次 DELETE 退还给调用方的 Freebucks（模拟"提前结束退款"）。 */
+/** 每次 DELETE 退还给调用方的 Freebucks(模拟"提前结束退款"). */
 let mockRefund = 1.5
 /**
- * 上游"结算未完成"标志 (vendor af898dc freebucksRefundPending)。true 时 DELETE
- * 回执只带 pending、**不带** freebucksRefund——2026-09 实测提前结束的会话会
- * 持续挂起数分钟。用于验证"挂起 ≠ 退款 0"。
+ * 上游"结算未完成"标志 (vendor af898dc freebucksRefundPending).true 时 DELETE
+ * - 回执只带 pending,不带 freebucksRefund——2026-09 实测提前结束的会话会
+ * 持续挂起数分钟.用于验证"挂起 ≠ 退款 0".
  */
 let mockRefundPending = false
-/** DELETE 收到过的 x-freebuff-instance-id（回归：不带会被上游 400）。 */
+/** DELETE 收到过的 x-freebuff-instance-id(回归:不带会被上游 400). */
 let deleteInstanceIds = []
-/** 还需要失败几次 DELETE（验证"失败不丢句柄"）。0 = 全部成功。 */
+/** 还需要失败几次 DELETE(验证"失败不丢句柄").0 = 全部成功. */
 let deleteFailuresLeft = 0
-/** 模拟上游 DELETE 缺 instance id 时返回 400 instance_required。 */
+/** 模拟上游 DELETE 缺 instance id 时返回 400 instance_required. */
 let requireDeleteInstance = true
-/** hold_once 模式：被挂起的流式响应控制器（等 releaseHoldStreams 放行） */
+/** hold_once 模式:被挂起的流式响应控制器(等 releaseHoldStreams 放行) */
 let holdStreamControllers = []
 
-/** 放行所有被挂起的流式响应（写入 [DONE] 并关闭）。 */
+/** 放行所有被挂起的流式响应(写入 [DONE] 并关闭). */
 function releaseHoldStreams() {
   const enc = new TextEncoder()
   for (const controller of holdStreamControllers.splice(0)) {
@@ -236,7 +236,7 @@ function releaseHoldStreams() {
   }
 }
 
-/** 轮询等待条件成立（默认 2s 超时，超时抛错）。 */
+/** 轮询等待条件成立(默认 2s 超时,超时抛错). */
 async function waitFor(desc, fn, timeoutMs = 2_000, stepMs = 20) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -258,13 +258,13 @@ globalThis.fetch = async (url, init = {}) => {
   if (u.includes('/api/v1/me')) {
     return jsonRes({ id: 'u1', email: 'a@b.c' })
   }
-  // 官方 POST 走 .../session/admission（GET/DELETE 走 .../session）。
+  // 官方 POST 走 .../session/admission(GET/DELETE 走 .../session).
   if (u.includes('/api/v1/freebuff/session/admission') && method === 'POST') {
     sessionPosts++
     /**
-     * 真实链路复现：槽位被**别的部署**占着时，上游只认带占用者 id 的接管。
-     * 不带 → `purchase_capacity`（槽位被占，不是额度问题）。
-     * 这条镜像让用例能证明"确实发了 takeover"，而不只是"最后 status 200"。
+     * - 真实链路复现:槽位被别的部署占着时,上游只认带占用者 id 的接管.
+     * - 不带 → purchase_capacity(槽位被占,不是额度问题).
+     * 这条镜像让用例能证明"确实发了 takeover",而不只是"最后 status 200".
      */
     if (mockPaidTakeover) {
       const tk =
@@ -311,19 +311,19 @@ globalThis.fetch = async (url, init = {}) => {
         429,
       )
     }
-    // 地理封锁：上游把它夹在 200 回执里（status 仍是 active、额度照扣），
-    // 随后 chat 一律 503。改前这个字段从未被读取 → 归成 http_503 → 冷却换号
-    // → 每个账号轮流买断一小时 Freebucks 却拿不到答案。
+    // 地理封锁:上游把它夹在 200 回执里(status 仍是 active,额度照扣),
+    // 随后 chat 一律 503.改前这个字段从未被读取 → 归成 http_503 → 冷却换号
+    // → 每个账号轮流买断一小时 Freebucks 却拿不到答案.
     // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
     if (mockMode === 'claim_released') {
       /**
-       * `purchase_claim_released` 的两段式 mock：**第一次**用旧 instanceId
-       * 请求时回这个码（模拟"购买声明已被作废"），**换新 instanceId 后**放行。
+       * - purchase_claim_released 的两段式 mock:第一次用旧 instanceId
+       * - 请求时回这个码(模拟"购买声明已被作废"),换新 instanceId 后放行.
        *
-       * 这样测的是官方语义（orchestrator.js:208166-208176）：
-       *   收到该码 → DELETE 作废 claim → 换全新 instanceId → 重试一次
-       * 若实现没有换 ID（旧行为：当"槽位忙"跳过），第二次仍带旧 ID →
-       * mock 继续返回该码 → 断言 `sessionPosts` 与最终状态会红。
+       * 这样测的是官方语义(orchestrator.js:208166-208176):
+       * 收到该码 → DELETE 作废 claim → 换全新 instanceId → 重试一次
+       * 若实现没有换 ID(旧行为:当"槽位忙"跳过),第二次仍带旧 ID →
+       * - mock 继续返回该码 → 断言 sessionPosts 与最终状态会红.
        */
       const inst =
         headers['x-freebuff-instance-id'] ||
@@ -358,9 +358,9 @@ globalThis.fetch = async (url, init = {}) => {
         countryBlockReason: 'country_not_allowed',
       })
     }
-    // limited 档位（VPN/代理/非 allowlist 国家）：**可用**，不是封锁。
-    // 官方源码：common/src/constants/freebuff-countries.ts —— "everywhere
-    // else, and any VPN, is limited access"。把它判成封锁会把可用账号判死。
+    // limited 档位(VPN/代理/非 allowlist 国家):可用,不是封锁.
+    // 官方源码:common/src/constants/freebuff-countries.ts —— "everywhere
+    // else, and any VPN, is limited access".把它判成封锁会把可用账号判死.
     if (mockMode === 'limited_tier') {
       return jsonRes({
         status: 'active',
@@ -396,12 +396,12 @@ globalThis.fetch = async (url, init = {}) => {
       rateLimit,
       rateLimitsByModel: { [model]: rateLimit },
       /**
-       * waiting_room_once：admit 回执带**扣费后**的余额（25 - 15 = 10）。
+       * - waiting_room_once:admit 回执带扣费后的余额(25 - 15 = 10).
        *
-       * 这是真机的真实形态（远程日志 2026-10-04T18:52:34Z）：admit 200 当场扣
-       * 整小时单价 15，回执里余额剩 10；紧接着 chat 回 428。此时若把 428 排在
-       * 额度闸门之后，`freebucksFor()` 会判"10 < 15 买不起"→ 续用被拦死。
-       * 测试必须复现这个**扣费后**的余额，否则闸门不会命中、断言变成假绿。
+       * 这是真机的真实形态(远程日志 2026-10-04T18:52:34Z):admit 200 当场扣
+       * 整小时单价 15,回执里余额剩 10;紧接着 chat 回 428.此时若把 428 排在
+       * - 额度闸门之后,freebucksFor() 会判"10 < 15 买不起"→ 续用被拦死.
+       * - 测试必须复现这个扣费后的余额,否则闸门不会命中,断言变成假绿.
        */
       ...(mockFreebucks
         ? {
@@ -419,13 +419,13 @@ globalThis.fetch = async (url, init = {}) => {
   }
   if (u.includes('/api/v1/freebuff/session') && method === 'GET') {
     /**
-     * 真实链路复现：上游清单里有**别的部署**占着一条已付费会话。
+     * - 真实链路复现:上游清单里有别的部署占着一条已付费会话.
      *
-     * 形态刻意与真机对齐：
-     *   - 回执 `status: none`（本部署没有自己的会话）；
-     *   - `desktopPurchases[].model` 是**上游 legacy id** 形式（不是目录 key）——
-     *     归一映射不生效时它匹配不上请求的模型，清单形同不存在；
-     *   - Freebucks 是**买不起**（balance 0 / 每日池 0/25），逼出额度闸门。
+     * 形态刻意与真机对齐:
+     * - - 回执 status: none(本部署没有自己的会话);
+     * - - desktopPurchases[].model 是上游 legacy id 形式(不是目录 key)——
+     * 归一映射不生效时它匹配不上请求的模型,清单形同不存在;
+     * - - Freebucks 是买不起(balance 0 / 每日池 0/25),逼出额度闸门.
      */
     if (mockPaidTakeover) {
       return jsonRes({
@@ -450,9 +450,9 @@ globalThis.fetch = async (url, init = {}) => {
           : {}),
       })
     }
-    // 官方建会话路径：GET + cli: claim + multi-session 头 → 直接 active。
-    // 官方 CLI 0.2.6 全程只走这条路（18 次 GET + 1 次 DELETE /attempt），
-    // **从不打 /admission**。见
+    // 官方建会话路径:GET + cli: claim + multi-session 头 → 直接 active.
+    // 官方 CLI 0.2.6 全程只走这条路(18 次 GET + 1 次 DELETE /attempt),
+    // 从不打 /admission.见
     // .agents/notes/implemented/bug-fix/2026-10-01-cli-get-session-path.md
     if (mockMode === 'get_claim_admit') {
       const inst =
@@ -463,8 +463,8 @@ globalThis.fetch = async (url, init = {}) => {
         status: 'active',
         accessTier: 'limited',
         instanceId: inst,
-        // 服务端**指派**的 model（目录 key），不是客户端请求的模型名。
-        // chat 必须回用这个值，否则上游报 session_model_mismatch。
+        // 服务端指派的 model(目录 key),不是客户端请求的模型名.
+        // chat 必须回用这个值,否则上游报 session_model_mismatch.
         model: 'm-00032eaeec',
         admittedAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + sessionExpiryMs).toISOString(),
@@ -491,8 +491,8 @@ globalThis.fetch = async (url, init = {}) => {
       headers['X-Freebuff-Instance-Id'] ||
       ''
     deleteInstanceIds.push(instanceId)
-    // 上游 2026-09 行为：DELETE 不带 x-freebuff-instance-id 会 400
-    // instance_required，会话删不掉、退款也拿不到。
+    // 上游 2026-09 行为:DELETE 不带 x-freebuff-instance-id 会 400
+    // instance_required,会话删不掉,退款也拿不到.
     if (requireDeleteInstance && !instanceId) {
       return jsonRes({ error: 'instance_required' }, 400)
     }
@@ -514,10 +514,10 @@ globalThis.fetch = async (url, init = {}) => {
       if (mockMode === 'run_500_a' && String(runAuth).includes('token-a')) {
         return jsonRes({ error: 'internal_error', message: 'run boom' }, 500)
       }
-      // startAgentRun 以 403 拒绝该账号（非 banned/ip_capped 等账号级封禁 code，
-      // 只是该账号+agent 组合不可用）：必须冷却当前账号并换下一个，而不是
-      // 把 start_agent_run_failed 直接甩给用户（回归：403 曾因不在换号条件内而
-      // 不换号、第一次尝试就报错给用户）。
+      // startAgentRun 以 403 拒绝该账号(非 banned/ip_capped 等账号级封禁 code,
+      // 只是该账号+agent 组合不可用):必须冷却当前账号并换下一个,而不是
+      // 把 start_agent_run_failed 直接甩给用户(回归:403 曾因不在换号条件内而
+      // 不换号,第一次尝试就报错给用户).
       if (mockMode === 'run_403_a' && String(runAuth).includes('token-a')) {
         return jsonRes(
           {
@@ -527,16 +527,16 @@ globalThis.fetch = async (url, init = {}) => {
           403,
         )
       }
-      // agent 兜底：主 agent（base2）被拒，base3 孪生成功
+      // agent 兜底:主 agent(base2)被拒,base3 孪生成功
       if (mockMode === 'agent_fallback' && body.agentId === 'base2-free-deepseek-flash') {
         return jsonRes(
           { error: 'free_mode_invalid_agent_model', message: 'Free mode is only available for specific agent and model combinations.' },
           403,
         )
       }
-      // 退役 Luna agent：chat 阶段 free_mode_legacy_luna_agent 场景——base2
-      // startAgentRun 能成功（runId 正常返回），但 chat 转发后上游说
-      // "此对话用了退役 agent"。重试必须切 base3。
+      // 退役 Luna agent:chat 阶段 free_mode_legacy_luna_agent 场景——base2
+      // startAgentRun 能成功(runId 正常返回),但 chat 转发后上游说
+      // "此对话用了退役 agent".重试必须切 base3.
       if (mockMode === 'luna_base2_retired' && body.agentId === 'base2-free-luna') {
         startAgentCalls.push(body.agentId)
         return jsonRes({ runId: '00000000-0000-4000-8000-000000000002' })
@@ -551,12 +551,12 @@ globalThis.fetch = async (url, init = {}) => {
   }
   if (u.includes('/api/v1/chat/completions')) {
     const body = JSON.parse(init.body)
-    // model 可能是三种形态之一：
-    //   - provider/name（legacy 模型 id，如 deepseek/deepseek-v4-flash）
-    //   - m-xxxxxxx（目录 key，服务端指派）
-    //   - fbm1.xxx（目录句柄，服务端签名）
-    // chat 必须用**会话回执里服务端指派的 model**，不能用自己的模型名
-    // （否则上游报 session_model_mismatch）。见
+    // model 可能是三种形态之一:
+    //   - provider/name(legacy 模型 id,如 deepseek/deepseek-v4-flash)
+    //   - m-xxxxxxx(目录 key,服务端指派)
+    //   - fbm1.xxx(目录句柄,服务端签名)
+    // chat 必须用会话回执里服务端指派的 model,不能用自己的模型名
+    // (否则上游报 session_model_mismatch).见
     // .agents/notes/implemented/bug-fix/2026-10-01-session-model-binding.md
     assert.match(
       body.model,
@@ -578,8 +578,8 @@ globalThis.fetch = async (url, init = {}) => {
         403,
       )
     }
-    // luna_base2_retired：base2 的 runId 指向退役 agent，chat 第一次必撞
-    // free_mode_legacy_luna_agent；重试（切 base3 + 新 runId）后成功。
+    // luna_base2_retired:base2 的 runId 指向退役 agent,chat 第一次必撞
+    // free_mode_legacy_luna_agent;重试(切 base3 + 新 runId)后成功.
     if (
       mockMode === 'luna_base2_retired' &&
       body.model === 'openai/gpt-5.6-luna' &&
@@ -603,22 +603,22 @@ globalThis.fetch = async (url, init = {}) => {
     )
     assert.ok(Array.isArray(body.messages))
     assert.equal(body.messages[0].role, 'system')
-    // base3 世代 root（base3-free-*）用 base3 规范开场（对齐 trefeon PR #207）：
-    // "a base3 run must open with the BASE3 canonical identity, not base2's"。
-    // 世代判定不能按模型名猜 —— 真实来源是 agentId，而 chat body 里没有它。
-    // 目录模式（会话模型是 m-xxx / fbm1.xxx）下官方**统一**用
-    // base3-free-catalog，故必然以 base3 开场；见
+    // base3 世代 root(base3-free-*)用 base3 规范开场(对齐 trefeon PR #207):
+    // "a base3 run must open with the BASE3 canonical identity, not base2's".
+    // 世代判定不能按模型名猜 —— 真实来源是 agentId,而 chat body 里没有它.
+    // 目录模式(会话模型是 m-xxx / fbm1.xxx)下官方统一用
+    // base3-free-catalog,故必然以 base3 开场;见
     // .agents/notes/implemented/bug-fix/2026-10-01-catalog-agent.md
-    // 真机证据：官方 chat 的 system 开场就是
+    // 真机证据:官方 chat 的 system 开场就是
     //   "You are Buffy, the coding agent behind Codebuff."
     const isBase3Run =
       /luna/.test(body.model) || /^(m-|fbm1\.)/.test(String(body.model))
     const msg0 = String(body.messages[0].content)
-    // ⚠️ 官方抓包（2026-10-03）证明 system 开场**恒为**
+    //  官方抓包(2026-10-03)证明 system 开场恒为
     //   "You are Buffy, the coding agent behind Codebuff."
-    // （worker 层模板 7918 字符以此开头）。
-    // 旧判定按模型名猜世代，模型名不匹配时会误走 base2 分支；
-    // 这里改为：官方开头与 legacy 的 base2 开场都接受。
+    // (worker 层模板 7918 字符以此开头).
+    // 旧判定按模型名猜世代,模型名不匹配时会误走 base2 分支;
+    // 这里改为:官方开头与 legacy 的 base2 开场都接受.
     // 见 docs/reverse/14-captured-diff.md
     assert.ok(
       msg0.startsWith('You are Buffy, the coding agent behind Codebuff.') ||
@@ -629,17 +629,17 @@ globalThis.fetch = async (url, init = {}) => {
     assert.ok(userMsg && String(userMsg.content).length > 0)
     assert.ok(headers.Authorization || headers.authorization)
     /**
-     * ⚠️ `x-codebuff-api-key` **必须不存在**：客户端 165 条抓包里出现 0 次
-     * （docs/reverse/20 §20.4）。以前的断言要求它必须存在，与真值相反。
+     * - x-codebuff-api-key 必须不存在:客户端 165 条抓包里出现 0 次
+     * (docs/reverse/20 §20.4).以前的断言要求它必须存在,与真值相反.
      */
     assert.ok(
       !headers['x-codebuff-api-key'] && !headers['X-Codebuff-Api-Key'],
       '不得再带 x-codebuff-api-key（客户端 0 次）',
     )
 
-    // 输出预算治理（freebuff2api-wokers#8）：客户端小 max_tokens 会把思考链
-    // （reasoning token 计入预算）掐断——转发上游前必须抬到 floor 并统一为
-    // max_completion_tokens 单字段，绝不允许小上限原样透传。
+    // 输出预算治理(freebuff2api-wokers#8):客户端小 max_tokens 会把思考链
+    // (reasoning token 计入预算)掐断——转发上游前必须抬到 floor 并统一为
+    // max_completion_tokens 单字段,绝不允许小上限原样透传.
     assert.equal(body.max_tokens, undefined)
     assert.equal(body.max_output_tokens, undefined)
     assert.ok(
@@ -649,7 +649,7 @@ globalThis.fetch = async (url, init = {}) => {
 
     completionAttempts++
     // stall_zero: 200 OK with a streaming body that never sends any data nor closes
-    // （只对 token-spa 的第一次尝试生效，验证换号重试）
+    // (只对 token-spa 的第一次尝试生效,验证换号重试)
     const stallAuth =
       headers.Authorization ||
       headers.authorization ||
@@ -682,7 +682,7 @@ globalThis.fetch = async (url, init = {}) => {
         { status: 200, headers: { 'content-type': 'text/event-stream' } },
       )
     }
-    // bigstall: 一次性下发大块数据后卡死——用于下游背压（客户端不读）场景，
+    // bigstall: 一次性下发大块数据后卡死——用于下游背压(客户端不读)场景,
     // 大块写会让下游 socket 缓冲区填满 → write() 返回 false → 等待 drain
     if (mockMode === 'bigstall') {
       return new Response(
@@ -725,8 +725,8 @@ globalThis.fetch = async (url, init = {}) => {
         { 'retry-after': '60' },
       )
     }
-    // 上游 tool-schema 指纹拒：带 tools 一律 404 "No endpoints found"
-    // （2026-09-18 线上实测原样复刻）。去掉 tools 后放行 → 验证剥离重试。
+    // 上游 tool-schema 指纹拒:带 tools 一律 404 "No endpoints found"
+    // (2026-09-18 线上实测原样复刻).去掉 tools 后放行 → 验证剥离重试.
     if (mockMode === 'tool_schema_reject' && Array.isArray(body.tools)) {
       return jsonRes(
         {
@@ -740,7 +740,7 @@ globalThis.fetch = async (url, init = {}) => {
         404,
       )
     }
-    // 账号封禁：403 {"error":"account_suspended"}（error 是**字符串**）
+    // 账号封禁:403 {"error":"account_suspended"}(error 是字符串)
     if (mockMode === 'suspended_a' && String(compAuthOf(headers)).includes('token-a')) {
       return jsonRes(
         {
@@ -751,14 +751,14 @@ globalThis.fetch = async (url, init = {}) => {
         403,
       )
     }
-    // 所有账号的 chat 都 500（账号级故障 → 连续换号），用于验证新会话预算
+    // 所有账号的 chat 都 500(账号级故障 → 连续换号),用于验证新会话预算
     if (mockMode === 'err_500_all') {
       return jsonRes({ error: 'internal_error', message: 'boom' }, 500)
     }
     if (mockMode === 'err_500_a' && String(compAuth).includes('token-a')) {
       return jsonRes({ error: 'internal_error', message: 'boom' }, 500)
     }
-    // free_mode_capacity_deferred：瞬时容量排队，换号重试不冷却
+    // free_mode_capacity_deferred:瞬时容量排队,换号重试不冷却
     if (mockMode === 'capacity_once' && completionAttempts === 1) {
       return jsonRes(
         {
@@ -780,18 +780,18 @@ globalThis.fetch = async (url, init = {}) => {
       )
     }
     /**
-     * 428 `waiting_room_required`：**首次** completion 返回它（其后放行）。
+     * - 428 waiting_room_required:首次 completion 返回它(其后放行).
      *
-     * 真实事故（远程 2026-10-04T18:52:34Z）：
-     *   admit 200 扣 15 FB（余额 25→10）
-     *   chat  428 waiting_room_required
-     *   skip re-admit: freebucks cannot afford model  balance 10 < price 15  ← 卡在这
-     *   account cooling down  code=freebucks_exhausted
-     *   → 客户端 429
+     * 真实事故(远程 2026-10-04T18:52:34Z):
+     * admit 200 扣 15 FB(余额 25→10)
+     * chat  428 waiting_room_required
+     * skip re-admit: freebucks cannot afford model  balance 10 < price 15  ← 卡在这
+     * account cooling down  code=freebucks_exhausted
+     * → 客户端 429
      *
-     * 428 的正确处置是"带同一 instanceId 续用那一小时"（不产生新购买），
-     * 所以**不得**被"买不起下一个小时"拦下。这里顺带把余额扣到 10
-     * （模拟 admit 已收费），让闸门在续用时必然判"买不起"。
+     * 428 的正确处置是"带同一 instanceId 续用那一小时"(不产生新购买),
+     * - 所以不得被"买不起下一个小时"拦下.这里顺带把余额扣到 10
+     * (模拟 admit 已收费),让闸门在续用时必然判"买不起".
      */
     if (mockMode === 'waiting_room_once' && completionAttempts === 1) {
       return jsonRes(
@@ -803,7 +803,7 @@ globalThis.fetch = async (url, init = {}) => {
         428,
       )
     }
-    // 同账号连续 gate 失败（session_superseded ×2）→ 升级换号
+    // 同账号连续 gate 失败(session_superseded ×2)→ 升级换号
     if (
       mockMode === 'gate_twice_a' &&
       String(compAuth).includes('token-a') &&
@@ -811,12 +811,12 @@ globalThis.fetch = async (url, init = {}) => {
     ) {
       return jsonRes({ error: 'session_superseded', message: 'taken over' }, 409)
     }
-    // 网络层错误（fetch 抛异常）→ 换号重试
+    // 网络层错误(fetch 抛异常)→ 换号重试
     if (mockMode === 'network_err_a' && String(compAuth).includes('token-a')) {
       throw new Error('ECONNRESET: socket hang up')
     }
-    // hold_once：第一次流式响应保持打开（先吐一个 chunk），
-    // 直到 releaseHoldStreams() 放行——用于模拟"正在传输的长流"。
+    // hold_once:第一次流式响应保持打开(先吐一个 chunk),
+    // 直到 releaseHoldStreams() 放行——用于模拟"正在传输的长流".
     if (mockMode === 'hold_once' && completionAttempts === 1 && body.stream) {
       return new Response(
         new ReadableStream({
@@ -864,7 +864,7 @@ globalThis.fetch = async (url, init = {}) => {
   return jsonRes({ error: 'unexpected ' + u }, 500)
 }
 
-/** 从请求头取上游认证 token（多账号测试区分 token-a / token-b 用）。 */
+/** 从请求头取上游认证 token(多账号测试区分 token-a / token-b 用). */
 function compAuthOf(headers = {}) {
   return (
     headers.Authorization ||
@@ -906,17 +906,17 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
     reasoning: { effort: 'low', other: 1 },
   })
   assert.equal(r.reasoning_effort, undefined)
-  // 官方 efforts 表（freebuff free-agents/reasoning-effort）：flash=[low,high,max]、
-  // pro=[high,max]——max 是合法档位，保留以支持最深思考（不降档）
+  // 官方 efforts 表(freebuff free-agents/reasoning-effort):flash=[low,high,max],
+  // pro=[high,max]——max 是合法档位,保留以支持最深思考(不降档)
   assert.equal(r.reasoning.effort, 'max')
   assert.equal(r.reasoning.other, 1)
 
   const r2 = normalizeReasoningFields({ reasoning_effort: 'high' })
   assert.equal(r2.reasoning.effort, 'high')
 
-  // 输出预算治理（freebuff2api-wokers#8：DS4 思考链稍长即截断）：
-  // reasoning token 计入 max_tokens 预算，客户端偏小上限会把思考链掐断
-  // （finish_reason=length）。转发上游前抬到 floor，统一为 max_completion_tokens。
+  // 输出预算治理(freebuff2api-wokers#8:DS4 思考链稍长即截断):
+  // reasoning token 计入 max_tokens 预算,客户端偏小上限会把思考链掐断
+  // (finish_reason=length).转发上游前抬到 floor,统一为 max_completion_tokens.
   const b1 = normalizeOutputBudget({ max_tokens: 8192 })
   assert.equal(b1.max_tokens, undefined)
   assert.equal(b1.max_completion_tokens, 65536)
@@ -925,16 +925,16 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
   assert.equal(b2.max_tokens, undefined)
   assert.equal(b2.max_completion_tokens, 65536)
 
-  // 客户端上限高于 floor → 保留客户端意图（不降档）
+  // 客户端上限高于 floor → 保留客户端意图(不降档)
   const b3 = normalizeOutputBudget({ max_tokens: 131072 })
   assert.equal(b3.max_completion_tokens, 131072)
 
-  // 未设上限 → 补 floor（上游默认若不设可能同样偏小）
+  // 未设上限 → 补 floor(上游默认若不设可能同样偏小)
   const b4 = normalizeOutputBudget({ model: 'x' })
   assert.equal(b4.max_completion_tokens, 65536)
   assert.equal(b4.model, 'x')
 
-  // max_output_tokens（Responses/部分 SDK 字段）同样计入预算
+  // max_output_tokens(Responses/部分 SDK 字段)同样计入预算
   const b6 = normalizeOutputBudget({ max_output_tokens: 2048 })
   assert.equal(b6.max_output_tokens, undefined)
   assert.equal(b6.max_completion_tokens, 65536)
@@ -948,17 +948,17 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
   ]
   const signedTools = ensureFreebuffToolSignature(originalTools, true)
   assert.equal(originalTools.length, 1)
-  // 注入的是**官方真签名工具**：主签名（带参数、走 schema 子集）+ 自定义名兜底。
+  // 注入的是官方真签名工具:主签名(带参数,走 schema 子集)+ 自定义名兜底.
   assert.equal(signedTools.length, 1 + FREEBUFF_SIGNATURE_TOOL_NAMES.length)
   assert.ok(signedTools[1].function.name === FREEBUFF_SIGNATURE_TOOL_NAME)
-  // 主签名工具必须带**非空** schema —— 上游判据要求签名工具「名字 + 真实参数」双真，
-  // 零参数工具永远不算签名（旧实现注入空心 end_turn 正是被上游点名的洗白形态）。
+  // 主签名工具必须带非空 schema —— 上游判据要求签名工具[名字 + 真实参数]双真,
+  // 零参数工具永远不算签名(旧实现注入空心 end_turn 正是被上游点名的洗白形态).
   assert.ok(
     signedTools[1].function.parameters &&
       Object.keys(signedTools[1].function.parameters.properties || {}).length > 0,
     '主签名工具必须带非空参数 schema',
   )
-  // 每个注入的工具都必须被上游判据认可为「货真价实」，否则等于没注入。
+  // 每个注入的工具都必须被上游判据认可为[货真价实],否则等于没注入.
   for (const def of FREEBUFF_SIGNATURE_TOOL_DEFINITIONS) {
     assert.ok(
       isGenuineSignatureTool({
@@ -978,7 +978,7 @@ function jsonRes(obj, status = 200, extraHeaders = {}) {
     ensureFreebuffToolSignature(signedTools, true),
     signedTools,
   )
-  // 只带其中一个签名工具时，应把缺的那个补上（两个都带才最稳）。
+  // 只带其中一个签名工具时,应把缺的那个补上(两个都带才最稳).
   const half = [originalTools[0], FREEBUFF_SIGNATURE_TOOL_DEFINITIONS[0]]
   assert.equal(
     ensureFreebuffToolSignature(half, true).length,
@@ -1096,7 +1096,7 @@ function chat(body, headers = {}) {
 }
 
 
-// 工具请求默认保持工具语义：上游拒绝时不得静默返回无工具回答。
+// 工具请求默认保持工具语义:上游拒绝时不得静默返回无工具回答.
 {
   calls = []
   completionAttempts = 0
@@ -1112,7 +1112,7 @@ function chat(body, headers = {}) {
   assert.equal(res.headers.get('x-freebuff-proxy-tools-stripped'), null)
 }
 
-// 明确开启纯文本回退时，工具拒绝仍允许剥离 tools 重试。
+// 明确开启纯文本回退时,工具拒绝仍允许剥离 tools 重试.
 {
   settingsStore.save({ stripToolsOnSchemaRejection: true })
   calls = []
@@ -1136,12 +1136,12 @@ function chat(body, headers = {}) {
   assert.equal(res.status, 200, await res.clone().text())
   const j = await res.json()
   assert.equal(j.choices[0].message.content, 'hi')
-  // 必须恰好两次 chat 尝试：第一次带 tools 被拒，第二次不带 tools 成功。
+  // 必须恰好两次 chat 尝试:第一次带 tools 被拒,第二次不带 tools 成功.
   const chatCalls = calls.filter((c) => c.url.includes('/chat/completions'))
   assert.equal(chatCalls.length, 2, '应重试恰好一次')
   const first = JSON.parse(chatCalls[0].body)
   const second = JSON.parse(chatCalls[1].body)
-  // 第一次带 tools（原工具 + 签名工具 end_turn，签名开关默认开）。
+  // 第一次带 tools(原工具 + 签名工具 end_turn,签名开关默认开).
   assert.ok(Array.isArray(first.tools), '第一次应带 tools')
   assert.ok(
     first.tools.some((t) => t.function && t.function.name === 'run_code'),
@@ -1153,7 +1153,7 @@ function chat(body, headers = {}) {
   settingsStore.save({ stripToolsOnSchemaRejection: false })
 }
 
-// 不带 tools 的请求遇到同样 404 时**不得**重试（没有工具可去），原样返回 404。
+// 不带 tools 的请求遇到同样 404 时不得重试(没有工具可去),原样返回 404.
 {
   calls = []
   completionAttempts = 0
@@ -1166,12 +1166,12 @@ function chat(body, headers = {}) {
   assert.equal(calls.filter((c) => c.url.includes('/chat/completions')).length, 1)
 }
 
-// 指纹对齐：chat 请求必须与官方 CLI 的形态一致。
-// 依据（全部静态提取自官方 freebuff@0.0.178 二进制，见
-// src/upstream/official-fingerprint.js）：
-//   chat UA = ai-sdk/openai-compatible/<真版本>/codebuff（旧实现硬编码 1.0.0）；
-//   POST 准入走 .../session/admission，不是 .../session。
-// 用独立全新账号目录起服务：热 session 复用不会发 POST，断言不到准入形状。
+// 指纹对齐:chat 请求必须与官方 CLI 的形态一致.
+// 依据(全部静态提取自官方 freebuff@0.0.178 二进制,见
+// src/upstream/official-fingerprint.js):
+//   chat UA = ai-sdk/openai-compatible/<真版本>/codebuff(旧实现硬编码 1.0.0);
+//   POST 准入走 .../session/admission,不是 .../session.
+// 用独立全新账号目录起服务:热 session 复用不会发 POST,断言不到准入形状.
 {
   const fpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-fp-'))
   saveAccountUser(fpDir, { id: 'fp', email: 'fp@example.com', authToken: 'token-fp' })
@@ -1205,17 +1205,17 @@ function chat(body, headers = {}) {
   assert.ok(chatCall, '应发出 chat 请求')
   const ua = chatCall.headers['user-agent'] || chatCall.headers['User-Agent']
   assert.ok(ua, 'chat 必须带 user-agent')
-  // chat UA 是**两段式**，逐字对齐真机抓包。
-  // 版本段是 0.0.0-test 而**不是**包版本号 —— 官方发布构建里 __PACKAGE_VERSION__
-  // 未注入，回退到该字面量（二进制原文：
+  // chat UA 是两段式,逐字对齐真机抓包.
+  // 版本段是 0.0.0-test 而不是包版本号 —— 官方发布构建里 __PACKAGE_VERSION__
+  // 未注入,回退到该字面量(二进制原文:
   //   Qo=typeof __PACKAGE_VERSION__<"u"?__PACKAGE_VERSION__:"0.0.0-test"
-  // ）。第二段我们此前整段漏了。见
+  // ).第二段我们此前整段漏了.见
   // .agents/notes/implemented/bug-fix/2026-10-01-chat-ua-two-part.md
   //
-  // ⚠️ 第三段随**客户端路线**而异，两条都是真机实测值：
+  //  第三段随客户端路线而异,两条都是真机实测值:
   //   CLI     0.2.6 → runtime/browser
-  //   desktop 0.0.156 → runtime/bun/1.4.2（orchestrator 是 bun 跑的）
-  // 本仓库走 desktop 路线，故断言取 bun 形态。
+  //   desktop 0.0.156 → runtime/bun/1.4.2(orchestrator 是 bun 跑的)
+  // 本仓库走 desktop 路线,故断言取 bun 形态.
   // 见 docs/reverse/14-captured-diff.md
   assert.equal(
     ua,
@@ -1224,12 +1224,12 @@ function chat(body, headers = {}) {
   )
   assert.ok(!ua.includes('/1.0.0/'), 'UA 不得再是硬编码的 1.0.0（与真 CLI 版本不符）')
   /**
-   * ⚠️ `x-codebuff-api-key` 已删除，断言**不再带**。
+   * - x-codebuff-api-key 已删除,断言不再带.
    *
-   * 旧注释说"删它有打死全部认证的风险（只带 Bearer 会 401）"—— 那是
-   * **未做单变量对照**的结论：当时同时换了 token 来源与出口，401 的真实
-   * 原因从未被证实是这个头。客户端 165 条抓包里它出现 0 次
-   * （docs/reverse/20 §20.4），故按官方形态只发 Bearer。
+   * 旧注释说"删它有打死全部认证的风险(只带 Bearer 会 401)"—— 那是
+   * - 未做单变量对照的结论:当时同时换了 token 来源与出口,401 的真实
+   * 原因从未被证实是这个头.客户端 165 条抓包里它出现 0 次
+   * (docs/reverse/20 §20.4),故按官方形态只发 Bearer.
    */
   assert.ok(
     !chatCall.headers['x-codebuff-api-key'],
@@ -1244,12 +1244,12 @@ function chat(body, headers = {}) {
   assert.equal(admitCall.headers['x-freebuff-first-tab-discount'], '0')
   assert.ok(admitCall.headers['x-fb-timezone'], '准入请求应带本机时区')
   /**
-   * ⚠️ `x-freebuff-env` **头不再发送**：desktop 客户端 165 条抓包 0 次
-   * （docs/reverse/20 §20.2 / 21 §21.3）。它来自官方 **CLI** 源码，
-   * 我们走 desktop 路线，带它等于自报 CLI 身份。
+   * - x-freebuff-env 头不再发送:desktop 客户端 165 条抓包 0 次
+   * - (docs/reverse/20 §20.2 / 21 §21.3).它来自官方 CLI 源码,
+   * 我们走 desktop 路线,带它等于自报 CLI 身份.
    *
-   * 但**同一份描述符仍要放进 chat 的 codebuff_metadata**
-   * （客户端在那里确实放）—— 下面从 metadata 取，不再从头上取。
+   * - 但同一份描述符仍要放进 chat 的 codebuff_metadata
+   * (客户端在那里确实放)—— 下面从 metadata 取,不再从头上取.
    */
   assert.ok(
     !admitCall.headers['x-freebuff-env'],
@@ -1267,23 +1267,23 @@ function chat(body, headers = {}) {
     envKeys,
     [
       'in', 'out', 'tp', 'term', 'ct', 'sz', 'ci', 'ssh', 'l', 'p', 'g', 'osc',
-      // 后 4 个字段：真机抓包 2026-10-01 确认官方已扩展
-      // （cli/src/utils/client-environment.ts:377-380）
+      // 后 4 个字段:真机抓包 2026-10-01 确认官方已扩展
+      // (cli/src/utils/client-environment.ts:377-380)
       'tzo', 'px', 'tls', 'ca',
     ],
     '描述符字段与顺序必须与官方一致, got ' + JSON.stringify(envKeys),
   )
-  // ⚠️ instanceId 形态随**路线**而异，两条都是真机实测值：
-  //   CLI     抓包 → `cli:<uuid>`（官方 newFreebuffCliInstanceId，
-  //                   服务端据此认出 CLI 而非 Desktop 标签）
-  //   desktop 抓包 → **裸 UUID 且整场复用**
-  //                  （line 8/34/54 三次 admission 同为 e1be7199-...，
-  //                   line 38 的 metadata 也是它）
+  //  instanceId 形态随路线而异,两条都是真机实测值:
+  //   CLI     抓包 → cli:<uuid>(官方 newFreebuffCliInstanceId,
+  //                   服务端据此认出 CLI 而非 Desktop 标签)
+  //   desktop 抓包 → 裸 UUID 且整场复用
+  //                  (line 8/34/54 三次 admission 同为 e1be7199-...,
+  //                   line 38 的 metadata 也是它)
   //
-  // 本仓库走 desktop 路线，故用裸 UUID。且必须**复用**同一个值：
+  // 本仓库走 desktop 路线,故用裸 UUID.且必须复用同一个值:
   // 每次 admission 新建会让每次购买被全额退款作废
-  // （官方回执里 desktopRefunds 从未出现，而我们此前每次都退）。
-  // 见 docs/reverse/15-protocol-review.md P0-2 与 E.1。
+  // (官方回执里 desktopRefunds 从未出现,而我们此前每次都退).
+  // 见 docs/reverse/15-protocol-review.md P0-2 与 E.1.
   const admitInstance = admitCall.headers['x-freebuff-instance-id']
   assert.ok(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(admitInstance || ''),
@@ -1295,7 +1295,7 @@ function chat(body, headers = {}) {
   )
   assert.equal(admitCall.headers['x-freebuff-multi-session'], '1', 'cli claim 必须带 multi-session 头')
   assert.equal(admitCall.headers['x-freebuff-purchase-continuity'], '1', 'cli claim 必须带 purchase-continuity 头')
-  // chat 的 codebuff_metadata 里也要有同一份描述符（官方两处都放）
+  // chat 的 codebuff_metadata 里也要有同一份描述符(官方两处都放)
   const chatMetaRaw = chatCall.body && JSON.parse(chatCall.body).codebuff_metadata
   assert.equal(
     chatMetaRaw?.freebuff_client_env,
@@ -1328,14 +1328,14 @@ function chat(body, headers = {}) {
   assert.equal(enabledRes.status, 200, await enabledRes.clone().text())
   const enabledCall = calls.find((c) => c.url.includes('/chat/completions'))
   const enabledBody = JSON.parse(enabledCall.body)
-  // 转发上游的工具集 = 客户端原工具 + 官方真签名工具（顺序：原工具在前）。
+  // 转发上游的工具集 = 客户端原工具 + 官方真签名工具(顺序:原工具在前).
   assert.deepEqual(
     enabledBody.tools.map((tool) => tool.function.name),
     ['web_search', ...FREEBUFF_SIGNATURE_TOOL_NAMES],
   )
-  // 决定性断言：这**整个工具集**送进上游判据必须判「自己人」（signal === null）。
-  // 旧实现注入空心 end_turn，上游判 foreign_toolset 并把请求降级到
-  // inclusionai/ling-3.0-tiny:free —— 那正是 issue#15「所有模型空响应」的根因。
+  // 决定性断言:这整个工具集送进上游判据必须判自己人.
+  // 旧实现注入空心 end_turn,上游判 foreign_toolset 并把请求降级到
+  // inclusionai/ling-3.0-tiny:free —— 那正是 issue#15[所有模型空响应]的根因.
   const verdict = detectForeignClient(
     { tools: enabledBody.tools, messages: enabledBody.messages },
     true,
@@ -1395,14 +1395,14 @@ function chat(body, headers = {}) {
   const j = await res.json()
   assert.equal(j.object, 'list')
   /**
-   * ⚠️ 目录未抓取时**返回空清单 + notProbed**，不再回落静态 catalog。
+   * - 目录未抓取时返回空清单 + notProbed,不再回落静态 catalog.
    *
-   * 以前这里断言"至少有内置 60 条模型"。但：
-   *   1. 内置 catalog 是 2026-08 快照（13 行实时目录只命中 3 行），
-   *      拿它当清单等于给下游一份错的模型表；
-   *   2. 服务改为**零自动探测**后，首访不再补抓目录。
-   * 现在正确行为是：空 + notProbed，由用户点「一键刷新」拉取。
-   * 清单本身的正确性由 test/verify-catalog-models.mjs 用真机目录钉住。
+   * 以前这里断言"至少有内置 60 条模型".但:
+   * 1. 内置 catalog 是 2026-08 快照(13 行实时目录只命中 3 行),
+   * 拿它当清单等于给下游一份错的模型表;
+   * - 2. 服务改为零自动探测后,首访不再补抓目录.
+   * 现在正确行为是:空 + notProbed,由用户点[一键刷新]拉取.
+   * 清单本身的正确性由 test/verify-catalog-models.mjs 用真机目录钉住.
    */
   assert.equal(j.data.length, 0, '未探测时清单应为空（不回落陈旧静态表）')
   assert.equal(j.notProbed, true, '未探测时必须带 notProbed 让前端提示刷新')
@@ -1431,7 +1431,7 @@ const verifiedSpecialModels = [
     id: 'openai/gpt-5.6-luna-es',
     base2: 'base2-free-luna-es',
     base3: 'base3-free-luna-es',
-    // luna 系强制 base3（风控保护）：agentIdForModel 直接返回 base3，不再用 base2
+    // luna 系强制 base3(风控保护):agentIdForModel 直接返回 base3,不再用 base2
     forcedBase3: true,
   },
   {
@@ -1456,7 +1456,7 @@ const verifiedSpecialModels = [
   },
 ]
 for (const model of verifiedSpecialModels) {
-  // luna 系强制 base3：主 agent 直接是 base3（风控保护，绝不用 base2）
+  // luna 系强制 base3:主 agent 直接是 base3(风控保护,绝不用 base2)
   const expected = model.forcedBase3 ? model.base3 : model.base2
   assert.equal(agentIdForModel(model.id), expected)
   assert.equal(agentFallbackForModel(model.id), model.base3)
@@ -1465,12 +1465,12 @@ for (const model of verifiedSpecialModels) {
 }
 
 /**
- * 回归：accessTier='limited' 不得把整个目录标成 unavailable。
+ * 回归:accessTier='limited' 不得把整个目录标成 unavailable.
  *
- * 真实故障（用户反馈「测试对话只有一个模型」）：内置 catalog 15 条都没有
- * accessTiers 字段 → 一律回落 ['full'] → 上游回一次 accessTier:'limited'，整张
- * 列表就被染成 available:false，前端过滤后只剩 extraIds 里那一个模型。
- * 目录准入 ≠ 实时配额：真正拦人的是 freebucks/units 闸门，不是这个静态标记。
+ * 真实故障(用户反馈[测试对话只有一个模型]):内置 catalog 15 条都没有
+ * accessTiers 字段 → 一律回落 ['full'] → 上游回一次 accessTier:'limited',整张
+ * 列表就被染成 available:false,前端过滤后只剩 extraIds 里那一个模型.
+ * 目录准入 ≠ 实时配额:真正拦人的是 freebucks/units 闸门,不是这个静态标记.
  */
 {
   const limited = buildModelsListResponse({ accessTier: 'limited', includeAllCatalog: true })
@@ -1480,17 +1480,17 @@ for (const model of verifiedSpecialModels) {
     0,
     `accessTier=limited 时不应有任何模型被标成不可用（实际 ${unavailable.length} 个：${unavailable.map((m) => m.id).join(',')}）`,
   )
-  // 基线 = 内置 catalog 的全量条目数（用同一入口取，避免硬编码数字）
+  // 基线 = 内置 catalog 的全量条目数(用同一入口取,避免硬编码数字)
   const baseline = buildModelsListResponse({ includeAllCatalog: true }).data.length
   assert.ok(
     limited.data.length >= baseline,
     `accessTier=limited 时列表长度不得缩水（${limited.data.length} < ${baseline}）`,
   )
-  // 前端「测试对话」的过滤条件（available !== false）必须留下全部模型——
-  // 这正是以前只剩一个的那一行。
+  // 前端[测试对话]的过滤条件(available !== false)必须留下全部模型——
+  // 这正是以前只剩一个的那一行.
   const visible = limited.data.filter((m) => m.available !== false)
   assert.equal(visible.length, limited.data.length, '测试对话下拉必须能看到全部模型')
-  // 上游真实清单只作为**标注**透出（upstreamModelIds），不是过滤依据。
+  // 上游真实清单只作为标注透出(upstreamModelIds),不是过滤依据.
   const withIds = buildModelsListResponse({
     accessTier: 'limited',
     extraIds: ['deepseek/deepseek-v4-flash'],
@@ -1506,14 +1506,14 @@ for (const model of verifiedSpecialModels) {
 }
 
 /**
- * 回归：账号级错误回执不得抹掉活着的 session 句柄。
+ * 回归:账号级错误回执不得抹掉活着的 session 句柄.
  *
- * 上游对 banned / country_blocked 的 GET 回执是 200 + {status:'banned'}。以前
- * SessionManager.refresh() 无条件 _apply(body)，于是控制台点一次「刷新」就会：
- *   1) 把 session 覆盖成无 instanceId 的空壳 —— 已付费一小时的会话从此无法寻址，
- *      DELETE 不掉（腾不出上游槽位）也追不回钱（退款的唯一凭据就是 instanceId）；
- *      用户要求「刷新和警告都不会导致丢失已购买的会话」正是这条。
- *   2) 记成 lastProbe.ok = true —— 探测失败却显示成功。
+ * 上游对 banned / country_blocked 的 GET 回执是 200 + {status:'banned'}.以前
+ * SessionManager.refresh() 无条件 _apply(body),于是控制台点一次[刷新]就会:
+ * 1) 把 session 覆盖成无 instanceId 的空壳 —— 已付费一小时的会话从此无法寻址,
+ * DELETE 不掉(腾不出上游槽位)也追不回钱(退款的唯一凭据就是 instanceId);
+ * 用户要求[刷新和警告都不会导致丢失已购买的会话]正是这条.
+ * 2) 记成 lastProbe.ok = true —— 探测失败却显示成功.
  */
 {
   const up = {
@@ -1527,7 +1527,7 @@ for (const model of verifiedSpecialModels) {
     config: { session: { reAdmitOnExpire: true }, limits: {} },
     accountKey: 'probe-k',
   })
-  // 先造一条活着的会话（买断了整小时）
+  // 先造一条活着的会话(买断了整小时)
   sm.session = {
     status: 'active',
     instanceId: 'inst-live',
@@ -1582,7 +1582,7 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// 会话切换（re-admit）不得掐断在途 SSE：旧 session 必须等在途流结束后才释放
+// 会话切换(re-admit)不得掐断在途 SSE:旧 session 必须等在途流结束后才释放
 {
   const sm = runtimes.get('u1').sessions
   await sm.release()
@@ -1601,10 +1601,10 @@ for (const model of verifiedSpecialModels) {
   assert.equal(sessionPosts, 1)
   assert.equal(sessionDeletes, 0)
 
-  // 模拟"会话即将过期需要 re-admit"：让 isUsableForModel 返回 false 后触发 ensureSession
+  // 模拟"会话即将过期需要 re-admit":让 isUsableForModel 返回 false 后触发 ensureSession
   sm.session.expiresAt = new Date(Date.now() - 1000).toISOString()
   const ensurePromise = sm.ensureSession('deepseek/deepseek-v4-flash')
-  // 等待一小段：ensureSession 应等待在途流结束，而不是立刻 DELETE 旧 session
+  // 等待一小段:ensureSession 应等待在途流结束,而不是立刻 DELETE 旧 session
   await new Promise((r) => setTimeout(r, 150))
   assert.equal(sessionDeletes, 0, 're-admit 不得在流在途时删除旧 session')
   assert.equal(sm.inFlightCount(), 1)
@@ -1619,7 +1619,7 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// agent 兜底：主 agent 403 free_mode_invalid_agent_model → 自动回退 base3 孪生
+// agent 兜底:主 agent 403 free_mode_invalid_agent_model → 自动回退 base3 孪生
 {
   mockMode = 'agent_fallback'
   sessionPosts = 0
@@ -1630,7 +1630,7 @@ for (const model of verifiedSpecialModels) {
     messages: [{ role: 'user', content: 'hello' }],
   })
   assert.equal(res.status, 200, await res.clone().text())
-  // startAgentRun 至少尝试了 base3（fallback），且 chat 成功
+  // startAgentRun 至少尝试了 base3(fallback),且 chat 成功
   const startCalls = calls.filter(
     (c) => c.url.includes('/agent-runs') && JSON.parse(c.body).action === 'START',
   )
@@ -1671,10 +1671,10 @@ for (const model of verifiedSpecialModels) {
     assert.equal(body.conversation_id, undefined)
     assert.equal(body.codebuff_metadata.conversation_id, undefined)
     assert.equal(body.codebuff_metadata.agent_id, undefined)
-    // client_id 必须是 SDK 形 13 位 base36（对齐官方 CLI
-    // Math.random().toString(36).substring(2,15)）——绝不能用 freebuff-proxy
-    // 等自有前缀：上游 cf-worker-signals.ts 的 looksLikeProxyClientId 会把
-    // 自定义形态指纹为代理客户端（对齐 trefeon generateClientID）。
+    // client_id 必须是 SDK 形 13 位 base36(对齐官方 CLI
+    // Math.random().toString(36).substring(2,15))——绝不能用 freebuff-proxy
+    // 等自有前缀:上游 cf-worker-signals.ts 的 looksLikeProxyClientId 会把
+    // 自定义形态指纹为代理客户端(对齐 trefeon generateClientID).
     assert.match(
       body.codebuff_metadata.client_id,
       /^[0-9a-z]{13}$/,
@@ -1689,9 +1689,9 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// luna 系强制 base3（风控保护）：agentIdForModel 对 luna 永远返回 base3-free-luna，
-// 无论自定义/catalog 写了 base2——任何 base2 尝试都会触发上游风控。
-// 验证：真实 chat 里 startAgentRun 只用 base3，绝无 base2 出现。
+// luna 系强制 base3(风控保护):agentIdForModel 对 luna 永远返回 base3-free-luna,
+// 无论自定义/catalog 写了 base2——任何 base2 尝试都会触发上游风控.
+// 验证:真实 chat 里 startAgentRun 只用 base3,绝无 base2 出现.
 {
   await runtimes.get('u1').sessions.release()
   mockMode = 'ok'
@@ -1717,14 +1717,14 @@ for (const model of verifiedSpecialModels) {
     !startAgentCalls.some((a) => a.includes('base2')),
     `luna 绝不允许 base2, got ${JSON.stringify(startAgentCalls)}`,
   )
-  // luna-es 同样强制 base3（base3-free-luna-es，绝无 base2）
+  // luna-es 同样强制 base3(base3-free-luna-es,绝无 base2)
   //
-  // ⚠️ 换模型前必须**显式释放**上一条会话。这不是测试在迁就实现，而是生产
-  // 语义：一次 admit 买断一小时且**绑定模型**（issue #24 实测——付费时段内换
-  // 模型必然把那一小时作废，且 DELETE 之后 0s/45s/90s 三次重试全部
-  // purchase_claim_released，接不回来）。所以「同一小时内跨模型可用」在生产
-  // 上不成立；此前这段测试能过，是因为 mock 上游无条件放行 admission。
-  // 这里显式释放 = 模拟"时段结束/用户主动关闭后再换模型"的真实路径。
+  //  换模型前必须显式释放上一条会话.这不是测试在迁就实现,而是生产
+  // 语义:一次 admit 买断一小时且绑定模型(issue #24 实测——付费时段内换
+  // 模型必然把那一小时作废,且 DELETE 之后 0s/45s/90s 三次重试全部
+  // purchase_claim_released,接不回来).所以[同一小时内跨模型可用]在生产
+  // 上不成立;此前这段测试能过,是因为 mock 上游无条件放行 admission.
+  // 这里显式释放 = 模拟"时段结束/用户主动关闭后再换模型"的真实路径.
   await runtimes.get('u1').sessions.release()
   startAgentCalls = []
   const resEs = await chat({
@@ -1739,15 +1739,15 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// 模型白名单：APP 里没有的模型 id 一律 400 拒绝，绝不盲发上游
+// 模型白名单:APP 里没有的模型 id 一律 400 拒绝,绝不盲发上游
 {
-  // 清掉上一用例留下的已付费会话：它绑在 luna-es 上，会让本用例的选号先撞上
-  // 「付费时段内绑别模型」（issue #24）而拿不到 400。白名单校验发生在选号之前，
-  // 但选号失败会先返回 429 —— 保持用例间状态干净，断言的才是白名单本身。
+  // 清掉上一用例留下的已付费会话:它绑在 luna-es 上,会让本用例的选号先撞上
+  // 付费时段内绑别模型而拿不到 400.白名单校验发生在选号之前,
+  // 但选号失败会先返回 429 —— 保持用例间状态干净,断言的才是白名单本身.
   await runtimes.get('u1').sessions.release()
   calls = []
   completionAttempts = 0
-  // 完全未知的模型 id（不在 catalog / 自定义 / 上游探测里）
+  // 完全未知的模型 id(不在 catalog / 自定义 / 上游探测里)
   const res = await chat({
     model: 'openai/gpt-5.7-unknown',
     messages: [{ role: 'user', content: 'hello' }],
@@ -1759,8 +1759,8 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// 客户端断开必须立即释放账号锁（回归：reqToAbortSignal 无条件 abort，
-// 否则请求体读完（req.complete=true）后断开会让上游挂到超时、锁占死全部请求）
+// 客户端断开必须立即释放账号锁(回归:reqToAbortSignal 无条件 abort,
+// 否则请求体读完(req.complete=true)后断开会让上游挂到超时,锁占死全部请求)
 {
   mockMode = 'hold_once'
   completionAttempts = 0
@@ -1770,11 +1770,11 @@ for (const model of verifiedSpecialModels) {
     messages: [{ role: 'user', content: 'hello' }],
   })
   assert.equal(res.status, 200)
-  // 读一个 chunk 后客户端断开（cancel body → 连接关闭）
+  // 读一个 chunk 后客户端断开(cancel body → 连接关闭)
   const reader = res.body.getReader()
   await reader.read()
   await reader.cancel().catch(() => {})
-  // 立即发第二个请求：锁必须已释放并快速 200（无修复会卡到上游超时/无限排队）
+  // 立即发第二个请求:锁必须已释放并快速 200(无修复会卡到上游超时/无限排队)
   const t0 = Date.now()
   const res2 = await chat({
     model: 'deepseek/deepseek-v4-flash',
@@ -1790,7 +1790,7 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// 流量切换（代理池变更）不得掐断在途 SSE：旧 runtime 优雅回收
+// 流量切换(代理池变更)不得掐断在途 SSE:旧 runtime 优雅回收
 {
   const pDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-drain-'))
   saveAccountUser(pDir, { id: 'pa', email: 'pa@example.com', authToken: 'token-pa' })
@@ -1837,14 +1837,14 @@ for (const model of verifiedSpecialModels) {
   assert.equal(res.status, 200)
   assert.equal(oldRt.sessions.inFlightCount(), 1)
 
-  // 切换代理池：立即让位，但旧流不能被掐断
+  // 切换代理池:立即让位,但旧流不能被掐断
   pConfig.upstream.proxies = ['http://p1.example:7890']
   await pRuntimes.invalidateProxies()
   assert.equal(pRuntimes.isCurrentRuntime(oldRt), false)
   await new Promise((r) => setTimeout(r, 150))
   assert.equal(sessionDeletes, 0, '代理切换不得在流在途时删除旧 session')
 
-  // 旧流正常结束，之后旧 session 才被优雅释放
+  // 旧流正常结束,之后旧 session 才被优雅释放
   releaseHoldStreams()
   const text = await res.text()
   assert.match(text, /data: \[DONE\]/)
@@ -1858,8 +1858,8 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// 排队等锁期间发生代理切换 → 请求无冷却重新选号，不撞已失效旧 runtime
-// 真实代理链路：本地 mock 上游 + 本地转发代理（单代理池必须真的走代理，回归 issue #5）
+// 排队等锁期间发生代理切换 → 请求无冷却重新选号,不撞已失效旧 runtime
+// 真实代理链路:本地 mock 上游 + 本地转发代理(单代理池必须真的走代理,回归 issue #5)
 {
   const { createMockUpstreamServer, createForwardProxy } = await import('./proxy-test-helpers.mjs')
   const qDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-queue-switch-'))
@@ -1916,7 +1916,7 @@ for (const model of verifiedSpecialModels) {
   sessionDeletes = 0
   completionAttempts = 0
   const oldRt = qRuntimes.get('qa')
-  // A：占住账号唯一并发槽（流保持打开）
+  // A:占住账号唯一并发槽(流保持打开)
   const resA = await fetch(`${qBase}/v1/chat/completions`, {
     method: 'POST',
     headers: {
@@ -1931,7 +1931,7 @@ for (const model of verifiedSpecialModels) {
   })
   assert.equal(resA.status, 200)
   assert.equal(oldRt.sessions.inFlightCount(), 1)
-  // B：开始后会在 chat 锁上排队
+  // B:开始后会在 chat 锁上排队
   const resBPromise = fetch(`${qBase}/v1/chat/completions`, {
     method: 'POST',
     headers: {
@@ -1945,11 +1945,11 @@ for (const model of verifiedSpecialModels) {
     }),
   })
   await new Promise((r) => setTimeout(r, 150))
-  // 等待期间切换代理池 → 旧 runtime 被顶替（单代理池，真实本地代理）
+  // 等待期间切换代理池 → 旧 runtime 被顶替(单代理池,真实本地代理)
   qConfig.upstream.proxies = [`http://127.0.0.1:${qProxy.port}`]
   await qRuntimes.invalidateProxies()
   assert.equal(qRuntimes.isCurrentRuntime(oldRt), false)
-  // 放行 A；B 拿到锁后应检测到 runtime 已过期 → 无冷却重新选号 → 走新出口成功
+  // 放行 A;B 拿到锁后应检测到 runtime 已过期 → 无冷却重新选号 → 走新出口成功
   releaseQHolds()
   await resA.text()
   const resB = await resBPromise
@@ -2037,9 +2037,9 @@ for (const model of verifiedSpecialModels) {
 }
 
 
-// 官方建会话路径：GET /freebuff/session + cli: claim（**不是** POST /admission）。
-// 真机抓包：官方 CLI 0.2.6 全程 18 次 GET + 1 次 DELETE /attempt，
-// **从不打 /admission**。契约见
+// 官方建会话路径:GET /freebuff/session + cli: claim(不是 POST /admission).
+// 真机抓包:官方 CLI 0.2.6 全程 18 次 GET + 1 次 DELETE /attempt,
+// 从不打 /admission.契约见
 // .agents/notes/implemented/bug-fix/2026-10-01-cli-get-session-path.md
 {
   const gsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-getclaim-'))
@@ -2083,7 +2083,7 @@ for (const model of verifiedSpecialModels) {
   })
   assert.equal(res.status, 200, await res.clone().text())
   const sessCalls = calls.filter((c) => c.url.includes('/freebuff/session'))
-  // 找**带 claim 的那个** GET —— 启动探测时的 GET 还不带 claim，不能拿来断言
+  // 找带 claim 的那个 GET —— 启动探测时的 GET 还不带 claim,不能拿来断言
   const getAdmit = sessCalls.find(
     (c) =>
       c.method === 'GET' &&
@@ -2098,12 +2098,12 @@ for (const model of verifiedSpecialModels) {
       '两者都是官方形态，只是路线不同）: ' +
       JSON.stringify(sessCalls.map((c) => c.method + ' ' + c.url.split('/api')[1])),
   )
-  // undici 会把头名规范化成首字母大写，断言两种写法都认
+  // undici 会把头名规范化成首字母大写,断言两种写法都认
   const instHdr =
     getAdmit.headers['x-freebuff-instance-id'] ||
     getAdmit.headers['X-Freebuff-Instance-Id'] ||
     ''
-  // desktop 路线：裸 UUID（CLI 路线才是 cli: 前缀）。见 P0-2。
+  // desktop 路线:裸 UUID(CLI 路线才是 cli: 前缀).见 P0-2.
   assert.ok(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(instHdr),
     'GET 建会话的 instanceId 必须是裸 UUID（desktop 形态）, got ' +
@@ -2124,9 +2124,9 @@ for (const model of verifiedSpecialModels) {
     0,
     'GET 路径成功时不得再打 POST admission; sessionPosts=' + sessionPosts,
   )
-  // 会话模型绑定：chat 的 model 必须用**会话回执里服务端指派的值**
-  // （mock 给的是 m-00032eaeec），而不是客户端请求的模型名 ——
-  // 用错会得到 session_model_mismatch。见
+  // 会话模型绑定:chat 的 model 必须用会话回执里服务端指派的值
+  // (mock 给的是 m-00032eaeec),而不是客户端请求的模型名 ——
+  // 用错会得到 session_model_mismatch.见
   // .agents/notes/implemented/bug-fix/2026-10-01-session-model-binding.md
   const chatCall = calls.find((c) => c.url.includes('/chat/completions'))
   assert.ok(chatCall, '应发出 chat 请求')
@@ -2148,32 +2148,32 @@ for (const model of verifiedSpecialModels) {
 }
 
 /* ================================================================
-   余额 0 + 上游存在同模型的已付费会话 → 必须 takeover 复用，不得被额度闸门挡住
+   余额 0 + 上游存在同模型的已付费会话 → 必须 takeover 复用,不得被额度闸门挡住
    ================================================================ */
 {
   /**
-   * 用户明确要求的能力（2026-10-04 铁律）：**余额为 0 不等于账号不可用**。
-   * 「一次 admit = 买断一小时」，这一小时内继续发请求**边际成本为 0**；
-   * `balance: 0` 只说明"再买一条买不起"，**不代表已付过钱的那一小时不能用**。
+   * - 用户明确要求的能力(2026-10-04 铁律):余额为 0 不等于账号不可用.
+   * - [一次 admit = 买断一小时],这一小时内继续发请求边际成本为 0;
+   * - balance: 0 只说明"再买一条买不起",不代表已付过钱的那一小时不能用.
    *
-   * 真实故障：面板显示 `DeepSeek V4.1 Flash · 49 分钟` 的已付费会话
-   * （上游 `desktopPurchases` 里 `deepseek/deepseek-v4-flash` 带
-   * `holderInstanceId`，**别的部署**建的），而调度因余额闸门跳过该账号 →
-   * 用户看到「有会话却一直 429」，那一小时的钱白扔。
+   * - 真实故障:面板显示 DeepSeek V4.1 Flash . 49 分钟 的已付费会话
+   * - (上游 desktopPurchases 里 deepseek/deepseek-v4-flash 带
+   * - holderInstanceId,别的部署建的),而调度因余额闸门跳过该账号 →
+   * 用户看到[有会话却一直 429],那一小时的钱白扔.
    *
-   * 本用例走**完整下游链路**（POST /v1/chat/completions → 选号 → 闸门 →
-   * 只读探测 → takeover → chat），并让 mock 遵守上游真实槽位语义：
-   * **不带占用者 id 的 POST admission 一律回 `purchase_capacity`** ——
-   * 所以"最后 200"无法由"照常新开一条会话"伪造出来（那次 POST 会被拒）。
+   * - 本用例走完整下游链路(POST /v1/chat/completions → 选号 → 闸门 →
+   * 只读探测 → takeover → chat),并让 mock 遵守上游真实槽位语义:
+   * - 不带占用者 id 的 POST admission 一律回 purchase_capacity ——
+   * 所以"最后 200"无法由"照常新开一条会话"伪造出来(那次 POST 会被拒).
    *
-   * ⚠️ 两处刻意用**上游 id 形式**（`deepseek/deepseek-v4-flash`），而不是
-   * 目录 key：清单侧与请求侧都走 `keyForName`/legacy 摘要归一，映射不生效时
-   * 本用例直接变红。
+   * - 两处刻意用上游 id 形式(deepseek/deepseek-v4-flash),而不是
+   * - 目录 key:清单侧与请求侧都走 keyForName/legacy 摘要归一,映射不生效时
+   * 本用例直接变红.
    *
-   * ⚠️ 反向探针（已实测）：把 `src/app-context.js` 里 `quotaLooksBlocked &&
-   * (await checkPaidUpstream())` 短路掉 → 本用例红在
-   * `res.status === 429`（`freebucks_exhausted`）；把 `holderFor` 的
-   * `resolveModelAlias` 归一退回严格相等 → 同样红（两侧标识不同）。
+   * - 反向探针(已实测):把 src/app-context.js 里 quotaLooksBlocked &&
+   * - (await checkPaidUpstream()) 短路掉 → 本用例红在
+   * - res.status === 429(freebucks_exhausted);把 holderFor 的
+   * - resolveModelAlias 归一退回严格相等 → 同样红(两侧标识不同).
    */
   const UPTAKE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-paid-ups-'))
   saveAccountUser(UPTAKE_DIR, {
@@ -2205,7 +2205,7 @@ for (const model of verifiedSpecialModels) {
   const upPort = upServer.address().port
 
   const HOLDER = 'other-deploy-inst'
-  /** 请求侧与清单侧都用**上游 legacy id**（不是目录 key m-xxx）。 */
+  /** 请求侧与清单侧都用上游 legacy id(不是目录 key m-xxx). */
   const MODEL_ID = 'deepseek/deepseek-v4-flash'
   mockPaidTakeover = {
     holderInstanceId: HOLDER,
@@ -2218,14 +2218,14 @@ for (const model of verifiedSpecialModels) {
   completionAttempts = 0
   calls = []
   /**
-   * ⚠️ **必须先对一次账**（等价于控制台点过「刷新」，或本进程此前建过会话）。
+   * - 必须先对一次账(等价于控制台点过[刷新],或本进程此前建过会话).
    *
-   * 否则本账号在调度眼里是"余额未知"（`freebucksFor().known === false`），
-   * 额度闸门恒放行 —— 用例就变成"无闸门时能不能建会话"，测不到本用例的主旨，
-   * 而且**不可证伪**（短路掉 paidUpstream 逻辑后仍然全绿，实测踩到过）。
+   * - 否则本账号在调度眼里是"余额未知"(freebucksFor().known === false),
+   * 额度闸门恒放行 —— 用例就变成"无闸门时能不能建会话",测不到本用例的主旨,
+   * - 而且不可证伪(短路掉 paidUpstream 逻辑后仍然全绿,实测踩到过).
    *
-   * 对账后：`balance 0 / 每日池 0/25` 已知 → 闸门即将拒绝 →
-   * 只有"清单里那条能接管的已付费会话"能救它。
+   * - 对账后:balance 0 / 每日池 0/25 已知 → 闸门即将拒绝 →
+   * 只有"清单里那条能接管的已付费会话"能救它.
    */
   await upRuntimes.get('paid').sessions.refresh()
   assert.equal(
@@ -2247,13 +2247,13 @@ for (const model of verifiedSpecialModels) {
   })
   const upText = await upRes.clone().text()
 
-  // ① 成功（不是 429，尤其**不是** freebucks_exhausted）
+  // ① 成功(不是 429,尤其不是 freebucks_exhausted)
   assert.equal(upRes.status, 200, upText)
   assert.ok(
     !upText.includes('freebucks_exhausted'),
     '余额 0 但存在已付费会话时，不得被 Freebucks 闸门挡住：' + upText.slice(0, 300),
   )
-  // ② 确实发了带「别的部署占用者」的 takeover
+  // ② 确实发了带[别的部署占用者]的 takeover
   const admissionPosts = calls.filter(
     (c) => c.url.includes('/session/admission') && c.method === 'POST',
   )
@@ -2275,8 +2275,8 @@ for (const model of verifiedSpecialModels) {
         ),
       ),
   )
-  // ③ 反向对照：mock 对**不带** takeover 的 POST 一律回 purchase_capacity ——
-  //    若实现只是"照常新开一条"，这里必然出现一次不带 takeover 的 admission。
+  // ③ 反向对照:mock 对不带 takeover 的 POST 一律回 purchase_capacity ——
+  //    若实现只是"照常新开一条",这里必然出现一次不带 takeover 的 admission.
   const noTakeover = admissionPosts.filter(
     (c) =>
       !(
@@ -2289,9 +2289,9 @@ for (const model of verifiedSpecialModels) {
     0,
     '不得先撞一次"槽位被占"再补 takeover（官方 knownHolder 是发请求前就知道）',
   )
-  // ④ 真的把 chat 发上了上游（链路闭环，不是空转拿到 200）
+  // ④ 真的把 chat 发上了上游(链路闭环,不是空转拿到 200)
   assert.ok(completionAttempts >= 1, '必须真的发出 chat 请求')
-  // ⑤ 映射生效的旁证：会话回执给的是上游 id 形式，chat 必须回用它
+  // ⑤ 映射生效的旁证:会话回执给的是上游 id 形式,chat 必须回用它
   const chatCall = calls.find((c) => c.url.includes('/chat/completions'))
   assert.ok(chatCall, '应发出 chat 请求')
   assert.ok(
@@ -2307,14 +2307,14 @@ for (const model of verifiedSpecialModels) {
 }
 
 /* ================================================================
-   同一账号的清单里有会话、但**不是**本次请求的模型 → 不得被误认成可接管
+   同一账号的清单里有会话,但不是本次请求的模型 → 不得被误认成可接管
    ================================================================ */
 {
   /**
-   * 反例（防"余额 0 一律放行"的假绿）：清单里那条已付费会话绑的是**别的模型**，
-   * 就没有任何"已付过钱、边际成本 0"的会话可用 —— 余额 0 仍然必须被闸门拦住。
+   * - 反例(防"余额 0 一律放行"的假绿):清单里那条已付费会话绑的是别的模型,
+   * 就没有任何"已付过钱,边际成本 0"的会话可用 —— 余额 0 仍然必须被闸门拦住.
    *
-   * 若有人把 `paidUpstream` 写成"清单非空即放行"，本用例立刻变红。
+   * - 若有人把 paidUpstream 写成"清单非空即放行",本用例立刻变红.
    */
   const MIS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-paid-mism-'))
   saveAccountUser(MIS_DIR, { id: 'p2', email: 'p2@example.com', authToken: 'token-p2' })
@@ -2343,7 +2343,7 @@ for (const model of verifiedSpecialModels) {
 
   mockPaidTakeover = {
     holderInstanceId: 'someone-elses-inst',
-    // 清单绑另一个模型（上游 id 形式）
+    // 清单绑另一个模型(上游 id 形式)
     model: 'mimo/mimo-v2.5',
     listed: true,
     freebucks: {
@@ -2355,9 +2355,9 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
   calls = []
   /**
-   * 先对一次账（等价于控制台点过「刷新」/此前建过会话）：本地既拿到"买不起"
-   * 的 Freebucks，也拿到会话清单。真实故障现场正是这个状态 ——
-   * 面板上都看得到那条会话，调度手上当然也有这份快照。
+   * 先对一次账(等价于控制台点过[刷新]/此前建过会话):本地既拿到"买不起"
+   * 的 Freebucks,也拿到会话清单.真实故障现场正是这个状态 ——
+   * 面板上都看得到那条会话,调度手上当然也有这份快照.
    */
   await misRuntimes.get('p2').sessions.refresh()
   const misRes = await fetch(`http://127.0.0.1:${misPort}/v1/chat/completions`, {
@@ -2390,9 +2390,9 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// limited 档位（accessTier: limited + anonymous_network）**不是封锁**：
+// limited 档位(accessTier: limited + anonymous_network)不是封锁:
 // 官方源码写明 "everywhere else, and any VPN, is limited access" —— 它只是
-// 模型集合变小、Freebucks 25→20，账号可用。判成封锁 = 把可用账号判死并白烧额度。
+// 模型集合变小,Freebucks 25→20,账号可用.判成封锁 = 把可用账号判死并白烧额度.
 {
   const ltDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-limited-'))
   saveAccountUser(ltDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
@@ -2448,15 +2448,15 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// 【2026-10-01 金标准修正】`status: 'active'` 优先于 countryBlockReason。
+// [2026-10-01 金标准修正]status: 'active' 优先于 countryBlockReason.
 //
-// 真机抓包：官方 CLI 在完全相同的出口（JP / country_not_allowed /
-// region_locked）下，服务端返回的**就是** `status: "active"` + 可用
-// instanceId。也就是说 countryBlockReason 是**说明性字段**（解释为什么模型集
-// 变小），不是拒绝信号。
+// 真机抓包:官方 CLI 在完全相同的出口(JP / country_not_allowed /
+// region_locked)下,服务端返回的就是 status: "active" + 可用
+// instanceId.也就是说 countryBlockReason 是说明性字段(解释为什么模型集
+// 变小),不是拒绝信号.
 //
-// 因此本条断言改为：active + terminal reason → **仍然可用（200）**。
-// 只有**没有 instanceId 的**终态才是真封锁（见下面第二个用例）。
+// 因此本条断言改为:active + terminal reason → 仍然可用(200).
+// 只有没有 instanceId 的终态才是真封锁(见下面第二个用例).
 // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
 {
   const cbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-country-'))
@@ -2500,7 +2500,7 @@ for (const model of verifiedSpecialModels) {
     }),
   })
   const cbBody = await res.json()
-  // 金标准：active + country_not_allowed = 可用（官方 CLI 实测拿到 active）
+  // 金标准:active + country_not_allowed = 可用(官方 CLI 实测拿到 active)
   assert.equal(
     res.status,
     200,
@@ -2509,14 +2509,14 @@ for (const model of verifiedSpecialModels) {
   const cbActive = cbRuntimes.get('a').sessions.getSnapshot()
   assert.equal(cbActive?.status, 'active', 'active 回执必须被采纳为活会话')
   assert.ok(cbActive?.instanceId, '会话句柄必须保留')
-  // 不换号：只应有一次 admit（换了号就会有第二次）
+  // 不换号:只应有一次 admit(换了号就会有第二次)
   assert.equal(
     sessionPosts,
     1,
     'country_blocked 是出口属性，换号只会白烧每个账号的额度; admit 次数=' + sessionPosts,
   )
-  // 已付费的窗口必须还在：上游照常建会话照常扣费（一次 admit = 一整小时），
-  // 所以句柄必须可寻址 —— 否则 DELETE 不掉、退款也追不回，等于白扔一小时。
+  // 已付费的窗口必须还在:上游照常建会话照常扣费(一次 admit = 一整小时),
+  // 所以句柄必须可寻址 —— 否则 DELETE 不掉,退款也追不回,等于白扔一小时.
   const cbAccounts = cbRuntimes.list()
   const cbA = cbAccounts.find((x) => x.email === 'a@example.com')
   assert.equal(
@@ -2524,7 +2524,7 @@ for (const model of verifiedSpecialModels) {
     'active',
     '封锁不得抹掉已付费的会话窗口，否则那一小时白买: ' + JSON.stringify(cbA?.session),
   )
-  // 控制台快照不暴露 instanceId（有意），真实状态要看 runtime 的 sessions
+  // 控制台快照不暴露 instanceId(有意),真实状态要看 runtime 的 sessions
   const cbRt = cbRuntimes.get('a')
   const cbSnap = cbRt.sessions.getSnapshot()
   assert.ok(
@@ -2542,11 +2542,11 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// account_suspended（403，error 为字符串）必须归一为 banned：
-// 冷却该账号并**换号重试**，绝不能当客户端 4xx 把错误甩给用户。
-// 背景（2026-09-18 线上实测）：上游对第三方客户端的封禁回的是
-// 403 {"error":"account_suspended"}（error 是字符串，没有 code 字段）；
-// 不归一它就会落进"4xx 客户端错误不换号"分支，于是每个被封账号被反复复用。
+// account_suspended(403,error 为字符串)必须归一为 banned:
+// 冷却该账号并换号重试,绝不能当客户端 4xx 把错误甩给用户.
+// 背景(2026-09-18 线上实测):上游对第三方客户端的封禁回的是
+// 403 {"error":"account_suspended"}(error 是字符串,没有 code 字段);
+// 不归一它就会落进"4xx 客户端错误不换号"分支,于是每个被封账号被反复复用.
 {
   const banDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-ban-'))
   saveAccountUser(banDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
@@ -2588,13 +2588,13 @@ for (const model of verifiedSpecialModels) {
       messages: [{ role: 'user', content: 'hello' }],
     }),
   })
-  // token-a 被封 → 必须换到 token-b 成功，而不是把 403 甩给下游。
+  // token-a 被封 → 必须换到 token-b 成功,而不是把 403 甩给下游.
   assert.equal(res.status, 200, await res.clone().text())
   assert.ok(
     calls.filter((c) => c.url.includes('/chat/completions')).length >= 2,
     '封禁后必须换号重试',
   )
-  // 被封账号被标记 banned（控制台分区与调度排除都靠它）。
+  // 被封账号被标记 banned(控制台分区与调度排除都靠它).
   const banAccounts = banRuntimes.list()
   const bannedA = banAccounts.find((x) => x.email === 'a@example.com')
   assert.equal(bannedA.banned, true, 'account_suspended 应归一为 banned')
@@ -2655,7 +2655,7 @@ for (const model of verifiedSpecialModels) {
     }),
   })
   assert.equal(res.status, 200, await res.clone().text())
-  // a 完成被 429 后换到 b 重试：2 次 session POST、2 次 completions
+  // a 完成被 429 后换到 b 重试:2 次 session POST,2 次 completions
   assert.equal(sessionPosts, 2, `expected 2 session POSTs, got ${sessionPosts}`)
   assert.equal(completionAttempts, 2)
   const rlAccounts = rlRuntimes.list()
@@ -2663,20 +2663,20 @@ for (const model of verifiedSpecialModels) {
   assert.equal(rlA.available, false)
   assert.equal(rlA.cooldownCode, 'free_mode_rate_limited')
   /**
-   * 冷却时长采用上游 retry-after（60s）。
+   * 冷却时长采用上游 retry-after(60s).
    *
-   * ⚠️ 下限取 50s 而不是 58s：冷却是按 `Date.now() + 60_000` **设置时刻**
-   * 算的，而本断言在用例跑了一段时间后才执行（实测已过去 2.7~5.4s，
-   * 得到 54.6~57.3s 的抖动值）。拿 58s 当下限会把"执行快慢"当成缺陷，
+   * - 下限取 50s 而不是 58s:冷却是按 Date.now() + 60_000 设置时刻
+   * 算的,而本断言在用例跑了一段时间后才执行(实测已过去 2.7~5.4s,
+   * 得到 54.6~57.3s 的抖动值).拿 58s 当下限会把"执行快慢"当成缺陷,
    * 判据应是"确实采用了 60s 而不是别的量级"—— 50s 足以区分
-   * （若误用默认 5min/15min 会远超、若用 30s 会低于）。
+   * (若误用默认 5min/15min 会远超,若用 30s 会低于).
    */
   const cd = rlRuntimes.cooldowns.get('a')
   assert.ok(
     cd.until - Date.now() >= 50_000,
     `cooldown should honor retry-after 60s, got ${cd.until - Date.now()}ms`,
   )
-  // 可观测性：响应头标明实际账号；换号后是 b
+  // 可观测性:响应头标明实际账号;换号后是 b
   assert.equal(res.headers.get('x-freebuff-proxy-account'), 'b@example.com')
   await rlRuntimes.shutdown()
   rlServer.close()
@@ -2709,17 +2709,17 @@ for (const model of verifiedSpecialModels) {
   assert.ok(cd.until - Date.now() > 60_000) // banned floors to 1 day
 }
 
-// --- unit: loadConfig 不得污染全局 DEFAULTS（深拷贝缺失的真 bug） ---
-// 历史 bug：deepMerge 用 `{ ...base }` 浅拷贝，当**没有 config.yaml** 时 fileConfig={}，
-// 嵌套的 session/limits/web/upstream 与 DEFAULTS 共享同一对象；任何一处
-// `config.session.xxx = y`（测试与运行时代码都这么改）都会污染 DEFAULTS，
-// 使同一进程内后续所有 loadConfig() 拿到被改坏的配置。有 config.yaml 时因递归
-// 新建对象而被掩盖——CI 一直靠仓库里的 config.yaml 侥幸通过。
+// --- unit: loadConfig 不得污染全局 DEFAULTS(深拷贝缺失的真 bug) ---
+// 历史 bug:deepMerge 用 { ...base } 浅拷贝,当没有 config.yaml 时 fileConfig={},
+// 嵌套的 session/limits/web/upstream 与 DEFAULTS 共享同一对象;任何一处
+// config.session.xxx = y(测试与运行时代码都这么改)都会污染 DEFAULTS,
+// 使同一进程内后续所有 loadConfig() 拿到被改坏的配置.有 config.yaml 时因递归
+// 新建对象而被掩盖——CI 一直靠仓库里的 config.yaml 侥幸通过.
 {
   const { DEFAULTS } = await import('../src/config.js')
   const snapshot = JSON.stringify(DEFAULTS)
   const c = loadConfig()
-  // 模拟调用方就地改写配置（smoke 其它块与运行时都这么做）
+  // 模拟调用方就地改写配置(smoke 其它块与运行时都这么做)
   c.session.idleReleaseSec = 0.15
   c.limits.maxNewSessionsPerRequest = 99
   c.limits.accountMaxConcurrency = 7
@@ -2743,17 +2743,17 @@ for (const model of verifiedSpecialModels) {
   assert.notEqual(d.limits, DEFAULTS.limits, '嵌套对象不得共享引用')
   assert.notEqual(d.upstream.proxies, DEFAULTS.upstream.proxies, '数组不得共享引用')
 }
-// --- unit: catalog 缓存必须落在 dataDir（issue #9：写死 /app/data → EACCES）---
+// --- unit: catalog 缓存必须落在 dataDir(issue #9:写死 /app/data → EACCES)---
 {
   const { writeCatalogCache, readCatalogCache, startCatalogSync } = await import(
     '../src/catalog/runtime-sync.mjs'
   )
-  // 路径由 dataDir 决定，而不是源码目录旁的 data
+  // 路径由 dataDir 决定,而不是源码目录旁的 data
   assert.equal(catalogCachePath('/data'), path.join('/data', CATALOG_CACHE_FILENAME))
   assert.equal(catalogCachePath('/srv/x'), path.join('/srv/x', 'catalog-cache.json'))
   assert.ok(DEFAULT_CATALOG_CACHE_PATH.endsWith(path.join('data', CATALOG_CACHE_FILENAME)))
 
-  // 切到 dataDir 后能读回同一份缓存（读路径 = 写路径）
+  // 切到 dataDir 后能读回同一份缓存(读路径 = 写路径)
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-catalog-'))
   const before = applyCatalogCache(cacheDir)
   assert.equal(before.path, catalogCachePath(cacheDir))
@@ -2762,7 +2762,7 @@ for (const model of verifiedSpecialModels) {
     before.models.some((m) => m.id === 'deepseek/deepseek-v4-flash'),
     '切入 dataDir 后应能读到真实 catalog（含 flash）',
   )
-  // 内置 catalog 兜底写一份（server 启动时的 seed 行为）
+  // 内置 catalog 兜底写一份(server 启动时的 seed 行为)
   assert.deepEqual(
     writeCatalogCache(before.path, {
       version: 1,
@@ -2773,14 +2773,14 @@ for (const model of verifiedSpecialModels) {
   )
   assert.equal(readCatalogCache(before.path)?.models.length, before.models.length)
 
-  // 目录不可写（旧版 Docker 的 /app/data）→ 只报错不抛，同步循环继续跑
+  // 目录不可写(旧版 Docker 的 /app/data)→ 只报错不抛,同步循环继续跑
   const badDir = path.join(cacheDir, 'file-not-a-dir')
   fs.writeFileSync(badDir, 'x')
   const fail = writeCatalogCache(path.join(badDir, 'catalog-cache.json'), { models: [] })
   assert.equal(fail.ok, false)
   assert.match(fail.error, /ENOTDIR|EEXIST|EACCES|EPERM|ENOENT/)
 
-  // 拉取成功但落盘失败 → 日志必须区别于"拉取失败"（issue #9 的误导来源）
+  // 拉取成功但落盘失败 → 日志必须区别于"拉取失败"(issue #9 的误导来源)
   const logs = []
   const sync = startCatalogSync(path.join(badDir, 'catalog-cache.json'), {
     log: (m) => logs.push(m),
@@ -2799,7 +2799,7 @@ for (const model of verifiedSpecialModels) {
   sync.stop()
   fs.rmSync(cacheDir, { recursive: true, force: true })
 
-  // 合并规则：内置元信息优先，agent 映射跟随缓存
+  // 合并规则:内置元信息优先,agent 映射跟随缓存
   const merged = mergeCatalogWithBuiltin(
     [{ id: 'm', displayName: '内置名', pool: 'premium', agentId: 'base2-x' }],
     [
@@ -2814,31 +2814,31 @@ for (const model of verifiedSpecialModels) {
   assert.deepEqual(mergeCatalogWithBuiltin([{ id: 'm' }], null), [{ id: 'm' }])
 }
 
-// --- unit: 管理员 bootstrap 报告真实结果（issue #9：日志撒谎导致"无法登录"）---
+// --- unit: 管理员 bootstrap 报告真实结果(issue #9:日志撒谎导致"无法登录")---
 {
   const { UserStore } = await import('../src/web/user-store.js')
   const adminsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-admin-'))
   const store = new UserStore(path.join(adminsDir, 'users.json'))
 
-  // 1) 首次启动 + 无密码 → 随机生成，必须把密码交回调用方打印
+  // 1) 首次启动 + 无密码 → 随机生成,必须把密码交回调用方打印
   const first = store.ensureDefaultAdmin('admin', null)
   assert.equal(first.created, true)
   assert.equal(first.username, 'admin')
   assert.ok(first.password && first.password.length >= 6)
 
-  // 2) 已有管理员 + env 给了合法密码 → 轮换（rotated=true，供日志如实上报）
+  // 2) 已有管理员 + env 给了合法密码 → 轮换(rotated=true,供日志如实上报)
   const rotated = store.ensureDefaultAdmin('admin', 'newpass123')
   assert.equal(rotated.created, false)
   assert.equal(rotated.rotated, true)
   assert.ok(store.verifyPassword('admin', 'newpass123'))
 
-  // 3) env 密码不合法（<6 位）→ 不能静默当成功，必须回传 error 让人看到
+  // 3) env 密码不合法(<6 位)→ 不能静默当成功,必须回传 error 让人看到
   const rejected = store.ensureDefaultAdmin('admin', 'abc')
   assert.equal(rejected.rotated, undefined)
   assert.match(String(rejected.error), /密码/)
   assert.ok(store.verifyPassword('admin', 'newpass123'), '被拒绝的密码不得改动现有密码')
 
-  // 4) 已有管理员且没给密码 → 既不创建也不轮换（密码只在首次启动打印一次）
+  // 4) 已有管理员且没给密码 → 既不创建也不轮换(密码只在首次启动打印一次)
   const again = store.ensureDefaultAdmin('admin', null)
   assert.equal(again.created, false)
   assert.equal(again.rotated, undefined)
@@ -2874,7 +2874,7 @@ for (const model of verifiedSpecialModels) {
   assert.equal(ws.get(tok), null)
 }
 
-// --- unit: session-first —— 热 session 复用，冷却后才启用下一个账号 ---
+// --- unit: session-first —— 热 session 复用,冷却后才启用下一个账号 ---
 {
   const rrDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-rr-unit-'))
   saveAccountUser(rrDir, { id: 'a', email: 'rr-a@example.com', authToken: 'token-a' })
@@ -2883,11 +2883,11 @@ for (const model of verifiedSpecialModels) {
   const rrConfig = loadConfig()
   rrConfig.upstream.credentialsDir = rrDir
   rrConfig.session.pollIntervalSec = 3600
-  // 本用例回归热 session 复用 → 平摊账号数=1（只用一个账号，永远复用热 session）
+  // 本用例回归热 session 复用 → 平摊账号数=1(只用一个账号,永远复用热 session)
   const pool = new AccountRuntimes(rrConfig)
   mockMode = 'ok'
   sessionPosts = 0
-  // 串行请求全部复用 a 的同一个热 session，只 admit 一次。
+  // 串行请求全部复用 a 的同一个热 session,只 admit 一次.
   const emails = []
   for (let i = 0; i < 6; i++) {
     const rt = await pool.acquireForModel('deepseek/deepseek-v4-flash')
@@ -2907,14 +2907,14 @@ for (const model of verifiedSpecialModels) {
   )
   assert.equal(sessionPosts, 1, `expected one admission, got ${sessionPosts}`)
 
-  // 新模型优先使用空闲的 b，不能释放 a 上仍可复用的 Flash session。
+  // 新模型优先使用空闲的 b,不能释放 a 上仍可复用的 Flash session.
   const luna = await pool.acquireForModel('openai/gpt-5.6-luna')
   assert.equal(luna.email, 'rr-b@example.com')
   assert.equal(pool.get('a').sessions.getSnapshot().model, 'deepseek/deepseek-v4-flash')
   assert.equal(pool.get('b').sessions.getSnapshot().model, 'openai/gpt-5.6-luna')
   assert.equal(sessionPosts, 2, `second model should add one admission, got ${sessionPosts}`)
 
-  // a 冷却后，Flash 使用空闲的 c，而不是覆盖 b 上的 Luna。
+  // a 冷却后,Flash 使用空闲的 c,而不是覆盖 b 上的 Luna.
   pool.markCooldown('a', {
     code: 'rate_limited',
     retryAfterMs: 60_000,
@@ -2934,7 +2934,7 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(rrDir, { recursive: true, force: true })
 }
 
-// --- unit: 粘性调度（drain, not rotate）——集中用一个账号，未用过的排最后 ---
+// --- unit: 粘性调度(drain, not rotate)——集中用一个账号,未用过的排最后 ---
 {
   const spDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-sticky-'))
   saveAccountUser(spDir, { id: 'a', email: 'sp-a@example.com', authToken: 'token-a' })
@@ -2946,7 +2946,7 @@ for (const model of verifiedSpecialModels) {
   const pool = new AccountRuntimes(spConfig)
   mockMode = 'ok'
   sessionPosts = 0
-  // 串行请求全部粘在 a 上（同一个热 session，只 admit 一次）——绝不轮换健康账号
+  // 串行请求全部粘在 a 上(同一个热 session,只 admit 一次)——绝不轮换健康账号
   const emails = []
   for (let i = 0; i < 6; i++) {
     const rt = await pool.acquireForModel('deepseek/deepseek-v4-flash')
@@ -2964,7 +2964,7 @@ for (const model of verifiedSpecialModels) {
   assert.equal(rows.find((r) => r.key === 'b').used, false, 'b 不应被使用')
   assert.equal(rows.find((r) => r.key === 'c').used, false, 'c 不应被使用')
 
-  // a 冷却（限流/额度耗尽）→ 才启用一个从未用过的账号，并继续粘住它
+  // a 冷却(限流/额度耗尽)→ 才启用一个从未用过的账号,并继续粘住它
   pool.markCooldown('a', { code: 'rate_limited', retryAfterMs: 60_000 })
   const after = []
   for (let i = 0; i < 3; i++) {
@@ -2983,13 +2983,13 @@ for (const model of verifiedSpecialModels) {
   assert.equal(last.email, 'sp-c@example.com', '最后一个账号才启用 c')
 
   /**
-   * 只剩 c 可用：换模型请求复用同一账号（释放旧 session 后 admit 新模型）。
+   * 只剩 c 可用:换模型请求复用同一账号(释放旧 session 后 admit 新模型).
    *
-   * ⚠️ 前提必须是**付费时段已结束**。一次 admit 买断一小时且绑定模型，
-   * 付费时段内换模型上游必然拒（issue #24：0s/45s/90s 三次重试全部
-   * purchase_claim_released，且 DELETE 之后接不回来）。所以"同一小时内跨模型
-   * 可用"在生产上不成立——此前这段能过，是因为 mock 无条件放行 admission。
-   * 这里先把 c 的会话置为已过期，测的才是真实成立的换模型路径。
+   * - 前提必须是付费时段已结束.一次 admit 买断一小时且绑定模型,
+   * 付费时段内换模型上游必然拒(issue #24:0s/45s/90s 三次重试全部
+   * purchase_claim_released,且 DELETE 之后接不回来).所以"同一小时内跨模型
+   * 可用"在生产上不成立——此前这段能过,是因为 mock 无条件放行 admission.
+   * 这里先把 c 的会话置为已过期,测的才是真实成立的换模型路径.
    */
   const cRt = pool.get('c')
   cRt.sessions.session = {
@@ -3008,26 +3008,26 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(spDir, { recursive: true, force: true })
 }
 
-// --- regression: GitHub/Google 同一邮箱但 id 不同 → 两个账号并存，不互相覆盖 ---
+// --- regression: GitHub/Google 同一邮箱但 id 不同 → 两个账号并存,不互相覆盖 ---
 {
   const dupDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-dup-'))
-  // 模拟 GitHub 登录 + Google 登录（同一邮箱、不同 Freebuff id）
+  // 模拟 GitHub 登录 + Google 登录(同一邮箱,不同 Freebuff id)
   saveAccountUser(dupDir, { id: 'github-u1', email: 'same@example.com', name: 'GitHub', authToken: 'token-gh' })
   saveAccountUser(dupDir, { id: 'google-u1', email: 'same@example.com', name: 'Google', authToken: 'token-google' })
   let rows = listAccounts(dupDir)
   assert.equal(rows.length, 2, `同邮箱不同 id 应并存, got ${JSON.stringify(rows.map((r) => r.id))}`)
   assert.equal(rows.filter((r) => r.email === 'same@example.com').length, 2)
   assert.ok(rows.some((r) => r.id === 'github-u1') && rows.some((r) => r.id === 'google-u1'))
-  // 各自独立文件，互不覆盖
+  // 各自独立文件,互不覆盖
   assert.ok(fs.existsSync(path.join(dupDir, 'github-u1.json')))
   assert.ok(fs.existsSync(path.join(dupDir, 'google-u1.json')))
-  // 重登 GitHub（同 id）→ 只更新 GitHub 那份，Google 那份原样保留
+  // 重登 GitHub(同 id)→ 只更新 GitHub 那份,Google 那份原样保留
   saveAccountUser(dupDir, { id: 'github-u1', email: 'same@example.com', name: 'GitHub', authToken: 'token-gh-2' })
   rows = listAccounts(dupDir)
   assert.equal(rows.length, 2)
   assert.equal(readAccountUser(dupDir, 'github-u1').authToken, 'token-gh-2')
   assert.equal(readAccountUser(dupDir, 'google-u1').authToken, 'token-google')
-  // 并发冷启动也只能创建一个 session；两个身份仍各自独立存在于账号池。
+  // 并发冷启动也只能创建一个 session;两个身份仍各自独立存在于账号池.
   const dupConfig = loadConfig()
   dupConfig.upstream.credentialsDir = dupDir
   dupConfig.session.pollIntervalSec = 3600
@@ -3093,7 +3093,7 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(pDir, { recursive: true, force: true })
 }
 
-// --- 全局代理池：稳定哈希分配 + 账号覆盖优先 ---
+// --- 全局代理池:稳定哈希分配 + 账号覆盖优先 ---
 {
   const poolConfig = loadConfig()
   poolConfig.upstream.proxies = [
@@ -3108,7 +3108,7 @@ for (const model of verifiedSpecialModels) {
   // 同账号稳定同一代理
   assert.equal(a1.proxyUrl, a2.proxyUrl)
   assert.ok(a1.proxyUrl.startsWith('http://p'))
-  // 不同账号可能落到不同代理（池内成员之一）
+  // 不同账号可能落到不同代理(池内成员之一)
   assert.ok(poolConfig.upstream.proxies.includes(a1.proxyUrl))
   assert.ok(poolConfig.upstream.proxies.includes(b.proxyUrl))
   // 账号显式代理优先于全局池
@@ -3117,15 +3117,15 @@ for (const model of verifiedSpecialModels) {
     proxy: 'http://explicit:9999',
   })
   assert.equal(c.proxyUrl, 'http://explicit:9999')
-  // 无池无显式 → 直连（null）
+  // 无池无显式 → 直连(null)
   const plain = createUpstreamClient(loadConfig(), 'tok', { accountId: 'x@example.com' })
   assert.equal(plain.proxyUrl, null)
 }
 
-// --- 回归：单代理池也必须走代理（issue #5 根因：1 个代理时直连绕过） ---
+// --- 回归:单代理池也必须走代理(issue #5 根因:1 个代理时直连绕过) ---
 {
   const { createProxyFetch } = await import('../src/upstream/client.js')
-  // 最小 HTTP 代理：收到绝对形式请求直接回带标记的响应（不转发）
+  // 最小 HTTP 代理:收到绝对形式请求直接回带标记的响应(不转发)
   let proxyHits = 0
   const proxyServer = http.createServer((req, res) => {
     proxyHits++
@@ -3153,7 +3153,7 @@ for (const model of verifiedSpecialModels) {
       `单代理池应走代理（代理收到请求），实际响应: ${text}`, // 直连会给 DIRECT
     )
     assert.equal(proxyHits, 1, '请求应恰好经过代理一次')
-    // 上游 apiFetch 同样走单代理池（apiBase 指向 target，代理不转发 → 收到的是代理的响应）
+    // 上游 apiFetch 同样走单代理池(apiBase 指向 target,代理不转发 → 收到的是代理的响应)
     const upstreamCfg = loadConfig()
     upstreamCfg.upstream.apiBase = `http://127.0.0.1:${targetPort}`
     upstreamCfg.upstream.proxies = [`http://127.0.0.1:${proxyPort}`]
@@ -3230,7 +3230,7 @@ for (const model of verifiedSpecialModels) {
   assert.equal(pj.accounts[0].email, 'w@example.com')
   // mock GET 返回 status none → 探测后 session 状态可见
   assert.equal(pj.accounts[0].session.status, 'none')
-  // 账号凭证：任意已登录用户可查看完整凭据（含 authToken），404 与 401 正确
+  // 账号凭证:任意已登录用户可查看完整凭据(含 authToken),404 与 401 正确
   {
     const cred = await fetch(`http://127.0.0.1:${wport}/api/accounts/w/credential`, {
       headers: { cookie },
@@ -3251,7 +3251,7 @@ for (const model of verifiedSpecialModels) {
     const anon = await fetch(`http://127.0.0.1:${wport}/api/accounts/w/credential`)
     assert.equal(anon.status, 401)
   }
-  // 运行设置：默认开启，保存关闭后立即返回并持久化，重建 store 仍为关闭
+  // 运行设置:默认开启,保存关闭后立即返回并持久化,重建 store 仍为关闭
   {
     const getDefault = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
       headers: { cookie },
@@ -3280,7 +3280,7 @@ for (const model of verifiedSpecialModels) {
       false,
     )
   }
-  // 运行设置：账号并发上限（粘性调度）——默认 2，校验非法值，保存后持久化
+  // 运行设置:账号并发上限(粘性调度)——默认 2,校验非法值,保存后持久化
   {
     const getDefault = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
       headers: { cookie },
@@ -3309,21 +3309,21 @@ for (const model of verifiedSpecialModels) {
         .accountMaxConcurrency,
       4,
     )
-    // 恢复默认，避免影响其他用例
+    // 恢复默认,避免影响其他用例
     await fetch(`http://127.0.0.1:${wport}/api/settings`, {
       method: 'POST',
       headers: { cookie, 'content-type': 'application/json' },
       body: JSON.stringify({ accountMaxConcurrency: 1 }),
     })
   }
-  // 运行设置：额度保护（空闲释放 + 单请求新会话预算）——非法值拒绝，保存即持久化
+  // 运行设置:额度保护(空闲释放 + 单请求新会话预算)——非法值拒绝,保存即持久化
   {
     const getDefault = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
       headers: { cookie },
     })
     const def = await getDefault.json()
-    // 2026-09-13 结论反转：早退 DELETE **会**按实际占用退还 Freebucks，所以默认回到
-    // 60s——挂着的空闲会话在按小时计价，早退才把未用时长换回来。
+    // 2026-09-13 结论反转:早退 DELETE 会按实际占用退还 Freebucks,所以默认回到
+    // 60s——挂着的空闲会话在按小时计价,早退才把未用时长换回来.
     assert.equal(def.idleReleaseSec, 60, '未保存过时应回落 config.yaml 默认值')
     assert.ok(
       def.idleReleaseSec > 0 && def.idleReleaseSec <= 300,
@@ -3340,7 +3340,7 @@ for (const model of verifiedSpecialModels) {
       assert.equal(res.status, 400, `idleReleaseSec=${bad} should be rejected`)
     }
 
-    // 下限放宽到 5s：1..4 吸附到 5s（避免把每个回合切成一条新会话）
+    // 下限放宽到 5s:1..4 吸附到 5s(避免把每个回合切成一条新会话)
     const tiny = await fetch(`http://127.0.0.1:${wport}/api/settings`, {
       method: 'POST',
       headers: { cookie, 'content-type': 'application/json' },
@@ -3362,7 +3362,7 @@ for (const model of verifiedSpecialModels) {
     assert.equal(persisted.idleReleaseSec, 600, '保存后应持久化到 settings.json')
     assert.equal(persisted.maxNewSessionsPerRequest, 3)
   }
-  // 代理管理 API：GET 空池 → POST 保存（持久化 + 立即生效）→ GET 返回
+  // 代理管理 API:GET 空池 → POST 保存(持久化 + 立即生效)→ GET 返回
   {
     const g1 = await fetch(`http://127.0.0.1:${wport}/api/proxy`, { headers: { cookie } })
     assert.equal(g1.status, 200)
@@ -3378,12 +3378,12 @@ for (const model of verifiedSpecialModels) {
     assert.deepEqual(pj.proxies, ['http://p1.example:7890', 'http://p2.example:7890'])
     assert.ok(pj.note)
 
-    // 持久化到 /data/proxies.json，且运行配置已更新
+    // 持久化到 /data/proxies.json,且运行配置已更新
     const saved = JSON.parse(fs.readFileSync(path.join(wDir, 'proxies.json'), 'utf8'))
     assert.deepEqual(saved.proxies, ['http://p1.example:7890', 'http://p2.example:7890'])
     assert.deepEqual(wConfig.upstream.proxies, ['http://p1.example:7890', 'http://p2.example:7890'])
 
-    // 新 runtime 使用新池（invalidateProxies 后重建）
+    // 新 runtime 使用新池(invalidateProxies 后重建)
     const rt = wruntimes.get('w')
     assert.ok(poolUrls.includes(rt.effectiveProxy))
 
@@ -3409,7 +3409,7 @@ for (const model of verifiedSpecialModels) {
   const ptj1 = await pt1.json()
   assert.equal(ptj1.results.length, 0)
   assert.ok(ptj1.note)
-  // proxy test: 死代理 → ok:false + 错误信息（真连接尝试，localhost 立即拒绝）
+  // proxy test: 死代理 → ok:false + 错误信息(真连接尝试,localhost 立即拒绝)
   const pt2 = await fetch(`http://127.0.0.1:${wport}/api/proxy/test`, {
     method: 'POST',
     headers: { cookie, 'content-type': 'application/json' },
@@ -3421,9 +3421,9 @@ for (const model of verifiedSpecialModels) {
   assert.equal(ptj2.results[0].ok, false)
   assert.equal(ptj2.results[0].proxy, 'http://127.0.0.1:9')
   assert.ok(ptj2.results[0].error)
-  // 操作列「关闭会话」：用户主动结束该账号的上游计费会话。
-  // 三个关键语义：① 成功即无活跃会话 ② 上游删不掉时不得谎报成功、句柄必须保留
-  // （留给重启扫尾继续退款）③ 未知账号 404。
+  // 操作列[关闭会话]:用户主动结束该账号的上游计费会话.
+  // 三个关键语义:① 成功即无活跃会话 ② 上游删不掉时不得谎报成功,句柄必须保留
+  // (留给重启扫尾继续退款)③ 未知账号 404.
   {
     const sm = wruntimes.get('w').sessions
     await sm.ensureSession('deepseek/deepseek-v4-flash')
@@ -3441,7 +3441,7 @@ for (const model of verifiedSpecialModels) {
     assert.equal(j.interrupted, false, '无在途流时不应标记为中断')
     assert.equal(sm.getSnapshot().status, 'none', '关闭后该账号应无活跃会话')
 
-    // 上游一直删不掉 → ok=false + 带原因，且句柄保留（不得静默丢弃）
+    // 上游一直删不掉 → ok=false + 带原因,且句柄保留(不得静默丢弃)
     await sm.ensureSession('deepseek/deepseek-v4-flash')
     deleteFailuresLeft = 99
     const bad = await fetch(`http://127.0.0.1:${wport}/api/accounts/w/session`, {
@@ -3456,7 +3456,7 @@ for (const model of verifiedSpecialModels) {
     deleteFailuresLeft = 0
     await sm.release()
 
-    // 未知账号 → 404（且不误伤其它账号）
+    // 未知账号 → 404(且不误伤其它账号)
     const nf = await fetch(`http://127.0.0.1:${wport}/api/accounts/nope/session`, {
       method: 'POST',
       headers: { cookie, 'content-type': 'application/json' },
@@ -3477,7 +3477,7 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(wDir, { recursive: true, force: true })
 }
 
-// --- quota: extraction + display；已用满的冷账号排到可用冷账号之后 ---
+// --- quota: extraction + display;已用满的冷账号排到可用冷账号之后 ---
 {
   const qDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-quota-'))
   saveAccountUser(qDir, { id: 'qa', email: 'qa@example.com', authToken: 'token-qa' })
@@ -3495,11 +3495,11 @@ for (const model of verifiedSpecialModels) {
   pa.sessions.quota = mkQuota('openai/gpt-5.6-luna', 6, 5)
   pb.sessions.quota = mkQuota('openai/gpt-5.6-luna', 6, 1)
 
-  // 两个账号都有剩余额度时，轮询仅作为同层级的平局处理。
+  // 两个账号都有剩余额度时,轮询仅作为同层级的平局处理.
   const order = pool.candidateKeys('openai/gpt-5.6-luna')
   assert.deepEqual(order, ['qa', 'qb'], `expected stable tie-break, got ${order}`)
 
-  // 已用满的冷账号不应先触发一次必败的 admit。
+  // 已用满的冷账号不应先触发一次必败的 admit.
   pa.sessions.quota = mkQuota('openai/gpt-5.6-luna', 6, 6)
   const order2 = pool.candidateKeys('openai/gpt-5.6-luna')
   assert.deepEqual(order2, ['qb', 'qa'], `exhausted account should be last, got ${order2}`)
@@ -3538,7 +3538,7 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(qDir, { recursive: true, force: true })
 }
 
-// --- session-first：conversation_id 不参与选号，同模型热 session 始终复用 ---
+// --- session-first:conversation_id 不参与选号,同模型热 session 始终复用 ---
 {
   const convDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-conv-'))
   saveAccountUser(convDir, { id: 'da', email: 'da@example.com', authToken: 'token-da' })
@@ -3567,7 +3567,7 @@ for (const model of verifiedSpecialModels) {
   })
   const convPort = convServer.address().port
 
-  // 同一会话 key 连续 6 次只创建并复用一个上游 session。
+  // 同一会话 key 连续 6 次只创建并复用一个上游 session.
   mockMode = 'ok'
   sessionPosts = 0
   completionAttempts = 0
@@ -3603,10 +3603,10 @@ for (const model of verifiedSpecialModels) {
     `恒定会话 key 应复用热 session, got ${JSON.stringify(seen)}`,
   )
   assert.equal(sessionPosts, 1, `expected one admission, got ${sessionPosts}`)
-  // 同一会话不应再回传会话 key 响应头（无会话分组概念）
+  // 同一会话不应再回传会话 key 响应头(无会话分组概念)
   assert.equal(res.headers.get('x-freebuff-proxy-conv-key'), null)
 
-  // 当前账号冷却后才切到下一个账号，并复用新 session。
+  // 当前账号冷却后才切到下一个账号,并复用新 session.
   convRuntimes.markCooldown('da', {
     code: 'rate_limited',
     retryAfterMs: 60_000,
@@ -3636,8 +3636,8 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(convDir, { recursive: true, force: true })
 }
 
-// 无会话ID 的并发请求：粘性调度 + 每账号并发上限 1 → 全部挤在同一账号上排队，
-// 不主动开新账号（换号 = 多买一条 Freebucks 计费会话）
+// 无会话ID 的并发请求:粘性调度 + 每账号并发上限 1 → 全部挤在同一账号上排队,
+// 不主动开新账号(换号 = 多买一条 Freebucks 计费会话)
 {
   const rrDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-rr-'))
   saveAccountUser(rrDir, { id: 'ra', email: 'ra@example.com', authToken: 'token-ra' })
@@ -3654,7 +3654,7 @@ for (const model of verifiedSpecialModels) {
     getAccountConcurrency: () => 1,
   })
 
-  // 慢流 mock：每流 ~300ms，保证并发期间锁一直占用，选号结果确定
+  // 慢流 mock:每流 ~300ms,保证并发期间锁一直占用,选号结果确定
   let rrActive = 0
   let rrActiveMax = 0
   const origFetch = globalThis.fetch
@@ -3737,7 +3737,7 @@ for (const model of verifiedSpecialModels) {
     assert.equal(res.status, 200, await res.clone().text())
     rrAccounts.push(res.headers.get('x-freebuff-proxy-account'))
   }
-  // 粘性优先：9 条并发全部挤在 ra 上（有界排队），单账号同时最多 1 条流，
+  // 粘性优先:9 条并发全部挤在 ra 上(有界排队),单账号同时最多 1 条流,
   // 不为了并发去启用从未用过的 rb / rc
   assert.deepEqual(
     [...new Set(rrAccounts)],
@@ -3750,7 +3750,7 @@ for (const model of verifiedSpecialModels) {
   assert.equal(rrRows.find((r) => r.key === 'ra').used, true, 'ra 应标记已用')
   assert.equal(rrRows.find((r) => r.key === 'rb').used, false, 'rb 不应被启用')
   assert.equal(rrRows.find((r) => r.key === 'rc').used, false, 'rc 不应被启用')
-  // 满员账号仍排在未用过账号之前（先排队；只有排队超时被 skipKeys 排除后才溢出）
+  // 满员账号仍排在未用过账号之前(先排队;只有排队超时被 skipKeys 排除后才溢出)
   assert.deepEqual(
     rrRuntimes.candidateKeys('deepseek/deepseek-v4-flash'),
     ['ra', 'rb', 'rc'],
@@ -3770,7 +3770,7 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(rrDir, { recursive: true, force: true })
 }
 
-// sub2api 场景：恒定 user 不参与选号，仍复用同模型热 session
+// sub2api 场景:恒定 user 不参与选号,仍复用同模型热 session
 {
   const subDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-sub2api-'))
   saveAccountUser(subDir, { id: 'sa', email: 'sa@example.com', authToken: 'token-sa' })
@@ -3819,7 +3819,7 @@ for (const model of verifiedSpecialModels) {
     assert.equal(res.status, 200, await res.clone().text())
     const acc = res.headers.get('x-freebuff-proxy-account')
     seenAccounts.set(acc, (seenAccounts.get(acc) || 0) + 1)
-    // 无会话分组：请求头也不回传 conv-key
+    // 无会话分组:请求头也不回传 conv-key
     assert.equal(res.headers.get('x-freebuff-proxy-conv-key'), null)
   }
   assert.equal(seenAccounts.get('sa@example.com'), 6)
@@ -3930,7 +3930,7 @@ for (const model of verifiedSpecialModels) {
     }),
   })
   assert.equal(res.status, 200, await res.clone().text())
-  // 实测同一 session 立即重试可恢复，无需为瞬时容量再开一个 session。
+  // 实测同一 session 立即重试可恢复,无需为瞬时容量再开一个 session.
   assert.equal(res.headers.get('x-freebuff-proxy-account'), 'a@example.com')
   assert.equal(sessionPosts, 1, `capacity retry should reuse session, got ${sessionPosts}`)
   const capAccounts = capRuntimes.list()
@@ -3946,7 +3946,7 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// 持续 capacity_deferred → 返回错误但不冷却（下次请求仍可复用）
+// 持续 capacity_deferred → 返回错误但不冷却(下次请求仍可复用)
 {
   const capDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-cap2-'))
   saveAccountUser(capDir2, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
@@ -4000,7 +4000,7 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// startAgentRun 500 → 冷却当前账号换下一个，最终成功
+// startAgentRun 500 → 冷却当前账号换下一个,最终成功
 {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-run500-'))
   saveAccountUser(runDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
@@ -4055,8 +4055,8 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// startAgentRun 403（start_agent_run_failed，非账号级封禁 code）→ 也应冷却
-// 当前账号换下一个，最终成功（回归：403 不在换号条件内，曾不换号、首次即报错给用户）
+// startAgentRun 403(start_agent_run_failed,非账号级封禁 code)→ 也应冷却
+// 当前账号换下一个,最终成功(回归:403 不在换号条件内,曾不换号,首次即报错给用户)
 {
   const run403Dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-run403-'))
   saveAccountUser(run403Dir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
@@ -4111,7 +4111,7 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// 网络错误（fetch 抛异常）→ 换号重试，最终成功
+// 网络错误(fetch 抛异常)→ 换号重试,最终成功
 {
   const netDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-net-'))
   saveAccountUser(netDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
@@ -4162,7 +4162,7 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// 同账号 gate 连续失败两次 → 升级为换号，最终成功
+// 同账号 gate 连续失败两次 → 升级为换号,最终成功
 {
   const g2Dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-gate2-'))
   saveAccountUser(g2Dir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
@@ -4206,7 +4206,7 @@ for (const model of verifiedSpecialModels) {
   })
   assert.equal(res.status, 200, await res.clone().text())
   assert.equal(res.headers.get('x-freebuff-proxy-account'), 'b@example.com')
-  // a 两次 gate（1 次会话 + 1 次同号 re-admit），b 一次 → 3 次 session POST、3 次 completions
+  // a 两次 gate(1 次会话 + 1 次同号 re-admit),b 一次 → 3 次 session POST,3 次 completions
   assert.equal(sessionPosts, 3, `expected 3 session POSTs, got ${sessionPosts}`)
   assert.equal(completionAttempts, 3, `expected 3 completions, got ${completionAttempts}`)
   const g2Accounts = g2Runtimes.list()
@@ -4222,7 +4222,7 @@ for (const model of verifiedSpecialModels) {
 
 
 
-// --- 幽灵连接：上游流 idle 超时（zero bytes 未落地）→ 换号重试 ---
+// --- 幽灵连接:上游流 idle 超时(zero bytes 未落地)→ 换号重试 ---
 {
   const stDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-stall-'))
   saveAccountUser(stDir, { id: 'sa', email: 'sa@example.com', authToken: 'token-sa' })
@@ -4252,7 +4252,7 @@ for (const model of verifiedSpecialModels) {
   })
   const stPort = stServer.address().port
 
-  // spa 的流式响应只开不关（幽灵连接，一个字节都不吐）→ 连接被掐断而不是永远挂着
+  // spa 的流式响应只开不关(幽灵连接,一个字节都不吐)→ 连接被掐断而不是永远挂着
   mockMode = 'stall_zero'
   sessionPosts = 0
   completionAttempts = 0
@@ -4276,8 +4276,8 @@ for (const model of verifiedSpecialModels) {
   const elapsed = Date.now() - started
   assert.ok(elapsed < 30_000, `stall zero test took too long: ${elapsed}ms`)
 
-  // 幽灵连接（流 idle 超时被掐断）→ 账号短暂冷却（stallCooldownSec 默认 30s）：
-  // 该账号刚被掐断过一条卡死链路，下一请求应切到另一个账号，而不是继续撞同一条链路。
+  // 幽灵连接(流 idle 超时被掐断)→ 账号短暂冷却(stallCooldownSec 默认 30s):
+  // 该账号刚被掐断过一条卡死链路,下一请求应切到另一个账号,而不是继续撞同一条链路.
   mockMode = 'ok'
   const stRes2 = await fetch(`http://127.0.0.1:${stPort}/v1/chat/completions`, {
     method: 'POST',
@@ -4298,7 +4298,7 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// --- 幽灵连接：上游流 idle 超时（partial bytes 已落地）→ 冷却当前账号 + 断开连接 ---
+// --- 幽灵连接:上游流 idle 超时(partial bytes 已落地)→ 冷却当前账号 + 断开连接 ---
 //   后续请求应切到另一个可用账号
 {
   const spDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-stall-partial-'))
@@ -4311,8 +4311,8 @@ for (const model of verifiedSpecialModels) {
   spConfig.upstream.credentialsDir = spDir
   spConfig.session.pollIntervalSec = 3600
   spConfig.limits.streamIdleTimeoutSec = 1
-  // stallCooldownSec=0：关闭掐断后的冷却（保留旧行为可配置）——验证该开关
-  // 关闭时，幽灵连接只断开连接、下一请求仍可复用同一会话
+  // stallCooldownSec=0:关闭掐断后的冷却(保留旧行为可配置)——验证该开关
+  // 关闭时,幽灵连接只断开连接,下一请求仍可复用同一会话
   spConfig.limits.stallCooldownSec = 0
 
   const spRuntimes = new AccountRuntimes(spConfig)
@@ -4332,7 +4332,7 @@ for (const model of verifiedSpecialModels) {
   })
   const spPort = spServer.address().port
 
-  // 第一个请求打到 spa：partial stall（已下发部分字节后卡死）→ 连接被掐断，
+  // 第一个请求打到 spa:partial stall(已下发部分字节后卡死)→ 连接被掐断,
   // 客户端收到截断的 SSE 而不是永远挂着
   mockMode = 'stall_partial'
   sessionPosts = 0
@@ -4355,7 +4355,7 @@ for (const model of verifiedSpecialModels) {
   )
   assert.ok(Date.now() - spStart < 30_000, `partial stall test took too long: ${Date.now() - spStart}ms`)
 
-  // 幽灵连接不冷却同账号（只是断开连接）；第二个请求仍可复用同一会话
+  // 幽灵连接不冷却同账号(只是断开连接);第二个请求仍可复用同一会话
   mockMode = 'ok'
   const spRes2 = await fetch(`http://127.0.0.1:${spPort}/v1/chat/completions`, {
     method: 'POST',
@@ -4373,7 +4373,7 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// --- 账号并发上限=1（慢流场景）：单账号同时 1 条流，满员即换号 ---
+// --- 账号并发上限=1(慢流场景):单账号同时 1 条流,满员即换号 ---
 {
   const scDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-serial-'))
   saveAccountUser(scDir, { id: 'sca', email: 'sca@example.com', authToken: 'token-sca' })
@@ -4405,7 +4405,7 @@ for (const model of verifiedSpecialModels) {
   })
   const scPort = scServer.address().port
 
-  // 慢流 mock：每次 chunk 延迟 ~100ms，总时长 ~800ms；记录并发峰值
+  // 慢流 mock:每次 chunk 延迟 ~100ms,总时长 ~800ms;记录并发峰值
   let streamActive = 0
   let streamActiveMax = 0
   const origFetch = globalThis.fetch
@@ -4483,7 +4483,7 @@ for (const model of verifiedSpecialModels) {
     const accountHeader = r.headers.get('x-freebuff-proxy-account')
     scAccounts.push(accountHeader)
   }
-  // 粘性优先：单账号并发上限 1 → 6 条流全部排在 sca 上（不启用第二个账号）
+  // 粘性优先:单账号并发上限 1 → 6 条流全部排在 sca 上(不启用第二个账号)
   assert.equal(new Set(scAccounts).size, 1, `expected one sticky account, got ${JSON.stringify(scAccounts)}`)
   assert.equal(sessionPosts, 1, `expected one admission, got ${sessionPosts}`)
   assert.equal(streamActiveMax, 1, `expected max 1 concurrent stream, got ${streamActiveMax}`)
@@ -4494,7 +4494,7 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(scDir, { recursive: true, force: true })
 }
 
-// --- 账号并发上限：一个账号可同时转发 N 条 SSE 流；满了换到下一个账号 ---
+// --- 账号并发上限:一个账号可同时转发 N 条 SSE 流;满了换到下一个账号 ---
 {
   const ccDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-cc-'))
   saveAccountUser(ccDir, { id: 'cca', email: 'cca@example.com', authToken: 'token-cca' })
@@ -4592,12 +4592,12 @@ for (const model of verifiedSpecialModels) {
     assert.equal(r.status, 200, await r.clone().text())
     ccAccounts.push(r.headers.get('x-freebuff-proxy-account'))
   }
-  // 粘性优先：每账号并发上限 2 → 6 条流全部挤在 cca 上（2 条并行、其余排队），
-  // 不主动启用第二个账号（只有排队超时才溢出）
+  // 粘性优先:每账号并发上限 2 → 6 条流全部挤在 cca 上(2 条并行,其余排队),
+  // 不主动启用第二个账号(只有排队超时才溢出)
   assert.equal(new Set(ccAccounts).size, 1, `expected one sticky account, got ${JSON.stringify(ccAccounts)}`)
   assert.equal(sessionPosts, 1, `expected one admission, got ${sessionPosts}`)
   assert.equal(streamActiveMax, 2, `expected max 2 concurrent streams, got ${streamActiveMax}`)
-  // 监控字段：账号行带 在途/上限
+  // 监控字段:账号行带 在途/上限
   const ccRow = ccRuntimes.list().find((x) => x.email === 'cca@example.com')
   assert.equal(ccRow.concurrency, 2)
   assert.ok(Number.isInteger(ccRow.inFlight) && ccRow.inFlight <= 2)
@@ -4608,9 +4608,9 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(ccDir, { recursive: true, force: true })
 }
 
-// --- regression: spread 关 + 并发上限 3 → 满了换号，不把并发钉死在一个账号 ---
-// 用户场景：关闭免费模型分散（模型实际已收费），上限设 3；并发超出 3 时必须
-// 换到下一个有空闲槽位的账号，而不是在满员账号上无限排队。
+// --- regression: spread 关 + 并发上限 3 → 满了换号,不把并发钉死在一个账号 ---
+// 用户场景:关闭免费模型分散(模型实际已收费),上限设 3;并发超出 3 时必须
+// 换到下一个有空闲槽位的账号,而不是在满员账号上无限排队.
 {
   const capDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-capspill-'))
   saveAccountUser(capDir, { id: 'cpa', email: 'cpa@example.com', authToken: 'token-cpa' })
@@ -4623,11 +4623,11 @@ for (const model of verifiedSpecialModels) {
   capConfig.session.pollIntervalSec = 3600
   capConfig.limits.maxConcurrentRequests = 12
   /**
-   * ⚠️ 必须**显式**把单账号并发上限设成 3。
+   * - 必须显式把单账号并发上限设成 3.
    *
-   * 以前这里不设，用默认（config.js 的 `accountMaxConcurrency: 2`），
-   * 却断言"上游并发峰值应为 3" —— 测试假设与配置不一致，于是稳定失败
-   * （got 2）。实现按上限 2 跑是对的，错的只是用例没把前置条件写全。
+   * - 以前这里不设,用默认(config.js 的 accountMaxConcurrency: 2),
+   * 却断言"上游并发峰值应为 3" —— 测试假设与配置不一致,于是稳定失败
+   * (got 2).实现按上限 2 跑是对的,错的只是用例没把前置条件写全.
    */
   capConfig.limits.accountMaxConcurrency = 3
   const capRuntimes = new AccountRuntimes(capConfig, {
@@ -4666,11 +4666,11 @@ for (const model of verifiedSpecialModels) {
             const enc = new TextEncoder()
             async function emit(i) {
               /**
-               * ⚠️ 帧数必须足够多：并发峰值是**瞬时采样**，
-               * 若每条流只活 ~500ms，而排队放行本身有耗时，
-               * 就可能出现"第 1 条已结束、第 3 条还没放行"的窗口，
-               * 采样峰值只有 2 → 断言间歇性失败（不是实现缺陷）。
-               * 让每条流活 ~2s，三条必然同时在飞，峰值才稳定等于上限。
+               * - 帧数必须足够多:并发峰值是瞬时采样,
+               * 若每条流只活 ~500ms,而排队放行本身有耗时,
+               * 就可能出现"第 1 条已结束,第 3 条还没放行"的窗口,
+               * 采样峰值只有 2 → 断言间歇性失败(不是实现缺陷).
+               * 让每条流活 ~2s,三条必然同时在飞,峰值才稳定等于上限.
                */
               if (i >= 20 || closed) {
                 streamActive = Math.max(0, streamActive - 1)
@@ -4704,7 +4704,7 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
   sessionPosts = 0
   completionAttempts = 0
-  // 8 个并发流，上限 3 → 全部挤在 cpa（3 并行 + 其余排队），不启用第二个账号
+  // 8 个并发流,上限 3 → 全部挤在 cpa(3 并行 + 其余排队),不启用第二个账号
   const capReqs = Array.from({ length: 8 }, () =>
     fetch(`http://127.0.0.1:${capPort}/v1/chat/completions`, {
       method: 'POST',
@@ -4724,8 +4724,8 @@ for (const model of verifiedSpecialModels) {
   }
   const byEmail = {}
   for (const a of capAccounts) byEmail[a] = (byEmail[a] || 0) + 1
-  // 核心断言：粘性优先——8 条流全在 cpa 上（3 条并行 + 排队），
-  // 不为了并发去启用从未用过的 cpb（换号 = 多买一条 Freebucks 计费会话）
+  // 核心断言:粘性优先——8 条流全在 cpa 上(3 条并行 + 排队),
+  // 不为了并发去启用从未用过的 cpb(换号 = 多买一条 Freebucks 计费会话)
   assert.deepEqual(byEmail, { 'cpa@example.com': 8 }, `应全部粘在 cpa, got ${JSON.stringify(byEmail)}`)
   assert.equal(sessionPosts, 1, `只应 admit 一次, got ${sessionPosts}`)
   assert.equal(streamActiveMax, 3, `单账号并发上限 3 → 上游并发峰值应为 3, got ${streamActiveMax}`)
@@ -4735,7 +4735,7 @@ for (const model of verifiedSpecialModels) {
     'cpb 不应被启用',
   )
 
-  // 冷态顺序请求仍复用热 session（不无谓 admit）：
+  // 冷态顺序请求仍复用热 session(不无谓 admit):
   sessionPosts = 0
   const seq = await fetch(`http://127.0.0.1:${capPort}/v1/chat/completions`, {
     method: 'POST',
@@ -4755,10 +4755,10 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(capDir, { recursive: true, force: true })
 }
 
-// --- regression: 调度模式 spread（并发优先）→ 满员立刻换号，启用第二个账号 ---
-// 用户场景：设了「每账号并发 2」却看到 4 个在途全挤在一个账号上。spread 模式下
-// 排序把"有空闲槽位"提到最前，满员账号不再压住空闲账号；且 busy 必须排在
-// used **之前**（否则"已用但满员"会一直压住"空闲但从未用过"的号）。
+// --- regression: 调度模式 spread(并发优先)→ 满员立刻换号,启用第二个账号 ---
+// 用户场景:设了[每账号并发 2]却看到 4 个在途全挤在一个账号上.spread 模式下
+// 排序把"有空闲槽位"提到最前,满员账号不再压住空闲账号;且 busy 必须排在
+// used 之前(否则"已用但满员"会一直压住"空闲但从未用过"的号).
 {
   const sdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-spread-'))
   saveAccountUser(sdDir, { id: 'sda', email: 'sda@example.com', authToken: 'token-sda' })
@@ -4791,8 +4791,8 @@ for (const model of verifiedSpecialModels) {
   })
   const sdPort = sdServer.address().port
 
-  // 按账号分别统计并发峰值：断言的是"单账号不超过上限"，而不是全局并发
-  // （全局 4 路是预期的，两个账号各 2 路）。
+  // 按账号分别统计并发峰值:断言的是"单账号不超过上限",而不是全局并发
+  // (全局 4 路是预期的,两个账号各 2 路).
   const sdActiveByToken = new Map()
   const sdPeakByToken = new Map()
   const sdOrigFetch = globalThis.fetch
@@ -4845,7 +4845,7 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
   sessionPosts = 0
   completionAttempts = 0
-  // 4 个并发流、每账号上限 2 → spread 必须铺到**两个**账号上（各 2 路）
+  // 4 个并发流,每账号上限 2 → spread 必须铺到两个账号上(各 2 路)
   const sdReqs = Array.from({ length: 4 }, () =>
     fetch(`http://127.0.0.1:${sdPort}/v1/chat/completions`, {
       method: 'POST',
@@ -4865,16 +4865,16 @@ for (const model of verifiedSpecialModels) {
   }
   const sdByEmail = {}
   for (const a of sdAccounts) sdByEmail[a] = (sdByEmail[a] || 0) + 1
-  // 核心断言：4 路并发 + 上限 2 → 两个账号各 2 路（不再全挤在一个号上）
+  // 核心断言:4 路并发 + 上限 2 → 两个账号各 2 路(不再全挤在一个号上)
   assert.equal(Object.keys(sdByEmail).length, 2, `spread 应铺到 2 个账号, got ${JSON.stringify(sdByEmail)}`)
   assert.equal(sdByEmail['sda@example.com'] || 0, 2, `sda 应 2 路, got ${JSON.stringify(sdByEmail)}`)
   assert.equal(sdByEmail['sdb@example.com'] || 0, 2, `sdb 应 2 路, got ${JSON.stringify(sdByEmail)}`)
-  // 每个账号的峰值都必须 <= 上限 2（并发真的铺开了，但没超上限）
+  // 每个账号的峰值都必须 <= 上限 2(并发真的铺开了,但没超上限)
   for (const [token, peak] of sdPeakByToken) {
     assert.ok(peak <= 2, `账号 ${token} 并发峰值应 <=2, got ${peak}`)
   }
   assert.equal(sdPeakByToken.size, 2, '两个账号都应被真正用上')
-  // 两个账号各 admit 一次（每账号一条会话，不多买）
+  // 两个账号各 admit 一次(每账号一条会话,不多买)
   assert.equal(sessionPosts, 2, `两个账号各 admit 一次, got ${sessionPosts}`)
 
   globalThis.fetch = sdOrigFetch
@@ -4883,7 +4883,7 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(sdDir, { recursive: true, force: true })
 }
 
-// --- regression: 账号时间轴持久化（导入/凭证更新/累计调度时长）---
+// --- regression: 账号时间轴持久化(导入/凭证更新/累计调度时长)---
 {
   const tsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-timeline-'))
   saveAccountUser(tsDir, { id: 'tsa', email: 'tsa@example.com', authToken: 'token-tsa' })
@@ -4894,17 +4894,17 @@ for (const model of verifiedSpecialModels) {
   tsConfig.upstream.credentialsDir = tsDir
   tsConfig.session.pollIntervalSec = 3600
   const tsRuntimes = new AccountRuntimes(tsConfig, { getAccountConcurrency: () => 1 })
-  // 导入时间：新账号应立刻有一个 importedAt（来自凭据文件创建时间）
+  // 导入时间:新账号应立刻有一个 importedAt(来自凭据文件创建时间)
   const tsRow = tsRuntimes.list().find((a) => a.key === 'tsa')
   assert.ok(tsRow, 'tsa 应在账号列表里')
   assert.ok(tsRow.importedAt, `importedAt 不应为空, got ${tsRow.importedAt}`)
   assert.equal(tsRow.scheduledMs, 0, '新账号累计调度时长应为 0')
-  // 凭证更新时间：只有真的写了凭据才记录（导入路径会调用 markCredentialUpdated）
+  // 凭证更新时间:只有真的写了凭据才记录(导入路径会调用 markCredentialUpdated)
   assert.equal(tsRow.credentialUpdatedAt, null, '未调用前应为 null')
   tsRuntimes.markCredentialUpdated('tsa')
   const tsRow2 = tsRuntimes.list().find((a) => a.key === 'tsa')
   assert.ok(tsRow2.credentialUpdatedAt, `markCredentialUpdated 后应非空`)
-  // 累计调度时长：模拟会话在途 1.2s 后归零
+  // 累计调度时长:模拟会话在途 1.2s 后归零
   const tsSessions = tsRuntimes.get('tsa').sessions
   tsSessions.beginRequest()
   assert.ok(tsSessions.currentSchedulingMs() >= 0, '在途时应有本轮调度时长')
@@ -4916,20 +4916,20 @@ for (const model of verifiedSpecialModels) {
   const tsRow3 = tsRuntimes.list().find((a) => a.key === 'tsa')
   assert.ok(tsRow3.scheduledMs >= 1000, `累计调度时长应 >=1s, got ${tsRow3.scheduledMs}`)
   assert.equal(tsRow3.currentSchedulingMs, 0, '本轮结束后实时时长应归零')
-  // 重启（同 dataDir 新建实例）后这些值必须还在 —— 持久化的意义就在这里
+  // 重启(同 dataDir 新建实例)后这些值必须还在 —— 持久化的意义就在这里
   const tsRuntimes2 = new AccountRuntimes(tsConfig, { getAccountConcurrency: () => 1 })
   const tsRow4 = tsRuntimes2.list().find((a) => a.key === 'tsa')
   assert.ok(tsRow4.scheduledMs >= 1000, `重启后累计调度时长应保留, got ${tsRow4.scheduledMs}`)
   assert.ok(tsRow4.importedAt, '重启后导入时间应保留')
   assert.ok(tsRow4.credentialUpdatedAt, '重启后凭证更新时间应保留')
-  // 起算点必须被清掉（上一进程已死，否则会显示假的"本轮运行 3 天"）
+  // 起算点必须被清掉(上一进程已死,否则会显示假的"本轮运行 3 天")
   assert.equal(tsRow4.schedulingSince, null, '重启后不应残留本轮起算点')
   await tsRuntimes2.shutdown()
   await tsRuntimes.shutdown()
   fs.rmSync(tsDir, { recursive: true, force: true })
 }
 
-// --- 会话临近过期：提前 re-admit 平滑切换（不再把新请求发到马上过期的会话）---
+// --- 会话临近过期:提前 re-admit 平滑切换(不再把新请求发到马上过期的会话)---
 {
   const expDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-expire-'))
   saveAccountUser(expDir, { id: 'ea', email: 'ea@example.com', authToken: 'token-ea' })
@@ -4966,13 +4966,13 @@ for (const model of verifiedSpecialModels) {
   sessionPosts = 0
   sessionDeletes = 0
   completionAttempts = 0
-  // 会话有效期只有 30s < reAdmitLeadSec(60s)：第二个请求必须提前换新会话
+  // 会话有效期只有 30s < reAdmitLeadSec(60s):第二个请求必须提前换新会话
   sessionExpiryMs = 30_000
   const e1 = await expChat()
   assert.equal(e1.status, 200, await e1.clone().text())
   assert.equal(sessionPosts, 1)
   assert.equal(e1.headers.get('x-freebuff-proxy-account'), 'ea@example.com')
-  // 多账号场景：近过期会话在同一账号 re-admit 续期，而不是换到 eb 新建 session
+  // 多账号场景:近过期会话在同一账号 re-admit 续期,而不是换到 eb 新建 session
   const e2 = await expChat()
   assert.equal(e2.status, 200, await e2.clone().text())
   assert.equal(sessionPosts, 2, `近过期会话应提前 re-admit, got ${sessionPosts}`)
@@ -4984,8 +4984,8 @@ for (const model of verifiedSpecialModels) {
     '近过期会话应在本账号续期，不换账号',
   )
 
-  // 有效期恢复正常（1h > lead）后：e3 先把还差 30s 的旧会话换掉（第 3 次 admit），
-  // e4 起新会话剩余 1h，不再重复 admit
+  // 有效期恢复正常(1h > lead)后:e3 先把还差 30s 的旧会话换掉(第 3 次 admit),
+  // e4 起新会话剩余 1h,不再重复 admit
   sessionExpiryMs = 3600_000
   const e3 = await expChat()
   assert.equal(e3.status, 200, await e3.clone().text())
@@ -5000,7 +5000,7 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(expDir, { recursive: true, force: true })
 }
 
-// --- 账号并发信号量单元测试：容量、排队、超时、动态调大 ---
+// --- 账号并发信号量单元测试:容量,排队,超时,动态调大 ---
 {
   const capPool = new AccountRuntimes(loadConfig(), {
     getAccountConcurrency: () => 2,
@@ -5009,7 +5009,7 @@ for (const model of verifiedSpecialModels) {
   const r2 = await capPool.acquireChat('cap-key', 0)
   assert.equal(capPool.chatInFlight('cap-key'), 2)
   assert.equal(capPool.isChatBusy('cap-key'), true)
-  // 满员时排队，超时 → account_busy
+  // 满员时排队,超时 → account_busy
   let timedOut = null
   try {
     await capPool.acquireChat('cap-key', 50)
@@ -5029,11 +5029,11 @@ for (const model of verifiedSpecialModels) {
   assert.equal(capPool.chatInFlight('cap-key'), 3)
   r1(); r3(); r4()
   assert.equal(capPool.chatInFlight('cap-key'), 0)
-  // 全部断开重连：重置信号量，在途清零、排队者放行
+  // 全部断开重连:重置信号量,在途清零,排队者放行
   const r5 = await capPool.acquireChat('cap-key', 0)
   const waiting3 = capPool.acquireChat('cap-key', 500)
   await capPool.reconnectAll()
-  // 旧持有被清除；排队者被放行（已拿到槽位，会在 chat 流程重新 re-admit）
+  // 旧持有被清除;排队者被放行(已拿到槽位,会在 chat 流程重新 re-admit)
   assert.ok(capPool.chatInFlight('cap-key') <= 1, 'reconnect 后旧持有应被清除')
   const r6 = await waiting3
   r5(); r6()
@@ -5041,7 +5041,7 @@ for (const model of verifiedSpecialModels) {
   await capPool.shutdown()
 }
 
-// --- 全部断开重连 API：比重启更轻量，释放 session + 重置并发信号量 ---
+// --- 全部断开重连 API:比重启更轻量,释放 session + 重置并发信号量 ---
 {
   const rcDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-reconnect-'))
   saveAccountUser(rcDir, { id: 'ra', email: 'ra@example.com', authToken: 'token-ra' })
@@ -5055,7 +5055,7 @@ for (const model of verifiedSpecialModels) {
   const { WebSessionStore: RCWS } = await import('../src/web/session-store.js')
   const { LoginFlowManager: RCLFM } = await import('../src/web/login-flows.js')
   const { ProxyStore: RCPS } = await import('../src/web/proxy-store.js')
-  const { SettingsStore: RCSS } = await import('../src/web/settings-store.js')
+  const { SettingsStore: RCSS } = await import('../src/web/settings-store.ts')
   const rcUsers = new RCUS(path.join(rcDir, 'users.json'))
   rcUsers.create({ username: 'admin', password: 'secret123', role: 'admin' })
   rcUsers.create({ username: 'viewer', password: 'secret123', role: 'user' })
@@ -5100,7 +5100,7 @@ for (const model of verifiedSpecialModels) {
   assert.equal(sessionPosts, 1)
   assert.equal(rcRuntimes.list()[0].session.status, 'active')
 
-  // 未登录 → 401；非 admin → 403
+  // 未登录 → 401;非 admin → 403
   {
     const anon = await fetch(`http://127.0.0.1:${rcPort}/api/system/reconnect`, { method: 'POST' })
     assert.equal(anon.status, 401)
@@ -5111,7 +5111,7 @@ for (const model of verifiedSpecialModels) {
     assert.equal(viewer.status, 403)
   }
 
-  // admin 全部断开重连 → 200，session 被释放（下个请求自动重建）
+  // admin 全部断开重连 → 200,session 被释放(下个请求自动重建)
   const rcRes = await fetch(`http://127.0.0.1:${rcPort}/api/system/reconnect`, {
     method: 'POST',
     headers: { cookie: adminCookie },
@@ -5138,7 +5138,7 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// --- 重启 API 端点测试（不执行实际重启）---
+// --- 重启 API 端点测试(不执行实际重启)---
 {
   const rsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-restart-'))
   const rsConfig = loadConfig()
@@ -5148,7 +5148,7 @@ for (const model of verifiedSpecialModels) {
   rsConfig.upstream.credentialsDir = rsDir
   rsConfig.session.pollIntervalSec = 3600
 
-  // 不需要实际 Freebuff 账号（重启不依赖上游）
+  // 不需要实际 Freebuff 账号(重启不依赖上游)
   const rsRuntimes = new AccountRuntimes(rsConfig)
   // 重启回调标记
   let restarted = false
@@ -5156,7 +5156,7 @@ for (const model of verifiedSpecialModels) {
   const { WebSessionStore: WS } = await import('../src/web/session-store.js')
   const { LoginFlowManager: LFM } = await import('../src/web/login-flows.js')
   const { ProxyStore: PS } = await import('../src/web/proxy-store.js')
-  const { SettingsStore: SS } = await import('../src/web/settings-store.js')
+  const { SettingsStore: SS } = await import('../src/web/settings-store.ts')
   const rsUsers = new US(path.join(rsDir, 'users.json'))
   rsUsers.create({ username: 'admin', password: 'secret123', role: 'admin' })
   const rsWS = new WS(path.join(rsDir, 'web-sessions.json'), 3600_000)
@@ -5204,7 +5204,7 @@ for (const model of verifiedSpecialModels) {
   fs.rmSync(rsDir, { recursive: true, force: true })
 }
 
-// --- 免费模型会话剩余 <5 分钟不再调度（提前 re-admit）；付费模型用到接近过期 ---
+// --- 免费模型会话剩余 <5 分钟不再调度(提前 re-admit);付费模型用到接近过期 ---
 {
   const ldDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-lead-'))
   saveAccountUser(ldDir, { id: 'lda', email: 'lda@example.com', authToken: 'token-lda' })
@@ -5217,14 +5217,14 @@ for (const model of verifiedSpecialModels) {
   const ldSm = ldPool.get('lda').sessions
   mockMode = 'ok'
 
-  // 模型分类：免费（daily）vs 付费（premium）；未知模型按免费保守处理
+  // 模型分类:免费(daily)vs 付费(premium);未知模型按免费保守处理
   assert.equal(isFreeModel('deepseek/deepseek-v4-flash'), true)
   assert.equal(isFreeModel('mimo/mimo-v2.5'), true)
   assert.equal(isFreeModel('deepseek/deepseek-v4-pro'), false)
   assert.equal(isFreeModel('openai/gpt-5.6-luna'), false)
   assert.equal(isFreeModel('unknown/vendor-model'), true)
 
-  // 免费模型：会话剩余 4 分钟（< 5 分钟阈值）→ 不再可用，提前 re-admit 换新会话
+  // 免费模型:会话剩余 4 分钟(< 5 分钟阈值)→ 不再可用,提前 re-admit 换新会话
   sessionExpiryMs = 4 * 60_000
   sessionPosts = 0
   await ldSm.ensureSession('deepseek/deepseek-v4-flash')
@@ -5237,19 +5237,19 @@ for (const model of verifiedSpecialModels) {
   await ldSm.ensureSession('deepseek/deepseek-v4-flash')
   assert.equal(sessionPosts, 2, '免费会话剩余 <5 分钟应提前 re-admit')
 
-  // 付费模型：会话剩余 4 分钟（> 60s lead）→ 仍可复用（不浪费已付费会话）
+  // 付费模型:会话剩余 4 分钟(> 60s lead)→ 仍可复用(不浪费已付费会话)
   //
-  // ⚠️ 这里必须用**同一个模型**续期，不能换到别的模型：一次 admit 买断一小时
-  // 且绑定模型，付费时段内换模型上游必然拒（issue #24 实测 0s/45s/90s 全部
-  // purchase_claim_released 且接不回来）。换模型路径由下面的用例单独覆盖。
-  // 先验"绑在 flash 上时换 pro 会被拦"，再释放、用 pro 重新 admit 验 lead。
+  //  这里必须用同一个模型续期,不能换到别的模型:一次 admit 买断一小时
+  // 且绑定模型,付费时段内换模型上游必然拒(issue #24 实测 0s/45s/90s 全部
+  // purchase_claim_released 且接不回来).换模型路径由下面的用例单独覆盖.
+  // 先验"绑在 flash 上时换 pro 会被拦",再释放,用 pro 重新 admit 验 lead.
   sessionExpiryMs = 4 * 60_000
   await assert.rejects(
     () => ldSm.ensureSession('deepseek/deepseek-v4-pro'),
     (err) => err.code === 'paid_window_model_mismatch',
     '付费时段内换模型必须被拦（否则已买断的一小时作废且接不回来）',
   )
-  // 用户主动关闭（或时段结束）后，同一个模型才能重新 admit
+  // 用户主动关闭(或时段结束)后,同一个模型才能重新 admit
   await ldSm.release()
   await ldSm.ensureSession('deepseek/deepseek-v4-pro')
   assert.equal(
@@ -5257,7 +5257,7 @@ for (const model of verifiedSpecialModels) {
     true,
     '付费会话剩余 4 分钟应可复用（60s 提前量）',
   )
-  // 付费模型：剩余 30s < 60s lead → 才不可复用
+  // 付费模型:剩余 30s < 60s lead → 才不可复用
   ldSm.session.expiresAt = new Date(Date.now() + 30_000).toISOString()
   assert.equal(
     ldSm.isUsableForModel('deepseek/deepseek-v4-pro'),
@@ -5271,9 +5271,9 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// --- 幽灵连接：下游背压（客户端不读）→ idle 超时后账号锁必须释放 ---
-//   回归：write() 返回 false 后裸等 drain（无 idle 定时器），客户端"活着但
-//   不再读"（网络波动/卡顿）会永久挂起 → 账号 chat 锁占死、后续请求全部超时
+// --- 幽灵连接:下游背压(客户端不读)→ idle 超时后账号锁必须释放 ---
+//   回归:write() 返回 false 后裸等 drain(无 idle 定时器),客户端"活着但
+//   不再读"(网络波动/卡顿)会永久挂起 → 账号 chat 锁占死,后续请求全部超时
 {
   const bdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-backpressure-'))
   saveAccountUser(bdDir, { id: 'bda', email: 'bda@example.com', authToken: 'token-bda' })
@@ -5284,7 +5284,7 @@ for (const model of verifiedSpecialModels) {
   bdConfig.upstream.credentialsDir = bdDir
   bdConfig.session.pollIntervalSec = 3600
   bdConfig.limits.streamIdleTimeoutSec = 1
-  // 本用例只验证"背压 → idle 超时 → 锁释放"，不验证掐断后冷却（由 stall_zero 覆盖）
+  // 本用例只验证"背压 → idle 超时 → 锁释放",不验证掐断后冷却(由 stall_zero 覆盖)
   bdConfig.limits.stallCooldownSec = 0
 
   const bdRuntimes = new AccountRuntimes(bdConfig)
@@ -5304,13 +5304,13 @@ for (const model of verifiedSpecialModels) {
   })
   const bdPort = bdServer.address().port
 
-  // 原始 TCP 客户端：发请求后绝不读响应（窗口满 → 背压）
+  // 原始 TCP 客户端:发请求后绝不读响应(窗口满 → 背压)
   mockMode = 'bigstall'
   sessionPosts = 0
   completionAttempts = 0
   const sock = net.connect(bdPort, '127.0.0.1')
   try {
-    sock.setRecvBufferSize(1024) // 缩小接收窗口，尽快触发背压
+    sock.setRecvBufferSize(1024) // 缩小接收窗口,尽快触发背压
   } catch {
     // 平台不支持则忽略
   }
@@ -5327,13 +5327,13 @@ for (const model of verifiedSpecialModels) {
       `Content-Length: ${Buffer.byteLength(bdBody)}\r\n\r\n` +
       bdBody,
   )
-  // 先等请求真正获取到账号锁（否则 waitFor(===0) 在锁未获取时就成立、空转通过）
+  // 先等请求真正获取到账号锁(否则 waitFor(===0) 在锁未获取时就成立,空转通过)
   await waitFor(
     '背压请求应获取账号锁',
     () => bdRuntimes.chatInFlight('bda') === 1,
     10_000,
   )
-  // 客户端不读响应 → 大块写触发下游背压；账号锁必须在 idle 超时（1s）后释放
+  // 客户端不读响应 → 大块写触发下游背压;账号锁必须在 idle 超时(1s)后释放
   await waitFor(
     '背压卡死时账号锁应在 idle 超时后释放',
     () => bdRuntimes.chatInFlight('bda') === 0,
@@ -5341,7 +5341,7 @@ for (const model of verifiedSpecialModels) {
   )
   sock.destroy()
 
-  // 锁已释放 → 下一个请求立即可用（不再排队超时）
+  // 锁已释放 → 下一个请求立即可用(不再排队超时)
   mockMode = 'ok'
   const bdRes = await fetch(`http://127.0.0.1:${bdPort}/v1/chat/completions`, {
     method: 'POST',
@@ -5361,7 +5361,7 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'ok'
 }
 
-// --- 账号被卡死（在途流占死唯一并发槽）时，其他连接换号成功而不是全部超时 ---
+// --- 账号被卡死(在途流占死唯一并发槽)时,其他连接换号成功而不是全部超时 ---
 {
   const waDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-wedge-'))
   saveAccountUser(waDir, { id: 'wa', email: 'wa@example.com', authToken: 'token-wa' })
@@ -5375,7 +5375,7 @@ for (const model of verifiedSpecialModels) {
   waConfig.limits.streamIdleTimeoutSec = 1
   waConfig.limits.accountMaxConcurrency = 1
 
-  const waRuntimes = new AccountRuntimes(waConfig) // 默认粘性调度（集中用一个账号）
+  const waRuntimes = new AccountRuntimes(waConfig) // 默认粘性调度(集中用一个账号)
   const waServer = await startServer({
     config: waConfig,
     runtimes: waRuntimes,
@@ -5401,12 +5401,12 @@ for (const model of verifiedSpecialModels) {
   mockMode = 'hold_once'
   sessionPosts = 0
   completionAttempts = 0
-  // A：wa 占住唯一并发槽（hold 流保持打开）
+  // A:wa 占住唯一并发槽(hold 流保持打开)
   const resA = await waChat()
   assert.equal(resA.status, 200)
   assert.equal(waRuntimes.chatInFlight('wa'), 1, 'hold 流应占用 wa 的唯一并发槽')
-  // B：立刻打第二个请求 → 粘性调度先在 wa 上有界排队；卡死的流会被 idle
-  // 超时（1s）掐断释放槽位，B 随即在 wa 上成功，而不是全部超时。
+  // B:立刻打第二个请求 → 粘性调度先在 wa 上有界排队;卡死的流会被 idle
+  // 超时(1s)掐断释放槽位,B 随即在 wa 上成功,而不是全部超时.
   const t0 = Date.now()
   const resB = await waChat()
   assert.equal(resB.status, 200, await resB.clone().text())
@@ -5417,7 +5417,7 @@ for (const model of verifiedSpecialModels) {
   )
   assert.ok(Date.now() - t0 < 15_000, `排队应有界快速完成, took ${Date.now() - t0}ms`)
   await resB.text()
-  // 放行 A 的 hold（可能已被 idle 超时掐断，容错）
+  // 放行 A 的 hold(可能已被 idle 超时掐断,容错)
   releaseHoldStreams()
   try { await resA.text() } catch { /* 被 idle 掐断也符合预期 */ }
 
@@ -5491,7 +5491,7 @@ server.close()
   assert.strictEqual(imp1.imported.length, 1, '导入 1 个')
   assert.strictEqual(imp1.imported[0].email, 'imp-two@example.com', '导入邮箱正确')
 
-  // 批量导入（数组）
+  // 批量导入(数组)
   r = await fetch(`${b2}/v1/freebuff/accounts/import`, {
     method: 'POST',
     headers: { authorization: 'Bearer sk-import-test', 'content-type': 'application/json' },
@@ -5515,7 +5515,7 @@ server.close()
   assert.ok(emails.includes('imp-two@example.com'), '列表含导入账号 imp-two')
   assert.ok(emails.includes('imp-three@example.com'), '列表含导入账号 imp-three')
 
-  // DELETE 单个（按 email）
+  // DELETE 单个(按 email)
   r = await fetch(`${b2}/v1/freebuff/accounts`, {
     method: 'DELETE',
     headers: { authorization: 'Bearer sk-import-test', 'content-type': 'application/json' },
@@ -5541,12 +5541,12 @@ server.close()
 }
 
 
-// ── Freebucks 计量改版（issue #7）：空闲释放 / 余额拦截 / 新会话预算 ──
+// ── Freebucks 计量改版(issue #7):空闲释放 / 余额拦截 / 新会话预算 ──
 //
-// 上游 2026-09 起：admit 一次按「单价(N/h)」买断整小时，**早退 DELETE 不退**
-// （只退还 session_units；见 docs/account-scheduling-and-refund.md §3）。
-// 旧代理把 session 留到过期、报错时把每个账号都 admit 一遍——一次故障就买断
-// 好几条整小时。下面回归针对这两个问题。
+// 上游 2026-09 起:admit 一次按[单价(N/h)]买断整小时,早退 DELETE 不退
+// (只退还 session_units;见 docs/account-scheduling-and-refund.md §3).
+// 旧代理把 session 留到过期,报错时把每个账号都 admit 一遍——一次故障就买断
+// 好几条整小时.下面回归针对这两个问题.
 {
   const fbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-fb-'))
   saveAccountUser(fbDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
@@ -5558,7 +5558,7 @@ server.close()
   fbConfig.server.apiKeys = ['sk-test']
   fbConfig.upstream.credentialsDir = fbDir
   fbConfig.session.pollIntervalSec = 3600
-  // 空闲释放调到 150ms（测试用），预算 2
+  // 空闲释放调到 150ms(测试用),预算 2
   fbConfig.session.idleReleaseSec = 0.15
   fbConfig.limits.maxNewSessionsPerRequest = 2
   const fbRuntimes = new AccountRuntimes(fbConfig)
@@ -5595,10 +5595,10 @@ server.close()
     prices: { 'deepseek/deepseek-v4-flash': 2 },
   }
 
-  // (1) **已付费时段内不释放**（2026-09-14 一手实测后改）：
-  //     上游一次 admit 就是买断一小时，POST 当场扣满整小时单价，回执带 expiresAt。
-  //     这一小时内继续用边际成本为 0，而 DELETE 后那一小时作废、重开要重买。
-  //     所以空闲超过 idleReleaseSec 也**不得**释放；要等付费时段结束。
+  // (1) 已付费时段内不释放(2026-09-14 一手实测后改):
+  //     上游一次 admit 就是买断一小时,POST 当场扣满整小时单价,回执带 expiresAt.
+  //     这一小时内继续用边际成本为 0,而 DELETE 后那一小时作废,重开要重买.
+  //     所以空闲超过 idleReleaseSec 也不得释放;要等付费时段结束.
   mockMode = 'ok'
   mockFreebucks = freebucks25
   sessionPosts = 0
@@ -5613,7 +5613,7 @@ server.close()
     assert.equal(res.status, 200, await res.clone().text())
     assert.equal(sessionPosts, 1, 'first request admits one session')
     const sm = fbRuntimes.get('a').sessions
-    // 拿到 freebucks 计量块（余额 / 单价 / 重置时间）
+    // 拿到 freebucks 计量块(余额 / 单价 / 重置时间)
     const snap0 = sm.getSnapshot()
     assert.equal(snap0.freebucks?.balance, 25, 'freebucks balance parsed')
     assert.equal(snap0.freebucks?.prices?.['deepseek/deepseek-v4-flash'], 2, 'price parsed')
@@ -5621,8 +5621,8 @@ server.close()
 
     // 付费时段判定本身
     assert.equal(sm.inPaidWindow(), true, '刚 admit（expiresAt=+1h）应判为在付费时段内')
-    // (REUSE-COUNT) 「我们在省钱」必须可被前端量化：一次 admit = 买断一小时，
-    // 之后的每次复用都是零边际成本。计数器要如实反映 admit/reuse。
+    // (REUSE-COUNT) [我们在省钱]必须可被前端量化:一次 admit = 买断一小时,
+    // 之后的每次复用都是零边际成本.计数器要如实反映 admit/reuse.
     assert.equal(sm.admitCount, 1, '首次请求应记为买过 1 条会话')
     assert.equal(sm.reuseCount, 0, '此时还没有复用')
     {
@@ -5645,12 +5645,12 @@ server.close()
     // 快照把 expiresAt 一路带到前端
     assert.ok(snap0.expiresAt, '快照应带 expiresAt（付费时段依据）')
 
-    // 空闲时长远超 idleReleaseSec（150ms），但付费时段内**必须一条都不删**。
+    // 空闲时长远超 idleReleaseSec(150ms),但付费时段内必须一条都不删.
     await new Promise((r) => setTimeout(r, 600))
     assert.equal(sessionDeletes, 0, '付费时段内空闲不得释放（那一小时已买断）')
     assert.equal(sm.getSnapshot().status, 'active', '付费时段内会话应保持 active')
 
-    // 付费时段结束后（把 expiresAt 拨到过去）→ 空闲释放恢复生效
+    // 付费时段结束后(把 expiresAt 拨到过去)→ 空闲释放恢复生效
     sm.session.expiresAt = new Date(Date.now() - 1000).toISOString()
     sm.session.remainingMs = 0
     assert.equal(sm.inPaidWindow(), false, '过期后不应再判为在付费时段内')
@@ -5664,9 +5664,9 @@ server.close()
     const row = fbRuntimes.list().find((x) => x.key === 'a')
     assert.equal(row.freebucks?.balance, 25, '账号列表应带 freebucks')
 
-    // (1.5) 退款流水必须落盘：只有 lastRefund 一个内存字段时，"退款是不是失败
-    //       了 / 金额对不对"根本无法审计（重启就丢）。流水要同时给出
-    //       refund（上游实退）与 expected（按实际占用应付），差额才可对账。
+    // (1.5) 退款流水必须落盘:只有 lastRefund 一个内存字段时,"退款是不是失败
+    //       了 / 金额对不对"根本无法审计(重启就丢).流水要同时给出
+    //       refund(上游实退)与 expected(按实际占用应付),差额才可对账.
     fbRuntimes.accountState.flush()
     const rlog = fbRuntimes.accountState.refunds('a')
     assert.ok(rlog.length >= 1, '退款流水应至少有一条')
@@ -5687,7 +5687,7 @@ server.close()
       mockRefund,
       '累计退款应出现在账号列表里',
     )
-    // 账号生命周期字段必须能到前端（分区功能的数据来源）
+    // 账号生命周期字段必须能到前端(分区功能的数据来源)
     const listRow = fbRuntimes.list().find((x) => x.key === 'a')
     assert.ok(listRow.firstSeenAt, '列表应带 firstSeenAt（账号加入时间）')
     assert.ok(
@@ -5702,7 +5702,7 @@ server.close()
     // 会话鉴权，本块未搭该设施），所以上面 list() 的断言就等于端点契约。
   }
 
-  // (2) 余额买不起该模型 → 不 admit（不发 POST），直接跳过该账号。
+  // (2) 余额买不起该模型 → 不 admit(不发 POST),直接跳过该账号.
   mockFreebucks = {
     ...freebucks25,
     balance: 0.5,
@@ -5712,8 +5712,8 @@ server.close()
   sessionDeletes = 0
   completionAttempts = 0
   {
-    // 粘性调度：warm 请求全部落在同一个账号（a）上，它的 freebucks 会更新成
-    // "只剩 0.5"。b/c 从未被使用过，压根不该被碰到。
+    // 粘性调度:warm 请求全部落在同一个账号(a)上,它的 freebucks 会更新成
+    // "只剩 0.5".b/c 从未被使用过,压根不该被碰到.
     for (let i = 0; i < 2; i++) {
       const warm = await fbChat({
         model: 'deepseek/deepseek-v4-flash',
@@ -5723,7 +5723,7 @@ server.close()
       assert.equal(warm.headers.get('x-freebuff-proxy-account'), 'a@example.com')
     }
     assert.equal(fbRuntimes.list().find((x) => x.key === 'b').used, false, 'b 不应被使用')
-    // 把三个号都标成"余额只剩 0.5"（等价于它们各自的 session 响应都回写过计量块）
+    // 把三个号都标成"余额只剩 0.5"(等价于它们各自的 session 响应都回写过计量块)
     for (const key of ['a', 'b', 'c']) {
       const sm = fbRuntimes.get(key).sessions
       sm.freebucks = {
@@ -5751,8 +5751,8 @@ server.close()
     })
     assert.equal(res.status, 429, await res.clone().text())
     const j = await res.json()
-    // 全部账号都是"余额买不起"→ 独立错误码，与"没号/都在冷却"区分开
-    // （前者等每日池刷新即可，后者要加号），控制台/调用方才分得清处境。
+    // 全部账号都是"余额买不起"→ 独立错误码,与"没号/都在冷却"区分开
+    // (前者等每日池刷新即可,后者要加号),控制台/调用方才分得清处境.
     assert.equal(
       j.error.code,
       'freebucks_exhausted',
@@ -5765,8 +5765,8 @@ server.close()
         ),
       `每个账号都应记为 freebucks_exhausted，got ${JSON.stringify(j.error.details)}`,
     )
-    // 真实端到端：对外响应**不得**出现任何账号标识。
-    // 这是 429 会原样转发给下游 Agent 客户端的载荷，带 email = 泄露整个账号池。
+    // 真实端到端:对外响应不得出现任何账号标识.
+    // 这是 429 会原样转发给下游 Agent 客户端的载荷,带 email = 泄露整个账号池.
     const dumped = JSON.stringify(j)
     for (const email of ['a@example.com', 'b@example.com', 'c@example.com']) {
       assert.ok(
@@ -5779,7 +5779,7 @@ server.close()
       assert.ok(!('key' in f), `failures 条目不得含 key，got ${JSON.stringify(f)}`)
       assert.ok(!('message' in f), `failures 条目不得含 message，got ${JSON.stringify(f)}`)
     }
-    // 聚合字段仍在（调用方据此判断"为什么全挂了"）
+    // 聚合字段仍在(调用方据此判断"为什么全挂了")
     assert.ok(j.error.details?.reasons, '应给 reasons 聚合')
     assert.equal(typeof j.error.details?.tried, 'number', '应给 tried 计数')
     assert.equal(
@@ -5789,9 +5789,9 @@ server.close()
     )
   }
 
-  // (2.2) 同号重试（forceReadmit）也必须过额度闸门：它会先 DELETE 再 admit，
-  //       等于**新买一条计费会话**。余额买不起还去 admit，正好命中上游
-  //       "所需 Freebucks > 余额 → 直接封号"的判定——这是最现实的一条封号路径。
+  // (2.2) 同号重试(forceReadmit)也必须过额度闸门:它会先 DELETE 再 admit,
+  //       等于新买一条计费会话.余额买不起还去 admit,正好命中上游
+  //       "所需 Freebucks > 余额 → 直接封号"的判定——这是最现实的一条封号路径.
   {
     const model = 'deepseek/deepseek-v4-flash'
     const fbLow = {
@@ -5808,7 +5808,7 @@ server.close()
     for (const key of ['a', 'b', 'c']) {
       fbRuntimes.get(key).sessions.freebucks = { ...fbLow }
     }
-    // 同号 gate 重试路径：给一个 session 可恢复的 gate code，走 forceReadmit 分支
+    // 同号 gate 重试路径:给一个 session 可恢复的 gate code,走 forceReadmit 分支
     const postsBefore = sessionPosts
     let threw = null
     try {
@@ -5833,14 +5833,14 @@ server.close()
     fbRuntimes.clearCooldown('a', model)
   }
 
-  // (2.4) session_units 是**独立**于 Freebucks 的第二道闸门：一手实测证明一笔会话
-  //       两本账都扣（units +1.0 且 Freebucks −单价），所以 units 用尽时同样不得
-  //       去 admit（上游会用 rate_limited 拒掉，白跑一次往返）。注意 recentCount
-  //       是**小数**，比较必须用 >=。见
+  // (2.4) session_units 是独立于 Freebucks 的第二道闸门:一手实测证明一笔会话
+  //       两本账都扣(units +1.0 且 Freebucks −单价),所以 units 用尽时同样不得
+  //       去 admit(上游会用 rate_limited 拒掉,白跑一次往返).注意 recentCount
+  //       是小数,比较必须用 >=.见
   //       .agents/notes/implemented/architecture/2026-09-14-two-ledgers-parallel-gates.md
   {
     const model = 'deepseek/deepseek-v4-flash'
-    // Freebucks 故意留得足足的 —— 只有 units 卡住，才能证明两道闸门是独立的。
+    // Freebucks 故意留得足足的 —— 只有 units 卡住,才能证明两道闸门是独立的.
     for (const key of ['a', 'b', 'c']) {
       const sm = fbRuntimes.get(key).sessions
       sm.freebucks = {
@@ -5854,7 +5854,7 @@ server.close()
         peak: null,
         updatedAt: new Date().toISOString(),
       }
-      // units 已满：6/6（实测里 recentCount 可为小数，这里同时覆盖整数边界）。
+      // units 已满:6/6(实测里 recentCount 可为小数,这里同时覆盖整数边界).
       sm.quota = {
         byModel: {
           [model]: {
@@ -5874,7 +5874,7 @@ server.close()
       assert.equal(u.known, true, `${key} 应识别出 units 账本`)
       assert.equal(u.exhausted, true, `${key} units 6/6 应判为用尽`)
       assert.equal(u.remaining, 0, `${key} 剩余应为 0`)
-      // 小数边界：5.4/6 未满、6/6 已满（不能用整数假设）
+      // 小数边界:5.4/6 未满,6/6 已满(不能用整数假设)
       assert.equal(
         sm.sessionUnitsFor(model).exhausted,
         true,
@@ -5898,20 +5898,20 @@ server.close()
       postsBefore,
       'units 用尽不得再 admit 新会话（两本账都扣，白跑一次往返）',
     )
-    // fail-open：没有 units 行的模型不得被这道闸门误拦。
+    // fail-open:没有 units 行的模型不得被这道闸门误拦.
     const noRow = fbRuntimes.get('a').sessions.sessionUnitsFor('openai/gpt-5.6-nope')
     assert.equal(noRow.known, false, '无 units 行的模型必须 fail-open')
     assert.equal(noRow.exhausted, false, '无 units 行的模型不得被判用尽')
-    // 清场：后续用例不该继承这里的 6/6（否则会一直被 units 闸门拦下）。
+    // 清场:后续用例不该继承这里的 6/6(否则会一直被 units 闸门拦下).
     for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.quota = null
   }
 
-  // (2.5) 重启后额度闸门不得失忆：账号账本（account-state.json）落盘 →
-  //       新进程起来后仍知道"这个号余额买不起"，不会拿重启当重置去撞已知
-  //       余额不足的账号（那正是封禁的触发条件）。
+  // (2.5) 重启后额度闸门不得失忆:账号账本(account-state.json)落盘 →
+  //       新进程起来后仍知道"这个号余额买不起",不会拿重启当重置去撞已知
+  //       余额不足的账号(那正是封禁的触发条件).
   {
     const model = 'deepseek/deepseek-v4-flash'
-    // 把 a 标成"余额 0.5 < 单价 2"，走完整落盘路径（不是直接改内存）。
+    // 把 a 标成"余额 0.5 < 单价 2",走完整落盘路径(不是直接改内存).
     const smA = fbRuntimes.get('a').sessions
     smA.freebucks = {
       balance: 0.5,
@@ -5941,7 +5941,7 @@ server.close()
       '请求计数必须落盘',
     )
 
-    // 模拟"进程重启"：同一 dataDir 上重新构造一套 runtime。
+    // 模拟"进程重启":同一 dataDir 上重新构造一套 runtime.
     const restarted = new AccountRuntimes(fbConfig)
     const rtA = restarted.get('a')
     assert.equal(
@@ -5959,8 +5959,8 @@ server.close()
     await restarted.shutdown()
   }
 
-  // (2.6) 账本回灌的前缀撞车：账号 key "acc" 与 "acc2" 是不同账号，冷却/记录
-  //       绝不能因为 startsWith 就互相串台（单字符 key 的用例测不出来）。
+  // (2.6) 账本回灌的前缀撞车:账号 key "acc" 与 "acc2" 是不同账号,冷却/记录
+  //       绝不能因为 startsWith 就互相串台(单字符 key 的用例测不出来).
   {
     const pDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-prefix-'))
     try {
@@ -5972,17 +5972,17 @@ server.close()
       const p1 = new AccountRuntimes(pCfg)
       p1.get('acc')
       p1.get('acc2')
-      // 只冷却 acc2（账号级 + 模型级各一条），走真实 markCooldown 路径
+      // 只冷却 acc2(账号级 + 模型级各一条),走真实 markCooldown 路径
       p1.markCooldown('acc2', { code: 'rate_limited' })
       p1.markCooldown('acc2', { code: 'model_unavailable' }, 'some/model')
-      // 关键：触发一次针对 **acc** 的归集（clearCooldown 也会写账本）。
-      // 没有这一步，startsWith('acc') 的撞车永远不会真正发生——acc 从不被写，
-      // 于是 bug 潜伏而测试恒绿（第一版就是这么写空的）。
+      // 关键:触发一次针对 acc 的归集(clearCooldown 也会写账本).
+      // 没有这一步,startsWith('acc') 的撞车永远不会真正发生——acc 从不被写,
+      // 于是 bug 潜伏而测试恒绿(第一版就是这么写空的).
       p1.clearCooldown('acc')
       p1.accountState.flush()
 
-      // 归集必须精确：acc2 的冷却绝不能写进 acc 的记录（startsWith("acc")
-      // 会把 "acc2" 一起匹配进来——单字符 key 的用例测不出这种前缀撞车）。
+      // 归集必须精确:acc2 的冷却绝不能写进 acc 的记录(startsWith("acc")
+      // 会把 "acc2" 一起匹配进来——单字符 key 的用例测不出这种前缀撞车).
       const accRec = p1.accountState.account('acc')
       assert.ok(
         !accRec.cooldowns || Object.keys(accRec.cooldowns).length === 0,
@@ -6014,8 +6014,8 @@ server.close()
         'acc2 的模型级冷却应回灌',
       )
       await p2.shutdown()
-      // 封禁时间要落盘：chat 阶段撞到 banned 与探测发现 banned 同等重要，
-      // 控制台"已被封禁"分区靠它（否则重启后这个号会被当成干净号）。
+      // 封禁时间要落盘:chat 阶段撞到 banned 与探测发现 banned 同等重要,
+      // 控制台"已被封禁"分区靠它(否则重启后这个号会被当成干净号).
       const p3 = new AccountRuntimes(pCfg)
       p3.get('acc')
       p3.markCooldown('acc', { code: 'banned' })
@@ -6034,10 +6034,10 @@ server.close()
     }
   }
 
-  // (3) 单请求新会话预算：chat 一直 500（账号级故障 → 换号），3 个账号最多
-  //     新建 2 个计费会话，不会把每个账号都买一条计费会话。
+  // (3) 单请求新会话预算:chat 一直 500(账号级故障 → 换号),3 个账号最多
+  //     新建 2 个计费会话,不会把每个账号都买一条计费会话.
   mockFreebucks = null
-  // 清掉 (2) 里缓存的"余额 0.5"（否则这一步会被余额拦截，测不到预算）
+  // 清掉 (2) 里缓存的"余额 0.5"(否则这一步会被余额拦截,测不到预算)
   for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
   mockMode = 'err_500_all'
   sessionPosts = 0
@@ -6050,9 +6050,9 @@ server.close()
     })
     assert.equal(res.status, 429, await res.clone().text())
     const j = await res.json()
-    // 全部账号都只是被「本次请求的新会话预算」拦下 —— 必须报独立错误码，
-    // 不能混成笼统的 no_available_account（那会让用户去查账号/上游额度，
-    // 而真正该做的是重试或调高「额度保护」→ 单请求新会话上限）。
+    // 全部账号都只是被[本次请求的新会话预算]拦下 —— 必须报独立错误码,
+    // 不能混成笼统的 no_available_account(那会让用户去查账号/上游额度,
+    // 而真正该做的是重试或调高[额度保护]→ 单请求新会话上限).
     assert.equal(j.error.code, 'session_budget_exhausted')
     assert.equal(sessionPosts, 2, `新会话预算 2，不得轮询全部账号，got ${sessionPosts}`)
     assert.ok(
@@ -6062,23 +6062,23 @@ server.close()
       '应记录 session_budget_exhausted',
     )
     /**
-     * ⚠️ 断言已按**真实计费机制**改写（2026-10-04）。
+     * - 断言已按真实计费机制改写(2026-10-04).
      *
-     * 旧断言：`sessionDeletes >= 1`（"失败账号的会话必须被早退释放，拿退款"）。
-     * 它的前提是"早退能拿回钱"—— **实测是错的**：上游对早退 DELETE 只回
-     * `freebucksRefundPending`，观察 2 分钟未到账；Freebucks 是**买断制**
-     * （POST 当场扣整小时单价），所以释放 = 已付的钱直接扔掉。
+     * - 旧断言:sessionDeletes >= 1("失败账号的会话必须被早退释放,拿退款").
+     * - 它的前提是"早退能拿回钱"—— 实测是错的:上游对早退 DELETE 只回
+     * - freebucksRefundPending,观察 2 分钟未到账;Freebucks 是买断制
+     * (POST 当场扣整小时单价),所以释放 = 已付的钱直接扔掉.
      *
-     * 真实事故：远程请求 428 后走 re-admit（先 DELETE 再 admit），
-     * 结果"钱花了、货退了、新的还买不起"，用户看到「请求完积分变零还失败」。
+     * 真实事故:远程请求 428 后走 re-admit(先 DELETE 再 admit),
+     * 结果"钱花了,货退了,新的还买不起",用户看到[请求完积分变零还失败].
      *
-     * 现在的正确行为：**付费时段内（expiresAt 未到）绝不释放** ——
-     * 留着它下一跳还能续用（readmitToContinue），闲置不额外花钱。
-     * 本用例的 mock 会话是 `Date.now() + 3600_000`（+1 小时），
-     * 所以期望是 **sessionDeletes === 0**。
+     * - 现在的正确行为:付费时段内(expiresAt 未到)绝不释放 ——
+     * 留着它下一跳还能续用(readmitToContinue),闲置不额外花钱.
+     * - 本用例的 mock 会话是 Date.now() + 3600_000(+1 小时),
+     * - 所以期望是 sessionDeletes === 0.
      *
-     * 保留原意（"不能空挂后台"由**付费时段结束后**的释放保证 —— 另见
-     * idle release 与 release_on_shutdown 的用例）。
+     * - 保留原意("不能空挂后台"由付费时段结束后的释放保证 —— 另见
+     * idle release 与 release_on_shutdown 的用例).
      */
     await waitFor('付费时段内未释放已买断的会话', () => sessionPosts >= 2, 3_000)
     assert.equal(
@@ -6089,27 +6089,27 @@ server.close()
   }
 
 
-  // (3.5) 单请求新会话预算 = 0 表示**不限制**（控制台 `b || '不限'`、配置文档、
-  //       API 校验三处一致的契约），不是「零预算」。曾经 proxy.js 无条件
-  //       Math.max(0, ...) 把 0 存成 remaining:0，于是闸门把**每个账号**都判成
-  //       session_budget_exhausted 跳过，整个代理固定 429 no_available_account ——
-  //       纯本地自锁，与上游额度/账号状态毫无关系。
+  // (3.5) 单请求新会话预算 = 0 表示不限制(控制台 b || '不限',配置文档,
+  //       API 校验三处一致的契约),不是[零预算].曾经 proxy.js 无条件
+  //       Math.max(0, ...) 把 0 存成 remaining:0,于是闸门把每个账号都判成
+  //       session_budget_exhausted 跳过,整个代理固定 429 no_available_account ——
+  //       纯本地自锁,与上游额度/账号状态毫无关系.
   //       见 .agents/notes/implemented/bug-fix/2026-09-24-zero-session-budget-means-unlimited.md
   for (const key of ['a', 'b', 'c']) fbRuntimes.clearCooldown(key)
   fbConfig.limits.maxNewSessionsPerRequest = 0
   mockFreebucks = null
   for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
   /**
-   * ⚠️ 必须**显式清掉上一段留下的热会话**（2026-10-04）。
+   * - 必须显式清掉上一段留下的热会话(2026-10-04).
    *
-   * 上一个用例改成"付费时段内不释放已买断的会话"后，会话会**留在原地**
-   * （这正是新行为的目的：那一小时已付款，扔掉就没了）。而本用例要断言
-   * `sessionPosts === 1`（首个请求应正常 admit），复用一个热 session 就不会
-   * 再 admit —— 于是断言失败。
+   * - 上一个用例改成"付费时段内不释放已买断的会话"后,会话会留在原地
+   * (这正是新行为的目的:那一小时已付款,扔掉就没了).而本用例要断言
+   * - sessionPosts === 1(首个请求应正常 admit),复用一个热 session 就不会
+   * 再 admit —— 于是断言失败.
    *
-   * 这是**用例间共享状态**的问题，不是实现问题：每个用例应自足地建立自己的
-   * 前置状态，而不是依赖上一个用例"恰好把会话清干净了"。
-   * 用 releaseStrict 真正结束它（这里测的是预算语义，不是付费时段保护）。
+   * - 这是用例间共享状态的问题,不是实现问题:每个用例应自足地建立自己的
+   * 前置状态,而不是依赖上一个用例"恰好把会话清干净了".
+   * 用 releaseStrict 真正结束它(这里测的是预算语义,不是付费时段保护).
    */
   for (const key of ['a', 'b', 'c']) {
     await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})
@@ -6126,8 +6126,8 @@ server.close()
     assert.equal(res.status, 200, await res.clone().text())
     assert.equal(sessionPosts, 1, '0 = 不限制：首个请求仍应正常 admit')
   }
-  // 预算不限时，故障换号不再被数字卡住：3 个账号全 500 时也不得报预算耗尽
-  // （预算为 0 被误当零预算时，这里会立刻抛 session_budget_exhausted）。
+  // 预算不限时,故障换号不再被数字卡住:3 个账号全 500 时也不得报预算耗尽
+  // (预算为 0 被误当零预算时,这里会立刻抛 session_budget_exhausted).
   for (const key of ['a', 'b', 'c']) fbRuntimes.clearCooldown(key)
   mockMode = 'err_500_all'
   sessionPosts = 0
@@ -6152,27 +6152,27 @@ server.close()
       '0 = 不限制：failures 里也不得有 session_budget_exhausted',
     )
   }
-  // 上面的故障换号把 3 个账号都冷却了；恢复预算并清掉冷却，别污染后续用例。
+  // 上面的故障换号把 3 个账号都冷却了;恢复预算并清掉冷却,别污染后续用例.
   for (const key of ['a', 'b', 'c']) fbRuntimes.clearCooldown(key)
   fbConfig.limits.maxNewSessionsPerRequest = 2
   /**
-   * ⚠️ 同时清掉遗留的热会话（2026-10-04）。
+   * - 同时清掉遗留的热会话(2026-10-04).
    *
-   * 前面的用例改成"付费时段内不释放已买断的会话"后，热 session 会留在原地
-   * （新行为的目的就是别扔掉已付的钱）。本段要断言 `sessionPosts === 1`
-   * （排队复用同一会话、不新建），复用旧会话就不会再 admit → 计数对不上。
+   * 前面的用例改成"付费时段内不释放已买断的会话"后,热 session 会留在原地
+   * - (新行为的目的就是别扔掉已付的钱).本段要断言 sessionPosts === 1
+   * (排队复用同一会话,不新建),复用旧会话就不会再 admit → 计数对不上.
    *
-   * 每个用例自足地建立前置状态，不依赖上一个用例"恰好清干净了"。
-   * `releaseStrict` 在这里是合法的：测的是排队/空闲释放语义，
-   * **不是**付费时段保护（那条由 (3) 的 `sessionDeletes === 0` 覆盖）。
+   * 每个用例自足地建立前置状态,不依赖上一个用例"恰好清干净了".
+   * - releaseStrict 在这里是合法的:测的是排队/空闲释放语义,
+   * - 不是付费时段保护(那条由 (3) 的 sessionDeletes === 0 覆盖).
    */
   for (const key of ['a', 'b', 'c']) {
     await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})
   }
 
 
-  // (4) 排队等 chat 锁的请求不得被空闲释放误删会话（选号阶段就 admit、请求
-  //     还没走到 beginRequest，在途计数为 0——只看在途会误删）。
+  // (4) 排队等 chat 锁的请求不得被空闲释放误删会话(选号阶段就 admit,请求
+  //     还没走到 beginRequest,在途计数为 0——只看在途会误删).
   mockFreebucks = null
   for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
   mockMode = 'hold_once'
@@ -6189,7 +6189,7 @@ server.close()
     const heldKey = resA.headers.get('x-freebuff-proxy-account-id')
     const sm = fbRuntimes.get(heldKey).sessions
     assert.equal(sm.inFlightCount(), 1, 'hold 流应在途')
-    // B 排在同一条会话的 chat 锁后面（每账号并发 1，粘性调度先排队不换号）
+    // B 排在同一条会话的 chat 锁后面(每账号并发 1,粘性调度先排队不换号)
     const pendingB = fbChat({
       model: 'deepseek/deepseek-v4-flash',
       messages: [{ role: 'user', content: 'queued' }],
@@ -6213,8 +6213,8 @@ server.close()
   }
 
 
-  // (5) DELETE 失败**不得丢弃 instanceId**（issue：取消失败 = 会话再也删不掉、
-  //     一直占着上游会话槽位）。失败后句柄保留并退避重试，第二次成功才清空会话。
+  // (5) DELETE 失败不得丢弃 instanceId(issue:取消失败 = 会话再也删不掉,
+  //     一直占着上游会话槽位).失败后句柄保留并退避重试,第二次成功才清空会话.
   sessionPosts = 0
   sessionDeletes = 0
   deleteFailuresLeft = 1
@@ -6228,13 +6228,13 @@ server.close()
     assert.equal(ok, false, '首次 DELETE 失败应返回 false（不谎报成功）')
     assert.equal(sm.getSnapshot().instanceId, sm.session.instanceId, '句柄必须保留')
     assert.equal(sm._releasePending, true, '应标记待重试')
-    // 退避重试（第一次 delay=0，立即重试）后应成功并清空
+    // 退避重试(第一次 delay=0,立即重试)后应成功并清空
     await waitFor('释放失败后自动重试成功', () => sm.getSnapshot().status === 'none', 3_000)
     assert.equal(sm._releasePending, false, '成功后清除待重试标记')
     assert.equal(sm.getSnapshot().status, 'none', '成功后句柄应清空')
   }
 
-  // (6) 严格释放（「断开全部连接」/「重启服务」用）：等到真的删掉才返回 ok。
+  // (6) 严格释放([断开全部连接]/[重启服务]用):等到真的删掉才返回 ok.
   sessionPosts = 0
   sessionDeletes = 0
   deleteFailuresLeft = 0
@@ -6244,7 +6244,7 @@ server.close()
     assert.ok(r.released >= 1, '至少释放一条会话')
   }
   {
-    // 上游一直删不掉 → 如实返回失败明细，绝不谎报"已全部断开"
+    // 上游一直删不掉 → 如实返回失败明细,绝不谎报"已全部断开"
     const sm = fbRuntimes.get('a').sessions
     await sm.ensureSession('deepseek/deepseek-v4-flash')
     deleteFailuresLeft = 99
@@ -6257,8 +6257,8 @@ server.close()
     await sm.release()
   }
 
-  // (7) 会话句柄落盘 sessions.json（重启/换容器后仍能寻址 DELETE 退款）：
-  //     admit 写入、释放清空、遗留句柄进 orphans 由启动扫尾清理。
+  // (7) 会话句柄落盘 sessions.json(重启/换容器后仍能寻址 DELETE 退款):
+  //     admit 写入,释放清空,遗留句柄进 orphans 由启动扫尾清理.
   {
     const idx = path.join(path.dirname(fbDir), 'sessions.json')
     const storeFile = fbRuntimes.handleStore.file
@@ -6276,21 +6276,21 @@ server.close()
       onDisk.sessions.some((s) => s.key === 'b' && s.instanceId),
       'admit 后句柄应落盘',
     )
-    // 模拟"进程被杀"：内存句柄丢弃，文件里仍有记录 → 下次启动扫尾应删掉它
+    // 模拟"进程被杀":内存句柄丢弃,文件里仍有记录 → 下次启动扫尾应删掉它
     const store = new SessionHandleStore(storeFile)
     assert.ok(store.listOrphans().length >= 1, '上次运行遗留的句柄应视为待清理')
-    // 账号已删除 / 凭据解析不到时：不得谎报清理成功，句柄要保留在文件里
+    // 账号已删除 / 凭据解析不到时:不得谎报清理成功,句柄要保留在文件里
     const skipped = await store.cleanupOrphans(() => null)
     assert.equal(skipped.cleaned, 0, '解析不到账号时不得谎报已清理')
     assert.ok(skipped.skipped >= 1, '解析不到的句柄应计入 skipped 并保留')
     assert.ok(store.listOrphans().length >= 1, '跳过的句柄必须保留')
-    // 用真实 upstream 解析器再跑一次：应清掉所有遗留句柄
+    // 用真实 upstream 解析器再跑一次:应清掉所有遗留句柄
     await store.cleanupOrphans((key) => fbRuntimes.byKey.get(key)?.upstream)
     assert.equal(store.listOrphans().length, 0, '启动扫尾后不应残留待清理句柄')
-    // —— 启动扫尾必须是**有界**的：一个连不通的上游（DNS 黑洞/代理挂起/已被删的
-    // 账号）曾让每条 DELETE 各等 30s×3 次重放，服务十几分钟不进监听状态，用户看到
-    // 的就是「起不来，删 sessions.json 就好了」。预算用完的句柄只许 deferred（留到
-    // 下次启动继续），绝不许把启动路径拖住。
+    // —— 启动扫尾必须是有界的:一个连不通的上游(DNS 黑洞/代理挂起/已被删的
+    // 账号)曾让每条 DELETE 各等 30s×3 次重放,服务十几分钟不进监听状态,用户看到
+    // 的就是[起不来,删 sessions.json 就好了].预算用完的句柄只许 deferred(留到
+    // 下次启动继续),绝不许把启动路径拖住.
     {
       const hangFile = path.join(path.dirname(storeFile), 'sessions-hang.json')
       fs.writeFileSync(hangFile, JSON.stringify({
@@ -6303,7 +6303,7 @@ server.close()
         })),
       }))
       const hangStore = new SessionHandleStore(hangFile)
-      // 永远拿不到结果的上游：模拟黑洞代理 / 上游不响应
+      // 永远拿不到结果的上游:模拟黑洞代理 / 上游不响应
       const blackHole = { freebuffSession: () => new Promise(() => {}) }
       const started = Date.now()
       const res = await Promise.race([
@@ -6322,10 +6322,10 @@ server.close()
   }
 
 
-  // (7.5) 结算挂起 ≠ 退款 0：上游回 freebucksRefundPending 时必须**保留句柄**
-  //       并继续重放，绝不能在 1.5s 后就把 instanceId 丢掉、把 pending 读成
-  //       "退款 0"。这是 2026-09 实测到的真 bug（旧代码只重放一次就 drop，
-  //       而实测上游 1.5s/7s/17s/37s/67s 全是 pending）。
+  // (7.5) 结算挂起 ≠ 退款 0:上游回 freebucksRefundPending 时必须保留句柄
+  //       并继续重放,绝不能在 1.5s 后就把 instanceId 丢掉,把 pending 读成
+  //       "退款 0".这是 2026-09 实测到的真 bug(旧代码只重放一次就 drop,
+  //       而实测上游 1.5s/7s/17s/37s/67s 全是 pending).
   {
     const sm = fbRuntimes.get('b').sessions
     const storeFile = fbRuntimes.handleStore.file
@@ -6334,7 +6334,7 @@ server.close()
     deleteFailuresLeft = 0
     sessionDeletes = 0
     deleteInstanceIds = []
-    // 上游持续挂起：DELETE 只回 pending、不给金额
+    // 上游持续挂起:DELETE 只回 pending,不给金额
     mockRefundPending = true
     try {
       await sm.ensureSession('deepseek/deepseek-v4-flash')
@@ -6344,16 +6344,16 @@ server.close()
 
       await sm.release()
 
-      // 必须重放（>1 次）而不是试一次就放弃
+      // 必须重放(>1 次)而不是试一次就放弃
       assert.ok(
         sessionDeletes >= 2,
         '挂起时必须继续重放 DELETE，实际只发了 ' + sessionDeletes + ' 次',
       )
-      // 重放必须始终带同一个 instanceId（丢了就再也删不掉这条会话）
+      // 重放必须始终带同一个 instanceId(丢了就再也删不掉这条会话)
       for (const id of deleteInstanceIds) {
         assert.equal(id, instanceId, '重放必须带同一个 instanceId')
       }
-      // 关键回归：句柄**绝不能丢**——丢了这笔预扣就永远要不回来
+      // 关键回归:句柄绝不能丢——丢了这笔预扣就永远要不回来
       const onDisk = JSON.parse(fs.readFileSync(storeFile, 'utf8'))
       const kept =
         onDisk.orphans.some((o) => o.instanceId === instanceId) ||
@@ -6367,8 +6367,8 @@ server.close()
         'pending 不得被读成退款 0（那是把没结算完错读成退了 0 元）',
       )
 
-      // —— 摘除走的是启动扫尾 cleanupOrphans（此刻已无 live session，
-      //    release() 不会再发 DELETE）。先验证**仍挂起时扫尾也不摘**：
+      // —— 摘除走的是启动扫尾 cleanupOrphans(此刻已无 live session,
+      //    release() 不会再发 DELETE).先验证仍挂起时扫尾也不摘:
       const swept = await fbRuntimes.handleStore.cleanupOrphans(
         (key) => fbRuntimes.byKey.get(key)?.upstream,
       )
@@ -6380,7 +6380,7 @@ server.close()
         '仍挂起时扫尾后句柄必须还在',
       )
 
-      // 现在让上游结算完成（终态、无金额 = 退款 0），扫尾应真正摘掉句柄
+      // 现在让上游结算完成(终态,无金额 = 退款 0),扫尾应真正摘掉句柄
       mockRefundPending = false
       const swept2 = await fbRuntimes.handleStore.cleanupOrphans(
         (key) => fbRuntimes.byKey.get(key)?.upstream,
@@ -6401,20 +6401,20 @@ server.close()
   }
 
   /**
-   * (8) 最终失败时**不再**早退释放（2026-10-04 按真实计费机制改写）。
+   * - (8) 最终失败时不再早退释放(2026-10-04 按真实计费机制改写).
    *
-   * 旧断言：「最终失败也必须早退释放会话（不再等空闲释放 / 挂到过期白扣时长）」
-   * → `sessionDeletes >= 1`。
+   * 旧断言:[最终失败也必须早退释放会话(不再等空闲释放 / 挂到过期白扣时长)]
+   * - → sessionDeletes >= 1.
    *
-   * 前提已被实测证伪：Freebucks 是**买断制**（POST 当场扣整小时单价），
-   * 早退 DELETE **不退钱**（只回 `freebucksRefundPending`，观察 2 分钟未到账）。
-   * 所以"早退"不是"省时长"，而是**把已付的那一小时直接扔掉**。
+   * - 前提已被实测证伪:Freebucks 是买断制(POST 当场扣整小时单价),
+   * - 早退 DELETE 不退钱(只回 freebucksRefundPending,观察 2 分钟未到账).
+   * - 所以"早退"不是"省时长",而是把已付的那一小时直接扔掉.
    *
-   * 真实事故：远程 428 后 re-admit（先 DELETE 再 admit）→ 钱花了、货退了、
-   * 新的买不起 → 用户看到「请求完积分变零还失败」。
+   * 真实事故:远程 428 后 re-admit(先 DELETE 再 admit)→ 钱花了,货退了,
+   * 新的买不起 → 用户看到[请求完积分变零还失败].
    *
-   * 新行为：付费时段内**保留**会话（下一跳还能续用）。本段 mock 的会话是
-   * +1 小时，所以 `sessionDeletes === 0`。
+   * - 新行为:付费时段内保留会话(下一跳还能续用).本段 mock 的会话是
+   * - +1 小时,所以 sessionDeletes === 0.
    */
   mockFreebucks = null
   for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
@@ -6431,7 +6431,7 @@ server.close()
       messages: [{ role: 'user', content: 'final-fail' }],
     })
     assert.equal(res.status, 429, await res.clone().text())
-    // 给释放逻辑留出与旧断言相同的时间窗，确认它**确实没有**发生
+    // 给释放逻辑留出与旧断言相同的时间窗,确认它确实没有发生
     await new Promise((r) => setTimeout(r, 300))
     assert.equal(
       sessionDeletes,
@@ -6441,22 +6441,22 @@ server.close()
   }
 
   /* ---------------------------------------------------------------
-     全池额度耗尽 = 终态（单元级：直接验 `_acquireForModelUnlocked` 的抛出物）
+     全池额度耗尽 = 终态(单元级:直接验 _acquireForModelUnlocked 的抛出物)
      --------------------------------------------------------------- */
   /**
-   * 真实事故（远程日志 2026-10-04 14:01:47-14:02:00）：13 个客户端请求，
-   * 每个都白轮 3 次（maxAttempts），每次都要遍历全部账号查额度 ——
-   * 每轮刷几十条日志，13 个请求就把 500 条环形缓冲冲爆，
-   * 用户事后**查不到更早的排障记录**。
+   * 真实事故(远程日志 2026-10-04 14:01:47-14:02:00):13 个客户端请求,
+   * 每个都白轮 3 次(maxAttempts),每次都要遍历全部账号查额度 ——
+   * 每轮刷几十条日志,13 个请求就把 500 条环形缓冲冲爆,
+   * - 用户事后查不到更早的排障记录.
    *
-   * 根因：全池都买不起时抛的是单账号级 `freebucks_exhausted`，
-   * 而 429 被 `shouldSwitchAccountOnError` 判成"该换号" → 再轮一遍。
-   * 但"全池都买不起"是**遍历完才得出的聚合结论**，换号不可能改变它。
+   * - 根因:全池都买不起时抛的是单账号级 freebucks_exhausted,
+   * - 而 429 被 shouldSwitchAccountOnError 判成"该换号" → 再轮一遍.
+   * - 但"全池都买不起"是遍历完才得出的聚合结论,换号不可能改变它.
    *
-   * 判据（单元级，直接看抛出的错误对象）：
-   *   `err.terminalExhausted === true` → 外层 isTerminal 会立即返回。
+   * 判据(单元级,直接看抛出的错误对象):
+   * - err.terminalExhausted === true → 外层 isTerminal 会立即返回.
    *
-   * ⚠️ 反向探针：去掉 app-context 里的 `terminalExhausted: true` → 本断言必须红。
+   * - 反向探针:去掉 app-context 里的 terminalExhausted: true → 本断言必须红.
    */
   {
     const up = { freebuffSession: async () => ({ status: 'none' }) }
@@ -6465,7 +6465,7 @@ server.close()
       config: { session: { reAdmitOnExpire: true, reAdmitLeadSec: 60, freeModelReAdmitLeadSec: 60 }, limits: {} },
       accountKey: 'terminal-exhausted',
     })
-    // 所有账号都买不起（余额 0 / 单价 15）→ 遍历完应抛终态聚合错误
+    // 所有账号都买不起(余额 0 / 单价 15)→ 遍历完应抛终态聚合错误
     sm.freebucks = {
       balance: 0,
       daily: { limit: 25, remaining: 0, resetAt: null },
@@ -6478,31 +6478,31 @@ server.close()
 
   mockMode = 'ok'
   mockFreebucks = null
-  // (3.4) 428 `waiting_room_required` **不得被额度闸门拦死**（2026-10-05 真实事故）
+  // (3.4) 428 waiting_room_required 不得被额度闸门拦死(2026-10-05 真实事故)
   //
-  // 远程日志（2026-10-04T18:52:34Z, 账号 llh282000500）：
-  //   admit        200   active  扣 15 FB（余额 25→10）
+  // 远程日志(2026-10-04T18:52:34Z, 账号 llh282000500):
+  //   admit        200   active  扣 15 FB(余额 25→10)
   //   agent-runs   200
   //   chat         428   waiting_room_required
   //   skip re-admit: freebucks cannot afford model   balance 10 < price 15
   //   account cooling down  code=freebucks_exhausted
-  //   随后每个请求都 429 → 客户端 dsh 拿到「Upstream rate limit exceeded」
+  //   随后每个请求都 429 → 客户端 dsh 拿到[Upstream rate limit exceeded]
   //
-  // 根因：`waiting_room_required` 的正确处置是 `readmitToContinue()`
-  // （带同一 instanceId + purchase-continuity 续用已买断的那一小时，
-  // **不产生任何新的购买**）。既然不花钱，"余额买不起下一个小时"就与它无关。
-  // 而代码里 428 的判断排在两道额度闸门**之后** → 续用被"买不起"拦死 →
-  // 冷却该号 + 已付的一小时白扔。
+  // 根因:waiting_room_required 的正确处置是 readmitToContinue()
+  // (带同一 instanceId + purchase-continuity 续用已买断的那一小时,
+  // 不产生任何新的购买).既然不花钱,"余额买不起下一个小时"就与它无关.
+  // 而代码里 428 的判断排在两道额度闸门之后 → 续用被"买不起"拦死 →
+  // 冷却该号 + 已付的一小时白扔.
   //
-  // 判据（可证伪）：
-  //   ① 客户端最终拿到 **200**，且**始终由同一个账号**承接（没被换号）；
-  //   ② 续用绝不 DELETE 已买断的那一小时（`sessionDeletes === 0`）；
-  //   ③ 参与本次请求的账号**没有**被冷却（旧行为在此冷却成 freebucks_exhausted）。
+  // 判据(可证伪):
+  //   ① 客户端最终拿到 200,且始终由同一个账号承接(没被换号);
+  //   ② 续用绝不 DELETE 已买断的那一小时(sessionDeletes === 0);
+  //   ③ 参与本次请求的账号没有被冷却(旧行为在此冷却成 freebucks_exhausted).
   //
-  // ⚠️ 反向探针（已实测）：把 app-context 里 428 那段挪回两道闸门之后 →
-  //    ③ 立即变红（`a 不得因 428 续用被冷却（旧行为：code=freebucks_exhausted）`）。
-  //    ①里的"同一账号"断言是配套的护栏：旧顺序下客户端靠**换号**仍可能拿到
-  //    200，只看状态码会把"钱花了 + 号被冷却"整个漏掉。
+  //  反向探针(已实测):把 app-context 里 428 那段挪回两道闸门之后 →
+  //    ③ 立即变红(a 不得因 428 续用被冷却(旧行为:code=freebucks_exhausted)).
+  //    ①里的"同一账号"断言是配套的护栏:旧顺序下客户端靠换号仍可能拿到
+  //    200,只看状态码会把"钱花了 + 号被冷却"整个漏掉.
   for (const key of ['a', 'b', 'c']) fbRuntimes.clearCooldown(key)
   for (const key of ['a', 'b', 'c']) {
     await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})
@@ -6511,8 +6511,8 @@ server.close()
     balance: 25,
     daily: { limit: 25, spent: 0, remaining: 25, resetAt: new Date(Date.now() + 6 * 3600_000).toISOString() },
     wallet: { balance: 0, monthlyBonus: 0, nextBonusAt: null },
-    // 单价 15：admit 后余额被扣到 10（mock 在 428 分支里同步），
-    // 于是续用时两道闸门**必然**判"买不起"——这正是旧顺序被拦死的条件。
+    // 单价 15:admit 后余额被扣到 10(mock 在 428 分支里同步),
+    // 于是续用时两道闸门必然判"买不起"——这正是旧顺序被拦死的条件.
     prices: { 'deepseek/deepseek-v4-flash': 15 },
   }
   mockMode = 'waiting_room_once'
@@ -6530,8 +6530,8 @@ server.close()
       200,
       `428 应走续用并成功（不得被"买不起"拦成 429），got ${res.status}: ${text.slice(0, 300)}`,
     )
-    // ① 必须由**同一个账号**从头到尾承接：旧顺序会把该号冷却后换号重试，
-    //    于是"花了 15 点 + 号进冷却"被 200 掩盖（用户看到的却是"账号被警告"）。
+    // ① 必须由同一个账号从头到尾承接:旧顺序会把该号冷却后换号重试,
+    //    于是"花了 15 点 + 号进冷却"被 200 掩盖(用户看到的却是"账号被警告").
     const firstKey = res.headers.get('x-freebuff-proxy-account-id')
     assert.ok(firstKey, '响应必须带 x-freebuff-proxy-account-id，否则无法判定是否换号')
     assert.equal(
@@ -6539,24 +6539,24 @@ server.close()
       2,
       `428 应只在同一账号上重试一次并成功，got attempts=${completionAttempts}`,
     )
-    // ⚠️ 续用**本身**也是一次 POST /session/admission（官方就是"带同一
-    // instanceId + purchase-continuity 重新 admission"），所以这里计到 2 次是
-    // 正确的。**区分"续用"与"重买"的判据是有没有先 DELETE**：
-    //   forceReadmit（重买）= DELETE 再 admit → sessionDeletes>=1；
-    //   readmitToContinue  = 直接带 continuity 重 admission → sessionDeletes===0。
+    //  续用本身也是一次 POST /session/admission(官方就是"带同一
+    // instanceId + purchase-continuity 重新 admission"),所以这里计到 2 次是
+    // 正确的.区分"续用"与"重买"的判据是有没有先 DELETE:
+    //   forceReadmit(重买)= DELETE 再 admit → sessionDeletes>=1;
+    //   readmitToContinue  = 直接带 continuity 重 admission → sessionDeletes===0.
     assert.equal(
       sessionDeletes,
       0,
       `续用绝不 DELETE 已付的那一小时（旧行为：forceReadmit 先删再买），got ${sessionDeletes}`,
     )
-    // 账号应仍可用：旧代码在这里会把它冷却成 freebucks_exhausted
+    // 账号应仍可用:旧代码在这里会把它冷却成 freebucks_exhausted
     for (const key of ['a', 'b', 'c']) {
       assert.ok(
         !fbRuntimes.isCoolingDown(key),
         `${key} 不得因 428 续用被冷却（旧行为：code=freebucks_exhausted）`,
       )
     }
-    // 承接请求的账号必须就是最初选中的那个（没被换号）
+    // 承接请求的账号必须就是最初选中的那个(没被换号)
     assert.ok(
       !fbRuntimes.isCoolingDown(firstKey),
       `承接账号 ${firstKey} 本身不得被冷却`,
@@ -6580,16 +6580,16 @@ server.close()
 // ===========================================================================
 // (STALL) 全局请求闸门绝不允许无界排队
 //
-// 线上故障：进程一切正常（CPU/日志/控制台都对）却"一段时间完全不接单"，
-// 只有重启才恢复。根因是旧 acquireRequestSlot 把超限请求 push 进一个**没有任何
-// 超时**的 _waitQueue：只要有几个请求"占着槽位却永久挂起"（客户端声明了
-// Content-Length 却不再发完请求体 → readRequestBody 的 for-await 永不返回），
-// 槽位被永久吃掉，后续所有请求排进队列再也出不来。
+// 线上故障:进程一切正常(CPU/日志/控制台都对)却"一段时间完全不接单",
+// 只有重启才恢复.根因是旧 acquireRequestSlot 把超限请求 push 进一个没有任何
+// 超时的 _waitQueue:只要有几个请求"占着槽位却永久挂起"(客户端声明了
+// Content-Length 却不再发完请求体 → readRequestBody 的 for-await 永不返回),
+// 槽位被永久吃掉,后续所有请求排进队列再也出不来.
 //
-// 本用例用真实 server + 真实半开 socket 复现该场景，断言：
-//   1. 排满时后续请求**有界**返回 429 server_busy（而不是永久挂起）；
-//   2. 半开请求被 bodyReadTimeoutMs 掐掉后，槽位与队列都回到 0。
-// 旧实现下第 1 条会永久挂起 → 用例超时失败（真实红灯）。
+// 本用例用真实 server + 真实半开 socket 复现该场景,断言:
+//   1. 排满时后续请求有界返回 429 server_busy(而不是永久挂起);
+//   2. 半开请求被 bodyReadTimeoutMs 掐掉后,槽位与队列都回到 0.
+// 旧实现下第 1 条会永久挂起 → 用例超时失败(真实红灯).
 {
   const stallDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-stall-'))
   saveAccountUser(stallDir, {
@@ -6611,7 +6611,7 @@ server.close()
   const stServer = await startServer({ config: stCfg, runtimes: stRuntimes })
   const stPort = stServer.address().port
 
-  // 半开 chat 请求：声明很大的 Content-Length，只发一个字节就再也不发。
+  // 半开 chat 请求:声明很大的 Content-Length,只发一个字节就再也不发.
   const halfOpen = []
   for (let i = 0; i < 2; i += 1) {
     const sock = net.connect(stPort, '127.0.0.1')
@@ -6636,9 +6636,9 @@ server.close()
   const occupied = requestSlotStats()
   assert.equal(occupied.inFlight, 2, '两个半开请求应占满全部 2 个槽位')
 
-  // 此刻来一个**完全正常**的请求：必须被有界拒绝，绝不永久排队。
+  // 此刻来一个完全正常的请求:必须被有界拒绝,绝不永久排队.
   const t0 = Date.now()
-  // 用本用例自己的 server（共享 chat() 的 server 在更早已经 close 了）
+  // 用本用例自己的 server(共享 chat() 的 server 在更早已经 close 了)
   const busy = await fetch(`http://127.0.0.1:${stPort}/v1/chat/completions`, {
     method: 'POST',
     headers: {
@@ -6663,7 +6663,7 @@ server.close()
     `排队必须是有界的：实测等待 ${waited}ms，应 < 2000ms（slotWaitMs=800）`,
   )
 
-  // 半开请求被 bodyReadTimeoutMs 掐掉后，槽位与队列必须归零（无泄漏）。
+  // 半开请求被 bodyReadTimeoutMs 掐掉后,槽位与队列必须归零(无泄漏).
   for (const sock of halfOpen) sock.destroy()
   await waitFor('半开请求超时后槽位全部归还', () => {
     const s = requestSlotStats()
@@ -6679,13 +6679,13 @@ server.close()
 }
 
 // ===========================================================================
-// (FBGATE) 封号判定的**两条**条件都必须拦（issue #11 实测）
+// (FBGATE) 封号判定的两条条件都必须拦(issue #11 实测)
 //
-// 上游对"余额不够"的封号判定有两条：
-//   ① Freebucks 跑完了（今日池 daily.remaining <= 0）
-//   ② 本次请求所需 Freebucks 高于剩余余额（balance < prices[model]）
-// 曾经的实现只判 ②，于是"池子跑完但 balance 还留着数字"的账号会被放行，
-// 照样送去撞封禁。本用例锁死两条都拦，并断言 reason 能区分是哪一条。
+// 上游对"余额不够"的封号判定有两条:
+//   ① Freebucks 跑完了(今日池 daily.remaining <= 0)
+//   ② 本次请求所需 Freebucks 高于剩余余额(balance < prices[model])
+// 曾经的实现只判 ②,于是"池子跑完但 balance 还留着数字"的账号会被放行,
+// 照样送去撞封禁.本用例锁死两条都拦,并断言 reason 能区分是哪一条.
 {
   const sm = new SessionManager({
     config: loadConfig(),
@@ -6696,7 +6696,7 @@ server.close()
   const price = 25
   const model = 'deepseek/deepseek-v4-flash'
 
-  // ① 今日池跑完，但余额看着还够 —— 必须拦（这正是以前漏掉的那条）
+  // ① 今日池跑完,但余额看着还够 —— 必须拦(这正是以前漏掉的那条)
   sm.freebucks = {
     balance: 100,
     daily: { limit: 85, spent: 85, remaining: 0, resetAt: null },
@@ -6726,7 +6726,7 @@ server.close()
   assert.equal(poor.affordable, false, '余额 < 单价 必须拦——上游封号条件②')
   assert.equal(poor.reason, 'balance_shortfall', '必须标明是余额不足')
 
-  // 两条都不命中 → 放行（不能误伤正常账号）
+  // 两条都不命中 → 放行(不能误伤正常账号)
   sm.freebucks = {
     balance: 100,
     daily: { limit: 85, spent: 20, remaining: 65, resetAt: null },
@@ -6739,7 +6739,7 @@ server.close()
   assert.equal(ok.affordable, true, '额度充足必须放行（不得误伤）')
   assert.equal(ok.reason, null, '放行时不应有 reason')
 
-  // `limit = 0` 表示"没有池子"，不是"池子跑完"——不得误判为耗尽
+  // limit = 0 表示"没有池子",不是"池子跑完"——不得误判为耗尽
   sm.freebucks = {
     balance: 100,
     daily: { limit: 0, spent: 0, remaining: 0, resetAt: null },
@@ -6770,7 +6770,7 @@ server.close()
     'quotaExempt 账号不受池/余额限制',
   )
 
-  // 每日池 resetAt 已过 → 本地数字视为过期，放行一次真实 admit 重新校准
+  // 每日池 resetAt 已过 → 本地数字视为过期,放行一次真实 admit 重新校准
   sm.freebucks = {
     balance: 0,
     daily: {
@@ -6793,14 +6793,45 @@ server.close()
   assert.equal(stale.stale, true, '必须标记为 stale')
 }
 
+
+/**
+ * 读整棵 dashboard/ 的源码文本（所有 .js 拼接）。
+ *
+ * 为什么必须扫目录而不是读单个文件：前端已从单文件 app.js 拆成 views/ + lib/，
+ * 写死 dashboard/app.js 的断言会因为"读到的文件里没有那段代码"而静默失效
+ * （正则不匹配，但只在被破坏时才红，平时是假绿）。实测踩到 3 处（idleReleaseAdvice、
+ * 局部刷新的 accounts-sections、今日池跑完判定）。
+ *
+ * 同时校验文件数下限：目录读不到时不能退化成"零违规"。
+ * @returns {string} 全部 dashboard 下的 .js 内容
+ */
+function readDashboardSource() {
+  const dashDir = new URL('../dashboard/', import.meta.url)
+  const files = []
+  const walkDash = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === 'node_modules') continue
+      const p = new URL(e.name + (e.isDirectory() ? '/' : ''), dir)
+      if (e.isDirectory()) walkDash(p)
+      else if (e.name.endsWith('.js')) files.push(p)
+    }
+  }
+  walkDash(dashDir)
+  assert.ok(files.length >= 10, `控制台源码扫描下限：只扫到 ${files.length} 个 .js`)
+  return files.map((p) => fs.readFileSync(p, 'utf8')).join('\n')
+}
+
 // (FBGATE-CONSISTENCY) 控制台的"额度不足"判定必须与后端 freebucksFor 的两条
-// 封号条件一致 —— 曾经前端判了"今日池跑完"而后端没判，导致控制台显示"已用尽"
-// 却仍被送去调度。这里用源码断言把两处钉在一起，防止再次漂移。
+// 封号条件一致 —— 曾经前端判了"今日池跑完"而后端没判,导致控制台显示"已用尽"
+// 却仍被送去调度.这里用源码断言把两处钉在一起,防止再次漂移.
 {
-  const dashSrc = fs.readFileSync(
-    new URL('../dashboard/app.js', import.meta.url),
-    'utf8',
-  )
+  // 断言对象是整棵 dashboard/** 而不是某个具体文件：这条判据经历过一次
+  // 静默失效 —— 前端拆成 views/lib 后判定搬去了
+  // dashboard/views/overview/accounts/sections.js，而断言仍盯 app.js，
+  // 于是"控制台保留了判定"这件事再也没被验证过（读不到文件 → 正则不匹配
+  // → 但它只在被破坏时才红，平时是假绿）。改成扫目录 + 校验被扫文件数下限，
+  // 既保住判据强度，又不会因为下一次搬家再次失效。
+  const dashSrc = readDashboardSource()
   const smSrc = fs.readFileSync(
     new URL('../src/session-manager.js', import.meta.url),
     'utf8',
@@ -6817,7 +6848,7 @@ server.close()
     /shortOnBalance/.test(smSrc),
     '后端 freebucksFor 必须判定"余额买不起"',
   )
-  // 后端必须能区分"池跑完"与"余额不足"，否则日志/错误信息会误导排查方向
+  // 后端必须能区分"池跑完"与"余额不足",否则日志/错误信息会误导排查方向
   assert.ok(
     /daily_exhausted/.test(smSrc),
     '后端必须区分出 daily_exhausted（否则排查时只看到"余额不够"）',
@@ -6826,30 +6857,29 @@ server.close()
     /balance_shortfall/.test(smSrc),
     '后端必须区分出 balance_shortfall',
   )
-  // 前端必须与后端一致地覆盖"池跑完"这条，不能只判余额
+  // 前端必须与后端一致地覆盖"池跑完"这条,不能只判余额
   assert.ok(
     /dailyGone/.test(dashSrc),
     '控制台必须保留 dailyGone（今日池跑完）判定',
   )
 }
 
-// (REFUND-COPY) 计费结论（2026-09-14 一手实测后重钉）不得被写回旧说法
+// (REFUND-COPY) 计费结论(2026-09-14 一手实测后重钉)不得被写回旧说法
 //
-// 上游 **一次 admit = 买断一小时**：POST 当场扣满整小时单价（实测 Freebucks
-// 5 → 0，回执带 expiresAt）。早退 DELETE 的实际结果两本账不对称：
-//   - session_units：**当场按比例退**（实测 1.1 → 0.2）
-//   - Freebucks：只回 freebucksRefundPending，实测 3 次重放 DELETE、2 分钟
-//     内**未到账**；而 24 个「账号 × 模型」组合里 22 个是 Freebucks 先见底
-// 所以"早退会退还 Freebucks / 挂着空闲会话才花钱"是**已被证伪**的说法，必须
-// 钉死：用户会照着它去调 idle_release_sec，方向正好是反的。
-// 详见 docs/freebucks-strategy.html 与 docs/account-scheduling-and-refund.md §3。
+// 上游 一次 admit = 买断一小时:POST 当场扣满整小时单价(实测 Freebucks
+// 5 → 0,回执带 expiresAt).早退 DELETE 的实际结果两本账不对称:
+//   - session_units:当场按比例退(实测 1.1 → 0.2)
+//   - Freebucks:只回 freebucksRefundPending,实测 3 次重放 DELETE,2 分钟
+//     内未到账;而 24 个[账号 × 模型]组合里 22 个是 Freebucks 先见底
+// 所以"早退会退还 Freebucks / 挂着空闲会话才花钱"是已被证伪的说法,必须
+// 钉死:用户会照着它去调 idle_release_sec,方向正好是反的.
+// 详见 docs/freebucks-strategy.html 与 docs/account-scheduling-and-refund.md §3.
 {
-  const dashSrc = fs.readFileSync(
-    new URL('../dashboard/app.js', import.meta.url),
-    'utf8',
-  )
+  const dashSrc = readDashboardSource()
+  // DEFAULTS 已随 config.js 拆分搬进 config/defaults.ts(config.js 只剩薄门面
+  // re-export),且实现已转 TS.断言必须指向真正持有默认值的那一层.
   const cfgSrc = fs.readFileSync(
-    new URL('../src/config.js', import.meta.url),
+    new URL('../src/config/defaults.ts', import.meta.url),
     'utf8',
   )
   const yamlSrc = fs.readFileSync(
@@ -6861,16 +6891,16 @@ server.close()
     'utf8',
   )
   const settingsSrc = fs.readFileSync(
-    new URL('../src/web/settings-store.js', import.meta.url),
+    new URL('../src/web/settings-store.ts', import.meta.url),
     'utf8',
   )
-  // 覆盖**整个仓库**：一开始只扫了 3 个文件，结果 README / bin/pricing.js /
+  // 覆盖整个仓库:一开始只扫了 3 个文件,结果 README / bin/pricing.js /
   // docs/deployment.md / proxy.js 等 10+ 处漏网——其中 README 与 CLI 输出
-  // 直接给用户看，错了最误导。改为遍历全仓（排除第三方与运行时数据）。
-  // 2026-09-13 **反转**：早退 DELETE 会按实际占用退还 Freebucks（见文档 §3）。
-  // 现在钉死的是"不退"这一类已被证伪的说法，防止它再被写回来。
-  // 钉死的是**已被证伪**的那一类说法：早退能拿回 Freebucks / 挂着空闲才花钱 /
-  // 越早释放越省。它们和实测（买断一小时，早退拿不回）正好相反。
+  // 直接给用户看,错了最误导.改为遍历全仓(排除第三方与运行时数据).
+  // 2026-09-13 反转:早退 DELETE 会按实际占用退还 Freebucks(见文档 §3).
+  // 现在钉死的是"不退"这一类已被证伪的说法,防止它再被写回来.
+  // 钉死的是已被证伪的那一类说法:早退能拿回 Freebucks / 挂着空闲才花钱 /
+  // 越早释放越省.它们和实测(买断一小时,早退拿不回)正好相反.
   const STALE_COPY =
     /按实际占用退还\s*Freebucks|退还未用时长|退还未用部分|停止为空转时长付费|挂着的空闲会话(在按小时计价|才是花钱)|越早释放越省|早退.{0,12}省钱/
   const SKIP_DIR = new Set(['node_modules', '.git', 'data', 'data-test'])
@@ -6889,24 +6919,33 @@ server.close()
   assert.ok(scanned.length > 20, `全仓扫描应覆盖足够多文件，实际 ${scanned.length}`)
   for (const abs of scanned) {
     const rel = path.relative(root, abs)
-    // 本文档（§3/§7）需要**引用**这些旧说法来解释纠错过程，豁免；
-    // smoke 自身含正则字面量，也豁免（它就是这个守卫）。
+    // 本文档(§3/§7)需要引用这些旧说法来解释纠错过程,豁免;
+    // smoke 自身含正则字面量,也豁免(它就是这个守卫).
     if (rel === 'docs/account-scheduling-and-refund.md') continue
     if (rel === 'test/smoke.mjs') continue
-    // Agent Notes 记录的是**历史决策与它的错在哪**（本次反转正需要引用旧说法），豁免。
+    // Agent Notes 记录的是历史决策与它的错在哪(本次反转正需要引用旧说法),豁免.
     if (rel.startsWith('.agents/notes/')) continue
-    // AGENTS.md 是最高优先级约定，**必须一起扫**：它一旦写着旧口径，后来的人会直接照着做。
-    // CLAUDE.md 只是指向它的符号链接，跳过以免同一内容报两次。
+    // docs/code-quality/ 是审计与评审产物,它们的写法就是"把错误说法原样引出来
+    // 再说明它错在哪"(实测:docs-audit.md 写 错误方向是"早退能省钱")。
+    // 与 check-docs.mjs 不扫该目录同源理由:参与判据会自噬。
+    if (rel.startsWith('docs/code-quality/')) continue
+    // AGENTS.md 是最高优先级约定,必须一起扫:它一旦写着旧口径,后来的人会直接照着做.
+    // CLAUDE.md 只是指向它的符号链接,跳过以免同一内容报两次.
     if (rel === 'CLAUDE.md') continue
     const src = fs.readFileSync(abs, 'utf8')
-    const hit = src.match(STALE_COPY)
+    // 归一后再匹配：这条守卫此前能被行内格式整体绕过 —— 实测
+    // src/session-handles.js 写的 退还未用部分 因  把词切开而匹配不上，
+    // 而它本来就是被证伪的口径；同一 commit 引入的守卫因此空转了 20 天。
+    // 去掉强调标记与反引号，让"词被格式化切开"不再是一种绕过手段。
+    const normalized = src.replace(/\*\*/g, '').replace(/`/g, '')
+    const hit = normalized.match(STALE_COPY)
     assert.ok(
       !hit,
       `${rel} 出现了已被证伪的说法「${hit && hit[0]}」（早退 DELETE **会**按实际占用退还 Freebucks；pending = 结算未完成，见 docs/account-scheduling-and-refund.md §3）`,
     )
   }
-  // idleReleaseSec 现在是**付费时段结束之后**的空闲释放时长（付费时段内一律不释放，
-  // 见 session-manager._armIdleRelease）。保持 60s：过期后尽快腾槽位给别的模型。
+  // idleReleaseSec 现在是付费时段结束之后的空闲释放时长(付费时段内一律不释放,
+  // 见 session-manager._armIdleRelease).保持 60s:过期后尽快腾槽位给别的模型.
   assert.ok(
     /idleReleaseSec:\s*60/.test(cfgSrc),
     'config.js 的 idleReleaseSec 默认应为 60s（付费时段结束后的空闲释放）',
@@ -6915,9 +6954,9 @@ server.close()
     /idle_release_sec:\s*60/.test(yamlSrc),
     'config.example.yaml 的 idle_release_sec 默认应为 60s',
   )
-  // 退款追问仍是常驻行为：pending 期间要靠重放 DELETE 取回执。实测确认
-  // pending 在本小时内不落地（所以**不能**把它当成"钱会回来"来决策释放时机），
-  // 但句柄不能丢——丢了连追问的机会都没有。
+  // 退款追问仍是常驻行为:pending 期间要靠重放 DELETE 取回执.实测确认
+  // pending 在本小时内不落地(所以不能把它当成"钱会回来"来决策释放时机),
+  // 但句柄不能丢——丢了连追问的机会都没有.
   const handlesSrc = fs.readFileSync(
     new URL('../src/session-handles.js', import.meta.url),
     'utf8',
@@ -6934,18 +6973,15 @@ server.close()
     /sweepPendingRefunds/.test(serveSrc2) && /setInterval/.test(serveSrc2),
     'serve.js 必须周期性调用 sweepPendingRefunds——只扫一次等于放弃那笔预扣',
   )
-  // 控制台必须给出"推荐值"（按账号池实时算），而不是让用户猜
+  // 控制台必须给出"推荐值"(按账号池实时算),而不是让用户猜
   assert.ok(
     /function idleReleaseAdvice/.test(dashSrc),
     '控制台必须提供 idleReleaseAdvice（按账号池实时算推荐值）',
   )
-  // (REUSE-UI) 「我们在省钱」必须能一眼看到：全局复用率 + 每账号 admit/reuse 计数。
-  // 复用发生在已买断的一小时内 → 边际成本 0，所以复用率就是省掉的重买比例。
+  // (REUSE-UI) [我们在省钱]必须能一眼看到:全局复用率 + 每账号 admit/reuse 计数.
+  // 复用发生在已买断的一小时内 → 边际成本 0,所以复用率就是省掉的重买比例.
   {
-    const src = fs.readFileSync(
-      new URL('../dashboard/app.js', import.meta.url),
-      'utf8',
-    )
+    const src = readDashboardSource()
     assert.ok(
       /会话复用率/.test(src),
       '总览必须有「会话复用率」卡片（让用户直观看到在省钱）',
@@ -6964,13 +7000,10 @@ server.close()
     )
   }
 
-  // (PAID-HOUR-UI) 付费时段内 `rem=0` 是"已付款"的正常状态，绝不能标成「额度不足」。
-  // 少了这条，"买断一小时"上线后每个正在被正常使用的账号都会显示成耗尽。
+  // (PAID-HOUR-UI) 付费时段内 rem=0 是"已付款"的正常状态,绝不能标成[额度不足].
+  // 少了这条,"买断一小时"上线后每个正在被正常使用的账号都会显示成耗尽.
   {
-    const src = fs.readFileSync(
-      new URL('../dashboard/app.js', import.meta.url),
-      'utf8',
-    )
+    const src = readDashboardSource()
     assert.ok(
       /inPaidWindow/.test(src),
       'classifyAccount 必须用付费时段（inPaidWindow）把 rem=0 的已付款账号判为可用',
@@ -6979,7 +7012,7 @@ server.close()
       /if \(fb && !inPaidWindow\)/.test(src),
       'Freebucks 耗尽判定必须在付费时段之外才生效',
     )
-    // 付费时段依据 expiresAt 必须真的传到前端，否则上面的判定永远不成立
+    // 付费时段依据 expiresAt 必须真的传到前端,否则上面的判定永远不成立
     const ctxSrc = fs.readFileSync(
       new URL('../src/app-context.js', import.meta.url),
       'utf8',
@@ -6994,8 +7027,8 @@ server.close()
     '控制台必须渲染推荐值区块',
   )
 
-  // (LOW-BALANCE-GROUP) 用户自定义「低额度」分组：余额低于阈值就归类过去，
-  // 但**仍然参与调度**——它是预警不是故障。默认 15 FB（≈ deepseek-v4-flash 单价）。
+  // (LOW-BALANCE-GROUP) 用户自定义[低额度]分组:余额低于阈值就归类过去,
+  // 但仍然参与调度——它是预警不是故障.默认 15 FB(≈ deepseek-v4-flash 单价).
   assert.ok(
     /id: 'lowbalance'/.test(dashSrc),
     "控制台必须有 'lowbalance' 分组",
@@ -7004,7 +7037,7 @@ server.close()
     /function lowBalanceHit/.test(dashSrc),
     '低额度分组必须有 lowBalanceHit 判定',
   )
-  // 归到「低额度」之后仍照常参与选号：该判定绝不能出现在后端调度路径里
+  // 归到[低额度]之后仍照常参与选号:该判定绝不能出现在后端调度路径里
   for (const rel of ['src/proxy.js', 'src/app-context.js', 'src/session-manager.js']) {
     let src = ''
     try { src = fs.readFileSync(new URL('../' + rel, import.meta.url), 'utf8') } catch { continue }
@@ -7017,7 +7050,7 @@ server.close()
     /lowBalanceThreshold: 15/.test(settingsSrc),
     'settings-store 的 lowBalanceThreshold 默认应为 15',
   )
-  // (WIDE-LAYOUT) 账号表 10 列，容器过窄会把「时间轴」挤成竖排单字
+  // (WIDE-LAYOUT) 账号表 10 列,容器过窄会把[时间轴]挤成竖排单字
   assert.ok(
     /max-width: 1560px/.test(cssSrc),
     '#app 容器应放宽到 1560px（账号表列多）',
@@ -7030,9 +7063,9 @@ server.close()
     /acct-time/.test(dashSrc),
     'accountTimeCell 必须使用 .acct-time 类',
   )
-  // 推荐值是「按账号池实时算」的，所以设置页必须真的把账号拉进来。
-  // /api/proxy 只回代理信息、不含 session.model —— 曾因此让推荐值恒等于默认值
-  // （永远显示"还没有账号"），点进去看到的建议是假的。这里钉死这个数据依赖。
+  // 推荐值是[按账号池实时算]的,所以设置页必须真的把账号拉进来.
+  // /api/proxy 只回代理信息,不含 session.model —— 曾因此让推荐值恒等于默认值
+  // (永远显示"还没有账号"),点进去看到的建议是假的.这里钉死这个数据依赖.
   assert.ok(
     /async function renderProxySettings[\s\S]{0,900}api\('\/api\/overview'\)/.test(dashSrc),
     'renderProxySettings 必须额外拉 /api/overview 填充 state.accounts（推荐值依赖它）',
@@ -7040,12 +7073,12 @@ server.close()
 }
 
 // ===========================================================================
-// (AGENT-LEAK) 更新凭证 / 改代理池丢弃 runtime 时，必须关闭出网 agent
+// (AGENT-LEAK) 更新凭证 / 改代理池丢弃 runtime 时,必须关闭出网 agent
 //
-// 每个账号 runtime 构造时都会 new ProxyAgent（带 keep-alive 连接池）。
-// "更新凭证/导入账号/切换代理池"都会重建 runtime —— 若旧 agent 不 close，
-// 它的 socket 会随操作次数单调累积，表现为**运行越久越慢**、连接越难建立。
-// 修复前实测：12 轮更新 → 13 个常驻 socket；修复后 → 1 个。
+// 每个账号 runtime 构造时都会 new ProxyAgent(带 keep-alive 连接池).
+// "更新凭证/导入账号/切换代理池"都会重建 runtime —— 若旧 agent 不 close,
+// 它的 socket 会随操作次数单调累积,表现为运行越久越慢,连接越难建立.
+// 修复前实测:12 轮更新 → 13 个常驻 socket;修复后 → 1 个.
 {
   const origin = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -7054,7 +7087,7 @@ server.close()
   await new Promise((r) => origin.listen(0, '127.0.0.1', r))
   const oport = origin.address().port
 
-  // 一个真正会转发 CONNECT 的代理，让请求能正常完成、连接进入 keep-alive
+  // 一个真正会转发 CONNECT 的代理,让请求能正常完成,连接进入 keep-alive
   const proxySrv = http.createServer((req, res) => {
     res.writeHead(200)
     res.end('ok')
@@ -7104,17 +7137,17 @@ server.close()
   try {
     await hit()
     await new Promise((r) => setTimeout(r, 200))
-    // 首次请求会建 2 条 keep-alive：一条是本请求，另一条是**目录抓取**
-    // （/api/v1/freebuff/models）。目录抓取也必须走同一个代理 agent ——
-    // 不走就会旁路直连、上游看到宿主真实出口 IP（issue #5 根因）。
-    // 本用例关心的是"是否被回收"，不是"建了几条"，所以基线取实测值。
+    // 首次请求会建 2 条 keep-alive:一条是本请求,另一条是目录抓取
+    // (/api/v1/freebuff/models).目录抓取也必须走同一个代理 agent ——
+    // 不走就会旁路直连,上游看到宿主真实出口 IP(issue #5 根因).
+    // 本用例关心的是"是否被回收",不是"建了几条",所以基线取实测值.
     const baseline = await socks()
     assert.ok(
       baseline >= 1 && baseline <= 3,
       `首次请求后的 keep-alive 基线应在 1..3（实测 ${baseline} 个）`,
     )
 
-    // 反复"更新凭证"：每次都 invalidate（丢弃旧 runtime）
+    // 反复"更新凭证":每次都 invalidate(丢弃旧 runtime)
     for (let i = 0; i < 12; i += 1) {
       await leakRuntimes.invalidate('leak1')
       await hit()
@@ -7134,12 +7167,12 @@ server.close()
   }
 }
 
-// --- 回归：客户端在"首字节前的静默等待"中断开 → 绝不钉死账号并发 ---
-// 线上症状：跑着跑着完全不接单，只有重启才恢复。根因是调度阶段的等待
-// （全局槽位 / 账号 chat 锁）完全不感知客户端断开：客户端（DSH/sub2api）早已
-// 超时走人，代理却还在闷等，并且拿到账号锁后继续把整个上游流程跑完——
-// 死请求占着账号并发（默认仅 2，且粘性调度把请求集中到同一账号），
-// 攒够几个就再也没有新请求能拿到锁。
+// --- 回归:客户端在"首字节前的静默等待"中断开 → 绝不钉死账号并发 ---
+// 线上症状:跑着跑着完全不接单,只有重启才恢复.根因是调度阶段的等待
+// (全局槽位 / 账号 chat 锁)完全不感知客户端断开:客户端(DSH/sub2api)早已
+// 超时走人,代理却还在闷等,并且拿到账号锁后继续把整个上游流程跑完——
+// 死请求占着账号并发(默认仅 2,且粘性调度把请求集中到同一账号),
+// 攒够几个就再也没有新请求能拿到锁.
 {
   const cgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-clientgone-'))
   saveAccountUser(cgDir, { id: 'cg', email: 'cg@example.com', authToken: 'token-cg' })
@@ -7149,10 +7182,10 @@ server.close()
   cgConfig.server.apiKeys = ['sk-test']
   cgConfig.upstream.credentialsDir = cgDir
   cgConfig.session.pollIntervalSec = 3600
-  // 单账号、并发 1：唯一槽位被占用后，第二个请求必须排队 —— 正是线上场景。
+  // 单账号,并发 1:唯一槽位被占用后,第二个请求必须排队 —— 正是线上场景.
   cgConfig.limits.accountMaxConcurrency = 1
   cgConfig.limits.streamIdleTimeoutSec = 1
-  // 把账号锁等待拉长，确保"断开前"确实处于等待态（旧代码会一直等下去）。
+  // 把账号锁等待拉长,确保"断开前"确实处于等待态(旧代码会一直等下去).
   cgConfig.limits.accountChatWaitMs = 120_000
   cgConfig.limits.schedulingBudgetMs = 60_000
 
@@ -7177,7 +7210,7 @@ server.close()
   sessionPosts = 0
   completionAttempts = 0
 
-  // A：占住唯一并发槽（流被挂起保持打开）
+  // A:占住唯一并发槽(流被挂起保持打开)
   const resA = await fetch(`http://127.0.0.1:${cgPort}/v1/chat/completions`, {
     method: 'POST',
     headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
@@ -7190,8 +7223,8 @@ server.close()
   assert.equal(resA.status, 200)
   await waitFor('A 应占住唯一并发槽', () => cgRuntimes.chatInFlight('cg') === 1)
 
-  // B：用裸 socket 发第二个流式请求（要能在等待中途"拔线"——fetch 做不到），
-  // 拿到账号锁之前就断开，模拟客户端等不住自行超时。
+  // B:用裸 socket 发第二个流式请求(要能在等待中途"拔线"——fetch 做不到),
+  // 拿到账号锁之前就断开,模拟客户端等不住自行超时.
   const beforeAttempts = completionAttempts
   const rawSock = net.connect(cgPort, '127.0.0.1')
   const bodyStr = JSON.stringify({
@@ -7212,12 +7245,12 @@ server.close()
       'Connection: close\r\n\r\n' +
       bodyStr,
   )
-  // 等 B 真正进入"排队等账号锁"状态，再断开。旧代码在这里会一直等到
-  // accountChatWaitMs（120s）才对客户端超时；新代码感知断开立即退出。
+  // 等 B 真正进入"排队等账号锁"状态,再断开.旧代码在这里会一直等到
+  // accountChatWaitMs(120s)才对客户端超时;新代码感知断开立即退出.
   await new Promise((r) => setTimeout(r, 300))
   rawSock.destroy()
 
-  // 关键断言：B 断开后，死请求不得继续推进上游请求。
+  // 关键断言:B 断开后,死请求不得继续推进上游请求.
   const t0 = Date.now()
   await new Promise((r) => setTimeout(r, 1_500))
   assert.equal(
@@ -7226,7 +7259,7 @@ server.close()
     '客户端断开后代理仍继续推进上游请求（死请求钉死账号并发）',
   )
 
-  // 释放 A 的挂起流，确认账号并发能正常回归 0（槽位没有泄漏）。
+  // 释放 A 的挂起流,确认账号并发能正常回归 0(槽位没有泄漏).
   releaseHoldStreams()
   try {
     await resA.text()
@@ -7253,13 +7286,13 @@ server.close()
 // ===========================================================================
 // (DATA-FILES) 数据目录 JSON 的统一读取口径
 //
-// 真实事故：镜像升级后容器起不来，用户删掉几个 /data/*.json 才恢复，而日志里
-// 只有一行容易被忽略的 warn。根因是每个 store 各自 try/catch，坏了就当空数据
-// 继续跑 —— 于是"配置悄悄回落默认值""账号履历全丢"都没人告诉你。
-// 这里锁死三件事：
-//   ① 损坏文件必须被**显式记账**（启动横幅 / 控制台自检读的就是这份账）；
-//   ② users.json 损坏**绝不静默重建管理员**（loadStatus 必须是 invalid）；
-//   ③ 派生缓存（catalog-cache.json）损坏时不能安静地当"从没同步过"，要留证。
+// 真实事故:镜像升级后容器起不来,用户删掉几个 /data/*.json 才恢复,而日志里
+// 只有一行容易被忽略的 warn.根因是每个 store 各自 try/catch,坏了就当空数据
+// 继续跑 —— 于是"配置悄悄回落默认值""账号履历全丢"都没人告诉你.
+// 这里锁死三件事:
+//   ① 损坏文件必须被显式记账(启动横幅 / 控制台自检读的就是这份账);
+//   ② users.json 损坏绝不静默重建管理员(loadStatus 必须是 invalid);
+//   ③ 派生缓存(catalog-cache.json)损坏时不能安静地当"从没同步过",要留证.
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-datastore-'))
   const write = (name, content) => {
@@ -7267,9 +7300,9 @@ server.close()
     fs.writeFileSync(p, content)
     return p
   }
-  const broken = '{"broken": tru' // 截断 + 非法字面量，最接近写盘被中断的真实形态
+  const broken = '{"broken": tru' // 截断 + 非法字面量,最接近写盘被中断的真实形态
 
-  // ① 六个控制面 store：正常文件 → ok；损坏文件 → invalid（都登记进审计）
+  // ① 六个控制面 store:正常文件 → ok;损坏文件 → invalid(都登记进审计)
   const usersPath = write('users.json', JSON.stringify({ version: 1, users: [] }))
   const settingsPath = write('settings.json', JSON.stringify({ version: 1, accountMaxConcurrency: 3 }))
   const proxiesPath = write('proxies.json', broken)
@@ -7281,8 +7314,8 @@ server.close()
   const settingsStore = new SettingsStore(settingsPath)
   assert.equal(settingsStore.get().accountMaxConcurrency, 3, 'settings.json 必须能读回设置')
 
-  // 布尔开关的**往返**回归：save() 能写盘、load() 就必须读回。
-  // 漏读的表现是"控制台打开开关、重启后自己关了"，症状与"开关没用"无法区分。
+  // 布尔开关的往返回归:save() 能写盘,load() 就必须读回.
+  // 漏读的表现是"控制台打开开关,重启后自己关了",症状与"开关没用"无法区分.
   {
     const rtPath = path.join(tmpDir, 'settings-roundtrip.json')
     const w = new SettingsStore(rtPath)
@@ -7292,9 +7325,9 @@ server.close()
     const fresh = new SettingsStore(path.join(tmpDir, 'settings-fresh.json')).get()
     assert.equal(fresh.cliTelemetryEnabled, false, '未配置时 cliTelemetryEnabled 默认关闭')
   }
-  // 网页通道开关（webChannelEnabled）**必须已彻底移除**：用户明确要求永远只走
-  // CLI 通道（真正的 agent 接口）—— 网页通道的请求体没有 tools 字段，工具调用
-  // 在它上面根本无法工作。留着开关会让人误以为还有第二条路。
+  // 网页通道开关(webChannelEnabled)必须已彻底移除:用户明确要求永远只走
+  // CLI 通道(真正的 agent 接口)—— 网页通道的请求体没有 tools 字段,工具调用
+  // 在它上面根本无法工作.留着开关会让人误以为还有第二条路.
   {
     const fresh = new SettingsStore(path.join(tmpDir, 'settings-noweb.json')).get()
     assert.ok(
@@ -7314,8 +7347,8 @@ server.close()
   assert.equal(proxyStore.loadStatus, 'invalid', '损坏的 proxies.json 必须报 invalid')
   assert.deepEqual(proxyStore.list(), [], '损坏的代理池按空处理（不抛）')
 
-  // 代理池里的脏值（null / 数字 / 畸形 URL）必须被丢弃：原样传下去会在
-  // 构造出网 agent 时抛 ERR_INVALID_URL —— 那是启动后的第一次出网就崩。
+  // 代理池里的脏值(null / 数字 / 畸形 URL)必须被丢弃:原样传下去会在
+  // 构造出网 agent 时抛 ERR_INVALID_URL —— 那是启动后的第一次出网就崩.
   {
     const dirtyProxies = write('proxies-dirty.json', JSON.stringify({
       version: 1,
@@ -7341,11 +7374,11 @@ server.close()
   const webSessions = new WebSessionStore(webSessPath, 3600_000)
   assert.equal(webSessions.loadStatus, 'ok', 'web-sessions.json 正常时必须报 ok')
 
-  // 缺文件 = missing（首次启动），不是 invalid —— 否则全新部署会被误报成损坏
+  // 缺文件 = missing(首次启动),不是 invalid —— 否则全新部署会被误报成损坏
   const missingStore = new ProxyStore(path.join(dir, 'nope.json'))
   assert.equal(missingStore.loadStatus, 'missing', '文件不存在必须报 missing 而不是 invalid')
 
-  // 审计按**绝对路径**记账（同一进程里可能有多个同名文件，如测试各自的临时目录）
+  // 审计按绝对路径记账(同一进程里可能有多个同名文件,如测试各自的临时目录)
   const byPath = new Map(dataFileAudit().map((e) => [e.file, e]))
   const rec = byPath.get(path.resolve(proxiesPath))
   assert.equal(rec?.status, 'invalid', '损坏文件必须出现在装载审计里')
@@ -7355,8 +7388,8 @@ server.close()
     '损坏文件必须出现在 invalidDataFiles()（启动横幅/控制台自检都读它）',
   )
 
-  // ② users.json 损坏：状态必须是 invalid，且**不能**被当成"没有账号"
-  //    —— 否则 bin/serve.js 的拒绝启动分支永远走不到，又会静默重建管理员。
+  // ② users.json 损坏:状态必须是 invalid,且不能被当成"没有账号"
+  //    —— 否则 bin/serve.js 的拒绝启动分支永远走不到,又会静默重建管理员.
   const brokenUsers = write('users-broken.json', broken)
   const brokenUserStore = new UserStore(brokenUsers)
   assert.equal(
@@ -7366,7 +7399,7 @@ server.close()
   )
   assert.equal(brokenUserStore.users.length, 0, '损坏时不得凭空造出用户')
 
-  // ③ 派生缓存损坏：必须登记为 invalid，且把损坏文件挪到一边留证（不静默覆盖）
+  // ③ 派生缓存损坏:必须登记为 invalid,且把损坏文件挪到一边留证(不静默覆盖)
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-catalogleak-'))
   const cachePath = path.join(cacheDir, CATALOG_CACHE_FILENAME)
   fs.writeFileSync(cachePath, broken)
@@ -7383,16 +7416,16 @@ server.close()
 }
 
 // ===========================================================================
-// (DATA-ENTRIES) 数据文件里的**非法条目**绝不能把启动带崩
+// (DATA-ENTRIES) 数据文件里的非法条目绝不能把启动带崩
 //
-// 真实故障（v1.13.0 定位并修复）：某些历史版本/手工编辑会在数组里留下 null 或
-// 非对象条目，而各 store 原先直接信任整个数组，于**构造期**就抛 TypeError：
+// 真实故障(v1.13.0 定位并修复):某些历史版本/手工编辑会在数组里留下 null 或
+// 非对象条目,而各 store 原先直接信任整个数组,于构造期就抛 TypeError:
 //   - web-sessions.json 的 [null] → _prune() 读 s.expiresAt → 进程退出
-//     （还没开始监听端口 → docker 里就是"更新镜像后起不来"）；
-//   - login-flows.json 的 [null]  → load() 读 f.id → 同上；
-//   - users.json 混入 null/非对象 → all() 读 u.username → 同上。
-// 这些都是**合法 JSON**，语法级自检一律报 ok，所以"自检说正常、进程起不来"。
-// 现在口径：逐条丢弃坏条目 + 留证 + 审计区分"文件损坏"与"脏条目"，绝不因此拒绝启动。
+//     (还没开始监听端口 → docker 里就是"更新镜像后起不来");
+//   - login-flows.json 的 [null]  → load() 读 f.id → 同上;
+//   - users.json 混入 null/非对象 → all() 读 u.username → 同上.
+// 这些都是合法 JSON,语法级自检一律报 ok,所以"自检说正常,进程起不来".
+// 现在口径:逐条丢弃坏条目 + 留证 + 审计区分"文件损坏"与"脏条目",绝不因此拒绝启动.
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-dataentries-'))
   const write = (name, body) => {
@@ -7401,7 +7434,7 @@ server.close()
     return p
   }
 
-  // ① 纯函数：坏条目被丢弃、好条目保留、无数组时为空
+  // ① 纯函数:坏条目被丢弃,好条目保留,无数组时为空
   {
     const mixed = ensureObjectEntries(
       { items: [null, 1, 'x', { id: 'ok' }] },
@@ -7416,7 +7449,7 @@ server.close()
     assert.equal(none.dropped, 0, '没有字段时不算丢弃')
   }
 
-  // ② web-sessions.json：混入 null 曾让服务在监听端口之前就崩
+  // ② web-sessions.json:混入 null 曾让服务在监听端口之前就崩
   {
     const p = write('ws-dirty.json', { version: 1, sessions: [null, { token: 't1', username: 'a', createdAt: 'x', expiresAt: new Date(Date.now() + 3600_000).toISOString() }] })
     let store
@@ -7437,7 +7470,7 @@ server.close()
     )
   }
 
-  // ③ login-flows.json：混入 null 曾在 load() 里抛（同样是启动期崩溃）
+  // ③ login-flows.json:混入 null 曾在 load() 里抛(同样是启动期崩溃)
   {
     const p = write('lf-dirty.json', { version: 1, flows: [null, { id: 'f1', status: 'pending', createdAt: 'x' }] })
     let mgr
@@ -7450,7 +7483,7 @@ server.close()
     assert.doesNotThrow(() => mgr.list(), 'list() 不能在脏数据后仍抛')
   }
 
-  // ④ users.json：混入 null 曾让 all() 在启动期抛；好用户必须留下
+  // ④ users.json:混入 null 曾让 all() 在启动期抛;好用户必须留下
   {
     const p = write('users-dirty.json', {
       version: 1,
@@ -7464,8 +7497,8 @@ server.close()
     assert.ok(store.getByUsername('admin'), '合法管理员必须可登录')
   }
 
-  // ⑤ users 数组**全部**非法 = 拿不到任何登录凭据 → 必须按损坏拒绝启动，
-  //    绝不能当成"还没有账号"而静默重建 admin（那会让人以为账号全丢了）
+  // ⑤ users 数组全部非法 = 拿不到任何登录凭据 → 必须按损坏拒绝启动,
+  //    绝不能当成"还没有账号"而静默重建 admin(那会让人以为账号全丢了)
   {
     const p = write('users-allbad.json', { version: 1, users: [null, 1, 'x'] })
     const store = new UserStore(p)
@@ -7473,9 +7506,9 @@ server.close()
     assert.equal(store.users.length, 0, '不得凭空造出用户')
   }
 
-  // ④b UTF-8 BOM：Windows 记事本 / 导出工具写出的文件开头带 U+FEFF。
-  //     它是无害的，但 JSON.parse 直接报 "Unexpected token '\uFEFF'" →
-  //     users.json 被判"损坏" → 拒绝启动（真实用户场景）。必须剥掉。
+  // ④b UTF-8 BOM:Windows 记事本 / 导出工具写出的文件开头带 U+FEFF.
+  //     它是无害的,但 JSON.parse 直接报 "Unexpected token '\uFEFF'" →
+  //     users.json 被判"损坏" → 拒绝启动(真实用户场景).必须剥掉.
   {
     const p = path.join(dir, 'users-bom.json')
     fs.writeFileSync(
@@ -7490,7 +7523,7 @@ server.close()
     assert.doesNotThrow(() => new WebSessionStore(sess, 3600_000), '带 BOM 的 web-sessions.json 不能抛')
   }
 
-  // ⑤b 脏凭据文件必须被**点名**，不能静默消失（用户会以为账号丢了）
+  // ⑤b 脏凭据文件必须被点名,不能静默消失(用户会以为账号丢了)
   {
     const credDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-creds-'))
     fs.writeFileSync(path.join(credDir, 'good.json'), JSON.stringify({
@@ -7498,7 +7531,7 @@ server.close()
     }))
     fs.writeFileSync(path.join(credDir, 'broken.json'), '{"broken": tru')
     fs.writeFileSync(path.join(credDir, 'notoken.json'), JSON.stringify({ id: 'id-2', email: 'c@d.com' }))
-    // id 是 '.' → safeAccountStem 会抛；以前这个异常直接冒到启动流程把服务带崩
+    // id 是 '.' → safeAccountStem 会抛;以前这个异常直接冒到启动流程把服务带崩
     fs.writeFileSync(path.join(credDir, 'badkey.json'), JSON.stringify({ id: '.', email: 'x@y.com', authToken: 't' }))
     let accounts
     assert.doesNotThrow(() => { accounts = listAccounts(credDir) }, '无法当文件名的账号 key 不能让 listAccounts 抛异常')
@@ -7520,13 +7553,13 @@ server.close()
     fs.rmSync(credDir, { recursive: true, force: true })
   }
 
-  // ⑥ sessions.json / account-state.json 的脏条目只能降级，不能抛
+  // ⑥ sessions.json / account-state.json 的脏条目只能降级,不能抛
   {
     const p = write('sh-dirty.json', { version: 1, sessions: [null], orphans: [null, { key: 'a', instanceId: 'i' }] })
     let sh
     assert.doesNotThrow(() => { sh = new SessionHandleStore(p) }, '含 null 的会话句柄索引绝不能抛')
-    // 「控制台说一切正常、进程却起不来」的教训：脏条目必须记账（否则删 sessions.json
-    // 就成了唯一出路）。合法句柄要留下，坏条目要留证，文件本身仍算 ok。
+    // [控制台说一切正常,进程却起不来]的教训:脏条目必须记账(否则删 sessions.json
+    // 就成了唯一出路).合法句柄要留下,坏条目要留证,文件本身仍算 ok.
     assert.equal(sh.loadStatus, 'ok', '含脏条目的 sessions.json 仍应算 ok（不是损坏）')
     assert.equal(sh.listOrphans().length, 1, '合法句柄必须保留（否则那些槽位再也回收不了）')
     assert.equal(sh.listOrphans()[0].instanceId, 'i', '保留的必须是有 key+instanceId 的那条')
@@ -7538,7 +7571,7 @@ server.close()
       !invalidDataFiles().some((e) => e.file === path.resolve(p)),
       '脏条目不能报成文件损坏（处置办法不同：前者无需人工干预）',
     )
-    // 结构完全不对（sessions 不是数组）同样只是降级，不得抛
+    // 结构完全不对(sessions 不是数组)同样只是降级,不得抛
     const bad = write('sh-shape.json', { version: 1, sessions: 'oops', orphans: [] })
     assert.doesNotThrow(() => new SessionHandleStore(bad), 'sessions 字段结构不对绝不能抛')
     const ast = write('as-dirty.json', { version: 1, accounts: { a: null, b: 'x', c: { requests: 1 } } })
@@ -7550,17 +7583,14 @@ server.close()
 }
 
 // ===========================================================================
-// (CONSOLE-REFRESH) 控制台「局部刷新」必须是原地更新，不能"多出一条栏目"
+// (CONSOLE-REFRESH) 控制台[局部刷新]必须是原地更新,不能"多出一条栏目"
 //
-// 实测故障：总览页点「局部刷新」会多出一条版面、旧内容还在。根因是刷新用
-// $('.table-wrap') 选中了**第一个分区的表**，把"整张新表"替换进去 —— 新表被塞
-// 进第一个 <details>，旧分区原样留着。用户页更直接：把 view.innerHTML 清空重建。
-// 这里用源码断言把两处钉死（这两个函数没法在 node 里直接跑，但结构是确定的）。
+// 实测故障:总览页点[局部刷新]会多出一条版面,旧内容还在.根因是刷新用
+// $('.table-wrap') 选中了第一个分区的表,把"整张新表"替换进去 —— 新表被塞
+// 进第一个 <details>,旧分区原样留着.用户页更直接:把 view.innerHTML 清空重建.
+// 这里用源码断言把两处钉死(这两个函数没法在 node 里直接跑,但结构是确定的).
 {
-  const dashSrc = fs.readFileSync(
-    new URL('../dashboard/app.js', import.meta.url),
-    'utf8',
-  )
+  const dashSrc = readDashboardSource()
   assert.ok(
     /id: 'accounts-sections'/.test(dashSrc),
     '账号分区必须有个带 id 的专用容器（局部刷新按它整体替换）',
@@ -7577,7 +7607,7 @@ server.close()
     /function refreshUsersTable/.test(dashSrc) && !/onclick: \(\) => renderUsers\(view\)/.test(dashSrc),
     '用户页「局部刷新」必须走 refreshUsersTable，不能 renderUsers(view) 重建整页',
   )
-  // SVG 图标必须补自闭合斜杠：手写 <circle ...> 会吞掉相邻节点（同一类渲染错乱）
+  // SVG 图标必须补自闭合斜杠:手写 <circle ...> 会吞掉相邻节点(同一类渲染错乱)
   assert.ok(
     /function normalizeSvgPaths/.test(dashSrc) && /normalizeSvgPaths\(paths\)/.test(dashSrc),
     'icon() 必须对 SVG 片段做自闭合归一，否则相邻节点会被解析器吞掉',
@@ -7585,30 +7615,30 @@ server.close()
 }
 
 
-// (SRC-GUARD) 源码级防回归：变量遮蔽与被改名的残留引用。
+// (SRC-GUARD) 源码级防回归:变量遮蔽与被改名的残留引用.
 //
-// 真实事故：`src/web/api.js` 的 handle() 里 `const path = url.pathname` 把
-// `import path from 'node:path'` 整个遮蔽，`/api/system/data-status` 里
-// `path.basename()` 变 "is not a function" → 该接口一路 500 到用户手里；
-// 修名后又在同文件漏改一行（`No route for ${method} ${path}`）→ ReferenceError。
-// 这两种都只在"运行时真的调到那一行"才炸，静态自检必须兜住。
+// 真实事故:src/web/api.ts 的 handle() 里 const path = url.pathname 把
+// import path from 'node:path' 整个遮蔽,/api/system/data-status 里
+// path.basename() 变 "is not a function" → 该接口一路 500 到用户手里;
+// 修名后又在同文件漏改一行(No route for ${method} ${path})→ ReferenceError.
+// 这两种都只在"运行时真的调到那一行"才炸,静态自检必须兜住.
 {
-  const srcFiles = ['../src/web/api.js', '../src/proxy.js', '../src/server.js']
+  const srcFiles = ['../src/web/api.ts', '../src/proxy.js', '../src/server.js']
   for (const rel of srcFiles) {
     const src = fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
     const name = rel.replace('../', '')
     const usesNodePath = /^\s*import\s+(?:\*\s+as\s+)?path\s*,?\s*(?:from\s+)?['"]node:path['"]/m.test(src)
-    // ① 不得在局部重新声明 `path`（会遮蔽 node:path 模块）
+    // ① 不得在局部重新声明 path(会遮蔽 node:path 模块)
     assert.ok(
       !/\bconst\s+path\s*=/.test(src),
       `${name}: 不得用 const path = ... 遮蔽 node:path 模块（曾导致 path.basename is not a function）`,
     )
-    // ② 路由变量必须叫 route/pathname，不得再出现 `path === '/...'` 这种旧命名
+    // ② 路由变量必须叫 route/pathname,不得再出现 path === '/...' 这种旧命名
     assert.ok(
       !/\bpath\s*===\s*['"]\//.test(src),
       `${name}: 路由变量必须叫 route/pathname，不得沿用已废弃的 path`,
     )
-    // ③ 模板串里不得再引用裸 path：改名只改一半就是这个形态（ReferenceError）
+    // ③ 模板串里不得再引用裸 path:改名只改一半就是这个形态(ReferenceError)
     assert.ok(
       !/\$\{[^}]*\bpath\b[^}]*\}/.test(src),
       `${name}: 模板串里引用了裸 path（改名漏改一行 → ReferenceError）`,
@@ -7621,12 +7651,12 @@ server.close()
 }
 
 
-// (REFUND-QUEUE) 待结算退款队列：这是**钱**，行为必须钉死。
+// (REFUND-QUEUE) 待结算退款队列:这是钱,行为必须钉死.
 //
-// 语义（见 .agents/notes/implemented/bug-fix/2026-09-13-refund-reversed.md）：
-//   - 上游回 freebucksRefundPending => 结算未完成，**入队并持续重放 DELETE 追问**；
-//   - 只有拿到终态回执（含 refund: 0）才允许出队；
-//   - 重放失败 / 账号没了 / 仍 pending，一律**保留记录**——绝不静默丢弃那笔预扣。
+// 语义(见 .agents/notes/implemented/bug-fix/2026-09-13-refund-reversed.md):
+//   - 上游回 freebucksRefundPending => 结算未完成,入队并持续重放 DELETE 追问;
+//   - 只有拿到终态回执(含 refund: 0)才允许出队;
+//   - 重放失败 / 账号没了 / 仍 pending,一律保留记录——绝不静默丢弃那笔预扣.
 {
   const refundDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-refund-'))
   const refundFile = path.join(refundDir, 'sessions.json')
@@ -7646,7 +7676,7 @@ server.close()
     assert.equal(r.pending, 1, '仍 pending 时应计入 pending')
     assert.equal(store.listPendingRefunds().length, 1, '仍 pending 时绝不出队')
 
-    // 终态退 0：也是终态，必须出队
+    // 终态退 0:也是终态,必须出队
     body = { status: 'ended', freebucksRefund: 0 }
     let settledInfo = null
     r = await store.sweepPendingRefunds(() => upstream, {
@@ -7656,25 +7686,25 @@ server.close()
     assert.equal(store.listPendingRefunds().length, 0, 'settled 应出队')
     assert.equal(settledInfo.refund, 0)
 
-    // 非终态非 pending：保留，绝不当作退 0
+    // 非终态非 pending:保留,绝不当作退 0
     store.notePendingRefund('k2', 'inst-2', 'm/y')
     body = { status: 'active' }
     r = await store.sweepPendingRefunds(() => upstream)
     assert.equal(r.pending, 1, '既非终态也非 pending 时必须保留')
     assert.equal(store.listPendingRefunds().length, 1)
 
-    // 账号已删/凭据变更：跳过但保留
+    // 账号已删/凭据变更:跳过但保留
     r = await store.sweepPendingRefunds(() => null)
     assert.equal(r.skipped, 1)
     assert.equal(store.listPendingRefunds().length, 1, '无凭据也不能丢记录')
 
-    // 重放失败：保留
+    // 重放失败:保留
     const boom = { freebuffSession: async () => { throw new Error('ECONNRESET') } }
     r = await store.sweepPendingRefunds(() => boom)
     assert.equal(r.failed, 1)
     assert.equal(store.listPendingRefunds().length, 1, '重放失败也必须保留')
 
-    // 重启后从盘里恢复（这是「跨重启追问」的全部依据）
+    // 重启后从盘里恢复(这是[跨重启追问]的全部依据)
     store.notePendingRefund('k3', 'inst-3', 'm/z')
     const reloaded = new SessionHandleStore(refundFile)
     assert.equal(
@@ -7683,7 +7713,7 @@ server.close()
       '重启后待结算退款队列必须还在',
     )
 
-    // drop 事件同时清 orphan 与 pending（钱已回到手）
+    // drop 事件同时清 orphan 与 pending(钱已回到手)
     reloaded.handleEvent({ type: 'drop', key: 'k3', instanceId: 'inst-3' })
     assert.equal(reloaded.listPendingRefunds().length, 1)
   } finally {
@@ -7691,12 +7721,12 @@ server.close()
   }
 }
 
-// 登录链路的瞬时故障重试与可诊断原因码（issue #22 / PR #23）。
+// 登录链路的瞬时故障重试与可诊断原因码(issue #22 / PR #23).
 //
-// 为什么必须钉住：`buildFetchWithProxy` 的池内回落**只存在于 kind==='pool'**，
-// 而"代理设置留空"（官方推荐的家庭部署）返回 kind:'none' → 裸 fetch 零回落。
-// 修复靠 `fetchLoginUpstream` 补一次重试，并把失败翻译成稳定原因码。
-// 这里钉三件事：重试只发生一次、code 是稳定业务码、cause 保留底层原始码。
+// 为什么必须钉住:buildFetchWithProxy 的池内回落只存在于 kind==='pool',
+// 而"代理设置留空"(官方推荐的家庭部署)返回 kind:'none' → 裸 fetch 零回落.
+// 修复靠 fetchLoginUpstream 补一次重试,并把失败翻译成稳定原因码.
+// 这里钉三件事:重试只发生一次,code 是稳定业务码,cause 保留底层原始码.
 {
   const { createUpstreamClient } = await import('../src/upstream/client.js')
   const loginCfg = loadConfig()
@@ -7728,12 +7758,12 @@ server.close()
   fs.rmSync(loginCfg.upstream.credentialsDir, { recursive: true, force: true })
 
   assert.ok(caught, 'loginCode 最终必须抛出（不可静默吞掉）')
-  // 1) 重试一次：只算登录端点，目录抓取不算进来
+  // 1) 重试一次:只算登录端点,目录抓取不算进来
   const loginCalls = seen.filter((u) => u.includes('/api/auth/cli/code'))
   assert.equal(loginCalls.length, 2, `登录应尝试 2 次（重试一次）, got ${loginCalls.length}`)
-  // 2) code 是稳定业务码，不是裸 socket 码
+  // 2) code 是稳定业务码,不是裸 socket 码
   assert.equal(caught.code, 'upstream_network', `code 应为稳定业务码, got ${caught.code}`)
-  // 3) cause 保留底层原始错误码（排障要能看见）
+  // 3) cause 保留底层原始错误码(排障要能看见)
   assert.equal(caught.cause, 'ECONNREFUSED', `cause 应保留底层码, got ${caught.cause}`)
   // 4) 给人看的 message 里也要带底层码
   assert.match(caught.message, /ECONNREFUSED/, 'message 应含底层码供肉眼排查')
@@ -7744,8 +7774,8 @@ fs.rmSync(tmpDir, { recursive: true, force: true })
 console.log('smoke ok')
 
 
-// 官方 CLI 遥测上报：格式必须与抓包样本逐字段一致（records 数组 + level/event/
-// message/client_session_id/data）。格式错了就是自证伪造，所以逐项锁死。
+// 官方 CLI 遥测上报:格式必须与抓包样本逐字段一致(records 数组 + level/event/
+// message/client_session_id/data).格式错了就是自证伪造,所以逐项锁死.
 // 判据见 .agents/notes/proposed/architecture/2026-09-30-cli-telemetry-reports.md
 {
   const {
@@ -7795,7 +7825,7 @@ console.log('smoke ok')
     success: true,
   }, 'fingerprint_generated 的 data 必须与抓包一致')
 
-  // 上报失败必须静默，绝不影响可用性
+  // 上报失败必须静默,绝不影响可用性
   trackCliEvent(CLI_EVENTS.LOGIN_STARTED, { via: 'plain_command' })
   const n = await flushTelemetry(async () => { throw new Error('boom') })
   assert.equal(n, 0, '上报失败返回 0 且不抛')
@@ -7807,14 +7837,16 @@ console.log('smoke ok')
   assert.equal(sent.length, before)
 }
 
-// TLS 层对齐官方 CLI：ALPN 只 offer http/1.1。
-// 真机抓包官方 Bun CLI：TLSv1.3 / alpn=http/1.1 / cipher=TLS_AES_256_GCM_SHA384。
-// undici 默认会同时 offer h2，与官方不同 —— 是可检测的 TLS 层差异。
-// 注：Node 与 Bun 同为系统 OpenSSL 栈，cipher 本就一致；"Node 无法对齐"只成立于
-// 浏览器目标（GREASE 是保留数值，OpenSSL 名字字符串表达不了）。
+// TLS 层对齐官方 CLI:ALPN 只 offer http/1.1.
+// 真机抓包官方 Bun CLI:TLSv1.3 / alpn=http/1.1 / cipher=TLS_AES_256_GCM_SHA384.
+// undici 默认会同时 offer h2,与官方不同 —— 是可检测的 TLS 层差异.
+// 注:Node 与 Bun 同为系统 OpenSSL 栈,cipher 本就一致;"Node 无法对齐"只成立于
+// 浏览器目标(GREASE 是保留数值,OpenSSL 名字字符串表达不了).
 {
+  // ALPN 的实现已随 client.js 拆分搬进 client/transport.js(client.js 只剩
+  // 薄门面 re-export).断言必须指向真正构造 dispatcher 的那一层.
   const src = fs.readFileSync(
-    new URL('../src/upstream/client.js', import.meta.url),
+    new URL('../src/upstream/client/transport.ts', import.meta.url),
     'utf8',
   )
   assert.ok(
@@ -7827,10 +7859,10 @@ console.log('smoke ok')
   )
 }
 
-// 设备签名（x-freebuff-device-{key,ts,sig}）：上游判定「是不是注册过的真客户端」
-// 的核心判据。真机抓包确认官方每个 catalog/session/completions 请求都带这三头，
-// 而我们此前一个都没有。算法逐字对齐官方公开源码，并用抓到的真机样本做过
-// 逐字节重现验证（MATCH: true）。见
+// 设备签名(x-freebuff-device-{key,ts,sig}):上游判定[是不是注册过的真客户端]
+// 的核心判据.真机抓包确认官方每个 catalog/session/completions 请求都带这三头,
+// 而我们此前一个都没有.算法逐字对齐官方公开源码,并用抓到的真机样本做过
+// 逐字节重现验证(MATCH: true).见
 // .agents/notes/implemented/bug-fix/2026-10-01-device-signing.md
 {
   const {
@@ -7854,7 +7886,7 @@ console.log('smoke ok')
   assert.equal(HEADER_DEVICE_SIGNATURE, 'x-freebuff-device-sig')
   assert.equal(DEVICE_SIGNATURE_VERSION, 'freebuff-device-v1')
 
-  // 载荷：换行拼接、METHOD 大写、fetchId 缺失用空串占位（不是省略该行）
+  // 载荷:换行拼接,METHOD 大写,fetchId 缺失用空串占位(不是省略该行)
   const p = deviceSignaturePayload({
     method: 'post',
     path: '/api/v1/x',
@@ -7866,7 +7898,7 @@ console.log('smoke ok')
   assert.equal(p.split('\n').length, 6, '载荷必须恰好 6 行')
   assert.ok(p.startsWith('freebuff-device-v1\nPOST\n'), '第一行是版本、第二行是大写方法')
 
-  // 空 body 的哈希是 e3b0c442...（SHA-256 of empty），官方同款
+  // 空 body 的哈希是 e3b0c442...(SHA-256 of empty),官方同款
   assert.equal(
     bodySha256(null),
     'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
@@ -7884,7 +7916,7 @@ console.log('smoke ok')
   assert.equal(parseDeviceKeyRecord({ version: 2 }), null, '版本不对必须拒绝')
   assert.equal(parseDeviceKeyRecord(null), null)
 
-  // 签名可复算且稳定（同输入同输出）
+  // 签名可复算且稳定(同输入同输出)
   const priv = importDevicePrivateKey(k)
   assert.ok(priv, '必须能导入私钥')
   const args = {
@@ -7904,7 +7936,7 @@ console.log('smoke ok')
   assert.ok(s1[HEADER_DEVICE_SIGNATURE].length > 60, '签名是 base64url')
   assert.ok(!s1[HEADER_DEVICE_SIGNATURE].includes('='), 'base64url 不带 padding')
 
-  // 不同 path / body / fetchId 必须得出不同签名（否则签名形同虚设）
+  // 不同 path / body / fetchId 必须得出不同签名(否则签名形同虚设)
   const s3 = signDeviceRequest({ ...args, url: 'https://www.codebuff.com/other' })
   assert.notEqual(s1[HEADER_DEVICE_SIGNATURE], s3[HEADER_DEVICE_SIGNATURE], 'path 变了签名必须变')
   const s4 = signDeviceRequest({ ...args, body: '{}' })
@@ -7912,18 +7944,18 @@ console.log('smoke ok')
   const s5 = signDeviceRequest({ ...args, fetchId: 'fbf1.x' })
   assert.notEqual(s1[HEADER_DEVICE_SIGNATURE], s5[HEADER_DEVICE_SIGNATURE], 'fetchId 变了签名必须变')
 
-  // 注册作用域字符串（官方同款形状）
+  // 注册作用域字符串(官方同款形状)
   assert.equal(
     registrationScope('https://www.codebuff.com', 'u1'),
     'https://www.codebuff.com user:u1',
   )
 }
 
-// 目录协议（x-freebuff-catalog-protocol / -fetch）：服务端据此把请求认作
-// **目录客户端**并使用句柄（fbm1.xxx）而非 legacy 模型 id。官方原话：
+// 目录协议(x-freebuff-catalog-protocol / -fetch):服务端据此把请求认作
+// 目录客户端并使用句柄(fbm1.xxx)而非 legacy 模型 id.官方原话:
 //   "Its presence is what tells the session endpoints to answer with catalog
 //    keys instead of model ids."
-// 没有它只能走 legacy 路径，在受限出口下被直接拒绝。契约见
+// 没有它只能走 legacy 路径,在受限出口下被直接拒绝.契约见
 // .agents/notes/implemented/bug-fix/2026-10-01-catalog-protocol.md
 {
   const {
@@ -7946,7 +7978,7 @@ console.log('smoke ok')
   assert.equal(isModelHandle('deepseek/deepseek-v4-flash'), false)
   assert.equal(isModelHandle(null), false)
 
-  // 未持有目录时不带头（走 legacy，可用性不受影响）
+  // 未持有目录时不带头(走 legacy,可用性不受影响)
   const h = new CatalogHolder({
     apiHost: 'https://www.codebuff.com',
     token: 't',
@@ -7956,13 +7988,13 @@ console.log('smoke ok')
   assert.deepEqual(h.headers(), {}, '未持有时必须返回空头，绝不假装已持有')
   assert.equal(h.handleFor('m-1'), 'm-1', '无句柄时原样返回 id（legacy 路径）')
 
-  // 抓取失败：静默返回 false，并写退避（不反复打上游）
+  // 抓取失败:静默返回 false,并写退避(不反复打上游)
   const ok1 = await h.fetch()
   assert.equal(ok1, false, '抓取失败必须返回 false 而不是抛')
   const ok2 = await h.fetch()
   assert.equal(ok2, false, '退避期内不再抓')
 
-  // 成功的抓取：解析 rows（**不是** models/data）+ key/handle 配对
+  // 成功的抓取:解析 rows(不是 models/data)+ key/handle 配对
   let called = 0
   const h2 = new CatalogHolder({
     apiHost: 'https://www.codebuff.com',
@@ -7998,9 +8030,9 @@ console.log('smoke ok')
   assert.equal(hdrs[HEADER_CATALOG_PROTOCOL], '1')
   assert.equal(hdrs[HEADER_CATALOG_FETCH], 'fbf1.AAGZWM32cR3rz9Ux042')
 
-  // 回执侧（session.model / rateLimitsByModel / prices）用的是目录 key，
+  // 回执侧(session.model / rateLimitsByModel / prices)用的是目录 key,
   // 控制台必须能把 key 显示成人能认的名字 —— 否则前端只会裸显示
-  // `m-00032eaeec 10 FB/h`（服务端不透明标识）。
+  // m-00032eaeec 10 FB/h(服务端不透明标识).
   assert.equal(
     h2.displayNameForKey('m-00032eaeec'),
     'MiMo',
@@ -8008,17 +8040,17 @@ console.log('smoke ok')
   )
   assert.equal(h2.displayNameForKey('m-nope'), null, '未知 key 返回 null')
   assert.equal(h2.displayNameForKey(null), null, '空输入返回 null')
-  // 反向：显示名 → key（下游照着 display_name 填 model 时靠它落回服务端口径）
+  // 反向:显示名 → key(下游照着 display_name 填 model 时靠它落回服务端口径)
   assert.equal(h2.keyForName('MiMo'), 'm-00032eaeec')
   assert.equal(h2.keyForName('mimo'), 'm-00032eaeec', '小写同样命中')
   assert.equal(h2.keyForName(''), null, '空串返回 null')
   assert.equal(h2.keyForName(null), null, '非字符串返回 null')
 }
 
-// 目录 key ↔ 人类可读 id 的桥接（legacyDigests 反查）。
-// 「同步上游模型」此前不生效的根因：回执只有 key（m-096e75164d），而 catalog /
-// 自定义模型用人类可读 id（deepseek/deepseek-v4-flash），两侧对不上，
-// 同步写进去的条目永远匹配不到实际模型。
+// 目录 key ↔ 人类可读 id 的桥接(legacyDigests 反查).
+// [同步上游模型]此前不生效的根因:回执只有 key(m-096e75164d),而 catalog /
+// 自定义模型用人类可读 id(deepseek/deepseek-v4-flash),两侧对不上,
+// 同步写进去的条目永远匹配不到实际模型.
 {
   const { CatalogHolder, freebuffLegacyModelDigest } = await import(
     '../src/upstream/catalog-protocol.js'
@@ -8043,7 +8075,7 @@ console.log('smoke ok')
       ),
   })
   await h.fetch()
-  // 摘要 → key（回执/展示侧口径），与 legacyIndex（摘要 → 句柄）互补
+  // 摘要 → key(回执/展示侧口径),与 legacyIndex(摘要 → 句柄)互补
   assert.equal(h.keyByDigest.get('1e303ac563a6f9cc'), 'm-096e75164d')
   // 内置 catalog 的 id 算同一摘要即可反查到该行
   const { FREEBUFF_AVAILABLE_MODELS } = await import('../src/model.js')
@@ -8052,37 +8084,37 @@ console.log('smoke ok')
   )
   assert.ok(hit, '内置 catalog 必须有一条 id 的摘要等于目录行的 legacyDigest')
   assert.equal(hit.id, 'deepseek/deepseek-v4-flash')
-  // key → 摘要 的反向表：展示侧要「key → 人类可读 id」必须先回到摘要。
+  // key → 摘要 的反向表:展示侧要[key → 人类可读 id]必须先回到摘要.
   assert.equal(
     h.digestForKey('m-096e75164d'),
     '1e303ac563a6f9cc',
     'key → 摘要必须可用（否则 /v1/models 的可读 id 反查不出来）',
   )
   assert.equal(h.digestForKey('m-nope'), null, '未知 key 返回 null')
-  // 显示名 → key 的反向解析：下游照着 /v1/models 的 display_name 填 model 时用。
+  // 显示名 → key 的反向解析:下游照着 /v1/models 的 display_name 填 model 时用.
   assert.equal(h.keyForName('DeepSeek V4.1 Flash'), 'm-096e75164d')
   assert.equal(h.keyForName('  deepseek v4.1 flash  '), 'm-096e75164d', '大小写/空白不敏感')
   assert.equal(h.keyForName('不存在的模型'), null)
 }
 
 /**
- * /v1/models 不得把目录 key（m-00032eaeec）当模型名返回给下游。
+ * /v1/models 不得把目录 key(m-00032eaeec)当模型名返回给下游.
  *
- * 真实故障（用户反馈）：/v1/models 里有 5 条 `{id:'m-00032eaeec', source:'session'}`，
- * 下游 Agent 拿它当模型表，看到的是一串不透明标识 ——「返回的也应该是模型名称，
- * 而不是 ID」。extraIds 现在带 displayName / catalogId，按
- * `catalogId || displayName || key` 取 id。
+ * - 真实故障(用户反馈):/v1/models 里有 5 条 {id:'m-00032eaeec', source:'session'},
+ * 下游 Agent 拿它当模型表,看到的是一串不透明标识 ——[返回的也应该是模型名称,
+ * 而不是 ID].extraIds 现在带 displayName / catalogId,按
+ * - catalogId || displayName || key 取 id.
  */
 {
   const { buildModelsListResponse } = await import('../src/model.js')
   const out = buildModelsListResponse({
     includeAllCatalog: true,
     extraIds: [
-      // 有 catalogId：直接用人类可读 id（生态通用写法）。
+      // 有 catalogId:直接用人类可读 id(生态通用写法).
       { key: 'm-096e75164d', displayName: 'DeepSeek V4.1 Flash', catalogId: 'deepseek/deepseek-v4-flash' },
-      // 无 catalogId（上游新模型）：够不到可读 id 时用 displayName。
+      // 无 catalogId(上游新模型):够不到可读 id 时用 displayName.
       { key: 'm-9a7e098cc1', displayName: 'Solar Pro 4', catalogId: null },
-      // 连名字都没有：兜底原 key，绝不丢模型。
+      // 连名字都没有:兜底原 key,绝不丢模型.
       { key: 'm-unknown0', displayName: null, catalogId: null },
     ],
   }).data
@@ -8091,7 +8123,7 @@ console.log('smoke ok')
     !ids.includes('m-096e75164d'),
     'm-096e75164d 必须换成人读得懂的 id 而不是裸目录 key',
   )
-  // deepseek 那条内置 catalog 里本来就有，所以不该重复出现两次
+  // deepseek 那条内置 catalog 里本来就有,所以不该重复出现两次
   assert.equal(
     ids.filter((id) => id === 'deepseek/deepseek-v4-flash').length,
     1,
@@ -8104,28 +8136,28 @@ console.log('smoke ok')
   const unknown = out.find((m) => m.id === 'm-unknown0')
   assert.ok(unknown, '连名字都没有时兜底原 key，绝不能把模型弄丢')
   assert.equal(unknown.display_name, 'm-unknown0')
-  // 回归：老写法（纯字符串 extraIds）仍然可用
+  // 回归:老写法(纯字符串 extraIds)仍然可用
   const legacyShape = buildModelsListResponse({ extraIds: ['m-abcdef123'] }).data
   assert.ok(legacyShape.find((m) => m.id === 'm-abcdef123'), '纯字符串 extraIds 必须继续被接受')
 }
 
-// 会话模型绑定：chat 的 model 必须用**会话回执里服务端指派的值**
-// （m-xxxx 目录 key / fbm1.xxx 句柄），不能用自己的模型名 ——
-// 否则上游报 session_model_mismatch（实测踩过）。契约见
+// 会话模型绑定:chat 的 model 必须用会话回执里服务端指派的值
+// (m-xxxx 目录 key / fbm1.xxx 句柄),不能用自己的模型名 ——
+// 否则上游报 session_model_mismatch(实测踩过).契约见
 // .agents/notes/implemented/bug-fix/2026-10-01-session-model-binding.md
 {}
 
-// 模型映射用 legacyDigests（双 FNV-1a），**不是** sha256、**不是** recommendedKey。
-// 官方目录不直接列模型 id，只给每行的 legacyDigests；这是把
-// deepseek/deepseek-v4-flash 这类 id 映射到服务端行的唯一正确途径。
-// 用错会静默映射到别的模型（实测曾把 deepseek 映射到 MiMo），导致 chat 503。
+// 模型映射用 legacyDigests(双 FNV-1a),不是 sha256,不是 recommendedKey.
+// 官方目录不直接列模型 id,只给每行的 legacyDigests;这是把
+// deepseek/deepseek-v4-flash 这类 id 映射到服务端行的唯一正确途径.
+// 用错会静默映射到别的模型(实测曾把 deepseek 映射到 MiMo),导致 chat 503.
 // 见 .agents/notes/implemented/bug-fix/2026-10-01-legacy-model-digest-mapping.md
 {
   const { freebuffLegacyModelDigest, CatalogHolder } = await import(
     '../src/upstream/catalog-protocol.js',
   )
 
-  // 与**服务端真实返回**的 legacyDigests 逐字对照（决定性验证）
+  // 与服务端真实返回的 legacyDigests 逐字对照(决定性验证)
   assert.equal(
     freebuffLegacyModelDigest('mimo/mimo-v2.5'),
     '5acfab992d88345c',
@@ -8141,11 +8173,11 @@ console.log('smoke ok')
     '197cbcdc4b67262b',
     'GLM 行（m-7e20df6765）',
   )
-  // 注：只对有**实证**的条目断言。openai/gpt-5.6-luna 的摘要与服务端
+  // 注:只对有实证的条目断言.openai/gpt-5.6-luna 的摘要与服务端
   // 'GPT-6 Luna' 行的 legacyDigests 不同 —— 说明那行的旧 id 是另一个
-  // （目录会随版本演进，旧 id 也换）。不做无据断言。
+  // (目录会随版本演进,旧 id 也换).不做无据断言.
 
-  // 形状：16 位小写 hex
+  // 形状:16 位小写 hex
   const d = freebuffLegacyModelDigest('x/y')
   assert.match(d, /^[0-9a-f]{16}$/, '必须是 16 位小写 hex, got ' + d)
   assert.notEqual(
@@ -8154,7 +8186,7 @@ console.log('smoke ok')
     '不同模型必须得出不同摘要',
   )
 
-  // 端到端映射：模拟一份含 legacyDigests 的目录，验证 handleFor 依次尝试
+  // 端到端映射:模拟一份含 legacyDigests 的目录,验证 handleFor 依次尝试
   // 句柄 → 目录 key → legacy 摘要
   const holder = new CatalogHolder({
     apiHost: 'https://www.codebuff.com',
@@ -8202,9 +8234,9 @@ console.log('smoke ok')
   assert.equal(holder.hasModel('unknown/model'), false)
 }
 
-// chat metadata 对齐：freebuff_input_profile / repo_snapshot / llm_step_number。
-// 官方 chat 带这三个字段，我们此前一个都没有。格式逐字对齐官方
-// cli/src/utils/input-profile.ts encodeInputProfile()。
+// chat metadata 对齐:freebuff_input_profile / repo_snapshot / llm_step_number.
+// 官方 chat 带这三个字段,我们此前一个都没有.格式逐字对齐官方
+// cli/src/utils/input-profile.ts encodeInputProfile().
 // 见 .agents/notes/implemented/feature/2026-10-01-chat-metadata-parity.md
 {
   const {
@@ -8236,7 +8268,7 @@ console.log('smoke ok')
     '必须与官方样本逐字一致',
   )
 
-  // null 的项**整项省略**（对齐官方 flatMap 过滤 null）
+  // null 的项整项省略(对齐官方 flatMap 过滤 null)
   const noMs = encodeInputProfile({
     typedChars: 3,
     keypressEvents: 3,
@@ -8249,7 +8281,7 @@ console.log('smoke ok')
   assert.ok(!noMs.includes('ms='), 'composeMs=null 时不得出现 ms 项: ' + noMs)
   assert.equal(noMs, 'v1;tc=3;ke=3;mc=0;pc=0;pe=0;cps=3')
 
-  // 服务端视角的画像：字段齐全、顺序正确、不伪造粘贴
+  // 服务端视角的画像:字段齐全,顺序正确,不伪造粘贴
   const prof = describeProxyInput({
     messages: [{ role: 'user', content: 'say OK' }],
     arrivedAtMs: 1000,
@@ -8257,14 +8289,14 @@ console.log('smoke ok')
   })
   assert.match(prof, /^v1;tc=6;ke=1;mc=1;pc=0;pe=0;ms=30;cps=6$/, prof)
 
-  // repo_snapshot 是 JSON **字符串**，字段与官方同形
+  // repo_snapshot 是 JSON 字符串,字段与官方同形
   const repo = JSON.parse(describeProxyRepo())
   assert.equal(repo.gitAvailable, false)
   assert.equal(repo.repositoryVisibility, 'unknown')
   assert.equal(typeof repo.fileCount, 'number')
   assert.ok('changedFileScanTruncated' in repo)
 
-  // 合并：只补缺失项，不覆盖调用方已有值
+  // 合并:只补缺失项,不覆盖调用方已有值
   const merged = withChatMetadataParity(
     { run_id: 'r1', [LLM_STEP_NUMBER_KEY]: '7' },
     { messages: [{ role: 'user', content: 'hi' }], stepNumber: 2 },
@@ -8276,11 +8308,11 @@ console.log('smoke ok')
 }
 
 // ===========================================================================
-// 多语言（zh-CN / en）：字典完整性与 t() 行为。
+// 多语言(zh-CN / en):字典完整性与 t() 行为.
 //
-// 红线由 scripts/check-i18n.mjs 在 CI 独立 job 里跑（它检查 app.js 硬编码
-// 中文 + 各语种 key 一致 + 代码引用的 key 存在）。这里只守住**字典与 t()**
-// 本身的契约：语种切换、占位符替换、缺 key 回落。
+// 红线由 scripts/check-i18n.mjs 在 CI 独立 job 里跑(它检查 app.js 硬编码
+// 中文 + 各语种 key 一致 + 代码引用的 key 存在).这里只守住字典与 t()
+// 本身的契约:语种切换,占位符替换,缺 key 回落.
 // 见 .agents/notes/implemented/feature/2026-10-02-dashboard-i18n.md
 {
   const i18n = await import('../dashboard/i18n.js')
@@ -8289,7 +8321,7 @@ console.log('smoke ok')
   assert.ok(LOCALES.includes(DEFAULT_LOCALE), '默认语种必须在语种列表里')
   assert.ok(LOCALES.includes('en'), '必须支持英文')
 
-  // 每个语种都覆盖基准语种的全部 key（CI 红线也查这条，这里是本地快检）
+  // 每个语种都覆盖基准语种的全部 key(CI 红线也查这条,这里是本地快检)
   const baseKeys = localeKeys(DEFAULT_LOCALE).sort()
   assert.ok(baseKeys.length > 50, `字典条目太少（${baseKeys.length}），疑似没写全`)
   for (const loc of LOCALES) {
@@ -8303,12 +8335,12 @@ console.log('smoke ok')
   }
 
   /**
-   * 占位符替换。
+   * 占位符替换.
    *
-   * ⚠️ 断言的 key 从 `model.syncDone` 换成 `model.syncReportAligned`：
-   * 同步结果改成「按上游目录三向对账」的弹窗后，syncDone 被删（i18n 门禁
-   * 会把它判成死词条），这里必须跟着换，否则断言打在一个不存在的 key 上，
-   * 中英两语都回落到 key 原文 → notEqual 失败。
+   * - 断言的 key 从 model.syncDone 换成 model.syncReportAligned:
+   * 同步结果改成[按上游目录三向对账]的弹窗后,syncDone 被删(i18n 门禁
+   * 会把它判成死词条),这里必须跟着换,否则断言打在一个不存在的 key 上,
+   * 中英两语都回落到 key 原文 → notEqual 失败.
    */
   setLocale('zh-CN')
   assert.equal(getLocale(), 'zh-CN')
@@ -8321,12 +8353,12 @@ console.log('smoke ok')
   assert.ok(!enSync.includes('{n}'), `占位符未替换: ${enSync}`)
   assert.ok(enSync.includes('3'), '占位符应被替换为实际值')
 
-  // 语种归一化：zh-TW / en-US 等带地区的写法要能落到对应语种
+  // 语种归一化:zh-TW / en-US 等带地区的写法要能落到对应语种
   assert.equal(setLocale('zh-TW'), 'zh-CN')
   assert.equal(setLocale('en-US'), 'en')
   assert.equal(setLocale('ja-JP'), DEFAULT_LOCALE, '不支持的语种回落到默认')
 
-  // 缺 key 返回 key 本身（界面露出可读 key，而不是空白）
+  // 缺 key 返回 key 本身(界面露出可读 key,而不是空白)
   assert.equal(t('nope.missing.key'), 'nope.missing.key')
 
   // 各语种文案都不该是空串
@@ -8340,10 +8372,10 @@ console.log('smoke ok')
   setLocale(DEFAULT_LOCALE)
 }
 
-// 账号池列表必须带 session.modelDisplayName（目录 key → 可读名）。
-// 回执里的 session.model 是目录 key（m-00032eaeec），控制台总览/账号池
-// 直接显示它就是 `m-00032eaeec` —— 用户看不出是哪个模型。
-// 同时必须保留 session.model 原值：请求/寻址要用 key 本身，不能被展示名覆盖。
+// 账号池列表必须带 session.modelDisplayName(目录 key → 可读名).
+// 回执里的 session.model 是目录 key(m-00032eaeec),控制台总览/账号池
+// 直接显示它就是 m-00032eaeec —— 用户看不出是哪个模型.
+// 同时必须保留 session.model 原值:请求/寻址要用 key 本身,不能被展示名覆盖.
 // 见 .agents/notes/implemented/bug-fix/2026-10-02-catalog-key-display-name-bridge.md
 {
   const { AccountRuntimes } = await import('../src/app-context.js')
@@ -8354,12 +8386,12 @@ console.log('smoke ok')
   const cfg = loadConfig()
   cfg.server.credentialsDir = dir
   cfg.upstream.credentialsDir = dir
-  cfg.upstream.apiBase = 'http://127.0.0.1:1' // 不可达：只测字段装配，不真连上游
+  cfg.upstream.apiBase = 'http://127.0.0.1:1' // 不可达:只测字段装配,不真连上游
   cfg.session.pollIntervalSec = 3600
 
   const rts = new AccountRuntimes(cfg)
   const rt = rts.get('mn')
-  // 注入一个已抓好目录的 catalog（真实目录行形态）
+  // 注入一个已抓好目录的 catalog(真实目录行形态)
   const cat = new CatalogHolder({
     apiHost: 'https://x',
     token: 't',
@@ -8377,7 +8409,7 @@ console.log('smoke ok')
   await cat.fetch()
   rt.upstream.catalog = cat
 
-  // 直接验证解析函数：这是 list() 里 modelDisplayName 的来源
+  // 直接验证解析函数:这是 list() 里 modelDisplayName 的来源
   assert.equal(
     rts._modelDisplayName('m-00032eaeec'),
     'MiMo 2.6 Flash',
@@ -8390,14 +8422,14 @@ console.log('smoke ok')
   fs.rmSync(dir, { recursive: true, force: true })
 }
 
-// 对外错误响应**绝不能**带账号标识（key / email / 逐条原始 message）。
-// 429 响应会被下游 Agent 客户端原样转发、落进别人的日志与报错堆栈；
-// 带上 email 等于把整个账号池的邮箱清单发给调用方（PII 泄露）。
-// 管理员要看明细请用控制台（登录后）或服务端日志。
+// 对外错误响应绝不能带账号标识(key / email / 逐条原始 message).
+// 429 响应会被下游 Agent 客户端原样转发,落进别人的日志与报错堆栈;
+// 带上 email 等于把整个账号池的邮箱清单发给调用方(PII 泄露).
+// 管理员要看明细请用控制台(登录后)或服务端日志.
 // 判据与取舍见 .agents/notes/implemented/bug-fix/2026-10-02-no-account-pii-in-errors.md
 {
   const { maskEmail } = await import('../src/app-context.js')
-  // 脱敏：保留域名、掩码本地部分
+  // 脱敏:保留域名,掩码本地部分
   assert.equal(maskEmail('alice@gmail.com'), 'a***e@gmail.com')
   assert.equal(maskEmail('ab@gmail.com'), 'a*@gmail.com')
   assert.equal(maskEmail('a@gmail.com'), '*@gmail.com')
@@ -8405,17 +8437,17 @@ console.log('smoke ok')
   assert.equal(maskEmail(''), '')
   assert.equal(maskEmail(null), '')
   assert.equal(maskEmail('not-an-email'), '')
-  // 脱敏结果**不得**包含完整本地部分
+  // 脱敏结果不得包含完整本地部分
   const masked = maskEmail('alexrennie293@gmail.com')
   assert.ok(!masked.includes('alexrennie293'), `脱敏后仍含完整本地部分: ${masked}`)
   assert.ok(masked.includes('@gmail.com'), '域名应保留（排障要能区分账号）')
 }
 
-// 被封禁（banned）的账号**不得**再参与调度：不进候选、不 admit、不产生扣费。
-// banned 是账号生命周期终点（账本 bannedAt 或冷却 code=banned），只能换号/等解封；
-// 让它继续进候选 = 每次都白试一轮，且一次 admit 实付一整小时。
-// 用户反馈的 14 账号全挂场景里，banned 账号出现在 failures 中属于**已跳过**记录，
-// 不是"被调度过" —— 这里钉死的是它根本不进候选、不产生任何上游扣费动作。
+// 被封禁(banned)的账号不得再参与调度:不进候选,不 admit,不产生扣费.
+// banned 是账号生命周期终点(账本 bannedAt 或冷却 code=banned),只能换号/等解封;
+// 让它继续进候选 = 每次都白试一轮,且一次 admit 实付一整小时.
+// 用户反馈的 14 账号全挂场景里,banned 账号出现在 failures 中属于已跳过记录,
+// 不是"被调度过" —— 这里钉死的是它根本不进候选,不产生任何上游扣费动作.
 {
   const { AccountRuntimes } = await import('../src/app-context.js')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-banned-'))
@@ -8438,7 +8470,7 @@ console.log('smoke ok')
   )
   assert.ok(order.includes('ok1'), '未封禁的账号应正常进候选')
 
-  // 控制台列表里仍要区分 banned（用户要能看出"这个号废了"）
+  // 控制台列表里仍要区分 banned(用户要能看出"这个号废了")
   const row = rts.list().find((x) => x.key === 'bk1')
   assert.equal(row.banned, true, '列表应标记 banned')
   assert.equal(row.status, 'banned')
@@ -8448,14 +8480,14 @@ console.log('smoke ok')
 }
 
 /* ================================================================
-   回归：上游 401 必须归一成 auth_unauthorized（不是裸 unauthorized）
+   回归:上游 401 必须归一成 auth_unauthorized(不是裸 unauthorized)
    ================================================================ */
 {
   const origFetch = globalThis.fetch
   /**
-   * 上游 401 的真值（2026-10-04 单变量对照实测）：
-   *   无效 token → 401 {"error":"unauthorized","message":"Invalid API key"}
-   *   无 token   → 401 {"error":"unauthorized","message":"Missing or invalid Authorization header"}
+   * 上游 401 的真值(2026-10-04 单变量对照实测):
+   * 无效 token → 401 {"error":"unauthorized","message":"Invalid API key"}
+   * 无 token   → 401 {"error":"unauthorized","message":"Missing or invalid Authorization header"}
    */
   globalThis.fetch = async () =>
     new Response(
@@ -8475,28 +8507,28 @@ console.log('smoke ok')
   assert.ok(caught, '401 必须抛出（不得被当成成功回执吞掉）')
   assert.equal(caught.status, 401)
   /**
-   * ⚠️ 以前 code 直接取 `body.error` = `unauthorized`。控制台 probeReason()
-   * 用宽匹配 `includes('unauthorized')` 命中「凭证无效」，把网络/出口类 401
-   * 也判成凭证失效。归一成 auth_unauthorized 后前端才能精确命中并给出处置。
+   * - 以前 code 直接取 body.error = unauthorized.控制台 probeReason()
+   * - 用宽匹配 includes('unauthorized') 命中[凭证无效],把网络/出口类 401
+   * 也判成凭证失效.归一成 auth_unauthorized 后前端才能精确命中并给出处置.
    */
   assert.equal(
     caught.code,
     'auth_unauthorized',
     `401 必须归一成 auth_unauthorized，got ${caught.code}`,
   )
-  // 上游原文必须带走：只说"凭证无效"用户不知道是 key 失效还是头没带
+  // 上游原文必须带走:只说"凭证无效"用户不知道是 key 失效还是头没带
   assert.match(caught.message, /Invalid API key/, '错误消息必须带上游原文')
   assert.equal(caught.body?.error, 'unauthorized')
 }
 
 /* ================================================================
-   回归：日志缓冲可清空 + 可按账号过滤
+   回归:日志缓冲可清空 + 可按账号过滤
    ================================================================ */
 {
   const { clearRing, readLogBuffer, configureLogBuffer, configureLogger, log } =
     await import('../src/util/log.js')
   const cap = configureLogBuffer(100)
-  // smoke 全局把 level 设成了 error，info 会被过滤掉；这里临时放开再还原。
+  // smoke 全局把 level 设成了 error,info 会被过滤掉;这里临时放开再还原.
   configureLogger({ level: 'info' })
   clearRing()
   log('info', 'alpha line', { account: 'a@gmail.com' })
@@ -8504,19 +8536,19 @@ console.log('smoke ok')
   log('error', 'gamma line', { account: 'a@gmail.com' })
   assert.equal(readLogBuffer().length, 3, 'info 级别必须能进缓冲')
 
-  // 按账号过滤：后端早已支持，但前端从未传 —— 这里钉住它不被简化掉。
+  // 按账号过滤:后端早已支持,但前端从未传 —— 这里钉住它不被简化掉.
   const onlyA = readLogBuffer({ account: 'a@gmail.com' })
   assert.equal(onlyA.length, 2, 'account 过滤必须命中该账号的两条')
   assert.ok(onlyA.every((l) => l.account === 'a@gmail.com'))
   const onlyB = readLogBuffer({ account: 'b@outlook.com' })
   assert.equal(onlyB.length, 1)
-  // 大小写不敏感（用户手打邮箱不会刻意对齐大小写）
+  // 大小写不敏感(用户手打邮箱不会刻意对齐大小写)
   assert.equal(readLogBuffer({ account: 'A@GMAIL.COM' }).length, 2)
 
-  // 级别过滤仍然有效（不能被 account 分支挤掉）
+  // 级别过滤仍然有效(不能被 account 分支挤掉)
   assert.equal(readLogBuffer({ level: 'error' }).length, 1)
 
-  // 清空：控制台「清空」按钮依赖它
+  // 清空:控制台[清空]按钮依赖它
   clearRing()
   assert.equal(readLogBuffer().length, 0, '清空后必须为空')
   configureLogger({ level: 'error' })
@@ -8524,7 +8556,7 @@ console.log('smoke ok')
 }
 
 /* ================================================================
-   回归：issue #24 —— 付费时段内换模型不得释放已买断的会话
+   回归:issue #24 —— 付费时段内换模型不得释放已买断的会话
    ================================================================ */
 {
   const events = []
@@ -8544,7 +8576,7 @@ console.log('smoke ok')
     },
     accountKey: 'paid-switch',
   })
-  // 一条买断整小时、还差 50 分钟到期的会话
+  // 一条买断整小时,还差 50 分钟到期的会话
   sm.session = {
     status: 'active',
     instanceId: 'inst-paid',
@@ -8559,10 +8591,10 @@ console.log('smoke ok')
     '付费时段内换模型必须被拦',
   )
   /**
-   * ⚠️ 核心断言：**绝不能发 DELETE**。
-   * 改前这里无条件 `_releaseUnlocked()`，而实测 DELETE 之后接不回来
-   * （0s/45s/90s 三次重试全部 purchase_claim_released）—— 已买断的一小时
-   * 既不能用也拿不回来。
+   * - 核心断言:绝不能发 DELETE.
+   * - 改前这里无条件 _releaseUnlocked(),而实测 DELETE 之后接不回来
+   * (0s/45s/90s 三次重试全部 purchase_claim_released)—— 已买断的一小时
+   * 既不能用也拿不回来.
    */
   assert.equal(
     events.includes('DELETE'),
@@ -8573,12 +8605,12 @@ console.log('smoke ok')
   assert.equal(sm.session?.status, 'active', '已付费会话状态不得被篡改')
   assert.equal(sm.inPaidWindow(), true)
 
-  // 同一模型继续请求 → 走热路径复用（边际成本 0），零上游调用
+  // 同一模型继续请求 → 走热路径复用(边际成本 0),零上游调用
   events.length = 0
   await sm.ensureSession('m-69307952f8')
   assert.equal(events.length, 0, '同模型应纯复用，不产生任何上游调用')
 
-  // 用户主动释放（时段结束/手动关闭）后，换模型才允许 admit
+  // 用户主动释放(时段结束/手动关闭)后,换模型才允许 admit
   await sm.release()
   events.length = 0
   await sm.ensureSession('mimo/mimo-v2.5').catch(() => {})
@@ -8589,22 +8621,22 @@ console.log('smoke ok')
 }
 
 /* ================================================================
-   purchase_claim_released：必须换新 instanceId 重试（官方语义），且多轮稳定
+   purchase_claim_released:必须换新 instanceId 重试(官方语义),且多轮稳定
    ================================================================ */
 {
   /**
-   * 官方真值（orchestrator.js:208166-208177）：
-   *   收到 purchase_claim_released
-   *     → recovery.finish（结束失败尝试）
-   *     → releasePurchaseClaim()（DELETE 那条作废的 claim）
-   *     → host.forget(instanceId) + crypto.randomUUID()（换全新 id）
-   *     → 重试**一次**（rotated）
+   * 官方真值(orchestrator.js:208166-208177):
+   * 收到 purchase_claim_released
+   * → recovery.finish(结束失败尝试)
+   * → releasePurchaseClaim()(DELETE 那条作废的 claim)
+   * → host.forget(instanceId) + crypto.randomUUID()(换全新 id)
+   * - → 重试一次(rotated)
    *
-   * 我们此前把它当"槽位忙"跳过 → 永远卡在同一个作废 id 上（真实事故：
-   * 连续三个模型全部失败，含单价 0 的模型，直到 expiresAt 才恢复）。
+   * 我们此前把它当"槽位忙"跳过 → 永远卡在同一个作废 id 上(真实事故:
+   * 连续三个模型全部失败,含单价 0 的模型,直到 expiresAt 才恢复).
    *
-   * 这里用纯 mock 复现该形态，并**连跑 5 轮**（用户要求「至少测试五轮」——
-   * 单轮会漏掉"第一轮侥幸成功、后续卡死"这类问题）。
+   * - 这里用纯 mock 复现该形态,并连跑 5 轮(用户要求[至少测试五轮]——
+   * 单轮会漏掉"第一轮侥幸成功,后续卡死"这类问题).
    */
   const events = []
   const retired = new Set()          // 已被作废过的 instanceId
@@ -8619,11 +8651,11 @@ console.log('smoke ok')
       if (method === 'POST') {
         const id = opts.instanceId || null
         /**
-         * 只让**第一个** id 作废一次（模拟上游对那条 claim 的作废）。
-         * 换新 id 后必须放行 —— 这正是本用例要验证的行为：
-         * 若不换 id（旧行为），会带同一个 id 再来 → 已在 retired 里 → 继续被拒。
-         * ⚠️ 不能写成"第一次见的 id 就作废"：那会让**换新后的 id 也被作废**
-         * （实测踩到，测试因此恒失败）。
+         * - 只让第一个 id 作废一次(模拟上游对那条 claim 的作废).
+         * 换新 id 后必须放行 —— 这正是本用例要验证的行为:
+         * 若不换 id(旧行为),会带同一个 id 再来 → 已在 retired 里 → 继续被拒.
+         * - 不能写成"第一次见的 id 就作废":那会让换新后的 id 也被作废
+         * (实测踩到,测试因此恒失败).
          */
         if (id && !retired.has(id) && retired.size === 0) {
           retired.add(id)
@@ -8665,8 +8697,8 @@ console.log('smoke ok')
   )
 
   /**
-   * 多轮稳定性：同一实例上连发 5 轮，每轮都要能复用热 session（零新增 admit）。
-   * 这条正是"第一轮成功、后续卡死"那类问题的守门人。
+   * 多轮稳定性:同一实例上连发 5 轮,每轮都要能复用热 session(零新增 admit).
+   * 这条正是"第一轮成功,后续卡死"那类问题的守门人.
    */
   const before = admitCount
   for (let i = 1; i <= 5; i += 1) {
@@ -8681,21 +8713,21 @@ console.log('smoke ok')
 }
 
 /* ================================================================
-   持有心跳：admission 后必须立刻发一次（官方行为），且轮询走心跳形态
+   持有心跳:admission 后必须立刻发一次(官方行为),且轮询走心跳形态
    ================================================================ */
 {
   /**
-   * 官方真值（orchestrator.js:208918-208957 的 syncHeartbeatTimer +
-   * 207945-207957 的 getSession(auth, instanceId, heartbeat=true)）：
-   *   - admission 成功后**立刻**发一次心跳，之后每 45 秒一次；
-   *   - 形态 = GET /session + `x-freebuff-instance-id` + `x-freebuff-heartbeat: 1`，
-   *     且**不带**时区（`...!heartbeat ? freebuffTimeZoneHeaders() : {}`）。
+   * 官方真值(orchestrator.js:208918-208957 的 syncHeartbeatTimer +
+   * 207945-207957 的 getSession(auth, instanceId, heartbeat=true)):
+   * - - admission 成功后立刻发一次心跳,之后每 45 秒一次;
+   * - - 形态 = GET /session + x-freebuff-instance-id + x-freebuff-heartbeat: 1,
+   * - 且不带时区(...!heartbeat ? freebuffTimeZoneHeaders() : {}).
    *
-   * 抓包实证：admission（line 8）→ 首个心跳（line 17）间隔 20.5 秒。
+   * 抓包实证:admission(line 8)→ 首个心跳(line 17)间隔 20.5 秒.
    * 而真实事故里 admission 后 25 秒就被上游退款 —— 缺心跳是"上游认为这条
-   * 会话无人持有"的最强候选。
+   * 会话无人持有"的最强候选.
    *
-   * ⚠️ 反向探针：删掉 `_sendHoldHeartbeat(...)` 调用后本用例必须变红。
+   * - 反向探针:删掉 _sendHoldHeartbeat(...) 调用后本用例必须变红.
    */
   const calls = []
   const up = {
@@ -8724,7 +8756,7 @@ console.log('smoke ok')
     accountKey: 'heartbeat-case',
   })
   await sm.ensureSession('m-00032eaeec')
-  // 心跳是 fire-and-forget，给它一个微任务窗口
+  // 心跳是 fire-and-forget,给它一个微任务窗口
   await new Promise((r) => setTimeout(r, 50))
   const beats = calls.filter((c) => c.method === 'GET' && c.heartbeat === true)
   assert.ok(
@@ -8737,14 +8769,14 @@ console.log('smoke ok')
     '心跳必须带**该会话的** instanceId（否则上游无从知道谁在持有）',
   )
 
-  // 轮询也必须走心跳形态（官方保活）
+  // 轮询也必须走心跳形态(官方保活)
   calls.length = 0
   await sm.refresh({ heartbeat: true })
   assert.ok(
     calls.some((c) => c.method === 'GET' && c.heartbeat === true && c.instanceId === 'inst-heartbeat'),
     `轮询必须走持有心跳形态，got ${JSON.stringify(calls)}`,
   )
-  // 普通刷新（控制台「检测」）**不是**心跳：要能拿回额度/单价
+  // 普通刷新(控制台[检测])不是心跳:要能拿回额度/单价
   calls.length = 0
   await sm.refresh()
   assert.ok(
@@ -8754,23 +8786,23 @@ console.log('smoke ok')
 }
 
 /* ================================================================
-   admission 前必须先结清"待结束的会话"（官方 journal.pending 循环）
+   admission 前必须先结清"待结束的会话"(官方 journal.pending 循环)
    ================================================================ */
 {
   /**
-   * 官方 `orchestrator.js:208130-208136`：
-   *   for (let end of journal.pending(owner)) {
-   *     if (end.instanceId !== instanceId) continue;
-   *     if ((await recovery.finish(end, auth)).status === 'ended') continue;
-   *     throw localSessionError('previous_end_unconfirmed');
-   *   }
-   * 即：**同一条 instanceId 上有未结清的会话时，先结束它再 admission**。
+   * - 官方 orchestrator.js:208130-208136:
+   * for (let end of journal.pending(owner)) {
+   * if (end.instanceId !== instanceId) continue;
+   * if ((await recovery.finish(end, auth)).status === 'ended') continue;
+   * throw localSessionError('previous_end_unconfirmed');
+   * }
+   * - 即:同一条 instanceId 上有未结清的会话时,先结束它再 admission.
    *
-   * 不这么做的后果（实测）：上游认为槽位仍被占 → `purchase_capacity`；
-   * 而本地 `_apply` 已把 session 覆盖成 `none` → 面板说"没有会话"，
-   * 两边各说各话，用户完全无法判断。
+   * - 不这么做的后果(实测):上游认为槽位仍被占 → purchase_capacity;
+   * - 而本地 _apply 已把 session 覆盖成 none → 面板说"没有会话",
+   * 两边各说各话,用户完全无法判断.
    *
-   * ⚠️ 反向探针：删掉 admit 里那段 `if (this._releasePending ...)` 后本用例必须变红。
+   * - 反向探针:删掉 admit 里那段 if (this._releasePending ...) 后本用例必须变红.
    */
   const events = []
   const up = {
@@ -8799,7 +8831,7 @@ console.log('smoke ok')
     },
     accountKey: 'pending-end',
   })
-  // 模拟"有一条待结束的会话"（DELETE 曾失败 → _releasePending 置位）
+  // 模拟"有一条待结束的会话"(DELETE 曾失败 → _releasePending 置位)
   sm.session = { status: 'none', instanceId: 'stale-inst' }
   sm._releasePending = true
   events.length = 0
@@ -8817,19 +8849,19 @@ console.log('smoke ok')
 }
 
 /* ================================================================
-   槽位被占 → 用 takeover 显式接管（官方 orchestrator.js:208152-208155）
+   槽位被占 → 用 takeover 显式接管(官方 orchestrator.js:208152-208155)
    ================================================================ */
 {
   /**
-   * 官方：admission 回 purchase_capacity / purchase_in_use / premium_slot_taken
-   * 且回执带 currentInstanceId 时，**带 `x-freebuff-takeover-instance-id` 重发一次**，
-   * 把剩余时长移过来（官方文案："move the remaining time here without another charge"）。
+   * 官方:admission 回 purchase_capacity / purchase_in_use / premium_slot_taken
+   * - 且回执带 currentInstanceId 时,带 x-freebuff-takeover-instance-id 重发一次,
+   * 把剩余时长移过来(官方文案:"move the remaining time here without another charge").
    *
-   * 缺这一步的后果（实测 2026-10-04）：账号上游 status:none、balance 15，
-   * 但每个请求都 purchase_capacity（回执 currentInstanceId 指向别人），
-   * 用户看到「明明有额度却永远说槽位被占」。
+   * 缺这一步的后果(实测 2026-10-04):账号上游 status:none,balance 15,
+   * 但每个请求都 purchase_capacity(回执 currentInstanceId 指向别人),
+   * 用户看到[明明有额度却永远说槽位被占].
    *
-   * ⚠️ 反向探针：删掉 admit 里的 takeover 分支后本用例必须变红。
+   * - 反向探针:删掉 admit 里的 takeover 分支后本用例必须变红.
    */
   const calls = []
   let sawTakeover = false
@@ -8839,11 +8871,11 @@ console.log('smoke ok')
       if (method === 'DELETE') return { status: 'ended' }
       if (method === 'POST') {
         /**
-         * ⚠️ **只认带 takeoverInstanceId 的请求**。
+         * - 只认带 takeoverInstanceId 的请求.
          *
-         * 早先用 `sawTakeover` 标志做"第二次就放行"，结果**探针测不出实现损坏**：
-         * 即便实现没发 takeover，第二次 POST 仍被放行 → 断言全绿（假绿）。
-         * 现在 mock 严格镜像上游语义：不带 takeover 的一律回 purchase_capacity。
+         * - 早先用 sawTakeover 标志做"第二次就放行",结果探针测不出实现损坏:
+         * 即便实现没发 takeover,第二次 POST 仍被放行 → 断言全绿(假绿).
+         * 现在 mock 严格镜像上游语义:不带 takeover 的一律回 purchase_capacity.
          */
         if (!opts.takeoverInstanceId) {
           return {
@@ -8891,18 +8923,18 @@ console.log('smoke ok')
 }
 
 /* ================================================================
-   会话清单（desktopPurchases）解析 + 发请求前先用 knownHolder 接管
+   会话清单(desktopPurchases)解析 + 发请求前先用 knownHolder 接管
    ================================================================ */
 {
   /**
-   * 上游 `GET /session` 回执里带**会话清单**（实测字段）：
-   *   "desktopPurchases": [{"model":"mimo/mimo-v2.5",
-   *                         "expiresAt":"...","holderInstanceId":"6c5b0c7e-…"}]
-   * 官方据此实现 `knownHolder(model)`（orchestrator.js:208639），
-   * 在**发请求之前**就知道槽位被谁占着 —— 而这是**跨部署可见**的：
-   * 真值在上游，本地/远程各建过会话时上游回执会把全部持有者列出来。
+   * - 上游 GET /session 回执里带会话清单(实测字段):
+   * "desktopPurchases": [{"model":"mimo/mimo-v2.5",
+   * "expiresAt":"...","holderInstanceId":"6c5b0c7e-..."}]
+   * - 官方据此实现 knownHolder(model)(orchestrator.js:208639),
+   * - 在发请求之前就知道槽位被谁占着 —— 而这是跨部署可见的:
+   * 真值在上游,本地/远程各建过会话时上游回执会把全部持有者列出来.
    *
-   * ⚠️ 反向探针：删掉 `_apply` 里的 desktopPurchases 解析后本用例必须变红。
+   * - 反向探针:删掉 _apply 里的 desktopPurchases 解析后本用例必须变红.
    */
   const calls = []
   const HOLDER = 'other-deployment-inst'
@@ -8921,7 +8953,7 @@ console.log('smoke ok')
         }
       }
       if (method === 'POST') {
-        // 只有带正确 takeover 头才放行（镜像上游语义）
+        // 只有带正确 takeover 头才放行(镜像上游语义)
         if (opts.takeoverInstanceId !== HOLDER) {
           return { status: 'purchase_capacity', currentInstanceId: HOLDER, slotLimit: 1 }
         }
@@ -8955,16 +8987,16 @@ console.log('smoke ok')
 }
 
 /* ================================================================
-   刷新（refresh）必须把上游会话清单带进快照 → 前端可显示
+   刷新(refresh)必须把上游会话清单带进快照 → 前端可显示
    ================================================================ */
 {
   /**
-   * 用户诉求：「刷新的时候就知道有多少个会话清单，并且显示在前端」。
+   * 用户诉求:[刷新的时候就知道有多少个会话清单,并且显示在前端].
    *
-   * 上游 `GET /session` 回执带 `desktopPurchases`（含**别的部署**建的会话）→
-   * `_absorbInventory` 吸收 → `getSnapshot().inventory` 带出去 → 前端渲染。
+   * - 上游 GET /session 回执带 desktopPurchases(含别的部署建的会话)→
+   * - _absorbInventory 吸收 → getSnapshot().inventory 带出去 → 前端渲染.
    *
-   * ⚠️ 反向探针：把 `_absorbInventory` 从 refresh 路径拿掉后本用例必须变红。
+   * - 反向探针:把 _absorbInventory 从 refresh 路径拿掉后本用例必须变红.
    */
   const OTHER = 'other-deployment-inst'
   const up = {
@@ -9006,20 +9038,20 @@ console.log('smoke ok')
 }
 
 /* ================================================================
-   全池额度耗尽 = 终态：一次收场，不白轮 maxAttempts 轮
+   全池额度耗尽 = 终态:一次收场,不白轮 maxAttempts 轮
    ================================================================ */
 {
   /**
-   * 真实事故（远程日志 2026-10-04 14:01:47-14:02:00）：
-   * 13 个客户端请求，每个都白轮 3 次（maxAttempts），每次都要遍历全部账号查额度。
-   * 每轮都刷几十条日志 —— 13 个请求就把 500 条环形缓冲冲爆，
-   * 用户事后**查不到更早的排障记录**。
+   * 真实事故(远程日志 2026-10-04 14:01:47-14:02:00):
+   * 13 个客户端请求,每个都白轮 3 次(maxAttempts),每次都要遍历全部账号查额度.
+   * 每轮都刷几十条日志 —— 13 个请求就把 500 条环形缓冲冲爆,
+   * - 用户事后查不到更早的排障记录.
    *
-   * 根因：所有账号都买不起时抛的是单账号级 `freebucks_exhausted`，
-   * 而 429 被 `shouldSwitchAccountOnError` 判成"该换号" → 再轮一遍。
-   * 但"全池都买不起"是**遍历完才得出的聚合结论**，换号不可能改变它。
+   * - 根因:所有账号都买不起时抛的是单账号级 freebucks_exhausted,
+   * - 而 429 被 shouldSwitchAccountOnError 判成"该换号" → 再轮一遍.
+   * - 但"全池都买不起"是遍历完才得出的聚合结论,换号不可能改变它.
    *
-   * ⚠️ 反向探针：去掉 `terminalExhausted: true` 后本用例必须变红。
+   * - 反向探针:去掉 terminalExhausted: true 后本用例必须变红.
    */
   const calls = []
   const up = {
@@ -9033,7 +9065,7 @@ console.log('smoke ok')
     config: { session: { reAdmitOnExpire: true, reAdmitLeadSec: 60, freeModelReAdmitLeadSec: 60 }, limits: {} },
     accountKey: 'terminal-exhausted',
   })
-  // 账号快照：余额 0、单价 15 → 买不起
+  // 账号快照:余额 0,单价 15 → 买不起
   sm.freebucks = { balance: 0, daily: { limit: 25, remaining: 0, resetAt: null }, prices: { 'm-00032eaeec': 15 } }
   const fb = sm.freebucksFor('m-00032eaeec')
   assert.equal(fb.affordable, false, '对照前提：该账号应被判买不起')
@@ -9041,20 +9073,20 @@ console.log('smoke ok')
 }
 
 /* ================================================================
-   全池额度耗尽 → 抛出的错误必须带 terminalExhausted（外层据此一次收场）
+   全池额度耗尽 → 抛出的错误必须带 terminalExhausted(外层据此一次收场)
    ================================================================ */
 {
   /**
-   * 这是对"为什么白轮 maxAttempts 轮"的直接回归：
+   * 这是对"为什么白轮 maxAttempts 轮"的直接回归:
    *
-   * 旧行为：全池都买不起时抛单账号级 `freebucks_exhausted`，外层
-   * `shouldSwitchAccountOnError(429, …)` 判成"该换号" → 再轮一遍全部账号。
-   * 实测远程 13 个请求各白轮 3 次，日志被冲爆（用户事后查不到更早记录）。
+   * - 旧行为:全池都买不起时抛单账号级 freebucks_exhausted,外层
+   * - shouldSwitchAccountOnError(429, ...) 判成"该换号" → 再轮一遍全部账号.
+   * 实测远程 13 个请求各白轮 3 次,日志被冲爆(用户事后查不到更早记录).
    *
-   * 修复：这种"遍历完才得出的聚合结论"带 `terminalExhausted: true`，
-   * 外层 `isTerminal` 立即返回。
+   * - 修复:这种"遍历完才得出的聚合结论"带 terminalExhausted: true,
+   * - 外层 isTerminal 立即返回.
    *
-   * ⚠️ 反向探针：删掉 app-context 里的 `terminalExhausted: true` → 本断言必须红。
+   * - 反向探针:删掉 app-context 里的 terminalExhausted: true → 本断言必须红.
    */
   const { buildAppContext } = await import('../src/app-context.js')
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-terminal-'))
@@ -9068,7 +9100,7 @@ console.log('smoke ok')
     JSON.stringify({ id: 'a', email: 'a@example.com', authToken: 'tok-a' }),
   )
   const runtimes3 = new AccountRuntimes(cfg)
-  // 让该账号"买不起"：余额 0 / 单价 15
+  // 让该账号"买不起":余额 0 / 单价 15
   const rt3 = runtimes3.get('a')
   rt3.sessions.freebucks = {
     balance: 0,
@@ -9088,7 +9120,7 @@ console.log('smoke ok')
     `全池额度耗尽必须带 terminalExhausted（否则外层会白轮 maxAttempts 轮），` +
       `got code=${thrown.code} terminalExhausted=${thrown.terminalExhausted}`,
   )
-  // 额度类码仍保留（兼容既有消费方）
+  // 额度类码仍保留(兼容既有消费方)
   assert.ok(
     thrown.code === 'freebucks_exhausted' || thrown.code === 'units_exhausted',
     `应保留额度类码，got ${thrown.code}`,
@@ -9098,55 +9130,55 @@ console.log('smoke ok')
 }
 
 /* ================================================================
-   日志缓冲：容量可配 + 默认足够回溯一次故障
+   日志缓冲:容量可配 + 默认足够回溯一次故障
    ================================================================ */
 {
   /**
-   * 真实事故（2026-10-04）：用户想查 30 分钟前的日志，发现缓冲里只剩
-   * 最近 16 分钟 —— 一次故障刷出的几百条把 500 条上限冲爆了。
-   * 而日志**不落盘**（纯内存），所以上限就是能回溯的全部深度。
+   * 真实事故(2026-10-04):用户想查 30 分钟前的日志,发现缓冲里只剩
+   * 最近 16 分钟 —— 一次故障刷出的几百条把 500 条上限冲爆了.
+   * - 而日志不落盘(纯内存),所以上限就是能回溯的全部深度.
    *
-   * 同时发现：`src/util/log.js` 的注释写着"可由 config.log.ringCap 调整"，
-   * 但 **config.js 里根本没有这一项**，`configureLogBuffer` 也从未被调用 ——
-   * 注释在骗人，容量永远锁死 500。
+   * - 同时发现:src/util/log.js 的注释写着"可由 config.log.ringCap 调整",
+   * - 但 config.js 里根本没有这一项,configureLogBuffer 也从未被调用 ——
+   * 注释在骗人,容量永远锁死 500.
    *
-   * ⚠️ 反向探针：把 config.js 的 `ringCap` 默认值改回 500 → 第一条断言必须红。
+   * - 反向探针:把 config.js 的 ringCap 默认值改回 500 → 第一条断言必须红.
    */
   const c = loadConfig()
   assert.ok(
     Number.isInteger(c.logging.ringCap) && c.logging.ringCap >= 2000,
     `日志缓冲默认必须足够回溯一次故障（≥2000），got ${c.logging.ringCap}`,
   )
-  // 可配置：ring_cap 覆盖要生效（KEY_MAP 接线正确）
+  // 可配置:ring_cap 覆盖要生效(KEY_MAP 接线正确)
   const yaml = 'logging:\n  level: info\n  ring_cap: 12345\n'
   const tmpYaml = path.join(os.tmpdir(), `fb-ringcap-${Date.now()}.yaml`)
   fs.writeFileSync(tmpYaml, yaml)
   const c2 = loadConfig(tmpYaml)
   assert.equal(c2.logging.ringCap, 12345, `ring_cap 配置必须生效，got ${c2.logging.ringCap}`)
   fs.rmSync(tmpYaml, { force: true })
-  // 运行时也真的能改（configureLogBuffer 出口）
+  // 运行时也真的能改(configureLogBuffer 出口)
   const logMod = await import('../src/util/log.js')
   assert.equal(logMod.configureLogBuffer(321), 321, 'configureLogBuffer 必须真的改到容量')
   logMod.configureLogBuffer(c.logging.ringCap)
 }
 
 /* ================================================================
-   503 不得冷却账号（模型侧问题，不是账号故障）
+   503 不得冷却账号(模型侧问题,不是账号故障)
    ================================================================ */
 {
   /**
-   * 真实事故（远程日志 2026-10-04 15:02:21-15:02:37）：
+   * 真实事故(远程日志 2026-10-04 15:02:21-15:02:37):
    *
-   *   15:02:22  freebuff session active  ← loli@woa.qzz.io（25 点）被选中
-   *   15:02:24  official channel: rpc result  status=503
-   *   15:02:24  account cooling down  code=http_503     ← ❌ 唯一有钱的号被冷却
-   *   15:02:24~ 只剩两个 0 余额号 → 全部 skip → 用户看到 429
+   * 15:02:22  freebuff session active  ← loli@woa.qzz.io(25 点)被选中
+   * 15:02:24  official channel: rpc result  status=503
+   * - 15:02:24  account cooling down  code=http_503     ←  唯一有钱的号被冷却
+   * 15:02:24~ 只剩两个 0 余额号 → 全部 skip → 用户看到 429
    *
-   * `docs/reverse/07` 的定因：503 是**模型侧**问题（该文档实测三个价格档、
-   * 多个模型、多种身份组合全部 503 → 变量不在请求里，也不在账号上）。
-   * 把它当 5xx 冷却，等于**把唯一有余额的账号踢出池子**。
+   * - docs/reverse/07 的定因:503 是模型侧问题(该文档实测三个价格档,
+   * 多个模型,多种身份组合全部 503 → 变量不在请求里,也不在账号上).
+   * - 把它当 5xx 冷却,等于把唯一有余额的账号踢出池子.
    *
-   * ⚠️ 反向探针：把 `if (status === 503) return false` 删掉后本用例必须变红。
+   * - 反向探针:把 if (status === 503) return false 删掉后本用例必须变红.
    */
   const { shouldSwitchAccountOnError } = await import('../src/proxy.js')
   assert.equal(
@@ -9154,31 +9186,31 @@ console.log('smoke ok')
     false,
     '503 是模型侧问题，不得触发冷却换号（否则会把唯一有余额的账号踢出池子）',
   )
-  // 对照：其它 5xx 仍应换号（上游瞬时故障，换号可能成功）
+  // 对照:其它 5xx 仍应换号(上游瞬时故障,换号可能成功)
   assert.equal(shouldSwitchAccountOnError(502, 'http_502'), true, '502 仍应换号')
   assert.equal(shouldSwitchAccountOnError(500, 'http_500'), true, '500 仍应换号')
-  // 对照：槽位类仍不换号（既有语义不变）
+  // 对照:槽位类仍不换号(既有语义不变)
   assert.equal(shouldSwitchAccountOnError(409, 'purchase_capacity'), false, '槽位忙仍不换号')
 }
 
 /* ================================================================
-   冷却的边界：banned 必须仍冷却（不能被任何"付费会话保护"吞掉）
+   冷却的边界:banned 必须仍冷却(不能被任何"付费会话保护"吞掉)
    ================================================================ */
 {
   /**
-   * ⚠️ 这里**曾经**有一条断言要求"持有已付费会话时不得因
-   * `start_agent_run_failed` 整号冷却" —— 那条**已删除**，因为它与本文
-   * 既有的换号用例（`expected 2 session POSTs`）以及 AGENTS.md 明写的纪律
-   * **直接冲突**：
+   * - 这里曾经有一条断言要求"持有已付费会话时不得因
+   * - start_agent_run_failed 整号冷却" —— 那条已删除,因为它与本文
+   * - 既有的换号用例(expected 2 session POSTs)以及 AGENTS.md 明写的纪律
+   * - 直接冲突:
    *
-   *   「上游报错(startAgentRun 失败 / 5xx / 403 账号级封禁 / 网络超时)
-   *     冷却当前账号并继续轮询下一个」
+   * [上游报错(startAgentRun 失败 / 5xx / 403 账号级封禁 / 网络超时)
+   * 冷却当前账号并继续轮询下一个]
    *
-   * 两者不可能同时成立。保留既有纪律（它先存在、且测完整链路），
-   * 删掉与之矛盾的断言 —— 已付费会话的价值由**「付费时段内绝不释放」**
-   * 那条纪律保护，不靠"禁止冷却"。
+   * 两者不可能同时成立.保留既有纪律(它先存在,且测完整链路),
+   * - 删掉与之矛盾的断言 —— 已付费会话的价值由[付费时段内绝不释放]
+   * 那条纪律保护,不靠"禁止冷却".
    *
-   * 本用例只钉住不矛盾的边界：**banned 是账号终点，必须冷却**。
+   * - 本用例只钉住不矛盾的边界:banned 是账号终点,必须冷却.
    */
   const { buildAppContext } = await import('../src/app-context.js')
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-bannedcool-'))
@@ -9210,21 +9242,21 @@ console.log('smoke ok')
 }
 
 /* ================================================================
-   余额 0 但有上游已付费会话 → 必须接管复用（不得被额度闸门挡住）
+   余额 0 但有上游已付费会话 → 必须接管复用(不得被额度闸门挡住)
    ================================================================ */
 {
   /**
-   * 2026-10-04 铁律（用户明确要求「它有 1 个会话你可以复用啊，记得复用」）：
+   * 2026-10-04 铁律(用户明确要求[它有 1 个会话你可以复用啊,记得复用]):
    *
-   * 一次 admit 买断一小时 → 这一小时内继续发请求**边际成本为 0**。
-   * `balance: 0` 只说明"再买一条买不起"，**不代表已付费的会话不能用**。
-   * 实测代价：面板显示 `DeepSeek V4.1 Flash · 49 分钟` 的已付费会话，
-   * 而调度因余额闸门跳过该账号 → 用户看到"有会话却一直 429"，白扔那一小时。
+   * - 一次 admit 买断一小时 → 这一小时内继续发请求边际成本为 0.
+   * - balance: 0 只说明"再买一条买不起",不代表已付费的会话不能用.
+   * - 实测代价:面板显示 DeepSeek V4.1 Flash . 49 分钟 的已付费会话,
+   * 而调度因余额闸门跳过该账号 → 用户看到"有会话却一直 429",白扔那一小时.
    *
-   * 判据：上游清单里有**同模型、未过期**的 `holderInstanceId` 时，
-   * 即使 `balance` 不够，也要走 takeover 复用，**不得**抛 `freebucks_exhausted`。
+   * - 判据:上游清单里有同模型,未过期的 holderInstanceId 时,
+   * - 即使 balance 不够,也要走 takeover 复用,不得抛 freebucks_exhausted.
    *
-   * ⚠️ 反向探针：把 `paidUpstream` 那段短路后本用例必须变红。
+   * - 反向探针:把 paidUpstream 那段短路后本用例必须变红.
    */
   const HOLDER = 'other-deployment-paid-inst'
   const calls = []
@@ -9233,7 +9265,7 @@ console.log('smoke ok')
       calls.push({ method, ...opts })
       if (method === 'DELETE') return { status: 'ended' }
       if (method === 'GET') {
-        // 上游：该模型有一条**别人**建的已付费会话（余额其实够，但这里刻意压低）
+        // 上游:该模型有一条别人建的已付费会话(余额其实够,但这里刻意压低)
         return {
           status: 'none',
           freebucks: { balance: 0, daily: { limit: 25, remaining: 0 }, prices: { 'm-00032eaeec': 10 } },
@@ -9262,9 +9294,9 @@ console.log('smoke ok')
     accountKey: 'paid-upstream',
   })
   /**
-   * ⚠️ 请求的模型必须与清单里那条会话**绑定的模型一致** —— 否则会撞上另一条
-   * 独立规则（`paid_window_model_mismatch`：付费时段内换模型 = 纯亏损，
-   * 实测 DELETE 后接不回来）。本用例只测"余额不足不得挡住复用"。
+   * - 请求的模型必须与清单里那条会话绑定的模型一致 —— 否则会撞上另一条
+   * - 独立规则(paid_window_model_mismatch:付费时段内换模型 = 纯亏损,
+   * 实测 DELETE 后接不回来).本用例只测"余额不足不得挡住复用".
    */
   const s = await sm.ensureSession('m-00032eaeec')
   assert.equal(s?.status, 'active', '有上游已付费会话时必须能复用到 active')
@@ -9277,22 +9309,22 @@ console.log('smoke ok')
 }
 
 /* ================================================================
-   免费模型（price === 0）不受 Freebucks 闸门约束
+   免费模型(price === 0)不受 Freebucks 闸门约束
    ================================================================ */
 {
   /**
-   * 用户报（2026-10-04）：「有些会话它的购买是免费的，而你这个筛选判断就把免费的
-   * 给它排除了……你就硬说他是没有余额，就不参与判断了，怎么能够这样？」
+   * 用户报(2026-10-04):[有些会话它的购买是免费的,而你这个筛选判断就把免费的
+   * 给它排除了......你就硬说他是没有余额,就不参与判断了,怎么能够这样?]
    *
-   * 上游价格表里确实有 `price: 0` 的免费模型（实测 `upstage/solar-mini4`、
-   * `stealth/space-bunny-alpha`）。既然它**不花钱**，"余额 0 / 每日池耗尽"就与它
-   * 无关 —— 用"没钱"拒绝一个免费模型是纯自伤：用户明明能用，被我们自己的闸门挡住。
+   * - 上游价格表里确实有 price: 0 的免费模型(实测 upstage/solar-mini4,
+   * - stealth/space-bunny-alpha).既然它不花钱,"余额 0 / 每日池耗尽"就与它
+   * 无关 —— 用"没钱"拒绝一个免费模型是纯自伤:用户明明能用,被我们自己的闸门挡住.
    *
-   * ⚠️ 但**只豁免"钱"**：会话次数（`rateLimitsByModel`）是上游的独立额度，
-   * 免费模型同样受它约束（实测这两个免费模型也是 `2.5/6`）。
+   * - 但只豁免"钱":会话次数(rateLimitsByModel)是上游的独立额度,
+   * - 免费模型同样受它约束(实测这两个免费模型也是 2.5/6).
    *
-   * ⚠️ 反向探针：去掉 `isFreeModel` 对 dailyExhausted/shortOnBalance 的短路后
-   * 本用例必须变红。
+   * - 反向探针:去掉 isFreeModel 对 dailyExhausted/shortOnBalance 的短路后
+   * 本用例必须变红.
    */
   const sm = new SessionManager({
     upstream: { freebuffSession: async () => null },
@@ -9310,21 +9342,21 @@ console.log('smoke ok')
   const paid = sm.freebucksFor('mimo/mimo-v2.5')
   assert.equal(paid.affordable, false, '对照：付费模型余额不足仍应拒绝')
   assert.equal(paid.reason, 'daily_exhausted', '对照：原因应为日池耗尽')
-  // 对照：次数闸门对免费模型**仍然生效**（不是"免费就无限制"）
+  // 对照:次数闸门对免费模型仍然生效(不是"免费就无限制")
   sm.quota = { byModel: { 'upstage/solar-mini4': { recentCount: 6, limit: 6 } } }
   const u = sm.sessionUnitsFor('upstage/solar-mini4')
   assert.equal(u.exhausted, true, '免费模型仍受会话次数闸门约束（上游的独立额度）')
 }
 
 /* ────────────────────────────────────────────────────────────────
-   边界结论（2026-10-05，**不放测试**，理由如下）
+   边界结论(2026-10-05,不放测试,理由如下)
 
-   全新账号（从未对过账，`freebucksFor().known === false`）**不会**触发上面那条
-   惰性探测 —— 因为门槛是"闸门已判定拒绝"。它的兜底路径是另一条：
-   正常 admit → 上游回 `purchase_capacity`（槽位被别处占着）
-   → `_admitUnlocked` 的 takeover 分支接管。
+   全新账号(从未对过账,freebucksFor().known === false)不会触发上面那条
+   惰性探测 —— 因为门槛是"闸门已判定拒绝".它的兜底路径是另一条:
+   正常 admit → 上游回 purchase_capacity(槽位被别处占着)
+   → _admitUnlocked 的 takeover 分支接管.
 
-   该路径**已由 `_admitUnlocked` 内的 takeover 测试覆盖**（见"槽位被占时用
-   takeover 显式接管"用例，含反向探针）。此处不再重复造一条需要 mock 整条
-   chat 链路的用例：投入产出不成比例，且重复覆盖同一逻辑。
+   该路径已由 _admitUnlocked 内的 takeover 测试覆盖(见"槽位被占时用
+   takeover 显式接管"用例,含反向探针).此处不再重复造一条需要 mock 整条
+   chat 链路的用例:投入产出不成比例,且重复覆盖同一逻辑.
    ──────────────────────────────────────────────────────────────── */

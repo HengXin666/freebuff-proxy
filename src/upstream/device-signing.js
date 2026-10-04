@@ -1,17 +1,17 @@
 /**
- * Freebuff/Codebuff 设备签名协议实现
- * 
- * 逆向自官方客户端 (Freebuff-0.0.156-linux-x86_64.AppImage)
- * orchestrator.js 第 134777-135150 行
- * 
- * 协议细节:
- * 1. 使用 Ed25519 密钥对
- * 2. 签名载荷格式 (换行符分隔):
- *    freebuff-device-v1\n{METHOD}\n{PATH}\n{TIMESTAMP_MS}\n{BODY_SHA256}\n{FETCH_ID}
- * 3. 三个请求头:
- *    - x-freebuff-device-key: {keyId}
- *    - x-freebuff-device-ts: {timestampMs}
- *    - x-freebuff-device-sig: {base64url(signature)}
+ - Freebuff/Codebuff 设备签名协议实现
+ *
+ - 逆向自官方客户端 (Freebuff-0.0.156-linux-x86_64.AppImage)
+ - orchestrator.js 第 134777-135150 行
+ *
+ - 协议细节:
+ - 1. 使用 Ed25519 密钥对
+ - 2. 签名载荷格式 (换行符分隔):
+ - freebuff-device-v1\n{METHOD}\n{PATH}\n{TIMESTAMP_MS}\n{BODY_SHA256}\n{FETCH_ID}
+ - 3. 三个请求头:
+ - - x-freebuff-device-key: {keyId}
+ - - x-freebuff-device-ts: {timestampMs}
+ - - x-freebuff-device-sig: {base64url(signature)}
  */
 
 import {
@@ -35,7 +35,7 @@ const DEVICE_KEY_HEADER = DEVICE_KEY_HEADER_NAME;
 const DEVICE_TIMESTAMP_HEADER = DEVICE_TIMESTAMP_HEADER_NAME;
 const DEVICE_SIGNATURE_HEADER = DEVICE_SIGNATURE_HEADER_NAME;
 
-// 测试与旧 import 点使用的别名（官方头部名逐字，不要另立取值）
+// 测试与旧 import 点使用的别名(官方头部名逐字,不要另立取值)
 export const HEADER_DEVICE_KEY = DEVICE_KEY_HEADER_NAME;
 export const HEADER_DEVICE_TIMESTAMP = DEVICE_TIMESTAMP_HEADER_NAME;
 export const HEADER_DEVICE_SIGNATURE = DEVICE_SIGNATURE_HEADER_NAME;
@@ -44,7 +44,7 @@ const REGISTER_TIMEOUT_MS = 10000;
 const REGISTER_RETRY_MS = 300000; // 5分钟
 
 /**
- * Base64url 编码
+ - Base64url 编码
  */
 function base64UrlEncode(buffer) {
   return buffer.toString('base64')
@@ -54,8 +54,8 @@ function base64UrlEncode(buffer) {
 }
 
 /**
- * 计算请求体的 SHA256 (hex)
- * 空 body = 空串的哈希（e3b0c442...），官方同款。
+ - 计算请求体的 SHA256 (hex)
+ - 空 body = 空串的哈希(e3b0c442...),官方同款.
  */
 export function bodySha256(body) {
   if (!body) return createHash('sha256').update('').digest('hex');
@@ -64,7 +64,7 @@ export function bodySha256(body) {
 }
 
 /**
- * Base64url 解码
+ - Base64url 解码
  */
 function base64UrlDecode(str) {
   const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
@@ -73,8 +73,8 @@ function base64UrlDecode(str) {
 }
 
 /**
- * 生成签名载荷（换行拼接、METHOD 大写、fetchId 缺失用空串占位）。
- * 逐字对齐官方 freebuffDeviceSignaturePayload()：6 行，缺一不可。
+ - 生成签名载荷(换行拼接,METHOD 大写,fetchId 缺失用空串占位).
+ - 逐字对齐官方 freebuffDeviceSignaturePayload():6 行,缺一不可.
  */
 export function deviceSignaturePayload({
   method,
@@ -93,16 +93,16 @@ export function deviceSignaturePayload({
   ].join('\n');
 }
 
-/** buildSignaturePayload 的同义名（内部调用点沿用）。 */
+/** buildSignaturePayload 的同义名(内部调用点沿用). */
 function buildSignaturePayload(opts) {
   return deviceSignaturePayload(opts);
 }
 
 /**
- * 生成一对 Ed25519 密钥（raw 公钥 + pkcs8 私钥，均 base64url）。
- * 公钥必须是 **raw 32 字节**：上游要求 "base64url raw Ed25519 public key"，
- * 传 SPKI 会被 400 拒绝。见
- * .agents/notes/implemented/bug-fix/2026-10-02-device-signing-raw-public-key.md
+ - 生成一对 Ed25519 密钥(raw 公钥 + pkcs8 私钥,均 base64url).
+ - 公钥必须是 raw 32 字节:上游要求 "base64url raw Ed25519 public key",
+ - 传 SPKI 会被 400 拒绝.见
+ - .agents/notes/implemented/bug-fix/2026-10-02-device-signing-raw-public-key.md
  */
 export function generateDeviceKey() {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519', {
@@ -119,7 +119,7 @@ export function generateDeviceKey() {
   };
 }
 
-/** 校验并规范化一个已存的密钥记录。 */
+/** 校验并规范化一个已存的密钥记录. */
 export function parseDeviceKeyRecord(value) {
   if (!value || typeof value !== 'object') return null;
   if (value.version !== 1) return null;
@@ -141,16 +141,16 @@ export function parseDeviceKeyRecord(value) {
   };
 }
 
-/** 注册作用域：一个 (apiHost, account) 一个 keyId（官方同款字符串）。 */
+/** 注册作用域:一个 (apiHost, account) 一个 keyId(官方同款字符串). */
 export function registrationScope(apiHost, accountId) {
   return `${apiHost} user:${accountId}`;
 }
 
-/** 从 PEM/PKCS#8 私钥导入 KeyObject。 */
+/** 从 PEM/PKCS#8 私钥导入 KeyObject. */
 export function importDevicePrivateKey(record) {
   try {
     const pem = record.privateKey;
-    // 既支持 PEM 字符串（本实现落盘格式），也支持 base64url DER（旧格式）
+    // 既支持 PEM 字符串(本实现落盘格式),也支持 base64url DER(旧格式)
     const key = pem.includes('-----BEGIN')
       ? pem
       : base64UrlDecode(pem);
@@ -165,7 +165,7 @@ export function importDevicePrivateKey(record) {
 }
 
 /**
- * 对一个请求算签名，返回三个头。纯函数（不碰 IO）。
+ - 对一个请求算签名,返回三个头.纯函数(不碰 IO).
  */
 export function signDeviceRequest({
   privateKey,
@@ -194,7 +194,7 @@ export function signDeviceRequest({
 }
 
 /**
- * Ed25519 签名（payload → base64url）
+ - Ed25519 签名(payload → base64url)
  */
 function signPayload(privateKeyPem, payload) {
   const signature = cryptoSign(null, Buffer.from(payload, 'utf8'), {
@@ -205,13 +205,13 @@ function signPayload(privateKeyPem, payload) {
 }
 
 /**
- * 生成一份新的设备密钥记录（Ed25519）。
+ - 生成一份新的设备密钥记录(Ed25519).
  *
- * 独立导出而非只作为 DeviceSigner 的方法：bun 通道装配 cfg 时
- * （official-rpc.js buildRpcCfg）也需要在密钥文件缺失时**就地生成**——
- * Docker 全新卷上该文件从来没有过，而生成它的 DeviceSigner 只在 Node
- * 路径被调用，session 走 bun 时压根不经过它（死锁）。
- * 同一份生成逻辑，两处复用，避免私钥格式漂移。
+ - 独立导出而非只作为 DeviceSigner 的方法:bun 通道装配 cfg 时
+ - (official-rpc.js buildRpcCfg)也需要在密钥文件缺失时就地生成——
+ - Docker 全新卷上该文件从来没有过,而生成它的 DeviceSigner 只在 Node
+ - 路径被调用,session 走 bun 时压根不经过它(死锁).
+ - 同一份生成逻辑,两处复用,避免私钥格式漂移.
  */
 export function createDeviceKeyRecord() {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519', {
@@ -232,7 +232,7 @@ export function createDeviceKeyRecord() {
 }
 
 /**
- * 设备签名器
+ - 设备签名器
  */
 export class DeviceSigner {
   constructor({ storePath, apiHost, accountId, token, fetchImpl }) {
@@ -245,7 +245,7 @@ export class DeviceSigner {
     this.loading = null;
     this.registering = null;
     this.retryAfter = 0;
-    
+
     logger.info('DeviceSigner constructed', {
       storePath,
       apiHost,
@@ -256,14 +256,14 @@ export class DeviceSigner {
   }
 
   /**
-   * 生成设备密钥对
+   - 生成设备密钥对
    */
   generateKeyPair() {
     return createDeviceKeyRecord()
   }
 
   /**
-   * 加载或生成设备密钥
+   - 加载或生成设备密钥
    */
   async ensureKey() {
     if (this.loading) return this.loading;
@@ -296,7 +296,7 @@ export class DeviceSigner {
   }
 
   /**
-   * 持久化密钥
+   - 持久化密钥
    */
   async persist() {
     if (!this.keyStore) return;
@@ -305,7 +305,7 @@ export class DeviceSigner {
   }
 
   /**
-   * 获取或注册 keyId
+   - 获取或注册 keyId
    */
   async getKeyId() {
     const key = await this.ensureKey();
@@ -313,7 +313,7 @@ export class DeviceSigner {
 
     // 已注册
     if (key.registrations[scope]) {
-      logger.info('using cached keyId', { 
+      logger.info('using cached keyId', {
         scope: scope.slice(0, 50) + '...',
         keyId: key.registrations[scope],
       });
@@ -342,7 +342,7 @@ export class DeviceSigner {
   }
 
   /**
-   * 向上游注册设备密钥
+   - 向上游注册设备密钥
    */
   async register(scope, key) {
     const url = `${this.apiHost}${DEVICE_KEYS_PATH}`;
@@ -355,16 +355,16 @@ export class DeviceSigner {
       const res = await this.fetchImpl(url, {
         method: 'POST',
         headers: {
-          // ⚠️ 只有 Bearer：客户端注册 device-keys 时也只带 Bearer +
-          // Content-Type（抓包真值），没有 x-codebuff-api-key。
+          //  只有 Bearer:客户端注册 device-keys 时也只带 Bearer +
+          // Content-Type(抓包真值),没有 x-codebuff-api-key.
           'Authorization': `Bearer ${this.token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           publicKey: key.publicKey,
-          // ⚠️ 官方抓包 body 是 `client: "desktop"`（二进制
-          // orchestrator.js:216629 同源）。此前写 'freebuff-proxy' —— 那是
-          // 自报家门的第三方特征。
+          //  官方抓包 body 是 client: "desktop"(二进制
+          // orchestrator.js:216629 同源).此前写 'freebuff-proxy' —— 那是
+          // 自报家门的第三方特征.
           client: 'desktop',
         }),
         signal: controller.signal
@@ -406,16 +406,16 @@ export class DeviceSigner {
   }
 
   /**
-   * 为请求生成设备签名头
-   * @param {{ method: string, url: string, body: string | null, fetchId: string | null }} params
-   * @returns {Promise<Record<string, string>>}
+   - 为请求生成设备签名头
+   - @param {{ method: string, url: string, body: string | null, fetchId: string | null }} params
+   - @returns {Promise<Record<string, string>>}
    */
   async headersFor({ method, url, body, fetchId }) {
     try {
       const keyId = await this.getKeyId();
       if (!keyId) {
         logger.info('no keyId available, skipping device signature');
-        return {}; // 签名失败，返回空头（上游会当作未签名请求处理）
+        return {}; // 签名失败,返回空头(上游会当作未签名请求处理)
       }
 
       const key = await this.ensureKey();
@@ -451,17 +451,17 @@ export class DeviceSigner {
         error: err.message,
         stack: err.stack?.slice(0, 300),
       });
-      return {}; // 签名失败，返回空头
+      return {}; // 签名失败,返回空头
     }
   }
 
   /**
-   * 忘记注册（当上游报 device_key unknown 错误时调用）
+   - 忘记注册(当上游报 device_key unknown 错误时调用)
    */
   async forgetRegistration() {
     const key = await this.ensureKey();
     const scope = `${this.apiHost} user:${this.accountId}`;
-    
+
     if (key.registrations[scope]) {
       delete key.registrations[scope];
       await this.persist();

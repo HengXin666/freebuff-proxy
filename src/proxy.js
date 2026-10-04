@@ -64,12 +64,12 @@ import {
 import { logger } from './util/log.js'
 
 /**
- * OpenAI-compatible surface under /v1 only.
- * Freebuff upstream calls are internal (/api/v1/...).
+ - OpenAI-compatible surface under /v1 only.
+ - Freebuff upstream calls are internal (/api/v1/...).
  *
- * @param {object} ctx
- * @param {import('./config.js').ProxyConfig} ctx.config
- * @param {import('./app-context.js').AccountRuntimes} ctx.runtimes
+ - @param {object} ctx
+ - @param {import('./config.js').ProxyConfig} ctx.config
+ - @param {import('./app-context.js').AccountRuntimes} ctx.runtimes
  */
 export function createProxyHandler(ctx) {
   const { config, runtimes, userStore, settingsStore } = ctx
@@ -77,12 +77,12 @@ export function createProxyHandler(ctx) {
     throw new Error('createProxyHandler requires ctx.runtimes (AccountRuntimes)')
   }
 
-  /** 前端「模型管理」配置的自定义模型（覆盖内置目录），实时生效。 */
+  /** 前端[模型管理]配置的自定义模型(覆盖内置目录),实时生效. */
   function customModels() {
     return typeof ctx.modelStore?.list === 'function' ? ctx.modelStore.list() : []
   }
 
-  /** 前端「模型管理」删除（隐藏）的模型 id，实时生效。 */
+  /** 前端[模型管理]删除(隐藏)的模型 id,实时生效. */
   function hiddenModels() {
     return typeof ctx.modelStore?.hidden === 'function'
       ? ctx.modelStore.hidden()
@@ -90,24 +90,24 @@ export function createProxyHandler(ctx) {
   }
 
   /**
-   * 释放账号的上游会话 —— **付费时段内一律拒绝**，这是唯一允许的释放入口。
+   - 释放账号的上游会话 —— 付费时段内一律拒绝,这是唯一允许的释放入口.
    *
-   * 为什么要有这个统一入口（2026-10-04 真实事故）：
-   * `runtimes.releaseSession(key)` 此前散落在 **7 处**重试/换号路径上，
-   * 每一处都是无条件的早退 DELETE。而 Freebucks 是**买断制**（POST 当场扣
-   * 整小时单价），早退 **不退钱**（实测只回 `freebucksRefundPending`，
-   * 观察 2 分钟未到账）—— 于是每一次换号/最终失败都在**把已付的一小时扔掉**。
+   - 为什么要有这个统一入口(2026-10-04 真实事故):
+   - runtimes.releaseSession(key) 此前散落在 7 处重试/换号路径上,
+   - 每一处都是无条件的早退 DELETE.而 Freebucks 是买断制(POST 当场扣
+   - 整小时单价),早退 不退钱(实测只回 freebucksRefundPending,
+   - 观察 2 分钟未到账)—— 于是每一次换号/最终失败都在把已付的一小时扔掉.
    *
-   * 用户看到的后果：请求一次 → 钱扣光 → 请求失败 → 会话也没了 →
-   * 下一个请求买不起（`freebucks_exhausted`）→ 表现成"账号废了"。
+   - 用户看到的后果:请求一次 → 钱扣光 → 请求失败 → 会话也没了 →
+   - 下一个请求买不起(freebucks_exhausted)→ 表现成"账号废了".
    *
-   * 修法：把释放收敛到这一个函数，**在付费时段内直接拒绝**（并留日志），
-   * 只允许"付费时段已过"时释放。这样将来新增重试路径也不会再漏 ——
-   * 只要它调的是这个函数。
+   - 修法:把释放收敛到这一个函数,在付费时段内直接拒绝(并留日志),
+   - 只允许"付费时段已过"时释放.这样将来新增重试路径也不会再漏 ——
+   - 只要它调的是这个函数.
    *
-   * @param {string} key 账号 key
-   * @param {string} why 释放原因（写进日志，便于复盘谁在释放）
-   * @returns {boolean} 是否真的发起了释放
+   - @param {string} key 账号 key
+   - @param {string} why 释放原因(写进日志,便于复盘谁在释放)
+   - @returns {boolean} 是否真的发起了释放
    */
   function releaseSessionUnlessPaid(key, why) {
     if (!key) return false
@@ -130,16 +130,16 @@ export function createProxyHandler(ctx) {
   }
 
   /**
-   * ⚠️ 已删除 `probeUpstreamSessionCached()` 及其 60s 缓存。
+   - 已删除 probeUpstreamSessionCached() 及其 60s 缓存.
    *
-   * 它做过两件都错的事：
-   *   1. **主动打上游** —— 白名单校验时 GET /session，与「零自动探测」
-   *      （docs/reverse/20 §20.3：只有用户主动刷新才准探测）直接冲突；
-   *   2. **无调用点** —— 是死代码，却留着"随时会被重新接上"的隐患。
+   - 它做过两件都错的事:
+   - 1. 主动打上游 —— 白名单校验时 GET /session,与[零自动探测]
+   - (docs/reverse/20 §20.3:只有用户主动刷新才准探测)直接冲突;
+   - 2. 无调用点 —— 是死代码,却留着"随时会被重新接上"的隐患.
    *
-   * 白名单判定所需的模型 id 现在**全部来自本地**：目录行（catalogKeys）、
-   * 内置 catalog、前端自定义、隐藏表。拿不到就是拿不到，如实拒绝，
-   * 不为判定而发上游请求。
+   - 白名单判定所需的模型 id 现在全部来自本地:目录行(catalogKeys),
+   - 内置 catalog,前端自定义,隐藏表.拿不到就是拿不到,如实拒绝,
+   - 不为判定而发上游请求.
    */
 
   function authorize(req, res) {
@@ -224,14 +224,14 @@ export function createProxyHandler(ctx) {
       return
     }
 
-    // Chat completions 只走 **CLI 通道**（真正的 agent 接口：admit 会话 +
-    // startAgentRun + /api/v1/chat/completions）。
+    // Chat completions 只走 CLI 通道(真正的 agent 接口:admit 会话 +
+    // startAgentRun + /api/v1/chat/completions).
     //
-    // 此前这里有一个「网页通道」优先接管的分支（打 freebuff.com 的
-    // /api/chat/stream），它是历史遗留：不 admit 会话、不消耗 Freebucks，
-    // 但**请求体只有 { threadId, content, model, reasoningEffort }，没有 tools 字段**
-    // —— 工具调用在它上面根本无法工作。用户明确要求永远只走 CLI 通道，
-    // 该分支及其开关已移除。
+    // 此前这里有一个[网页通道]优先接管的分支(打 freebuff.com 的
+    // /api/chat/stream),它是历史遗留:不 admit 会话,不消耗 Freebucks,
+    // 但请求体只有 { threadId, content, model, reasoningEffort },没有 tools 字段
+    // —— 工具调用在它上面根本无法工作.用户明确要求永远只走 CLI 通道,
+    // 该分支及其开关已移除.
     if (method === 'POST' && route === '/v1/chat/completions') {
       await handleChatCompletions(req, res)
       return
@@ -255,26 +255,26 @@ export function createProxyHandler(ctx) {
 
   async function handleModels(res) {
     /**
-     * 清单 = 目录行（权威，13 行）；额度/单价 = 会话回执（只挂元数据）。
+     - 清单 = 目录行(权威,13 行);额度/单价 = 会话回执(只挂元数据).
      *
-     * ⚠️ 此前这里**把 rateLimitsByModel 当成了模型清单** —— 它只是"今日给了
-     * 会话额度的子集"（实测 6 个键 vs 13 行目录），于是额度满、未封禁的账号
-     * 照样对外报「没有任何可用模型」。见 docs/reverse/19-catalog-is-the-model-list.md。
+     - 此前这里把 rateLimitsByModel 当成了模型清单 —— 它只是"今日给了
+     - 会话额度的子集"(实测 6 个键 vs 13 行目录),于是额度满,未封禁的账号
+     - 照样对外报[没有任何可用模型].见 docs/reverse/19-catalog-is-the-model-list.md.
      *
-     * 目录抓取失败（网络/未登录）时回落到旧的静态表，绝不返回空列表 ——
-     * 空列表会让下游 Agent 直接判定"这个代理没有任何模型"。
+     - 目录抓取失败(网络/未登录)时回落到旧的静态表,绝不返回空列表 ——
+     - 空列表会让下游 Agent 直接判定"这个代理没有任何模型".
      */
     /**
-     * ⚠️ **零自动探测**（用户裁决，docs/reverse/20 §20.3）。
+     - 零自动探测(用户裁决,docs/reverse/20 §20.3).
      *
-     * 本接口只读**本地缓存**：目录缓存（catalog-cache / 各 runtime 已抓的
-     * 目录）与账号会话快照里的额度/单价。拿不到就如实返回空并带
-     * `notProbed: true` —— 由控制台提示用户点「一键刷新」，
-     * **绝不为填空而自动发一次上游请求**。
+     - 本接口只读本地缓存:目录缓存(catalog-cache / 各 runtime 已抓的
+     - 目录)与账号会话快照里的额度/单价.拿不到就如实返回空并带
+     - notProbed: true —— 由控制台提示用户点[一键刷新],
+     - 绝不为填空而自动发一次上游请求.
      *
-     * 以前的写法会在这里补一次 GET（catalog 也好、session 也好），
-     * 于是"下游刷新一次页面"就等于"上游看见一次我们主动发起的探测"，
-     * 这正是要消灭的流量。
+     - 以前的写法会在这里补一次 GET(catalog 也好,session 也好),
+     - 于是"下游刷新一次页面"就等于"上游看见一次我们主动发起的探测",
+     - 这正是要消灭的流量.
      */
     const catalog = runtimes.catalogRows?.() || { rows: [], issuedAt: null }
     const quota =
@@ -300,15 +300,15 @@ export function createProxyHandler(ctx) {
       return
     }
     /**
-     * 目录未缓存 → **返回空清单 + notProbed**，不回落静态表。
+     - 目录未缓存 → 返回空清单 + notProbed,不回落静态表.
      *
-     * 以前回落内置静态 catalog，而那份是 2026-08 的快照（13 行目录只命中
-     * 3 行）—— 拿它当清单等于给下游一份**错的模型表**，比给空更糟：
-     * 下游会照着它发请求，然后被 `model_not_allowed` 或上游拒掉。
-     * 按 docs/reverse/20 §20.2「没从客户端对齐过的一律作废」，
-     * 真实清单只有上游目录一个来源。
+     - 以前回落内置静态 catalog,而那份是 2026-08 的快照(13 行目录只命中
+     - 3 行)—— 拿它当清单等于给下游一份错的模型表,比给空更糟:
+     - 下游会照着它发请求,然后被 model_not_allowed 或上游拒掉.
+     - 按 docs/reverse/20 §20.2[没从客户端对齐过的一律作废],
+     - 真实清单只有上游目录一个来源.
      *
-     * 用户点控制台「一键刷新」即触发探测（那是被允许的时机）。
+     - 用户点控制台[一键刷新]即触发探测(那是被允许的时机).
      */
     logger.warn('models: catalog not cached; returning empty + notProbed', {
       accounts: runtimes.allKeys().length,
@@ -322,28 +322,28 @@ export function createProxyHandler(ctx) {
     })
   }
 
-  /** 一键屏蔽收费模型开关（前端「模型管理」，实时生效）。 */
+  /** 一键屏蔽收费模型开关(前端[模型管理],实时生效). */
   function blockPremiumModels() {
     return settingsStore?.get()?.blockPremiumModels === true
   }
 
   /**
-   * 目录行的**全部可寻址口径**（目录 key + 可读显示名），供白名单判定。
+   - 目录行的全部可寻址口径(目录 key + 可读显示名),供白名单判定.
    *
-   * 客户端可能照着 `/v1/models` 的可读名填（"DeepSeek V4.1 Flash"），
-   * 也可能用我们透出的 `freebuff_key`（m-096e75164d）。两个都收。
+   - 客户端可能照着 /v1/models 的可读名填("DeepSeek V4.1 Flash"),
+   - 也可能用我们透出的 freebuff_key(m-096e75164d).两个都收.
    *
-   * ⚠️ **不设缓存**（用户裁决：只有对外/内部/上游三层，中间不允许有缓存层）。
+   - 不设缓存(用户裁决:只有对外/内部/上游三层,中间不允许有缓存层).
    *
-   * 此前这里有 60s 缓存，制造过一个真实事故：服务刚启动时目录尚未加载
-   * （零自动探测，要等首次用到才抓），那一刻缓存了**空数组**，于是 60 秒内
-   * **所有**模型都被 `model_not_allowed` 拒掉 —— 用户的客户端配的是目录 key
-   * `m-096e75164d`，直接报 400。表现还"时好时坏"（缓存过期后目录已加载则正常），
-   * 实测等过 60s 重试同一请求即恢复正常，证实缓存是唯一变量。
+   - 此前这里有 60s 缓存,制造过一个真实事故:服务刚启动时目录尚未加载
+   - (零自动探测,要等首次用到才抓),那一刻缓存了空数组,于是 60 秒内
+   - 所有模型都被 model_not_allowed 拒掉 —— 用户的客户端配的是目录 key
+   - m-096e75164d,直接报 400.表现还"时好时坏"(缓存过期后目录已加载则正常),
+   - 实测等过 60s 重试同一请求即恢复正常,证实缓存是唯一变量.
    *
-   * 现在直接读 `catalogRows()`：它是**内存里的现成对象**（各 runtime 已抓的
-   * 目录行的并集），取一次就是遍历几十个元素，没有 I/O、没有网络。
-   * 为省这点遍历而引入"过期/空值/时序"三类 bug，不划算。
+   - 现在直接读 catalogRows():它是内存里的现成对象(各 runtime 已抓的
+   - 目录行的并集),取一次就是遍历几十个元素,没有 I/O,没有网络.
+   - 为省这点遍历而引入"过期/空值/时序"三类 bug,不划算.
    */
   function catalogModelKeys() {
     const keys = []
@@ -362,11 +362,11 @@ export function createProxyHandler(ctx) {
   }
 
   /**
-   * POST /v1/freebuff/accounts/import — 开放 API 导入账号（Bearer API Key 鉴权）。
-   * body 支持三种形态：
-   *   {"email":"..","authToken":"..","id?":"..","name?":".."}      单个账号
-   *   {"json":"<stringified 账号>"}                                 兼容 Web 端导入格式
-   *   {"accounts":[{...},{...}]}                                    批量导入
+   - POST /v1/freebuff/accounts/import — 开放 API 导入账号(Bearer API Key 鉴权).
+   - body 支持三种形态:
+   - {"email":"..","authToken":"..","id?":"..","name?":".."}      单个账号
+   - {"json":"<stringified 账号>"}                                 兼容 Web 端导入格式
+   - {"accounts":[{...},{...}]}                                    批量导入
    */
   async function handleAccountsImport(req, res) {
     let rawBuf
@@ -463,12 +463,12 @@ export function createProxyHandler(ctx) {
       }
       try {
         const saved = saveAccountUser(runtimes.dir, u)
-        // 凭证更新时间落盘（前端「更新」列的数据源）。
+        // 凭证更新时间落盘(前端[更新]列的数据源).
         runtimes.markCredentialUpdated(saved.key)
         await runtimes.invalidate(saved.key).catch(() => {})
-        // ⚠️ 以前的「导入后自动探测」已删除（docs/reverse/20 §20.3）：
-        // 导入账号不该顺带发一次上游 GET。额度/状态等用户点「检测」或
-        // 「一键刷新」时再取。
+        //  以前的[导入后自动探测]已删除(docs/reverse/20 §20.3):
+        // 导入账号不该顺带发一次上游 GET.额度/状态等用户点[检测]或
+        // [一键刷新]时再取.
         imported.push({
           key: saved.key,
           email: saved.user.email,
@@ -492,8 +492,8 @@ export function createProxyHandler(ctx) {
   }
 
   /**
-   * DELETE /v1/freebuff/accounts — 开放 API 删除账号。
-   * body（可选）: {"email":".."} / {"key":".."} / {"id":".."}；空 body 或全部则清空所有账号。
+   - DELETE /v1/freebuff/accounts — 开放 API 删除账号.
+   - body(可选): {"email":".."} / {"key":".."} / {"id":".."};空 body 或全部则清空所有账号.
    */
   async function handleAccountsDelete(req, res) {
     let body = null
@@ -527,7 +527,7 @@ export function createProxyHandler(ctx) {
       }
       return
     }
-    // 空 body → 全部删除（先释放 session 再删凭据文件）
+    // 空 body → 全部删除(先释放 session 再删凭据文件)
     const rows = runtimes.list()
     const removed = []
     for (const row of rows) {
@@ -545,11 +545,11 @@ export function createProxyHandler(ctx) {
   }
 
   /**
-   * /v1/freebuff/status —— **纯本地快照**，不发任何上游请求。
+   - /v1/freebuff/status —— 纯本地快照,不发任何上游请求.
    *
-   * 以前这里会 GET /api/v1/me：客户端 165 条抓包里该端点出现 **0 次**
-   * （见 docs/reverse/20 §20.2），是我们凭空多出来的流量。删掉后，
-   * 状态接口只读本地账号/会话快照。
+   - 以前这里会 GET /api/v1/me:客户端 165 条抓包里该端点出现 0 次
+   - (见 docs/reverse/20 §20.2),是我们凭空多出来的流量.删掉后,
+   - 状态接口只读本地账号/会话快照.
    */
   async function handleStatus(res) {
     const accounts = runtimes.list()
@@ -572,18 +572,18 @@ export function createProxyHandler(ctx) {
   }
 
   async function handleChatCompletions(req, res) {
-    // 有界排队：闸门排满时最多等 slotWaitMs，超时以 429 server_busy 拒绝
-    // （客户端可重试），绝不无界排队把整个服务静默钉死。
+    // 有界排队:闸门排满时最多等 slotWaitMs,超时以 429 server_busy 拒绝
+    // (客户端可重试),绝不无界排队把整个服务静默钉死.
     let releaseSlot
-    // 客户端在排队期间断开：立即放弃等待（否则这个"已死"的请求会一直占着
-    // 它稍后拿到的槽位，直到走完整个上游流程）。
+    // 客户端在排队期间断开:立即放弃等待(否则这个"已死"的请求会一直占着
+    // 它稍后拿到的槽位,直到走完整个上游流程).
     const slotGone = clientGoneSignal(req)
     try {
       releaseSlot = await slotGone.race(
         acquireRequestSlot(config.limits.maxConcurrentRequests, slotWaitMs()),
       )
     } catch (err) {
-      // client_gone：连接已没了，安静收场（无法再写响应）。
+      // client_gone:连接已没了,安静收场(无法再写响应).
       if (err?.code !== 'client_gone') mapAndSendError(res, err)
       return
     } finally {
@@ -611,10 +611,10 @@ export function createProxyHandler(ctx) {
         })
         return
       }
-      // 客户端在读 body 途中断开：连接已经没了，安静收场即可。
+      // 客户端在读 body 途中断开:连接已经没了,安静收场即可.
       if (err && err.code === 'client_aborted') return
-      // 408 body_read_timeout：客户端声明了体积却没发完。绝不能让它继续
-      // 占着全局槽位——明确拒绝并归还名额。
+      // 408 body_read_timeout:客户端声明了体积却没发完.绝不能让它继续
+      // 占着全局槽位——明确拒绝并归还名额.
       if (err && err.statusCode === 408) {
         sendJson(res, 408, {
           error: {
@@ -664,21 +664,21 @@ export function createProxyHandler(ctx) {
       return
     }
     /**
-     * ⚠️ **先确保目录已加载，再做名称→key 归一化**（2026-10-04 真实事故修正）。
+     - 先确保目录已加载,再做名称→key 归一化(2026-10-04 真实事故修正).
      *
-     * `resolveModelAlias()` 把可读名（"MiMo 2.6 Flash"）落回目录 key（m-xxx）
-     * 靠的是**已抓到的目录**（`CatalogHolder.keyForName`）。而目录是懒加载的
-     * （零自动探测，要等真正用到才抓）—— 于是**冷启动后的第一个请求**在归一化
-     * 时目录还是空的 → 归一化失败、原样返回可读名 → 一路传到 admission 的
-     * `x-freebuff-model` → 上游回
-     *   400 {"error":"invalid_request","message":"Unknown model."}
+     - resolveModelAlias() 把可读名("MiMo 2.6 Flash")落回目录 key(m-xxx)
+     - 靠的是已抓到的目录(CatalogHolder.keyForName).而目录是懒加载的
+     - (零自动探测,要等真正用到才抓)—— 于是冷启动后的第一个请求在归一化
+     - 时目录还是空的 → 归一化失败,原样返回可读名 → 一路传到 admission 的
+     - x-freebuff-model → 上游回
+     - 400 {"error":"invalid_request","message":"Unknown model."}
      *
-     * 实测（2026-10-04 12:15）：三个账号全部 400 `invalid_request`，
-     * 日志里 `x-freebuff-model: "MiMo 2.6 Flash"` —— 本应是句柄 `fbm1.xxx`。
+     - 实测(2026-10-04 12:15):三个账号全部 400 invalid_request,
+     - 日志里 x-freebuff-model: "MiMo 2.6 Flash" —— 本应是句柄 fbm1.xxx.
      *
-     * 所以把"目录为空则先加载一次"提到归一化**之前**。这不算多余探测：
-     * 该请求本来就必须抓目录（admission 要目录句柄），docs/reverse/20 §20.3
-     * 禁的是启动/导入/首访模型表时空跑，不是请求驱动的必要前置。
+     - 所以把"目录为空则先加载一次"提到归一化之前.这不算多余探测:
+     - 该请求本来就必须抓目录(admission 要目录句柄),docs/reverse/20 §20.3
+     - 禁的是启动/导入/首访模型表时空跑,不是请求驱动的必要前置.
      */
     if (!catalogModelKeys().length) {
       try {
@@ -688,27 +688,27 @@ export function createProxyHandler(ctx) {
       }
     }
     /**
-     * `/v1/models` 对外给的是可读口径（catalogId，内置目录没有对应条目时是
-     * displayName），所以下游**照着模型表填的名字**必须能落地：
-     * 'Solar Pro 4' 这类显示名要落回目录 key 再走句柄映射，否则白名单会拒、
-     * 会话也会绑错模型。可读 id / key / 句柄则原样通过（见 resolveModelAlias）。
+     - /v1/models 对外给的是可读口径(catalogId,内置目录没有对应条目时是
+     - displayName),所以下游照着模型表填的名字必须能落地:
+     - 'Solar Pro 4' 这类显示名要落回目录 key 再走句柄映射,否则白名单会拒,
+     - 会话也会绑错模型.可读 id / key / 句柄则原样通过(见 resolveModelAlias).
      */
     const upstreamModel = runtimes.resolveModelAlias(requestedModel)
 
-    // 模型白名单校验：未隐藏 + catalog/自定义/上游会话出现过才放行。
-    // 避免把"APP 里没有的模型"探测请求盲发上游（上游会标记异常行为，是免费
-    // 反代被封号的主要诱因）。未知模型不拦截免费用户（保守：catalog 更新有
-    // 滞后，硬拒绝会误伤合法新模型），只对上游明确说"没有"的模型硬拒绝。
+    // 模型白名单校验:未隐藏 + catalog/自定义/上游会话出现过才放行.
+    // 避免把"APP 里没有的模型"探测请求盲发上游(上游会标记异常行为,是免费
+    // 反代被封号的主要诱因).未知模型不拦截免费用户(保守:catalog 更新有
+    // 滞后,硬拒绝会误伤合法新模型),只对上游明确说"没有"的模型硬拒绝.
     //
-    // 顺序很重要（性能）：**先**用本地三张表（catalog / 前端自定义 / 隐藏）
-    // 这一层**纯本地**：目录行 / 前端自定义 / 内置 catalog / 隐藏表。
-    // 不探测、不缓存、不发上游请求（零自动探测，docs/reverse/20 §20.3）。
+    // 顺序很重要(性能):先用本地三张表(catalog / 前端自定义 / 隐藏)
+    // 这一层纯本地:目录行 / 前端自定义 / 内置 catalog / 隐藏表.
+    // 不探测,不缓存,不发上游请求(零自动探测,docs/reverse/20 §20.3).
     /**
-     * ⚠️ 白名单必须认**目录行**：目录是模型清单的权威（13 行），而会话回执的
-     * rateLimitsByModel 只有 6 个键。少了这一层，目录里有、但当日额度为 0
-     * （或没被授予额度）的模型会被 `model_not_allowed` 拒掉 —— 用户看到的就是
-     * 「账号额度满的，却没有任何可用模型」。
-     * 两个口径都收：key（m-xxx，resolveModelAlias 归一后的形态）与 displayName。
+     - 白名单必须认目录行:目录是模型清单的权威(13 行),而会话回执的
+     - rateLimitsByModel 只有 6 个键.少了这一层,目录里有,但当日额度为 0
+     - (或没被授予额度)的模型会被 model_not_allowed 拒掉 —— 用户看到的就是
+     - [账号额度满的,却没有任何可用模型].
+     - 两个口径都收:key(m-xxx,resolveModelAlias 归一后的形态)与 displayName.
      */
     const catalogKeys = catalogModelKeys()
     let allowed = isModelAllowed(upstreamModel, {
@@ -718,9 +718,9 @@ export function createProxyHandler(ctx) {
       catalogKeys,
     })
     /**
-     * 目录在本函数更上方已确保加载（"先加载再归一化"），所以这里的
-     * `catalogKeys` 已经包含了目录行。若仍为空（上游抓取失败），
-     * 下面的判定照旧拒绝 —— 不猜模型。
+     - 目录在本函数更上方已确保加载("先加载再归一化"),所以这里的
+     - catalogKeys 已经包含了目录行.若仍为空(上游抓取失败),
+     - 下面的判定照旧拒绝 —— 不猜模型.
      */
     if (!allowed) {
       logger.warn('model not allowed; rejecting before upstream', {
@@ -741,16 +741,16 @@ export function createProxyHandler(ctx) {
 
     const stream = Boolean(body.stream)
     /**
-     * 「首字节之前」的总预算起点：全局槽位/账号锁/上游首字节这些静默等待
-     * 全部计入。超预算即快速失败（429 scheduling_timeout），而不是让客户端
-     * 对着一个一直转圈的连接等到自己超时（上游前面是 Cloudflare，100s 524）。
+     - [首字节之前]的总预算起点:全局槽位/账号锁/上游首字节这些静默等待
+     - 全部计入.超预算即快速失败(429 scheduling_timeout),而不是让客户端
+     - 对着一个一直转圈的连接等到自己超时(上游前面是 Cloudflare,100s 524).
      */
     const schedulingDeadline = Date.now() + schedulingBudgetMs()
     let attempt = 0
     const maxRetry = config.limits.maxAutoRetryOnSessionError ?? 1
-    // 换号重试预算：账号数 +1（封顶 5 次）——多出的一次用于同账号 gate 重试
-    // （session 失效等先同号 re-admit 一次，再失败才升级换号），保证一波限流/5xx
-    // 时能换到可用账号，试完所有账号才把错误返回给用户。
+    // 换号重试预算:账号数 +1(封顶 5 次)——多出的一次用于同账号 gate 重试
+    // (session 失效等先同号 re-admit 一次,再失败才升级换号),保证一波限流/5xx
+    // 时能换到可用账号,试完所有账号才把错误返回给用户.
     const maxAttempts = Math.max(
       maxRetry + 1,
       Math.min((runtimes.allKeys().length || 1) + 1, 5),
@@ -765,25 +765,25 @@ export function createProxyHandler(ctx) {
     let pendingSwitchAccount = false
     /** @type {boolean} */
     let pendingNoCooldown = false
-    /** 同一账号连续重试计数：同号重试过一次仍失败 → 升级为换号。 */
+    /** 同一账号连续重试计数:同号重试过一次仍失败 → 升级为换号. */
     let sameAccountRetries = 0
     /**
-     * 本次请求已经"满员排队超时"过的账号：粘性调度会优先继续用已用账号
-     * （甚至排队等它），若不在选号里排除，超时后会再次选中同一个账号反复等。
+     - 本次请求已经"满员排队超时"过的账号:粘性调度会优先继续用已用账号
+     - (甚至排队等它),若不在选号里排除,超时后会再次选中同一个账号反复等.
      */
     const skipKeys = new Set()
     /**
-     * 本次下游请求允许新建的上游会话数（Freebucks 计费单位）。
-     * 上游按整小时单价预扣、早退按实际占用退还（见 docs/account-scheduling-and-refund.md §3），
-     * 旧行为在报错时把「账号数+1」个账号挨个 admit 一遍，一次故障就买断好几条整小时
-     * （issue #7）。复用已有热 session 不消耗预算。
+     - 本次下游请求允许新建的上游会话数(Freebucks 计费单位).
+     - 上游按整小时单价预扣,早退按实际占用退还(见 docs/account-scheduling-and-refund.md §3),
+     - 旧行为在报错时把[账号数+1]个账号挨个 admit 一遍,一次故障就买断好几条整小时
+     - (issue #7).复用已有热 session 不消耗预算.
      *
-     * ⚠️ **0 = 不限制**（控制台/配置文档/API 校验三处一致的契约），不是"零预算"。
-     * 曾经这里无条件 Math.max(0, ...)，把 0 存成 remaining:0，于是
-     * app-context 的预算闸门把**每个账号**都判成 session_budget_exhausted 跳过，
-     * 整个代理固定返回 429 no_available_account——本地自锁，与上游额度无关。
-     * 因此 0 必须映射为 null（= 不限额），而不是一个会被用尽的数字。
-     * 见 .agents/notes/implemented/bug-fix/2026-09-24-zero-session-budget-means-unlimited.md
+     - 0 = 不限制(控制台/配置文档/API 校验三处一致的契约),不是"零预算".
+     - 曾经这里无条件 Math.max(0, ...),把 0 存成 remaining:0,于是
+     - app-context 的预算闸门把每个账号都判成 session_budget_exhausted 跳过,
+     - 整个代理固定返回 429 no_available_account——本地自锁,与上游额度无关.
+     - 因此 0 必须映射为 null(= 不限额),而不是一个会被用尽的数字.
+     - 见 .agents/notes/implemented/bug-fix/2026-09-24-zero-session-budget-means-unlimited.md
      */
     const budgetSetting = settingsStore?.get?.()?.maxNewSessionsPerRequest
     const budgetRaw = Number.isFinite(budgetSetting)
@@ -791,36 +791,36 @@ export function createProxyHandler(ctx) {
       : config.limits.maxNewSessionsPerRequest
     const budgetLimit = Number.isFinite(budgetRaw) ? Math.floor(budgetRaw) : 2
     const sessionBudget = {
-      // 0（或负数）= 不限额：remaining 为 null 时闸门恒放行、也不递减。
+      // 0(或负数)= 不限额:remaining 为 null 时闸门恒放行,也不递减.
       remaining: budgetLimit > 0 ? budgetLimit : null,
     }
-    /** 当前持锁账号 runtime（账号级串行化：一个账号同一时间只处理一个 chat）。 */
+    /** 当前持锁账号 runtime(账号级串行化:一个账号同一时间只处理一个 chat). */
     let heldRt = null
-    /** 当前持有的账号 chat 锁释放函数。 */
+    /** 当前持有的账号 chat 锁释放函数. */
     let releaseChat = null
     /**
-     * 选号阶段占用的「槽位预留」释放函数（见 AccountRuntimes.reserveSlot）。
-     * spread（并发优先）排序靠它看见"刚被选中、正在拿锁"的请求——否则 N 个并发
-     * 请求会同时看到空账号、全部选中同一个号。拿到 chat 锁后立即交还。
+     - 选号阶段占用的[槽位预留]释放函数(见 AccountRuntimes.reserveSlot).
+     - spread(并发优先)排序靠它看见"刚被选中,正在拿锁"的请求——否则 N 个并发
+     - 请求会同时看到空账号,全部选中同一个号.拿到 chat 锁后立即交还.
      */
     let releaseReserved = null
     /**
-     * 客户端断开信号（整个请求共用；finally 里 cleanup）。账号锁等待是
-     * "首字节前静默等待"里最长的一段（热 75s / 冷 120s），客户端早就断了却
-     * 还在闷等，且拿到锁后会继续跑完上游流程——死请求钉死账号并发。
+     - 客户端断开信号(整个请求共用;finally 里 cleanup).账号锁等待是
+     - "首字节前静默等待"里最长的一段(热 75s / 冷 120s),客户端早就断了却
+     - 还在闷等,且拿到锁后会继续跑完上游流程——死请求钉死账号并发.
      */
     const chatGone = clientGoneSignal(req)
-    /** 是否已完整等待过账号锁（account_busy 超时一次后，再等只给短窗，避免 5 次重试 × 长等待）。 */
+    /** 是否已完整等待过账号锁(account_busy 超时一次后,再等只给短窗,避免 5 次重试 × 长等待). */
     let chatWaited = false
     /**
-     * agent 覆盖（本次请求内贯穿重试）：startAgentRun 被上游以
-     * free_mode_invalid_agent_model 拒绝时回退 base3 孪生（通用模型兜底）。
-     * 注意：luna 系不经过这里——agentIdForModel 已强制 base3，永不尝试 base2。
-     * @type {string | null}
+     - agent 覆盖(本次请求内贯穿重试):startAgentRun 被上游以
+     - free_mode_invalid_agent_model 拒绝时回退 base3 孪生(通用模型兜底).
+     - 注意:luna 系不经过这里——agentIdForModel 已强制 base3,永不尝试 base2.
+     - @type {string | null}
      */
     let agentOverride = null
 
-    /** 释放当前账号的串行化锁与在途标记（换号/请求结束时调用）。 */
+    /** 释放当前账号的串行化锁与在途标记(换号/请求结束时调用). */
     function dropChatHold() {
       if (releaseChat) {
         releaseChat()
@@ -830,8 +830,8 @@ export function createProxyHandler(ctx) {
         heldRt.sessions.endRequest()
         heldRt = null
       }
-      // 预留槽位（选号时占用）必须**无论如何**交还：它是 spread 排序看见
-      // "这个账号马上要满了"的唯一依据，泄漏一次就会让账号被误判为满员。
+      // 预留槽位(选号时占用)必须无论如何交还:它是 spread 排序看见
+      // "这个账号马上要满了"的唯一依据,泄漏一次就会让账号被误判为满员.
       if (releaseReserved) {
         releaseReserved()
         releaseReserved = null
@@ -839,17 +839,17 @@ export function createProxyHandler(ctx) {
     }
 
     /**
-     * 账号锁等待时长（仅在所有可用账号都满员时排队才生效；有账号空闲时
-     * 选号阶段就已换号，不会走到这里）：
-     * - 热 session（同模型可直接复用）：等一个完整 idle 超时周期。上游卡死也会在
-     *   streamIdleTimeoutSec 后被掐断释放锁，所以热会话优先排队复用而不是新建 session。
-     * - 冷账号/换模型：只等固定窗口，超时即换下一个账号。
+     - 账号锁等待时长(仅在所有可用账号都满员时排队才生效;有账号空闲时
+     - 选号阶段就已换号,不会走到这里):
+     - - 热 session(同模型可直接复用):等一个完整 idle 超时周期.上游卡死也会在
+     - streamIdleTimeoutSec 后被掐断释放锁,所以热会话优先排队复用而不是新建 session.
+     - - 冷账号/换模型:只等固定窗口,超时即换下一个账号.
      */
     function chatWaitMs(rt) {
-      // spread 模式：并发优先——账号满员就是"该换号了"，只给一个短窗
-      // （accountOverflowWaitMs，默认 15s）就溢出到下一个账号，绝不把并发
-      // 钉死在一个账号上干等。sticky（默认）保留大等待：宁可排队也不换号，
-      // 因为换号 = 新买一条 Freebucks 计费会话。
+      // spread 模式:并发优先——账号满员就是"该换号了",只给一个短窗
+      // (accountOverflowWaitMs,默认 15s)就溢出到下一个账号,绝不把并发
+      // 钉死在一个账号上干等.sticky(默认)保留大等待:宁可排队也不换号,
+      // 因为换号 = 新买一条 Freebucks 计费会话.
       if (runtimes.schedulingMode() === 'spread') {
         const overflow = settingsStore?.get?.()?.accountOverflowWaitMs
         const ms = Number.isFinite(overflow) ? overflow : 15_000
@@ -862,12 +862,12 @@ export function createProxyHandler(ctx) {
     }
 
     // Session-first scheduling: reuse a live same-model slot, serialized per
-    // account (one account handles at most `accountMaxConcurrency` chats at a
+    // account (one account handles at most accountMaxConcurrency chats at a
     // time). The upstream is stateless because clients send the full history.
-    // 账号并发上限即"满了换号"的阈值：在途已满的账号排最后，新请求优先去
-    // 有空闲槽位的账号；所有账号都满员时才排队（有界等待，超时 account_busy）。
-    // 故障转移：除了 4xx 客户端错误，任何上游失败（session/run/chat/网络超时）都
-    // 冷却当前账号并继续轮询下一个，只有试完所有账号才把错误返回给用户。
+    // 账号并发上限即"满了换号"的阈值:在途已满的账号排最后,新请求优先去
+    // 有空闲槽位的账号;所有账号都满员时才排队(有界等待,超时 account_busy).
+    // 故障转移:除了 4xx 客户端错误,任何上游失败(session/run/chat/网络超时)都
+    // 冷却当前账号并继续轮询下一个,只有试完所有账号才把错误返回给用户.
     try {
       while (attempt < maxAttempts) {
         attempt++
@@ -892,8 +892,8 @@ export function createProxyHandler(ctx) {
           pendingRetryAfterMs = null
           pendingSwitchAccount = false
           pendingNoCooldown = false
-          // 本轮选号占用的槽位预留：换号时必须先交还上一个账号的预留
-          // （它已经不在本次请求的候选里了），再接管新账号的预留。
+          // 本轮选号占用的槽位预留:换号时必须先交还上一个账号的预留
+          // (它已经不在本次请求的候选里了),再接管新账号的预留.
           if (releaseReserved) {
             releaseReserved()
             releaseReserved = null
@@ -903,13 +903,13 @@ export function createProxyHandler(ctx) {
               ? rt.releaseReservedSlot
               : null
           if (lastKey && rt.key !== lastKey) {
-            // 已经换到不同账号 → 重置同账号重试计数，并释放上一账号的串行化锁
+            // 已经换到不同账号 → 重置同账号重试计数,并释放上一账号的串行化锁
             sameAccountRetries = 0
             dropChatHold()
-            // agentOverride 是针对上一账号的 agent 覆盖（free_mode_invalid_agent_model
-            // 等按该账号+agent 组合判定）。换到新账号后必须清空，让新账号从它自己的
-            // 主 agent 重新尝试——否则上一账号被拒的 agent 覆盖会泄漏到新账号上，
-            // 使新账号跳过主 agent、直接用孪生/兜底（偏离其应有主 agent）。
+            // agentOverride 是针对上一账号的 agent 覆盖(free_mode_invalid_agent_model
+            // 等按该账号+agent 组合判定).换到新账号后必须清空,让新账号从它自己的
+            // 主 agent 重新尝试——否则上一账号被拒的 agent 覆盖会泄漏到新账号上,
+            // 使新账号跳过主 agent,直接用孪生/兜底(偏离其应有主 agent).
             if (agentOverride !== null) {
               logger.warn('reset agent override on account switch', {
                 fromKey: lastKey,
@@ -921,8 +921,8 @@ export function createProxyHandler(ctx) {
             }
           }
           lastKey = rt.key
-          // 账号选定 → 补进日志上下文：其后这条请求的所有日志都能对上"哪个账号"。
-          // 多账号池并发时没有它，日志就是一堆无主记录交织，排障只能靠猜。
+          // 账号选定 → 补进日志上下文:其后这条请求的所有日志都能对上"哪个账号".
+          // 多账号池并发时没有它,日志就是一堆无主记录交织,排障只能靠猜.
           patchLogContext({ account: rt.email || rt.key, model: upstreamModel })
           logger.info('account selected', {
             key: rt.key,
@@ -931,20 +931,20 @@ export function createProxyHandler(ctx) {
             wasAgentOverride: !!agentOverride,
           })
 
-          // 账号并发上限：同一账号同时在途流数不超过上限（热会话优先复用，
-          // 选号阶段已把满员账号排后；只有所有账号都满员时才排队复用，
-          // 超时兜底换号）。**任何一次获取都必须有界**：兜底阶段虽然预算已
-          // 耗尽（不会再换号），但若持锁者因网络波动卡死（幽灵连接），无限
-          // 等待会让本请求永久挂起、所有后续请求排队超时——必须像前面的
-          // acquire 一样设上界，超时把 account_busy 返回给客户端（可重试），
-          // 绝不无限等待。
+          // 账号并发上限:同一账号同时在途流数不超过上限(热会话优先复用,
+          // 选号阶段已把满员账号排后;只有所有账号都满员时才排队复用,
+          // 超时兜底换号).任何一次获取都必须有界:兜底阶段虽然预算已
+          // 耗尽(不会再换号),但若持锁者因网络波动卡死(幽灵连接),无限
+          // 等待会让本请求永久挂起,所有后续请求排队超时——必须像前面的
+          // acquire 一样设上界,超时把 account_busy 返回给客户端(可重试),
+          // 绝不无限等待.
           if (!heldRt) {
-            // 已在上一轮完整等待过账号锁（account_busy）→ 本轮只给短窗
-            // （账号并发上限即"满了换号"阈值：所有账号都满员时才排队复用热
-            // 会话，但排队只等一次完整 idle 周期，之后必须尽快换下一个账号，
-            // 而不是在满员账号上反复长等把并发全部钉死）。
-            // 夹到剩余调度预算：账号锁是本阶段最长的一段（热 75s / 冷 120s），
-            // 不能让它单独把整个请求拖过客户端耐心与 Cloudflare 100s 悬崖。
+            // 已在上一轮完整等待过账号锁(account_busy)→ 本轮只给短窗
+            // (账号并发上限即"满了换号"阈值:所有账号都满员时才排队复用热
+            // 会话,但排队只等一次完整 idle 周期,之后必须尽快换下一个账号,
+            // 而不是在满员账号上反复长等把并发全部钉死).
+            // 夹到剩余调度预算:账号锁是本阶段最长的一段(热 75s / 冷 120s),
+            // 不能让它单独把整个请求拖过客户端耐心与 Cloudflare 100s 悬崖.
             const budgetLeft = schedulingDeadline - Date.now()
             if (budgetLeft <= 0) {
               throw new UpstreamError(
@@ -974,8 +974,8 @@ export function createProxyHandler(ctx) {
                   waitedMs: waitMs,
                 })
                 chatWaited = true
-                // 满员排队超时：把该账号从本次请求的候选中排除，下一轮才
-                // 真正换到别的账号（否则粘性排序会再次选中它反复等）。
+                // 满员排队超时:把该账号从本次请求的候选中排除,下一轮才
+                // 真正换到别的账号(否则粘性排序会再次选中它反复等).
                 skipKeys.add(rt.key)
                 pendingGateCode = 'account_busy'
                 pendingSwitchAccount = true
@@ -997,10 +997,10 @@ export function createProxyHandler(ctx) {
                 runtimes.acquireChat(rt.key, finalWaitMs),
               )
             }
-            // 切换竞态：等待 chat 锁期间可能发生了代理/账号切换（本 runtime
-            // 已被顶替，旧 session 正在被优雅释放）。此时不能继续用旧 runtime
-            // ——它的 session 可能马上被 DELETE，硬用会让请求撞上已失效会话而
-            // 卡死。释放锁、无冷却重新选号（新 runtime 走新出口、新 session）。
+            // 切换竞态:等待 chat 锁期间可能发生了代理/账号切换(本 runtime
+            // 已被顶替,旧 session 正在被优雅释放).此时不能继续用旧 runtime
+            // ——它的 session 可能马上被 DELETE,硬用会让请求撞上已失效会话而
+            // 卡死.释放锁,无冷却重新选号(新 runtime 走新出口,新 session).
             if (!runtimes.isCurrentRuntime(rt)) {
               logger.warn(
                 'runtime superseded while waiting for chat slot; re-selecting',
@@ -1019,10 +1019,10 @@ export function createProxyHandler(ctx) {
               continue
             }
             heldRt = rt
-            // 在途标记：锁内唯一请求；轮询 GET 会跳过该账号，避免干扰活跃会话。
+            // 在途标记:锁内唯一请求;轮询 GET 会跳过该账号,避免干扰活跃会话.
             heldRt.sessions.beginRequest()
-            // 已经拿到真实槽位 —— 预留完成使命，立刻交还（此后由
-            // chatLock.inFlight 承担"这个账号有多满"的事实来源）。
+            // 已经拿到真实槽位 —— 预留完成使命,立刻交还(此后由
+            // chatLock.inFlight 承担"这个账号有多满"的事实来源).
             if (releaseReserved) {
               releaseReserved()
               releaseReserved = null
@@ -1031,12 +1031,12 @@ export function createProxyHandler(ctx) {
 
           let result
           let runId
-          /** 本 run 的 client_id（对齐 trefeon：每个 run 一个 client_id，
-           * 整个 run 的所有 chat 调用复用——client_id 绑定 run 生命周期，
-           * 绝不在同一 run 的多次 chat 间 fanout（free_mode_run_fanout）。 */
+          /** 本 run 的 client_id(对齐 trefeon:每个 run 一个 client_id,
+           - 整个 run 的所有 chat 调用复用——client_id 绑定 run 生命周期,
+           - 绝不在同一 run 的多次 chat 间 fanout(free_mode_run_fanout). */
           let clientId
           {
-            // 可观测性：响应头标明本次实际使用的账号。
+            // 可观测性:响应头标明本次实际使用的账号.
             res.setHeader('x-freebuff-proxy-account', rt.email)
             res.setHeader('x-freebuff-proxy-account-id', rt.key)
 
@@ -1048,35 +1048,35 @@ export function createProxyHandler(ctx) {
               )
             }
 
-            // agent 选择：主 agent 被上游以 free_mode_invalid_agent_model 拒绝时
-            // （上游按用途/推理任务可能只接受特定 agent，且部分 agent 带单次
-            // output 限制会截断长思考链），回退 base3 孪生 agent 再试一次。
-            // agentOverride：本请求上一次尝试因 free_mode_legacy_luna_agent 失败
-            // 后置为 base3 孪生（上游退役旧 agent 时换 session 没用，必须换 agent）。
-            // ⚠️ 目录协议下的 agent 选择（真机抓包 + 二进制双重证据）：
+            // agent 选择:主 agent 被上游以 free_mode_invalid_agent_model 拒绝时
+            // (上游按用途/推理任务可能只接受特定 agent,且部分 agent 带单次
+            // output 限制会截断长思考链),回退 base3 孪生 agent 再试一次.
+            // agentOverride:本请求上一次尝试因 free_mode_legacy_luna_agent 失败
+            // 后置为 base3 孪生(上游退役旧 agent 时换 session 没用,必须换 agent).
+            //  目录协议下的 agent 选择(真机抓包 + 二进制双重证据):
             //
-            // 官方 chat 走目录协议时，agent-run 用的是**统一的**
-            // `base3-free-catalog`，而不是 `base2-free-<model>`。
-            // 二进制原文：
+            // 官方 chat 走目录协议时,agent-run 用的是统一的
+            // base3-free-catalog,而不是 base2-free-<model>.
+            // 二进制原文:
             //   UK = "base3-free-catalog"
             //   Ps$(H){ return WD().row(H)?.key === H ? UK : cCH(H) }
-            // 即：**当会话模型是目录 key（m-xxx）时 → 用 catalog agent**；
-            // 否则才按 legacy 规则推导 base2/base3。
+            // 即:当会话模型是目录 key(m-xxx)时 → 用 catalog agent;
+            // 否则才按 legacy 规则推导 base2/base3.
             //
-            // 抓包实测：官方 START agentId=base3-free-catalog（目录模式下唯一值）。
-            // 我们此前发 base2-free-deepseek-flash —— 与官方不一致。
+            // 抓包实测:官方 START agentId=base3-free-catalog(目录模式下唯一值).
+            // 我们此前发 base2-free-deepseek-flash —— 与官方不一致.
             // 见 .agents/notes/implemented/bug-fix/2026-10-01-catalog-agent.md
             const sessionModelId = snap.model
             const isCatalogMode =
               typeof sessionModelId === 'string' &&
               (sessionModelId.startsWith('m-') ||
                 sessionModelId.startsWith('fbm1.'))
-            // ⚠️ official 通道：**跳过**本段 startAgentRun。
-            // agent 世代是官方形态的一部分，实现只在副仓库；这里自己发一次
-            // 会用 legacy 世代，与副仓库后续 chat 的世代打架。
-            // 副仓库的 `reuse` 会自己做 startRun（desktop 世代）+ chat。
+            //  official 通道:跳过本段 startAgentRun.
+            // agent 世代是官方形态的一部分,实现只在副仓库;这里自己发一次
+            // 会用 legacy 世代,与副仓库后续 chat 的世代打架.
+            // 副仓库的 reuse 会自己做 startRun(desktop 世代)+ chat.
             // 见 docs/reverse/17-current-status-and-gaps.md
-            // legacy 已废弃（见 config.resolveUpstreamChannel）：一律 official
+            // legacy 已废弃(见 config.resolveUpstreamChannel):一律 official
             const _channel = resolveUpstreamChannel(
               settingsStore?.get?.(),
               config,
@@ -1087,11 +1087,11 @@ export function createProxyHandler(ctx) {
               (isCatalogMode
                 ? CATALOG_UNIFIED_AGENT_ID
                 : agentIdForModel(upstreamModel, customModels()))
-            // official 通道**仍然发** startAgentRun：
-            //   - 保证 runId 始终有值（FINISH 上报、以及 RPC 失败回落 legacy
-            //     时都要用）；
-            //   - 不影响 chat 世代 —— official 下 chat 由副仓库执行，
-            //     它自己会用 desktop 世代再 startRun 一次。
+            // official 通道仍然发 startAgentRun:
+            //   - 保证 runId 始终有值(FINISH 上报,以及 RPC 失败回落 legacy
+            //     时都要用);
+            //   - 不影响 chat 世代 —— official 下 chat 由副仓库执行,
+            //     它自己会用 desktop 世代再 startRun 一次.
             // 见 docs/reverse/17-current-status-and-gaps.md
             {
             try {
@@ -1104,9 +1104,9 @@ export function createProxyHandler(ctx) {
                   agentErr.code === 'free_mode_invalid_agent_model') &&
                 agentErr.status === 403
               ) {
-                // 目录模式下主 agent 是 base3-free-catalog；兜底**必须同代**，
-                // 否则回退成 base2-free 会跨世代（系统消息开场白按 base3 写，
-                // agent 却是 base2 → 上游按世代校验必然拒绝）。
+                // 目录模式下主 agent 是 base3-free-catalog;兜底必须同代,
+                // 否则回退成 base2-free 会跨世代(系统消息开场白按 base3 写,
+                // agent 却是 base2 → 上游按世代校验必然拒绝).
                 // 见 .agents/notes/implemented/bug-fix/2026-10-01-catalog-agent.md
                 const fbAgentId = isCatalogMode
                   ? CATALOG_UNIFIED_AGENT_ID
@@ -1146,11 +1146,11 @@ export function createProxyHandler(ctx) {
               agentId,
               clientId,
               hermesDelegateAlias,
-              // 服务端指派的 model（会话回执里的 m-xxx / fbm1.xxx）。
-              // 用错会得到 session_model_mismatch —— 实测踩过。
+              // 服务端指派的 model(会话回执里的 m-xxx / fbm1.xxx).
+              // 用错会得到 session_model_mismatch —— 实测踩过.
               snap.model,
-              // 目录持有者：把 m-xxx（目录 key）翻成 fbm1.xxx（句柄）——
-              // 官方 chat 的 model 用的就是句柄（真机抓包确认）。
+              // 目录持有者:把 m-xxx(目录 key)翻成 fbm1.xxx(句柄)——
+              // 官方 chat 的 model 用的就是句柄(真机抓包确认).
               rt.upstream.catalog,
             )
             result = await forwardCompletions({
@@ -1160,9 +1160,9 @@ export function createProxyHandler(ctx) {
               stream,
               hermesDelegateAlias,
               upstream: rt.upstream,
-              // 会话剩余时间：用于把流 idle 超时收敛到会话过期附近，过期即掐
+              // 会话剩余时间:用于把流 idle 超时收敛到会话过期附近,过期即掐
               sessionRemainingMs: snap.remainingMs,
-              // chat 必须带会话实例 id，否则上游 428（见 forwardCompletions）
+              // chat 必须带会话实例 id,否则上游 428(见 forwardCompletions)
               instanceId: snap.instanceId,
               schedulingDeadline,
               upstreamModel,
@@ -1182,11 +1182,11 @@ export function createProxyHandler(ctx) {
 
           if (result.ok) return
 
-          // 幽灵连接（流 idle 超时被掐断）：响应头已提交、无法整体重试，但
-          // 该账号刚被掐断过一条卡死的链路——上游/网络对该会话不稳定。给账号
-          // 一个短暂冷却（stallCooldownSec，默认 30s），让后续新请求优先去别的
-          // 账号，避免反复撞上同一条卡死链路；不冷却会导致卡死的账号继续吸收
-          // 新流量（用户实测：一个账号 3/3 满了还在持续接收请求）。
+          // 幽灵连接(流 idle 超时被掐断):响应头已提交,无法整体重试,但
+          // 该账号刚被掐断过一条卡死的链路——上游/网络对该会话不稳定.给账号
+          // 一个短暂冷却(stallCooldownSec,默认 30s),让后续新请求优先去别的
+          // 账号,避免反复撞上同一条卡死链路;不冷却会导致卡死的账号继续吸收
+          // 新流量(用户实测:一个账号 3/3 满了还在持续接收请求).
           if (
             result.gateCode === 'stream_idle_timeout' &&
             !result.ok &&
@@ -1210,14 +1210,14 @@ export function createProxyHandler(ctx) {
           }
 
           if (result.recoverable && attempt < maxAttempts) {
-            // 先判定是否换号，再累加同号重试计数（顺序不能反：反了会让
-            // 第一次同号重试就被判成"该换号"）。
+            // 先判定是否换号,再累加同号重试计数(顺序不能反:反了会让
+            // 第一次同号重试就被判成"该换号").
             const willSwitch =
               result.switchAccount === true || sameAccountRetries >= 1
             sameAccountRetries = willSwitch ? 0 : sameAccountRetries + 1
-            // free_mode_legacy_luna_agent：上游退役旧 Luna agent。agentIdForModel
-            // 已对 luna 系强制 base3（见 model.js），重试换 session 即用新 agent，
-            // 不再需要额外的 agentOverride——任何 base2 尝试都不会发生。
+            // free_mode_legacy_luna_agent:上游退役旧 Luna agent.agentIdForModel
+            // 已对 luna 系强制 base3(见 model.js),重试换 session 即用新 agent,
+            // 不再需要额外的 agentOverride——任何 base2 尝试都不会发生.
             logger.warn('session error; will re-acquire', {
               code: result.gateCode,
               attempt,
@@ -1232,45 +1232,45 @@ export function createProxyHandler(ctx) {
             pendingRetryAfterMs = result.retryAfterMs ?? null
             pendingSwitchAccount = willSwitch
             pendingNoCooldown = result.noCooldown === true
-            // 换号前**不再无条件**早退 DELETE：那一小时是实付买断的，
-            // 而上游早退不退 Freebucks。旧注释说"它已经在冷却，没人会再用它"——
-            // 但冷却只有 60 秒，而这一小时还剩几十分钟可用（下一跳还能续用）。
-            // 只有**付费时段已过**才真正没有保留价值，那时才释放。
-            // 换号前释放：走统一入口（付费时段内会被拒绝 —— 那一小时是实付的）
+            // 换号前不再无条件早退 DELETE:那一小时是实付买断的,
+            // 而上游早退不退 Freebucks.旧注释说"它已经在冷却,没人会再用它"——
+            // 但冷却只有 60 秒,而这一小时还剩几十分钟可用(下一跳还能续用).
+            // 只有付费时段已过才真正没有保留价值,那时才释放.
+            // 换号前释放:走统一入口(付费时段内会被拒绝 —— 那一小时是实付的)
             if (willSwitch && lastKey) {
               releaseSessionUnlessPaid(lastKey, 'switch account after gate error')
             }
             continue
           }
 
-          // 最后一次尝试也失败：把当前账号标记冷却（gate 瞬时问题 noCooldown 除外），
-          // 避免下一个请求立刻又撞上同一个故障账号。
+          // 最后一次尝试也失败:把当前账号标记冷却(gate 瞬时问题 noCooldown 除外),
+          // 避免下一个请求立刻又撞上同一个故障账号.
           //
-          // 同时**必须把该账号的会话早退 DELETE 掉**：请求已经不会再用这条
-          // 会话了，留着只会白占上游会话槽位（一个账号同时只有一条 session 且
-          // 绑定模型），换模型时会被它挡住。一次 admit 买断一小时，付费时段内
-          // 换模型才需要早退腾槽位（那一小时已付款，闲置不额外花钱）。
-          // 释放失败也不丢句柄（SessionManager
-          // 会保留 instanceId 并重试，sessions.json 里还有一份）。
+          // 同时必须把该账号的会话早退 DELETE 掉:请求已经不会再用这条
+          // 会话了,留着只会白占上游会话槽位(一个账号同时只有一条 session 且
+          // 绑定模型),换模型时会被它挡住.一次 admit 买断一小时,付费时段内
+          // 换模型才需要早退腾槽位(那一小时已付款,闲置不额外花钱).
+          // 释放失败也不丢句柄(SessionManager
+          // 会保留 instanceId 并重试,sessions.json 里还有一份).
           /**
-           * ⚠️ **付费时段内绝不释放**（2026-10-04 真实事故修正）。
+           - 付费时段内绝不释放(2026-10-04 真实事故修正).
            *
-           * 旧行为：最后一次尝试失败就 `releaseSession()`，日志写
-           * `releasing session to free the slot`。但那一小时是**实付买断**的，
-           * 上游早退 DELETE **不退 Freebucks**（实测只回 `freebucksRefundPending`
-           * 且观察 2 分钟未到账）—— 于是"请求失败 + 钱白花 + 会话没了"，
-           * 用户看到的就是「请求完积分变零，还失败了」。
+           - 旧行为:最后一次尝试失败就 releaseSession(),日志写
+           - releasing session to free the slot.但那一小时是实付买断的,
+           - 上游早退 DELETE 不退 Freebucks(实测只回 freebucksRefundPending
+           - 且观察 2 分钟未到账)—— 于是"请求失败 + 钱白花 + 会话没了",
+           - 用户看到的就是[请求完积分变零,还失败了].
            *
-           * 更要命的是 428 `waiting_room_required`：上游原话是
-           * "Send your message again to start a new one" —— **它要的是重发，
-           * 不是重买**；而我们把会话扔了，重发就真的只能重买。
+           - 更要命的是 428 waiting_room_required:上游原话是
+           - "Send your message again to start a new one" —— 它要的是重发,
+           - 不是重买;而我们把会话扔了,重发就真的只能重买.
            *
-           * 现在：只要会话仍在已付费时段内（`inPaidWindow()`），就**保留句柄**。
-           * 闲置不额外花钱，而留着它下一跳还能续用（见 readmitToContinue）。
-           * 只有**付费时段已过**才释放腾槽位。
+           - 现在:只要会话仍在已付费时段内(inPaidWindow()),就保留句柄.
+           - 闲置不额外花钱,而留着它下一跳还能续用(见 readmitToContinue).
+           - 只有付费时段已过才释放腾槽位.
            *
-           * 释放失败也不丢句柄（SessionManager 会保留 instanceId 并重试，
-           * sessions.json 里还有一份）。
+           - 释放失败也不丢句柄(SessionManager 会保留 instanceId 并重试,
+           - sessions.json 里还有一份).
            */
           if (lastKey) {
             const st = result.status
@@ -1281,7 +1281,7 @@ export function createProxyHandler(ctx) {
               st !== 429 &&
               result.noCooldown !== true
             if (!clientError || result.gateCode === 'stream_idle_timeout') {
-              // 统一入口：付费时段内会被拒绝（避免把已买断的一小时扔掉）
+              // 统一入口:付费时段内会被拒绝(避免把已买断的一小时扔掉)
               releaseSessionUnlessPaid(lastKey, 'final attempt failed')
             }
           }
@@ -1308,29 +1308,29 @@ export function createProxyHandler(ctx) {
           return
         } catch (err) {
           if (err instanceof UpstreamError) {
-            // 终态错误：没有可用账号 / 参数缺失，直接返回。
+            // 终态错误:没有可用账号 / 参数缺失,直接返回.
             const isTerminal =
               err.code === 'no_available_account' ||
               err.code === 'model_required' ||
               err.code === 'upstream_auth_missing' ||
-              // 客户端已断开：换号只会再买一条 Freebucks 计费会话给一个
-              // 没人接收的响应，必须立刻收场（连接已死，写不出去也不报错）。
+              // 客户端已断开:换号只会再买一条 Freebucks 计费会话给一个
+              // 没人接收的响应,必须立刻收场(连接已死,写不出去也不报错).
               err.code === 'client_gone' ||
-              // 调度预算已耗尽：预算是整个请求一份，后续每轮都会立即再超，
-              // 重试只会白烧 maxAttempts 次循环，直接快速失败让客户端重试。
+              // 调度预算已耗尽:预算是整个请求一份,后续每轮都会立即再超,
+              // 重试只会白烧 maxAttempts 次循环,直接快速失败让客户端重试.
               err.code === 'scheduling_timeout' ||
-              // 本次请求的新会话预算已用尽：同样在整个请求内不会恢复
-              // （重新选号也拿不到预算），重试只会白转一轮，直接返回可操作的错误码。
+              // 本次请求的新会话预算已用尽:同样在整个请求内不会恢复
+              // (重新选号也拿不到预算),重试只会白转一轮,直接返回可操作的错误码.
               err.code === 'session_budget_exhausted' ||
-              // 出口级故障（地理封锁）：换号无用（所有账号共享同一出口），
-              // 重试只会再买断一次一整小时的 Freebucks。立即收场。
+              // 出口级故障(地理封锁):换号无用(所有账号共享同一出口),
+              // 重试只会再买断一次一整小时的 Freebucks.立即收场.
               // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
               err.fatal === true ||
               /**
-               * 全池额度耗尽：**遍历完所有账号**才得出的聚合结论 ——
-               * 换号/同号重试不可能有不同结果。立即收场，不白轮 maxAttempts 轮。
-               * （实测：每个客户端请求白轮 3 次 × 每次遍历全部账号，
-               *   13 个请求就把 500 条日志缓冲冲爆，用户事后查不到更早记录。）
+               - 全池额度耗尽:遍历完所有账号才得出的聚合结论 ——
+               - 换号/同号重试不可能有不同结果.立即收场,不白轮 maxAttempts 轮.
+               - (实测:每个客户端请求白轮 3 次 × 每次遍历全部账号,
+               - 13 个请求就把 500 条日志缓冲冲爆,用户事后查不到更早记录.)
                */
               err.terminalExhausted === true
             if (isTerminal) {
@@ -1344,7 +1344,7 @@ export function createProxyHandler(ctx) {
                   attempt,
                   key: lastKey,
                 })
-                // 同号 re-admit 一次；再失败即换号（见下方 sameAccountRetries）。
+                // 同号 re-admit 一次;再失败即换号(见下方 sameAccountRetries).
                 const willSwitch = sameAccountRetries >= 1
                 sameAccountRetries += 1
                 pendingGateCode = err.code
@@ -1355,10 +1355,10 @@ export function createProxyHandler(ctx) {
                 }
                 continue
               }
-              // 上游错误（startAgentRun 失败 / no_session / 5xx 等）：
-              // - 账号级故障（限流/封禁/配额）→ 冷却换号；
-              // - 其他（5xx/网络/上游瞬时故障）→ 先在同一账号上重试一次：
-              //   复用热 session，不新建计费会话；同号再失败才换号。
+              // 上游错误(startAgentRun 失败 / no_session / 5xx 等):
+              // - 账号级故障(限流/封禁/配额)→ 冷却换号;
+              // - 其他(5xx/网络/上游瞬时故障)→ 先在同一账号上重试一次:
+              //   复用热 session,不新建计费会话;同号再失败才换号.
               const accountSpecific = shouldSwitchAccountOnError(
                 err.status,
                 err.code,
@@ -1386,19 +1386,19 @@ export function createProxyHandler(ctx) {
                 }
               continue
             }
-            // 最后一次尝试也失败（无重试机会）：会话不会再被用，立刻早退
-            // DELETE 释放槽位，而不是等空闲释放 / 挂到过期。
+            // 最后一次尝试也失败(无重试机会):会话不会再被用,立刻早退
+            // DELETE 释放槽位,而不是等空闲释放 / 挂到过期.
             if (lastKey) {
-              // 统一入口（付费时段内拒绝释放）
+              // 统一入口(付费时段内拒绝释放)
               releaseSessionUnlessPaid(lastKey, 'final upstream error')
             }
             mapAndSendError(res, err)
             return
           }
-          // 非 UpstreamError：网络错误 / 上游超时（socket 断开、代理不可达等）。
-          // 先同号重试一次（热 session 复用，不新建计费会话），再失败才换号；
-          // 客户端是否已断开无法可靠区分（req.destroyed 在请求体读完后就为 true），
-          // 多试一轮最多浪费一次上游调用。
+          // 非 UpstreamError:网络错误 / 上游超时(socket 断开,代理不可达等).
+          // 先同号重试一次(热 session 复用,不新建计费会话),再失败才换号;
+          // 客户端是否已断开无法可靠区分(req.destroyed 在请求体读完后就为 true),
+          // 多试一轮最多浪费一次上游调用.
           if (attempt < maxAttempts) {
             const willSwitch = sameAccountRetries >= 1
             logger.warn(
@@ -1426,8 +1426,8 @@ export function createProxyHandler(ctx) {
             error: err instanceof Error ? err.message : String(err),
             stack: err instanceof Error ? err.stack : undefined,
           })
-          // 网络类错误、重试已耗尽：会话不会再被本次请求使用，立刻 DELETE
-          // 释放槽位（失败也会保留句柄重试），别让它挂到过期。
+          // 网络类错误,重试已耗尽:会话不会再被本次请求使用,立刻 DELETE
+          // 释放槽位(失败也会保留句柄重试),别让它挂到过期.
           if (lastKey) {
             logger.info('final network error; releasing session to free the slot', {
               key: lastKey,
@@ -1450,8 +1450,8 @@ export function createProxyHandler(ctx) {
         }
       }
     } finally {
-      // 请求结束（成功/失败/预算耗尽）：释放账号串行化锁，恢复该账号轮询；
-      // 并摘掉客户端断开监听器（keep-alive 连接复用，不摘会累积监听器）。
+      // 请求结束(成功/失败/预算耗尽):释放账号串行化锁,恢复该账号轮询;
+      // 并摘掉客户端断开监听器(keep-alive 连接复用,不摘会累积监听器).
       dropChatHold()
       chatGone.cleanup()
     }
@@ -1467,26 +1467,26 @@ export function createProxyHandler(ctx) {
     clientId,
     hermesDelegateAlias,
     /**
-     * 服务端在会话回执里给出的 model 值。**必须用它**，不能用自己的模型名。
+     - 服务端在会话回执里给出的 model 值.必须用它,不能用自己的模型名.
      *
-     * 真机证据：官方 GET 建会话的回执是 `"model":"m-00032eaeec"`（目录 key），
-     * 或 `"model":"fbm1.AAEAAUPe2Us..."`（句柄）—— 都是**服务端指派**的，
-     * 与客户端请求的模型名无关。实测用 `deepseek/deepseek-v4-flash` 去 chat
-     * 会得到 `session_model_mismatch`（会话绑定的模型与请求的不符）。
-     * 见 .agents/notes/implemented/bug-fix/2026-10-01-session-model-binding.md
+     - 真机证据:官方 GET 建会话的回执是 "model":"m-00032eaeec"(目录 key),
+     - 或 "model":"fbm1.AAEAAUPe2Us..."(句柄)—— 都是服务端指派的,
+     - 与客户端请求的模型名无关.实测用 deepseek/deepseek-v4-flash 去 chat
+     - 会得到 session_model_mismatch(会话绑定的模型与请求的不符).
+     - 见 .agents/notes/implemented/bug-fix/2026-10-01-session-model-binding.md
      */
     sessionModel,
     catalog,
-    /** 'worker' | 'manager'：官方形态的层（默认 worker）。 */
+    /** 'worker' | 'manager':官方形态的层(默认 worker). */
     layerHint = 'worker',
-    /** repo_snapshot 的 JSON 字符串（worker 层用真实项目统计）。 */
+    /** repo_snapshot 的 JSON 字符串(worker 层用真实项目统计). */
     repositorySnapshot = null,
   ) {
     const { clientId: fallbackClientId } = newIds()
     const effectiveClientId = clientId || fallbackClientId
-    // 优先级：服务端指派的 model（m-xxx）> 请求的模型名；
-    // 再经目录翻成**句柄**（fbm1.xxx）—— 官方 chat 的 model 就是句柄。
-    // 真机证据：{"model":"fbm1.AAEAAUPe2Us...","codebuff_metadata":{...}}
+    // 优先级:服务端指派的 model(m-xxx)> 请求的模型名;
+    // 再经目录翻成句柄(fbm1.xxx)—— 官方 chat 的 model 就是句柄.
+    // 真机证据:{"model":"fbm1.AAEAAUPe2Us...","codebuff_metadata":{...}}
     const assigned =
       typeof sessionModel === 'string' && sessionModel ? sessionModel : upstreamModel
     const outgoingModel =
@@ -1503,49 +1503,49 @@ export function createProxyHandler(ctx) {
       ...clientBody,
       model: outgoingModel,
     })
-    // Hermes 的 delegate_task 命中上游 foreign_tool_names。只在客户端实际声明
-    // 该工具时做窄范围双向别名；历史 tool_calls/tool message/tool_choice 同步改名，
-    // 回程再恢复原名，避免破坏 Hermes 的硬编码派发。见 issue #17 与：
+    // Hermes 的 delegate_task 命中上游 foreign_tool_names.只在客户端实际声明
+    // 该工具时做窄范围双向别名;历史 tool_calls/tool message/tool_choice 同步改名,
+    // 回程再恢复原名,避免破坏 Hermes 的硬编码派发.见 issue #17 与:
     // .agents/notes/implemented/bug-fix/2026-09-19-hermes-delegate-task-alias.md
     body = rewriteHermesDelegateForUpstream(body, hermesDelegateAlias)
     // One reasoning field only — avoids Freebuff default + client dual fields.
     body = normalizeReasoningFields(body)
-    // 输出预算治理：客户端偏小的 max_tokens/max_completion_tokens 会把思考链
-    // （reasoning token 计入该预算）提前掐断（finish_reason=length）——参考
-    // freebuff2api-wokers#8「DS4 思考链稍长即截断」。转发上游前抬到 floor。
+    // 输出预算治理:客户端偏小的 max_tokens/max_completion_tokens 会把思考链
+    // (reasoning token 计入该预算)提前掐断(finish_reason=length)——参考
+    // freebuff2api-wokers#8[DS4 思考链稍长即截断].转发上游前抬到 floor.
     body = normalizeOutputBudget(body)
-    // ⚠️ 分通道（可在控制台「设置」切换，见 settingsStore.upstreamChannel）：
-    //   official —— 用**官方抓包原文**（官方 system 模板 + 官方 37 工具）。
-    //   legacy（默认）—— 旧的自拼形态（CLI 开场白 + 自编签名工具）。
+    //  分通道(可在控制台[设置]切换,见 settingsStore.upstreamChannel):
+    //   official —— 用官方抓包原文(官方 system 模板 + 官方 37 工具).
+    //   legacy(默认)—— 旧的自拼形态(CLI 开场白 + 自编签名工具).
     //
-    // 旧形态来源是早期第三方项目 + 多年补丁，已无法与官方逐字段核对；
-    // 与抓包对比后发现三处硬差异（system 全文、工具集、agent 世代），
-    // 是身份/世代错配的根源。见 docs/reverse/17-current-status-and-gaps.md。
+    // 旧形态来源是早期第三方项目 + 多年补丁,已无法与官方逐字段核对;
+    // 与抓包对比后发现三处硬差异(system 全文,工具集,agent 世代),
+    // 是身份/世代错配的根源.见 docs/reverse/17-current-status-and-gaps.md.
     //
-    // 优先级：settingsStore（前端可调）> config.upstream.channel（兜底）。
+    // 优先级:settingsStore(前端可调)> config.upstream.channel(兜底).
     const channel = resolveUpstreamChannel(
       settingsStore?.get?.(),
       config,
       (m, f) => logger.warn(m, f),
     )
-    // ⚠️ official 通道**不在这里构造**：官方形态的实现只有一份，在 cli-bridge。
-    // 本函数只产出 legacy 形态；official 会在发送阶段把整条请求委托给副仓库
-    // （见 forwardCompletions 里的 rpcChat 分支），避免两份实现漂移。
+    //  official 通道不在这里构造:官方形态的实现只有一份,在 cli-bridge.
+    // 本函数只产出 legacy 形态;official 会在发送阶段把整条请求委托给副仓库
+    // (见 forwardCompletions 里的 rpcChat 分支),避免两份实现漂移.
     // 见 docs/reverse/17-current-status-and-gaps.md
     if (channel !== 'official') {
       // Free mode requires a system message opening with the Freebuff CLI marker
       // ("You are Buffy, the strategic coding assistant."). base3-free-* agent
-      // 用 base3 规范开场（对齐 trefeon PR #207）。
+      // 用 base3 规范开场(对齐 trefeon PR #207).
       body.messages = ensureFreebuffSystemMessages(body.messages, agentId)
     }
-    // 补齐**官方真签名工具**（名字 + 真实参数 schema），否则上游把请求判成
+    // 补齐官方真签名工具(名字 + 真实参数 schema),否则上游把请求判成
     // 第三方客户端并降级到 inclusionai/ling-3.0-tiny:free —— 其 slug 不可路由时
-    // 以 404 失败、下游桥接层再崩成 502 空体，即 issue#15「所有模型空响应」。
+    // 以 404 失败,下游桥接层再崩成 502 空体,即 issue#15[所有模型空响应].
     // 判据与实测见
     // .agents/notes/implemented/bug-fix/2026-09-19-genuine-tool-signature.md
-    // ⚠️ 必须 `?.get()?.`：只写 `?.get().` 时，settingsStore 存在而 get() 返回
-    // undefined（store 尚未就绪/读盘降级）会抛 TypeError，直接打断带工具的
-    // 转发链路 —— 与同文件 blockPremiumModels 的写法保持一致。
+    //  必须 ?.get()?.:只写 ?.get(). 时,settingsStore 存在而 get() 返回
+    // undefined(store 尚未就绪/读盘降级)会抛 TypeError,直接打断带工具的
+    // 转发链路 —— 与同文件 blockPremiumModels 的写法保持一致.
     const freeToolSignatureEnabled =
       settingsStore?.get?.()?.freeToolSignatureEnabled !== false
     if (channel !== 'official') {
@@ -1554,13 +1554,13 @@ export function createProxyHandler(ctx) {
         freeToolSignatureEnabled,
       )
     }
-    // 可观测性：把「上游会怎么看这个工具集」算出来记进日志。判定权永远在上游，
-    // 本地算这份只为让「正在被降级」在出问题时能被看见（上游不回明确错误，
-    // 症状只是回答变差或 404/502，不主动暴露原因）。
+    // 可观测性:把[上游会怎么看这个工具集]算出来记进日志.判定权永远在上游,
+    // 本地算这份只为让[正在被降级]在出问题时能被看见(上游不回明确错误,
+    // 症状只是回答变差或 404/502,不主动暴露原因).
     //
-    // isRootAgent 恒为 true：本代理转发的一律是 root agent（base2-free* /
-    // base3-free-*，见 model.agentIdForModel），而该参数只影响「无工具」时的
-    // 只报不罚信号分类，不影响任何降级判定。
+    // isRootAgent 恒为 true:本代理转发的一律是 root agent(base2-free* /
+    // base3-free-*,见 model.agentIdForModel),而该参数只影响[无工具]时的
+    // 只报不罚信号分类,不影响任何降级判定.
     if (Array.isArray(body.tools) && body.tools.length > 0) {
       const verdict = detectForeignClient(body, true)
       if (verdict.signal && ENFORCED_FOREIGN_SIGNALS.includes(verdict.signal)) {
@@ -1580,32 +1580,32 @@ export function createProxyHandler(ctx) {
         ? { ...body.codebuff_metadata }
         : {}
     // run_id MUST be server-issued via POST /api/v1/agent-runs (START).
-    // client_id：SDK 形 13 位 base36（对齐官方 CLI），每 run 一次，绝不用
+    // client_id:SDK 形 13 位 base36(对齐官方 CLI),每 run 一次,绝不用
     // 自有前缀——上游 cf-worker-signals.ts 的 looksLikeProxyClientId 会指纹
-    // 代理形态 client id（详见 util/http.js generateClientId）。
+    // 代理形态 client id(详见 util/http.js generateClientId).
     body.codebuff_metadata = {
       ...existingMeta,
       run_id: runId,
       client_id: effectiveClientId,
       cost_mode: 'free',
       freebuff_instance_id: instanceId,
-      // 客户端环境描述符：官方把它放进 codebuff_metadata（与 x-freebuff-env
-      // 头同一份字符串）。缺失 = 请求形态不像官方 CLI —— 上游会据此判定
-      // 第三方客户端。常量与格式见 src/upstream/official-fingerprint.js。
+      // 客户端环境描述符:官方把它放进 codebuff_metadata(与 x-freebuff-env
+      // 头同一份字符串).缺失 = 请求形态不像官方 CLI —— 上游会据此判定
+      // 第三方客户端.常量与格式见 src/upstream/official-fingerprint.js.
       [META_CLIENT_ENV]: clientEnvironment(),
-      // 官方在 CLI claim（`cli:` 前缀）时额外声明这两项：
+      // 官方在 CLI claim(cli: 前缀)时额外声明这两项:
       //   cli/src/utils/freebuff-session-identity.ts freebuffSessionMetadata()
       //     { freebuff_instance_id, freebuff_multi_session: '1', surface: 'cli' }
-      // `surface: 'cli'` 就是服务端用来区分 native CLI 与 Desktop 标签的字段。
+      // surface: 'cli' 就是服务端用来区分 native CLI 与 Desktop 标签的字段.
       ...(isCliClaim(instanceId)
         ? { freebuff_multi_session: '1', surface: 'cli' }
         : {}),
       ...(existingMeta.trace_session_id
         ? {}
         : { trace_session_id: randomUUID() }),
-      // 官方 chat metadata 的另三个字段（真机抓包确认存在）：
+      // 官方 chat metadata 的另三个字段(真机抓包确认存在):
       //   freebuff_input_profile / repo_snapshot / llm_step_number
-      // 我们此前一个都没有。格式逐字对齐官方（见 chat-metadata-parity.js）。
+      // 我们此前一个都没有.格式逐字对齐官方(见 chat-metadata-parity.js).
       ...chatMetadataParity(
         {
           messages: body.messages,
@@ -1613,17 +1613,17 @@ export function createProxyHandler(ctx) {
         },
       ),
     }
-    // provider.data_collection=deny：官方 CLI 每次 chat 都带（拒绝数据采集），
-    // 缺失反而与官方客户端不一致。客户端自带 provider 时保留其字段，补上 deny。
+    // provider.data_collection=deny:官方 CLI 每次 chat 都带(拒绝数据采集),
+    // 缺失反而与官方客户端不一致.客户端自带 provider 时保留其字段,补上 deny.
     body.provider = {
       ...(body.provider && typeof body.provider === 'object'
         ? body.provider
         : {}),
       data_collection: 'deny',
     }
-    // CLI 全局停止序列：JSON 编码带引号的哨兵 `"cb_easp"`（agent-runtime
-    // globalStopSequence = JSON.stringify(endsAgentStepParam)），客户端没给
-    // stop 时补上，与官方 CLI 一致。
+    // CLI 全局停止序列:JSON 编码带引号的哨兵 "cb_easp"(agent-runtime
+    // globalStopSequence = JSON.stringify(endsAgentStepParam)),客户端没给
+    // stop 时补上,与官方 CLI 一致.
     if (!body.stop) {
       body.stop = [`"cb_easp"`]
     }
@@ -1631,9 +1631,9 @@ export function createProxyHandler(ctx) {
   }
 
   /**
-   * 流式 idle 超时：默认取 limits.streamIdleTimeoutSec；若会话剩余时间已知，
-   * 在其基础上加一个 lead 宽限并封顶，会话过期后上游若不再吐数据（幽灵卡死）
-   * 会更快被掐断，避免"会话快过期时响应卡住"。带下限 30s，避免误伤慢首包。
+   - 流式 idle 超时:默认取 limits.streamIdleTimeoutSec;若会话剩余时间已知,
+   - 在其基础上加一个 lead 宽限并封顶,会话过期后上游若不再吐数据(幽灵卡死)
+   - 会更快被掐断,避免"会话快过期时响应卡住".带下限 30s,避免误伤慢首包.
    */
   function effectiveStreamIdleMs(sessionRemainingMs) {
     const base = (config.limits.streamIdleTimeoutSec || 0) * 1000
@@ -1646,10 +1646,10 @@ export function createProxyHandler(ctx) {
   }
 
   /**
-   * chat/completions 响应头等待上限（毫秒）：与 body idle 同量级并带 30s 下限，
-   * 且不超过全局 upstreamTimeoutSec。上游 chat 是流式接口，正常秒级出响应头；
-   * 网络波动（TCP 黑洞/代理挂起）时等 upstreamTimeoutSec（默认 600s）才 abort，
-   * 账号 chat 锁会被占死 10 分钟、所有新请求超时——必须尽快释放。
+   - chat/completions 响应头等待上限(毫秒):与 body idle 同量级并带 30s 下限,
+   - 且不超过全局 upstreamTimeoutSec.上游 chat 是流式接口,正常秒级出响应头;
+   - 网络波动(TCP 黑洞/代理挂起)时等 upstreamTimeoutSec(默认 600s)才 abort,
+   - 账号 chat 锁会被占死 10 分钟,所有新请求超时——必须尽快释放.
    */
   function chatHeaderTimeoutMs() {
     const idleSec = config.limits.streamIdleTimeoutSec
@@ -1660,10 +1660,10 @@ export function createProxyHandler(ctx) {
   }
 
   /**
-   * 全局请求闸门的排队上限（毫秒）。有界即可：这是"同一进程内等一个并发
-   * 名额"的预算，不是上游等待。给足 15s 让突发流量自然消化，超时就明确
-   * 拒绝，绝不像旧实现那样把请求永久挂在队列里。可用
-   * limits.slotWaitMs 调整（<=0 表示一旦排满立即拒绝）。
+   - 全局请求闸门的排队上限(毫秒).有界即可:这是"同一进程内等一个并发
+   - 名额"的预算,不是上游等待.给足 15s 让突发流量自然消化,超时就明确
+   - 拒绝,绝不像旧实现那样把请求永久挂在队列里.可用
+   - limits.slotWaitMs 调整(<=0 表示一旦排满立即拒绝).
    */
   function slotWaitMs() {
     const v = config.limits.slotWaitMs
@@ -1671,17 +1671,17 @@ export function createProxyHandler(ctx) {
   }
 
   /**
-   * 「首字节之前」的调度总预算（毫秒）。上游链路前置 Cloudflare（源站 100s
-   * 未回响应头即 524），而本代理在 writeHead 之前有多段串行静默等待（全局槽位
-   * → 账号 chat 锁 → 上游首字节）。默认 45s：留足正常排队余量，又明显低于
-   * 100s 悬崖，绝不把请求静默拖到客户端早已超时。
+   - [首字节之前]的调度总预算(毫秒).上游链路前置 Cloudflare(源站 100s
+   - 未回响应头即 524),而本代理在 writeHead 之前有多段串行静默等待(全局槽位
+   - → 账号 chat 锁 → 上游首字节).默认 45s:留足正常排队余量,又明显低于
+   - 100s 悬崖,绝不把请求静默拖到客户端早已超时.
    */
   function schedulingBudgetMs() {
     const v = config.limits.schedulingBudgetMs
     return Number.isFinite(v) && v > 0 ? v : 45_000
   }
 
-  /** 读请求体的上限（毫秒）。<=0 关闭（不建议）。 */
+  /** 读请求体的上限(毫秒).<=0 关闭(不建议). */
   function bodyReadTimeoutMs() {
     const v = config.limits.bodyReadTimeoutMs
     return Number.isFinite(v) && v > 0 ? v : 0
@@ -1696,43 +1696,43 @@ export function createProxyHandler(ctx) {
     upstream,
     sessionRemainingMs,
     /**
-     * 会话实例 id（admission 回执的 instanceId）。
-     * 用于 chat 请求的 x-freebuff-instance-id —— 缺失会导致 428，见下方 headers。
+     - 会话实例 id(admission 回执的 instanceId).
+     - 用于 chat 请求的 x-freebuff-instance-id —— 缺失会导致 428,见下方 headers.
      */
     instanceId,
     /**
-     * 「首字节之前」的调度截止时间戳（含全局槽位/账号锁/上游首字节）。
-     * 上游首字节也必须受它约束：不然账号锁等到位了，首字节又能再等 60s，
-     * 总和照样冲过 Cloudflare 的 100s 悬崖。
+     - [首字节之前]的调度截止时间戳(含全局槽位/账号锁/上游首字节).
+     - 上游首字节也必须受它约束:不然账号锁等到位了,首字节又能再等 60s,
+     - 总和照样冲过 Cloudflare 的 100s 悬崖.
      */
     schedulingDeadline,
-    /** 上游模型 id（仅用于日志；forwardBody.model 即它，但显式传更清楚）。 */
+    /** 上游模型 id(仅用于日志;forwardBody.model 即它,但显式传更清楚). */
     upstreamModel,
   }) {
     const headers = {
       ...filterRequestHeaders(req.headers),
       'content-type': 'application/json',
-      // 官方 CLI chat 的 Accept 是 `*/*` —— Bun fetch 的默认值。
+      // 官方 CLI chat 的 Accept 是 */* —— Bun fetch 的默认值.
       //
-      // 真机抓包（官方 CLI 0.2.6，流式 chat ×2）实测两条**都是** `*/*`。
-      // 此前按 trefeon 的 chat.go:105 写成 `application/json, text/event-stream`
-      // —— 那是**另一个第三方实现**的选择，不是官方形态。真机证据优先。
+      // 真机抓包(官方 CLI 0.2.6,流式 chat ×2)实测两条都是 */*.
+      // 此前按 trefeon 的 chat.go:105 写成 application/json, text/event-stream
+      // —— 那是另一个第三方实现的选择,不是官方形态.真机证据优先.
       // 见 .agents/notes/implemented/bug-fix/2026-10-01-chat-ua-two-part.md
       accept: '*/*',
-      // chat 头逐字对齐官方 codebuff provider 分支：**只有** Authorization +
-      // user-agent（+可选 x-freebuff-acting-user-id）。官方 chat **不带**
-      // x-codebuff-api-key —— 那个头只出现在 session / agent-runs 等端点；多发就是
-      // 多余的指纹面。常量真源见 src/upstream/official-fingerprint.js 与
+      // chat 头逐字对齐官方 codebuff provider 分支:只有 Authorization +
+      // user-agent(+可选 x-freebuff-acting-user-id).官方 chat 不带
+      // x-codebuff-api-key —— 那个头只出现在 session / agent-runs 等端点;多发就是
+      // 多余的指纹面.常量真源见 src/upstream/official-fingerprint.js 与
       // .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md
-      // ⚠️ **不传 version**：官方 chat UA 的版本段是 `0.0.0-test`（发布构建里
-      // __PACKAGE_VERSION__ 未注入而回退），不是包版本号。传 getCliVersion()
-      // 会发成 `.../0.0.178/codebuff` —— 与官方不一致。用函数默认值。
+      //  不传 version:官方 chat UA 的版本段是 0.0.0-test(发布构建里
+      // __PACKAGE_VERSION__ 未注入而回退),不是包版本号.传 getCliVersion()
+      // 会发成 .../0.0.178/codebuff —— 与官方不一致.用函数默认值.
       ...officialChatHeaders(upstream.token, {
-        // 官方 chat 带 x-freebuff-acting-user-id（真机抓包 13 个头里有它，
-        // 其余 12 个是传输层）。我们此前没传 → 少一个指纹面。
+        // 官方 chat 带 x-freebuff-acting-user-id(真机抓包 13 个头里有它,
+        // 其余 12 个是传输层).我们此前没传 → 少一个指纹面.
         userId: upstream.accountId || undefined,
       }),
-      // ⚠️ **不要带** x-freebuff-instance-id。
+      //  **不要带** x-freebuff-instance-id。
       //
       // 2026-10-03 抓包复核（docs/reverse/15-protocol-review.md）证明：
       // 官方 chat 头部恒为 8 项，8 个样本逐个校验 diff 为空集，
@@ -1745,35 +1745,35 @@ export function createProxyHandler(ctx) {
       // 见 docs/reverse/15-protocol-review.md P0-1。
     }
 
-    // 风控：chat 调用前打散节奏（随机 [0, requestJitterMs)）。上游按请求
-    // 节奏指纹自动化脚本，等间隔的机器式调用是明显特征（参考项目 SAFE_MODE
-    // 默认 200ms）。0 = 关闭。
+    // 风控:chat 调用前打散节奏(随机 [0, requestJitterMs)).上游按请求
+    // 节奏指纹自动化脚本,等间隔的机器式调用是明显特征(参考项目 SAFE_MODE
+    // 默认 200ms).0 = 关闭.
     const jitterMs = Number(config.limits.requestJitterMs) || 0
     if (jitterMs > 0) await sleep(Math.random() * jitterMs)
 
     const abortCtrl = reqToAbortSignal(req)
-    // 工具声明被上游拒绝时，去掉 tools 再发一次（见 isToolSchemaRejection）。
-    // 只对"客户端确实带了 tools"的请求生效——没有工具可去时重试毫无意义。
+    // 工具声明被上游拒绝时,去掉 tools 再发一次(见 isToolSchemaRejection).
+    // 只对"客户端确实带了 tools"的请求生效——没有工具可去时重试毫无意义.
     // 判据与取舍见
     // .agents/notes/implemented/bug-fix/2026-09-18-tool-schema-rejection-strip.md
-    // 注意：toolStripCapable 在 RPC 之后计算（见下），因为只有在**确定**
-    // 走了官方形态时才可以禁用这条退路；若 RPC 不可用而降级到 legacy，
-    // 退路必须重新生效（否则 legacy 的 404 无法恢复）。
+    // 注意:toolStripCapable 在 RPC 之后计算(见下),因为只有在确定
+    // 走了官方形态时才可以禁用这条退路;若 RPC 不可用而降级到 legacy,
+    // 退路必须重新生效(否则 legacy 的 404 无法恢复).
     let requestBody = forwardBody
     let toolsStripped = false
     let upstreamRes
-    /** 非 2xx 时上游响应体的文本（在循环里读一次，避免重复消费流）。 */
+    /** 非 2xx 时上游响应体的文本(在循环里读一次,避免重复消费流). */
     let upstreamErrText = null
 
-    // ⚠️ official 通道：**整条请求委托给副仓库（cli-bridge）执行**。
+    //  official 通道:整条请求委托给副仓库(cli-bridge)执行.
     //
-    // 官方形态的实现只有一份（在 cli-bridge，bun 执行）：官方 37 工具 /
-    // 官方 system 模板 / desktop 世代 agent / 分层 provider。
-    // 主服务不复制那份逻辑，而是把 instanceId + messages + tools 传过去，
-    // 由副仓库 startRun + chat，再把原始响应透传给下游 —— 这就是 RPC 边界。
+    // 官方形态的实现只有一份(在 cli-bridge,bun 执行):官方 37 工具 /
+    // 官方 system 模板 / desktop 世代 agent / 分层 provider.
+    // 主服务不复制那份逻辑,而是把 instanceId + messages + tools 传过去,
+    // 由副仓库 startRun + chat,再把原始响应透传给下游 —— 这就是 RPC 边界.
     //
-    // 用 `reuse` 而不是 `full`：主服务**已经**做过 admission 并持有会话，
-    // 副仓库不需要再买一次（一次 admit = 买断一小时）。
+    // 用 reuse 而不是 full:主服务已经做过 admission 并持有会话,
+    // 副仓库不需要再买一次(一次 admit = 买断一小时).
     // 见 docs/reverse/17-current-status-and-gaps.md
     const _official =
       resolveUpstreamChannel(
@@ -1781,7 +1781,7 @@ export function createProxyHandler(ctx) {
         config,
         (m, f) => logger.warn(m, f),
       ) === 'official'
-    /** RPC 是否拿到了响应（拿到则跳过下面的 raw 重试循环）。 */
+    /** RPC 是否拿到了响应(拿到则跳过下面的 raw 重试循环). */
     let _rpcResponse = false
     if (_official) {
       try {
@@ -1808,15 +1808,15 @@ export function createProxyHandler(ctx) {
             model: rpc.model?.name,
             error: rpc.error,
             /**
-             * ⚠️ **非 200 时必须把上游原文记下来**（2026-10-04 教训）。
+             - 非 200 时必须把上游原文记下来(2026-10-04 教训).
              *
-             * 此前只记 `status`，于是 503 时日志里只有一行
-             * `official channel: rpc result status=503` —— 而**上游原文**
-             * （`{"error":{"message":"The model is temporarily unavailable.",…}}`
-             * 之类）我们明明拿到了（放在 `rpc.text` 里），却只塞进 Response
-             * 不记日志。排障时只能看见"503"这个数字，看不到上游给的原因。
+             - 此前只记 status,于是 503 时日志里只有一行
+             - official channel: rpc result status=503 —— 而上游原文
+             - ({"error":{"message":"The model is temporarily unavailable.",...}}
+             - 之类)我们明明拿到了(放在 rpc.text 里),却只塞进 Response
+             - 不记日志.排障时只能看见"503"这个数字,看不到上游给的原因.
              *
-             * 截断到 300 字符：够看清 message/code，又不至于把整段流式体写进日志。
+             - 截断到 300 字符:够看清 message/code,又不至于把整段流式体写进日志.
              */
             body:
               rpc.ok || !rpc.text
@@ -1826,15 +1826,15 @@ export function createProxyHandler(ctx) {
           if (rpc.status) {
             _rpcResponse = true
             /**
-             * ★ **上行工具名还原**（与 bun 侧的下行映射配对）。
+             - 上行工具名还原(与 bun 侧的下行映射配对).
              *
-             * 下行把 `bash`→`run_terminal_command` 等换成官方等价名（否则上游
-             * 回 503，见 `cli-bridge/upstream.mjs` 的 `MAP_TOOLS` 说明）。
-             * 客户端拿到响应时，`tool_calls[].function.name` 是**官方名**——
-             * 下游不认识，也没法派发。所以在透传前逐行还原成它声明的名字。
+             - 下行把 bash→run_terminal_command 等换成官方等价名(否则上游
+             - 回 503,见 cli-bridge/upstream.mjs 的 MAP_TOOLS 说明).
+             - 客户端拿到响应时,tool_calls[].function.name 是官方名——
+             - 下游不认识,也没法派发.所以在透传前逐行还原成它声明的名字.
              *
-             * SSE 逐行处理：只在 `data: {...}` 行上做 JSON 解析 + 名字替换，
-             * 不是 JSON 的行（`[DONE]`、空行）原样保留。
+             - SSE 逐行处理:只在 data: {...} 行上做 JSON 解析 + 名字替换,
+             - 不是 JSON 的行([DONE],空行)原样保留.
              */
             const rawText = rpc.text || ''
             upstreamRes = new Response(
@@ -1852,9 +1852,9 @@ export function createProxyHandler(ctx) {
           error: String(err?.message || err),
         })
       }
-      // ⚠️ 降级：RPC 没拿到响应（不可用/失败/无凭据）时，
+      //  降级:RPC 没拿到响应(不可用/失败/无凭据)时,
       // 请求体必须补成 legacy 形态再走原 raw 路径 ——
-      // 否则会发出一个"既没有官方 system、也没有签名工具"的畸形请求。
+      // 否则会发出一个"既没有官方 system,也没有签名工具"的畸形请求.
       if (!upstreamRes) {
         requestBody.messages = ensureFreebuffSystemMessages(
           requestBody.messages,
@@ -1872,32 +1872,32 @@ export function createProxyHandler(ctx) {
       }
     }
 
-    // official 通道发的是**官方工具集**，本就不应触发 tool-schema 拒绝，
-    // 也就不需要"剥离工具重试"这条退路（剥离会丢掉官方工具集反而更糟）。
-    // 但 RPC 没命中而降级到 legacy 时，退路必须重新生效。
+    // official 通道发的是官方工具集,本就不应触发 tool-schema 拒绝,
+    // 也就不需要"剥离工具重试"这条退路(剥离会丢掉官方工具集反而更糟).
+    // 但 RPC 没命中而降级到 legacy 时,退路必须重新生效.
     const toolStripCapable =
       hasClientTools(forwardBody) &&
       settingsStore?.get?.()?.stripToolsOnSchemaRejection === true &&
       !upstreamRes
 
     try {
-      // 最多两轮：第一轮带原工具集，被 tool-schema 拒后第二轮去掉工具。
-      // ⚠️ official 通道已由 RPC 拿到响应 → 整段跳过（不再自己发一次 raw）。
+      // 最多两轮:第一轮带原工具集,被 tool-schema 拒后第二轮去掉工具.
+      //  official 通道已由 RPC 拿到响应 → 整段跳过(不再自己发一次 raw).
       for (let round = 0; round < 2; round++) {
-        // 只有 RPC 拿到响应才跳过；循环内重试时上游 404 不应被这里打断
+        // 只有 RPC 拿到响应才跳过;循环内重试时上游 404 不应被这里打断
         if (_rpcResponse) break
         upstreamRes = await upstream.raw('/api/v1/chat/completions', {
           method: 'POST',
           headers,
           body: JSON.stringify(requestBody),
           signal: abortCtrl.signal,
-          // 官方 chat 只带 catalog-fetch，不带 catalog-protocol
-          // （8 个样本头部集合逐个校验 diff 为空集）
+          // 官方 chat 只带 catalog-fetch,不带 catalog-protocol
+          // (8 个样本头部集合逐个校验 diff 为空集)
           catalogFetchOnly: true,
-          // 响应头等待上限收紧到 body idle 同量级（默认 120s，带 30s 下限）：
-          // chat 是流式接口，正常秒级出响应头；网络波动（TCP 黑洞）时若等
-          // upstreamTimeoutSec（默认 600s）才 abort，账号 chat 锁会被占死
-          // 10 分钟，期间所有新请求超时——与幽灵连接同源，必须尽快释放。
+          // 响应头等待上限收紧到 body idle 同量级(默认 120s,带 30s 下限):
+          // chat 是流式接口,正常秒级出响应头;网络波动(TCP 黑洞)时若等
+          // upstreamTimeoutSec(默认 600s)才 abort,账号 chat 锁会被占死
+          // 10 分钟,期间所有新请求超时——与幽灵连接同源,必须尽快释放.
           timeoutMs: Math.max(
             1_000,
             Math.min(chatHeaderTimeoutMs(), schedulingDeadline - Date.now()),
@@ -1928,13 +1928,13 @@ export function createProxyHandler(ctx) {
         break
       }
     } finally {
-      // 响应头已到/上游已失败：后续由 pipe 的 socket 监听接管，移除本监听器
+      // 响应头已到/上游已失败:后续由 pipe 的 socket 监听接管,移除本监听器
       abortCtrl.cleanup()
     }
 
     const status = upstreamRes.status
-    // 可观测性：上游 chat 非 2xx 时把**响应体**记下来。
-    // 503 这类错误不带业务体时最难排查 —— 没有它只能猜（见控制台「日志」页）。
+    // 可观测性:上游 chat 非 2xx 时把响应体记下来.
+    // 503 这类错误不带业务体时最难排查 —— 没有它只能猜(见控制台[日志]页).
     if (!upstreamRes.ok) {
       logger.warn('upstream chat non-ok', {
         status,
@@ -1944,7 +1944,7 @@ export function createProxyHandler(ctx) {
     }
     const respHeaders = filterResponseHeaders(upstreamRes.headers)
     if (hermesDelegateAlias) {
-      // 回程会改写 tool_calls 的 function.name，原 Content-Length 已不再可信。
+      // 回程会改写 tool_calls 的 function.name,原 Content-Length 已不再可信.
       delete respHeaders['content-length']
       res.setHeader(
         'x-freebuff-proxy-tool-alias',
@@ -1952,7 +1952,7 @@ export function createProxyHandler(ctx) {
       )
     }
     if (toolsStripped) {
-      // 可观测性：下游能看出这次回答是在"无工具"模式下取得的。
+      // 可观测性:下游能看出这次回答是在"无工具"模式下取得的.
       res.setHeader('x-freebuff-proxy-tools-stripped', '1')
     }
 
@@ -1971,12 +1971,12 @@ export function createProxyHandler(ctx) {
         (parsed.error?.code || parsed.error || parsed.code || parsed.status)) ||
         null
       const gateCode = extractGateError(parsed, status)
-      // 账号封禁归一：上游把"因第三方客户端被封"写成 403
-      // {"error":"account_suspended",...}（error 是**字符串**）。不归一它就会以
-      // 403 落进"4xx 客户端错误不换号"分支 —— 每个被封的账号被反复复用、错误
-      // 原样甩给下游，控制台也记不上 bannedAt（见 extractAccountBanError）。
-      // 归一后必须**重算 errCode**：下面的 shouldSwitchAccountOnError 与
-      // markCooldown 都按 errCode 分支，只改 parsedBody 而留着旧 errCode 等于没改。
+      // 账号封禁归一:上游把"因第三方客户端被封"写成 403
+      // {"error":"account_suspended",...}(error 是字符串).不归一它就会以
+      // 403 落进"4xx 客户端错误不换号"分支 —— 每个被封的账号被反复复用,错误
+      // 原样甩给下游,控制台也记不上 bannedAt(见 extractAccountBanError).
+      // 归一后必须重算 errCode:下面的 shouldSwitchAccountOnError 与
+      // markCooldown 都按 errCode 分支,只改 parsedBody 而留着旧 errCode 等于没改.
       const banCode = extractAccountBanError(parsed, status)
       if (banCode && parsed && typeof parsed === 'object') {
         parsed.error =
@@ -1989,11 +1989,11 @@ export function createProxyHandler(ctx) {
         error: { message: text, type: 'upstream_error' },
       }
 
-      // free_mode_capacity_deferred：免费模式瞬时容量排队（上游原话
-      // "your request will be retried automatically"）。不是账号级故障——
-      // 实测同一账号同一 session 立即重试即恢复（flash 尤其常见）。
-      // 优先复用当前热 session 重试，但绝不冷却账号，避免为瞬时容量
-      // 无谓开启另一个计费 session；若账号另有故障，外层仍会正常切号。
+      // free_mode_capacity_deferred:免费模式瞬时容量排队(上游原话
+      // "your request will be retried automatically").不是账号级故障——
+      // 实测同一账号同一 session 立即重试即恢复(flash 尤其常见).
+      // 优先复用当前热 session 重试,但绝不冷却账号,避免为瞬时容量
+      // 无谓开启另一个计费 session;若账号另有故障,外层仍会正常切号.
       if (
         effectiveErrCode === 'free_mode_capacity_deferred' ||
         gateCode === 'free_mode_capacity_deferred'
@@ -2011,8 +2011,8 @@ export function createProxyHandler(ctx) {
           headers: respHeaders,
         }
       }
-      // 可恢复 gate（session_expired/superseded/waiting_room 等）：
-      // 同账号 re-admit 一次即可恢复，不属于账号级故障，不冷却不换号。
+      // 可恢复 gate(session_expired/superseded/waiting_room 等):
+      // 同账号 re-admit 一次即可恢复,不属于账号级故障,不冷却不换号.
       if (gateCode && isSessionRecoverableGate(gateCode)) {
         return {
           ok: false,
@@ -2026,8 +2026,8 @@ export function createProxyHandler(ctx) {
           headers: respHeaders,
         }
       }
-      // 账号侧故障（429 限流 / 5xx / 403 账号级封禁）：冷却当前账号并换号重试，
-      // 而不是把错误直接甩给用户。4xx 客户端错误（400/401/404/422 等）不换号。
+      // 账号侧故障(429 限流 / 5xx / 403 账号级封禁):冷却当前账号并换号重试,
+      // 而不是把错误直接甩给用户.4xx 客户端错误(400/401/404/422 等)不换号.
       const switchAccount = shouldSwitchAccountOnError(status, effectiveErrCode)
       if (switchAccount) {
         return {
@@ -2063,8 +2063,8 @@ export function createProxyHandler(ctx) {
       return { ok: true, wrote: true }
     }
 
-    // 非流式 JSON 可以整体恢复工具名；流式 SSE 则逐 data 行改写首个携带
-    // function.name 的 chunk，后续 arguments 分片原样透传。
+    // 非流式 JSON 可以整体恢复工具名;流式 SSE 则逐 data 行改写首个携带
+    // function.name 的 chunk,后续 arguments 分片原样透传.
     if (hermesDelegateAlias && !stream) {
       const text = await upstreamRes.text()
       let output = text
@@ -2101,8 +2101,8 @@ export function createProxyHandler(ctx) {
   }
 
   /**
-   * Non-chat /v1/* → upstream /api/v1/* with Freebuff auth only.
-   * No session admit (chat has its own handler).
+   - Non-chat /v1/* → upstream /api/v1/* with Freebuff auth only.
+   - No session admit (chat has its own handler).
    */
   async function handleGenericPassthrough(req, res, url) {
     if (
@@ -2162,7 +2162,7 @@ export function createProxyHandler(ctx) {
         idleTimeoutMs: (config.limits.streamIdleTimeoutSec || 0) * 1000,
       })
     } catch (err) {
-      // 上游卡死/客户端断开：透传没有换号语义，直接掐断连接（客户端自行重试）
+      // 上游卡死/客户端断开:透传没有换号语义,直接掐断连接(客户端自行重试)
       if (!res.destroyed) {
         try {
           res.destroy()
@@ -2182,607 +2182,51 @@ export function createProxyHandler(ctx) {
 }
 
 /**
- * 上游流式 body 透传失败的处理（幽灵连接/客户端断开）：
- * - 上游卡死（idle 超时）→ 200 响应头已提交（writeHead 在 pipe 之前），无法整体
- *   重试；直接销毁连接，让客户端感知截断后自行重试。不冷却账号（session 可能
- *   正常，只是那次传输卡了），下一请求仍可复用该 session。
- * - 客户端主动断开 → 静默终止：不重试、不冷却、不写错误。
+ - 搬进 ./proxy/* 的私有实现 —— 必须逐个 import 进来,因为下面
+ - createProxyHandler 内部直接调用它们.
+ *
+ - 教训(2026-10-05 实测复现的运行时回归):单靠末尾的
+ - export { X } from './proxy/y.js' 是不够的 —— re-export 只影响本模块的
+ - 对外导出,不会把 X 带进本模块的作用域.只写 re-export 的话,
+ - createProxyHandler 里每个调用点都会抛 ReferenceError: X is not defined,
+ - 而 node --check 与 tsc(默认 checkJs:false)都可能放过它.这与本仓历史上
+ - 的 mergeOfficialTools: mapped is not defined 是同一形状.
+ *
+ - 自查纪律:搬走一个函数后 grep -n "<名>" <原文件> —— 每一处出现必须是
+ - import,注释或调用点,且 import 必须存在.
  */
-function handleStreamPipeFailure(err, req, res) {
-  const stalled = Boolean(err?.stalled || err?.code === 'stream_idle_timeout')
-  if (stalled) {
-    return {
-      ok: false,
-      wrote: true,
-      recoverable: false,
-      switchAccount: false,
-      gateCode: 'stream_idle_timeout',
-      status: 504,
-      body: {
-        error: {
-          message: 'upstream stream idle timeout',
-          type: 'upstream_error',
-          code: 'stream_idle_timeout',
-        },
-      },
-      headers: {},
-    }
-  }
-  // 客户端主动断开（pipe 内 res.destroy 是我们自己触发的，不能用来判断客户端状态）
-  if (req.destroyed || err?.name === 'AbortError' || err?.code === 'client_gone') {
-    return {
-      ok: false,
-      wrote: true,
-      recoverable: false,
-      switchAccount: false,
-      gateCode: 'client_disconnected',
-      status: 499,
-    }
-  }
-  throw err
-}
+import {
+  acquireRequestSlot,
+  requestSlotStats,
+} from './proxy/slots.ts'
 
-/** 有界等待（毫秒）。 */
-function sleep(ms) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms)
-    if (timer.unref) timer.unref()
-  })
-}
+import {
+  isToolSchemaRejection,
+  parseRetryAfterMsHeader,
+  shouldSwitchAccountOnError,
+  unmapToolCallsInSse,
+  upstreamBodyEmbeddedError,
+} from './proxy/errors.ts'
 
-function methodHasBody(method) {
-  const m = (method || 'GET').toUpperCase()
-  return m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE'
-}
+import {
+  handleStreamPipeFailure,
+  mapAndSendError,
+  writeUpstreamError,
+} from './proxy/respond.ts'
 
-/**
- * 上游是否因为**工具集指纹**拒绝了这次 chat。
- *
- * 现场（2026-09-18 直连线上 freebuff-proxy 一手实测）：带任意 `tools`
- * （含逐字复刻官方 24 个工具名 + 中性 schema）→
- * `404 {"error":{"message":"No endpoints found for <model>","code":404}}`；
- * 同一个请求去掉 `tools` → 200。
- *
- * 这条错误**字面指向模型**，与工具毫无关联——正因如此它长期被当成
- * "模型不存在/不可用"处理（404 属于 4xx 客户端错误，不换号、不重试），
- * 最终把一个 404 透传给下游；下游 Responses 桥接层把它崩成 Cloudflare
- * 纯文本 502，客户端 SDK 解析成 "502 status code (no body)"，表现为
- * **所有模型全部空响应**。
- *
- * 所以必须按"工具被拒"识别并走剥离重试，不能按客户端 4xx 收场。
- * 取舍与实测矩阵见
- * .agents/notes/implemented/bug-fix/2026-09-18-tool-schema-rejection-strip.md
- *
- * @param {number} status
- * @param {string} text 上游响应体原文
- * @returns {boolean}
- */
-function isToolSchemaRejection(status, text) {
-  if (status !== 404) return false
-  const s = String(text || '')
-  return (
-    s.includes('No endpoints found') ||
-    s.includes('no_endpoints') ||
-    s.includes('no endpoints')
-  )
-}
+import {
+  apiKeyMatches,
+  clientGoneSignal,
+  methodHasBody,
+  pipeWebStreamToNode,
+  reqToAbortSignal,
+  sleep,
+} from './proxy/stream-pipe.ts'
 
-/**
- * 上游 **200 响应体内嵌**的 free_mode 错误码检测。
- *
- * 上游并不总是用 HTTP 状态码表达失败：它可能 200 回执、却在响应体里夹
- * `free_mode_*` 错误串。只判 `upstreamRes.ok` 会把它当成成功，错误被静默吞掉。
- * 第三方实现（lza6/Freebuff-2API `upstream_body_error`）对 200 也扫这类串，
- * 本仓库此前只在 `!upstreamRes.ok` 分支解析错误体 —— 这是真缺口。
- *
- * 只做**识别与告警**，不改变任何转发行为：流式路径下响应体已被消费，
- * 接入需要改 pipe 流程，属于行为改动，需单独验证。
- *
- * @param {string} text 响应体原文（已流式接收的完整文本）
- * @returns {string | null} 命中的错误码
- */
-export function upstreamBodyEmbeddedError(text) {
-  if (typeof text !== 'string' || !text) return null
-  const CODES = [
-    'free_mode_invalid_agent_model',
-    'free_mode_invalid_agent_hierarchy',
-    'free_mode_cli_required',
-    'free_mode_rate_limited',
-    'free_mode_capacity_deferred',
-    'account_suspended',
-    'model_unavailable',
-  ]
-  for (const c of CODES) if (text.includes(c)) return c
-  return null
-}
-
-/**
- * 上游 chat/completions 报错时是否应冷却当前账号并换号重试：
- * 429（限流/配额）、5xx（服务端故障）、403 账号级封禁（banned/country_blocked/ip_capped）、
- * free_mode_rate_limited 等账号级限流 code，以及 start_agent_run_failed（startAgentRun
- * 被上游拒绝＝该账号+agent 组合不可用／账号级问题，即使 403/4xx 也应按账号故障换号）。
- * 其余 4xx 客户端错误不换号。
- * @param {number} status
- * @param {unknown} code
- * @returns {boolean}
- */
-export /**
- * 对上游响应文本做**工具名还原**（支持 SSE 流式与整体 JSON 两种形态）。
- *
- * SSE：逐行看 `data: {...}`，仅对可解析的 JSON 行做替换，其余原样。
- * 非 SSE（application/json 整体）：直接 JSON.parse → 还原 → stringify。
- *
- * 任何解析失败都**原样返回该行/原文** —— 这条路径绝不能因为还原而破坏响应
- * （还原是"锦上添花"，不是"必须成功"）。
- *
- * @param {string} text
- * @returns {string}
- */
-function unmapToolCallsInSse(text) {
-  if (!text || typeof text !== 'string') return text
-  const looksSse = text.includes('data: ')
-  if (!looksSse) {
-    try {
-      return JSON.stringify(unmapToolCallsInBody(JSON.parse(text)))
-    } catch {
-      return text
-    }
-  }
-  return text
-    .split('\n')
-    .map((line) => {
-      if (!line.startsWith('data: ')) return line
-      const payload = line.slice(6).trim()
-      if (!payload || payload === '[DONE]') return line
-      try {
-        const obj = JSON.parse(payload)
-        const hasCalls = Array.isArray(obj?.choices)
-          ? obj.choices.some(
-              (c) =>
-                Array.isArray(c?.message?.tool_calls) ||
-                Array.isArray(c?.delta?.tool_calls),
-            )
-          : false
-        if (!hasCalls) return line
-        return 'data: ' + JSON.stringify(unmapToolCallsInBody(obj))
-      } catch {
-        return line
-      }
-    })
-    .join('\n')
-}
-
-export function shouldSwitchAccountOnError(status, code) {
-  /**
-   * ★ **503 不冷却账号**（2026-10-04 真实事故修正）。
-   *
-   * `docs/reverse/07` 的定因：`503 The model is temporarily unavailable`
-   * **不是账号故障**，是**模型侧**问题（该文档实测：三个价格档、多个模型、
-   * 多种身份组合全部 503 → 变量不在请求里，也不在账号上）。
-   *
-   * 旧行为把它当 5xx → `switchAccount` → `markCooldown`：
-   * 于是**唯一有余额的账号被踢出池子**，剩下全是 0 余额号 →
-   * 后续每个请求都 429 `freebucks_exhausted`。
-   * 实测远程日志（15:02:21-15:02:37）：`loli@woa.qzz.io`（25 点）
-   * 被 503 冷却后，其余请求只剩两个 0 余额号可跳，用户看到
-   * 「明明有 25 点却一直 429」。
-   *
-   * 处置与 `purchase_capacity` 同类：**跳过、不冷却**（模型侧问题等它自己恢复 /
-   * 换个模型），绝不把可用的账号判死。
-   *
-   * ⚠️ 仍保留 `switchAccount` 语义（试下一个账号**不冷却**当前账号）——
-   * 多账号池里换个号确实可能成功，但不该留下冷却记录。
-   */
-  if (status === 503) return false
-  if (status >= 500) return true
-  if (status === 429) return true
-  const codeStr = String(code)
-  // country_blocked 是**出口**属性不是账号属性：所有账号共享同一个出口，
-  // 换号只会把每个账号的额度依次买断一遍（一次 admit = 一整小时 Freebucks），
-  // 却永远拿不到答案。它必须直接失败并把原因告知用户 —— 出路是换代理，不是换号。
-  // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
-  if (codeStr === 'country_blocked') return false
-  // purchase_capacity：该账号的付费槽位已被占（一个账号 slotLimit:1）。
-  // 它是**资源竞争**不是账号故障 —— 冷却换号只会把别的账号也依次买断，
-  // 而回执已经给出 currentInstanceId 与 nextExpiryAt，等它空出即可。
-  // 实测语义见 .agents/notes/implemented/bug-fix/2026-10-01-admission-handle-and-403.md
-  if (codeStr === 'purchase_capacity') return false
-  // premium_slot_taken / purchase_in_use：同上，都是"槽位正在被用"。
-  if (codeStr === 'premium_slot_taken' || codeStr === 'purchase_in_use') {
-    return false
-  }
-  if (status === 403 && ['banned', 'ip_capped'].includes(codeStr)) {
-    return true
-  }
-  // startAgentRun 失败：上游拒绝启动 run（模型/agent 不可用、该账号被限制等）。
-  // 无论返回什么状态码都冷却当前账号换下一个，而不是直接把错误甩给用户——
-  // 试完所有账号（预算=账号数+1）才把错误返回给客户端。
-  if (codeStr === 'start_agent_run_failed') return true
-  return extractRateLimitError({ error: code }) !== null
-}
-
-/** Parse Retry-After header (seconds or HTTP-date) into ms, or null. */
-function parseRetryAfterMsHeader(value) {
-  if (!value) return null
-  const secs = Number(value)
-  if (Number.isFinite(secs) && secs >= 0) return Math.ceil(secs * 1000)
-  const ms = Date.parse(value)
-  return Number.isFinite(ms) ? Math.max(0, ms - Date.now()) : null
-}
-
-/** Constant-time-ish compare against configured proxy keys. */
-function apiKeyMatches(token, keys) {
-  const a = Buffer.from(String(token))
-  for (const key of keys) {
-    const b = Buffer.from(String(key))
-    if (a.length === b.length && timingSafeEqual(a, b)) return true
-  }
-  return false
-}
-
-/** 在途 chat 请求数（占用中的槽位）。 */
-let _inFlight = 0
-/** 最近一次生效的槽位上限（仅用于可观测性展示）。 */
-let _slotLimit = 32
-/** @type {Array<{resolve: (fn: () => void) => void, timer: any}>} */
-const _waitQueue = []
-
-/**
- * 全局 chat 请求并发闸门（进程内信号量）。
- *
- * **绝不允许无界排队**：旧实现把超限请求 push 进一个**没有任何超时**的
- * _waitQueue，此后永不 reject。只要有几个请求在"占着槽位却永久挂起"
- * （最典型：客户端/SDK 声明了 Content-Length 却不再发完请求体，readRequestBody
- * 的 for await (const chunk of req) 就永远不返回），槽位就被永久吃掉，
- * 后续**所有**请求都排进那个队列再也出不来——进程 CPU/日志/控制台一切正常，
- * 但完全不接单，只有重启才恢复（已用真实 server 复现，见 test/smoke.mjs）。
- *
- * 现在的语义：
- *   - 有空位 → 立即占用；
- *   - 排满 → **有界等待**（slotWaitMs），超时抛 429 server_busy 让客户端稍后
- *     重试（客户端可重试远好于整个服务静默停摆）；
- *   - 释放函数**幂等**（与 ChatMutex._makeRelease 一致）：finally 与任何
- *     兜底路径重复调用都只归还一次，绝不让计数被多减。
- * @param {number} max
- * @param {number} [waitMs] 排队上限；<=0 表示不等待、直接拒绝
- * @returns {Promise<() => void>}
- */
-function acquireRequestSlot(max, waitMs = 0) {
-  const limit = Number.isFinite(max) && max > 0 ? max : 32
-  _slotLimit = limit
-  if (_inFlight < limit) {
-    _inFlight++
-    return Promise.resolve(makeSlotRelease())
-  }
-  if (!(waitMs > 0)) {
-    throw new UpstreamError(
-      "server is at max concurrent requests (" + limit + "); try again later",
-      { status: 429, code: "server_busy" },
-    )
-  }
-  return new Promise((resolve, reject) => {
-    const entry = { resolve, timer: null }
-    entry.timer = setTimeout(() => {
-      const i = _waitQueue.indexOf(entry)
-      if (i >= 0) _waitQueue.splice(i, 1)
-      reject(
-        new UpstreamError(
-          "server is at max concurrent requests (" + limit +
-            "); timed out waiting for a slot",
-          { status: 429, code: "server_busy" },
-        ),
-      )
-    }, waitMs)
-    if (entry.timer.unref) entry.timer.unref()
-    _waitQueue.push(entry)
-  })
-}
-
-/** 幂等释放句柄：重复调用只归还一次槽位（与 ChatMutex._makeRelease 同构）。 */
-function makeSlotRelease() {
-  let released = false
-  return () => {
-    if (released) return
-    released = true
-    releaseRequestSlot()
-  }
-}
-
-function releaseRequestSlot() {
-  _inFlight = Math.max(0, _inFlight - 1)
-  const next = _waitQueue.shift()
-  if (next) {
-    if (next.timer) clearTimeout(next.timer)
-    _inFlight++
-    next.resolve(makeSlotRelease())
-  }
-}
-
-/**
- * 当前在途/排队的 chat 请求数：暴露到控制台，槽位泄漏时能立刻看出来
- * （旧实现完全不可观测，泄漏后只能靠"不接单"这个体感发现）。
- */
-export function requestSlotStats() {
-  return { inFlight: _inFlight, queued: _waitQueue.length, limit: _slotLimit }
-}
-
-/**
- * 客户端断开信号（**调度阶段**用，区别于下方的 pipe 阶段）。
- *
- * 为什么必须有：本代理在调度上有多个「首字节之前的静默等待」——全局槽位、
- * 账号 chat 锁、上游首字节。这些等待原先完全不感知客户端是否还在。客户端
- * （DSH/sub2api）等不住会自行超时并 abort 旧请求，但代理这边仍在闷等
- * （账号锁最长 accountChatWaitMs，默认 120s），**并且继续占着账号 chat 锁**。
- * 账号并发默认只有 2，粘性调度又把请求集中到同一个账号上，于是几个"已死"的
- * 请求就能把账号锁钉死 → 后续所有请求排队 → 表现为「跑着跑着完全不接单，
- * 只有重启才恢复」。
- *
- * 语义：socket close → 视为客户端已走，等待立即放弃，并保证稍后授予的锁被释放。
- * @param {import('node:http').IncomingMessage} req
- */
-function clientGoneSignal(req) {
-  const socket = req.socket
-  /** @type {(() => void) | null} */
-  let onClose = null
-  const promise = new Promise((resolve) => {
-    if (!socket || socket.destroyed) {
-      resolve()
-      return
-    }
-    // 与 reqToAbortSignal 同因：只有底层 socket close 才代表真断开
-    // （req 'close' 在 body 读完时就触发，早于这里注册的时机）。
-    onClose = () => resolve()
-    socket.once('close', onClose)
-  })
-  return {
-    /** 客户端是否已断开（同步判断）。 */
-    isGone: () => Boolean(socket && socket.destroyed),
-    /** 与等待 Promise 竞速；客户端断开时以 client_gone 提前结束等待。 */
-    async race(waitPromise) {
-      const outcome = await Promise.race([
-        waitPromise.then((hold) => ({ hold }), (err) => ({ err })),
-        promise.then(() => ({ gone: true })),
-      ])
-      if (outcome.gone) {
-        // 竞速输了不等于锁没授予：授予后立刻归还，绝不泄漏槽位。
-        waitPromise.then((hold) => hold()).catch(() => {})
-        throw new UpstreamError(
-          'client disconnected while waiting for a scheduling slot',
-          { status: 499, code: 'client_gone' },
-        )
-      }
-      if (outcome.err) throw outcome.err
-      return outcome.hold
-    },
-    cleanup() {
-      if (onClose && socket) socket.removeListener('close', onClose)
-    },
-  }
-}
-
-/**
- * 客户端断开的 abort 信号。**必须监听底层 socket 关闭**：node 的
- * IncomingMessage 'close' 是「请求体读完」事件（body 读完即触发，早于我们注册
- * 监听器的时机），监听它既收不到真正的断开、又会在 body 一读完就 abort 掉上游。
- * 客户端断开（含 keep-alive 下断开）只会体现在 socket close 上。若这里不 abort，
- * 上游 fetch 会一直挂着（最长等 upstreamTimeoutSec=600s），账号 chat 锁被占死，
- * 后续所有请求排队超时（实测 inFlight 卡满、客户端 headers 超时）。
- */
-function reqToAbortSignal(req) {
-  const controller = new AbortController()
-  const onClose = () => controller.abort()
-  // once + 用后 removeListener：keep-alive 连接被多个请求共享，不清理会累积监听器
-  req.socket?.once('close', onClose)
-  return {
-    signal: controller.signal,
-    cleanup() {
-      req.socket?.removeListener('close', onClose)
-    },
-  }
-}
-
-/**
- * 把上游响应体透传给下游，带 idle 超时兜底：
- * 上游流式响应“发了一半不再吐数据、也不断开”（幽灵连接）时，超过
- * idleTimeoutMs 没有新数据块 → 取消上游读取、销毁下游连接，并抛出带
- * stalled 标记的错误（err.wroteBytes 记录已下发的字节数），
- * 由调用方决定换号重试还是直接断开。
- *
- * 客户端断开也必须立即中断：实测 reader.cancel()/fetch abort 都不能让挂起的
- * reader.read() 拒绝（会一直挂到 idle 超时），账号 chat 锁被占死。因此把
- * 「客户端连接关闭」显式加进 race，断开瞬间 reject 并释放锁。
- */
-async function pipeWebStreamToNode(
-  webBody,
-  nodeRes,
-  nodeReq,
-  { idleTimeoutMs = 0 } = {},
-) {
-  const reader = webBody.getReader()
-  let wroteBytes = 0
-  /** 确定性 stall 标志：不依赖 race 谁先拒绝（reader.cancel 的拒绝原因各实现不同）。 */
-  let stalled = false
-  /** 确定性 client-gone 标志（同上：不依赖底层取消的拒绝原因）。 */
-  let clientGone = false
-  let timer = null
-  let rejectStall = null
-  let rejectGone = null
-  let stallPromise = null
-  let gonePromise = null
-
-  const clearTimer = () => {
-    if (timer) clearTimeout(timer)
-    timer = null
-    rejectStall = null
-    stallPromise = null
-  }
-  const armTimer = () => {
-    clearTimer()
-    if (!(idleTimeoutMs > 0)) return
-    stallPromise = new Promise((_, reject) => {
-      rejectStall = reject
-    })
-    stallPromise.catch(() => {}) // 防迟到拒绝变 unhandledRejection
-    timer = setTimeout(() => {
-      stalled = true
-      reader.cancel().catch(() => {})
-      if (rejectStall) rejectStall(new StreamStallError(idleTimeoutMs))
-    }, idleTimeoutMs)
-    if (timer.unref) timer.unref()
-  }
-  const armGone = () => {
-    if (gonePromise) return
-    gonePromise = new Promise((_, reject) => {
-      rejectGone = reject
-    })
-    gonePromise.catch(() => {}) // 防迟到拒绝变 unhandledRejection
-  }
-  const stallGuard = (promise) =>
-    Promise.race([promise, stallPromise, gonePromise].filter(Boolean))
-
-  // 客户端断开只能靠底层 socket close 感知（req 'close' 是 body 读完事件，
-  // 在管道注册前就已触发）；迟到触发的拒绝需要兜底 catch 防 unhandledRejection。
-  const socket = nodeReq.socket
-  const onSocketClose = () => {
-    clientGone = true
-    reader.cancel().catch(() => {})
-    if (rejectGone) rejectGone(new ClientGoneError())
-  }
-  if (socket) socket.once('close', onSocketClose)
-
-  armTimer()
-  armGone()
-  try {
-    while (true) {
-      const { done, value } = await stallGuard(reader.read())
-      if (stalled) throw new StreamStallError(idleTimeoutMs)
-      if (clientGone) throw new ClientGoneError()
-      if (done) break
-      if (value) {
-        clearTimer()
-        const buf = Buffer.from(value)
-        wroteBytes += buf.length
-        const ok = nodeRes.write(buf)
-        if (!ok) {
-          // 下游背压：客户端 TCP 窗口满，等待 drain。clearTimer 已在 write 前
-          // 执行，若客户端"活着但不再读"（网络波动/卡顿，不关连接也不消费），
-          // onceDrain 永不触发 → 账号 chat 锁被永久占死、后续请求全部超时
-          // （与上游幽灵连接同源）。等待 drain 前必须重新武装 idle 定时器，
-          // drain 后 armTimer() 会再重置计时。
-          armTimer()
-          await stallGuard(onceDrain(nodeRes))
-          if (stalled) throw new StreamStallError(idleTimeoutMs)
-          if (clientGone) throw new ClientGoneError()
-        }
-        armTimer()
-      }
-    }
-    clearTimer()
-    nodeRes.end()
-    return { wroteBytes }
-  } catch (err) {
-    clearTimer()
-    if (stalled && !(err instanceof StreamStallError)) {
-      err = new StreamStallError(idleTimeoutMs)
-    }
-    if (clientGone && !(err instanceof ClientGoneError)) {
-      err = new ClientGoneError()
-    }
-    if (err && typeof err === 'object' && err.wroteBytes == null) {
-      err.wroteBytes = wroteBytes
-    }
-    try {
-      nodeRes.destroy(err instanceof Error ? err : undefined)
-    } catch {
-      // ignore
-    }
-    throw err
-  } finally {
-    if (socket) socket.removeListener('close', onSocketClose)
-  }
-}
-
-class ClientGoneError extends Error {
-  constructor() {
-    super('client disconnected while streaming upstream response')
-    this.name = 'ClientGoneError'
-    this.code = 'client_gone'
-  }
-}
-
-class StreamStallError extends Error {
-  constructor(idleTimeoutMs) {
-    super(
-      `upstream stream idle for ${idleTimeoutMs}ms without data; terminating`,
-    )
-    this.name = 'StreamStallError'
-    this.code = 'stream_idle_timeout'
-    this.stalled = true
-  }
-}
-
-function onceDrain(res) {
-  return new Promise((resolve) => res.once('drain', resolve))
-}
-
-async function writeUpstreamError(res, status, body, headers = {}) {
-  if (res.headersSent) {
-    res.end()
-    return
-  }
-  if (body && typeof body === 'object') {
-    sendJson(res, status || 502, body, headers)
-    return
-  }
-  sendJson(res, status || 502, {
-    error: {
-      message: typeof body === 'string' ? body : 'Upstream error',
-      type: 'upstream_error',
-    },
-  })
-}
-
-function mapAndSendError(res, err) {
-  if (res.headersSent) {
-    try {
-      res.end()
-    } catch {
-      // ignore
-    }
-    return
-  }
-  if (err instanceof UpstreamError) {
-    const status = err.status || 502
-    const body =
-      err.body && typeof err.body === 'object'
-        ? err.body.error
-          ? err.body
-          : {
-              error: {
-                message: err.message,
-                type: 'freebuff_error',
-                code: err.code,
-                details: err.body,
-              },
-            }
-        : {
-            error: {
-              message: err.message,
-              type: 'freebuff_error',
-              code: err.code,
-            },
-          }
-    const headers = {}
-    if (err.retryAfterMs != null) {
-      headers['retry-after'] = String(Math.ceil(err.retryAfterMs / 1000))
-    }
-    sendJson(res, status, body, headers)
-    return
-  }
-  sendJson(res, 500, {
-    error: {
-      message: err instanceof Error ? err.message : String(err),
-      type: 'proxy_error',
-    },
-  })
-}
+// 这三个符号在 src/proxy.js 里的对外导出名必须保持不变(消费方:
+// src/server.js,src/web/api.js,test/smoke.mjs 含动态 import).
+//  upstreamBodyEmbeddedError 在本次搬运前就是 src/proxy.js 的导出符号,
+// 搬进子模块后必须原样再导出,否则是无声的导出面收缩.
+export { shouldSwitchAccountOnError } from './proxy/errors.ts'
+export { requestSlotStats } from './proxy/slots.ts'
+export { upstreamBodyEmbeddedError } from './proxy/errors.ts'

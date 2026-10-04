@@ -10,39 +10,42 @@ import {
 } from './util/json-store.js'
 
 /**
- * 启动扫尾的总预算（毫秒）。启动路径**绝不允许**长时间阻塞——用户看到的是
- * "容器起不来"，而实际上只是清孤儿慢（连不通的上游 / 已被删的账号）。
- * 超出预算的句柄留在索引里，下次启动或后续释放流程继续清理。
+ * 启动扫尾的总预算(毫秒).启动路径绝不允许长时间阻塞——用户看到的是
+ * "容器起不来",而实际上只是清孤儿慢(连不通的上游 / 已被删的账号).
+ * 超出预算的句柄留在索引里,下次启动或后续释放流程继续清理.
  */
 const STARTUP_SWEEP_BUDGET_MS = 15_000
 
-/** 单次 DELETE 的上限（毫秒）：上游正常时毫秒级返回，连不上时由预算兜底。 */
+/** 单次 DELETE 的上限(毫秒):上游正常时毫秒级返回,连不上时由预算兜底. */
 const DELETE_ATTEMPT_TIMEOUT_MS = 8_000
 
 /**
- * 上游会话句柄的**持久化索引**（/data/sessions.json）。
+ * 上游会话句柄的持久化索引(/data/sessions.json).
  *
- * 为什么必须有它：Freebuff 的 session 按整小时单价**预扣**，早退 DELETE 会按实际
- * 占用时长**退还**未用部分（回执 freebucksRefund；pending = 结算未完成，不是"不退"；
- * 见 docs/account-scheduling-and-refund.md §3）。
- * 句柄（instanceId）只存在内存里时，一次进程重启 / 换容器 / /data 重挂，活着的会话
- * 就变成**无法寻址的孤儿**：既删不掉（腾不出槽位），那笔已预扣的钱也**永远取不回来**
- * （回执必须用同一个 instanceId 重放 DELETE 才能拿到）。所以每次 admit/释放都把句柄
- * 落盘，启动时按这份索引扫尾 DELETE 取回执，平时释放失败的句柄也留在里面等下次机会。
+ * 为什么必须有它:Freebuff 的 session 按整小时单价预扣.现行真值(一手实测,
+ * 见 docs/account-scheduling-and-refund.md §3.7):
+ *   session_units 当场按实际占用比例退;Freebucks 不退.
+ *   回执里的 freebucksRefundPending 表示"结算未完成",不等于"会退钱";
+ *   重开同一模型会吃 rate_limited + freebucksShortfall.
+ * 所以策略是:付费时段内绝不为空闲释放 -- 那一小时已经买断,提前释放只是白扔.
+ * 句柄(instanceId)只存在内存里时,一次进程重启 / 换容器 / /data 重挂,活着的会话
+ * 就变成无法寻址的孤儿:既删不掉(腾不出槽位),那笔已预扣的钱也永远取不回来
+ * (回执必须用同一个 instanceId 重放 DELETE 才能拿到).所以每次 admit/释放都把句柄
+ * 落盘,启动时按这份索引扫尾 DELETE 取回执,平时释放失败的句柄也留在里面等下次机会.
  *
- * 文件形如：
- *   { version:1, updatedAt, sessions:[{key,instanceId,model,admittedAt,expiresAt}],
- *     orphans:[{key,instanceId,model,admittedAt,expiresAt,note}] }
- * sessions = 本进程当前持有的活会话；orphans = DELETE 一直失败、暂时失联但仍
- * 需要继续尝试清理的句柄（绝不静默丢弃）。
+ * 文件形如:
+ * { version:1, updatedAt, sessions:[{key,instanceId,model,admittedAt,expiresAt}],
+ * orphans:[{key,instanceId,model,admittedAt,expiresAt,note}] }
+ * sessions = 本进程当前持有的活会话;orphans = DELETE 一直失败,暂时失联但仍
+ * 需要继续尝试清理的句柄(绝不静默丢弃).
  *
- * 待结算退款（`pendingRefunds`）的完整决策与证据见
- * .agents/notes/implemented/bug-fix/2026-09-13-refund-reversed.md。
+ * 待结算退款(pendingRefunds)的完整决策与证据见
+ * .agents/notes/implemented/bug-fix/2026-09-13-refund-reversed.md.
  *
- * **启动扫尾是有界的**：总预算 STARTUP_SWEEP_BUDGET_MS、单次 DELETE
- * DELETE_ATTEMPT_TIMEOUT_MS，超预算的句柄原样留下（信息不丢、只是不挡启动）。
- * 别把预算删掉"图省事"——启动被清孤儿卡住是"服务起不来、删 sessions.json 就好"
- * 的真实成因（见 .agents/notes/implemented/bug-fix/2026-09-13-startup-path-bounded.md）。
+ * 启动扫尾是有界的:总预算 STARTUP_SWEEP_BUDGET_MS,单次 DELETE
+ * DELETE_ATTEMPT_TIMEOUT_MS,超预算的句柄原样留下(信息不丢,只是不挡启动).
+ * 别把预算删掉"图省事"——启动被清孤儿卡住是"服务起不来,删 sessions.json 就好"
+ * 的真实成因(见 .agents/notes/implemented/bug-fix/2026-09-13-startup-path-bounded.md).
  */
 export class SessionHandleStore {
   /**
@@ -55,17 +58,17 @@ export class SessionHandleStore {
     /** @type {Array<{key:string,instanceId:string,model?:string|null,admittedAt?:string|null,expiresAt?:string|null,note?:string}>} */
     this.orphans = []
     /**
-     * 待结算退款队列：{"<key>\0<instanceId>": {key, instanceId, model, attempts,
-     * firstSeenAt, lastTriedAt}}。上游回 freebucksRefundPending 时入队，拿到终态
-     * 回执（含 0）才出队。
+     * 待结算退款队列:{"<key>\0<instanceId>": {key, instanceId, model, attempts,
+     * firstSeenAt, lastTriedAt}}.上游回 freebucksRefundPending 时入队,拿到终态
+     * 回执(含 0)才出队.
      *
-     * 与 orphans 的分工：orphans 记"这个句柄得删"（槽位），本队列记"这笔钱得追"
-     * （退款）。两者高度重叠但现在都有独立用途——启动扫尾按 orphans 删，周期扫尾
-     * 按本队列追问退款。
+     * 与 orphans 的分工:orphans 记"这个句柄得删"(槽位),本队列记"这笔钱得追"
+     * (退款).两者高度重叠但现在都有独立用途——启动扫尾按 orphans 删,周期扫尾
+     * 按本队列追问退款.
      */
     this.pendingRefunds = new Map()
-    /** 装载结果（'ok' | 'missing' | 'invalid'）。损坏 = 句柄索引丢失 = 上游会话
-     * 变成无法寻址的计费孤儿（删不掉、也释放不了槽位，退款也无从追起），必须在启动横幅里点名。 */
+    /** 装载结果('ok' | 'missing' | 'invalid').损坏 = 句柄索引丢失 = 上游会话
+     * 变成无法寻址的计费孤儿(删不掉,也释放不了槽位,退款也无从追起),必须在启动横幅里点名. */
     this.loadStatus = 'missing'
     this.loadReason = null
     this.load()
@@ -87,12 +90,12 @@ export class SessionHandleStore {
     }
     try {
       const raw = st.data
-      // 上次进程遗留的 sessions 一律视为孤儿：本进程还没 admit 过任何会话，
-      // 这些句柄要么还有效（需要 DELETE 退款）要么已过期（DELETE 无害）。
-      // 逐条口径：**只取用得上的记录，绝不为一条脏数据拒绝启动**。
-      // sessions.json 是"重启后还能寻址 DELETE"的索引，丢了只是槽位回收变慢，
-      // 不值得让整个服务停摆——它与 users.json（凭据真源，坏了必须拒绝启动）不同。
-      // 但"丢了几条"必须记账：否则文件里明明有东西、控制台却说一切正常。
+      // 上次进程遗留的 sessions 一律视为孤儿:本进程还没 admit 过任何会话,
+      // 这些句柄要么还有效(需要 DELETE 退款)要么已过期(DELETE 无害).
+      // 逐条口径:只取用得上的记录,绝不为一条脏数据拒绝启动.
+      // sessions.json 是"重启后还能寻址 DELETE"的索引,丢了只是槽位回收变慢,
+      // 不值得让整个服务停摆——它与 users.json(凭据真源,坏了必须拒绝启动)不同.
+      // 但"丢了几条"必须记账:否则文件里明明有东西,控制台却说一切正常.
       /** @type {any[]} */
       const droppedItems = []
       for (const s of Array.isArray(raw?.sessions) ? raw.sessions : []) {
@@ -125,8 +128,8 @@ export class SessionHandleStore {
       }
       this.sessions.clear()
       if (droppedItems.length) {
-        // 结构与 web-sessions/login-flows 的脏条目同源（null / {} / 字符串），
-        // 统一按"条目级丢弃"记账：控制台能看到条数与留证，不必人工删文件。
+        // 结构与 web-sessions/login-flows 的脏条目同源(null / {} / 字符串),
+        // 统一按"条目级丢弃"记账:控制台能看到条数与留证,不必人工删文件.
         const backup = dumpDroppedEntries(this.file, droppedItems)
         noteDroppedEntries(
           this.file,
@@ -140,12 +143,12 @@ export class SessionHandleStore {
           backup,
         })
       }
-      // 合法句柄一律进 orphans 队列（本次进程还没 admit 过任何会话，
-      // 上次遗留的句柄要么还有效要 DELETE、要么已过期 DELETE 无害）。
+      // 合法句柄一律进 orphans 队列(本次进程还没 admit 过任何会话,
+      // 上次遗留的句柄要么还有效要 DELETE,要么已过期 DELETE 无害).
       noteOpenHandles(this.file, this.orphans.length)
     } catch (err) {
-      // 已经解析成 JSON 了：这里只可能是字段结构问题（Array.isArray 之后基本
-      // 不会抛）。保留原来的兜底，不让启动流程被一个索引文件拖死。
+      // 已经解析成 JSON 了:这里只可能是字段结构问题(Array.isArray 之后基本
+      // 不会抛).保留原来的兜底,不让启动流程被一个索引文件拖死.
       logger.warn('session handle store load failed', {
         file: this.file,
         error: err instanceof Error ? err.message : String(err),
@@ -155,10 +158,10 @@ export class SessionHandleStore {
   }
 
   /**
-   * 处理 SessionManager 上报的事件：
-   *   {type:'track', key, instanceId, ...} 当前活会话（覆盖）
-   *   {type:'clear', key}                 该账号已无活会话
-   *   {type:'orphan', key, instanceId, ...} 删不掉的句柄，继续排队清理
+   * 处理 SessionManager 上报的事件:
+   * {type:'track', key, instanceId, ...} 当前活会话(覆盖)
+   * {type:'clear', key}                 该账号已无活会话
+   * {type:'orphan', key, instanceId, ...} 删不掉的句柄,继续排队清理
    */
   handleEvent(ev) {
     if (!ev || typeof ev !== 'object') return
@@ -185,39 +188,39 @@ export class SessionHandleStore {
       this.save()
       return
     }
-    // 上游回 freebucksRefundPending：这笔钱还没结算完，**入队持续追问**。
-    // 不能只在内存里挂个定时器——进程重启就没了，那笔预扣再也追不回来。
+    // 上游回 freebucksRefundPending:这笔钱还没结算完,入队持续追问.
+    // 不能只在内存里挂个定时器——进程重启就没了,那笔预扣再也追不回来.
     if (ev.type === 'refund_pending' && ev.instanceId) {
       this.notePendingRefund(key, ev.instanceId, ev.model ?? null)
       return
     }
-    // 结算终于落地（或上游确认该 instance 已终结）：把排队中的 orphan 摘掉。
-    // 少了这一步，orphan 会永远留在 sessions.json 里，每次进程启动都对着同一条
-    // 早已结算的 instance 重放 DELETE（我的 (7.5) 回归用例就是这么抓到的）。
+    // 结算终于落地(或上游确认该 instance 已终结):把排队中的 orphan 摘掉.
+    // 少了这一步,orphan 会永远留在 sessions.json 里,每次进程启动都对着同一条
+    // 早已结算的 instance 重放 DELETE(我的 (7.5) 回归用例就是这么抓到的).
     if (ev.type === 'drop' && ev.instanceId) {
       this.dropOrphan(ev.instanceId)
       this.dropPendingRefund(key, ev.instanceId)
     }
   }
 
-  /** 当前活会话（本进程持有）。 */
+  /** 当前活会话(本进程持有). */
   list() {
     return [...this.sessions.values()]
   }
 
-  /** 待清理句柄（含本次与上次进程遗留）。 */
+  /** 待清理句柄(含本次与上次进程遗留). */
   listOrphans() {
     return [...this.orphans]
   }
 
-  /** 待结算退款队列（含上次进程遗留）。 */
+  /** 待结算退款队列(含上次进程遗留). */
   listPendingRefunds() {
     return [...this.pendingRefunds.values()]
   }
 
   /**
-   * 记下一条**待结算退款**（上游回 freebucksRefundPending）。幂等：同一条
-   * instance 反复入队只累加 attempts，不产生重复项。
+   * 记下一条待结算退款(上游回 freebucksRefundPending).幂等:同一条
+   * instance 反复入队只累加 attempts,不产生重复项.
    */
   notePendingRefund(key, instanceId, model = null) {
     if (!key || !instanceId) return
@@ -235,10 +238,10 @@ export class SessionHandleStore {
   }
 
   /**
-   * 出队（**只在拿到终态回执后调用**——含退款 0）。
+   * 出队(只在拿到终态回执后调用——含退款 0).
    *
-   * 绝不因为"问了好几次还是 pending"就出队：pending 的语义是"最终用量还没算完"，
-   * 出队 = 主动放弃这笔已经预扣的 Freebucks。
+   * 绝不因为"问了好几次还是 pending"就出队:pending 的语义是"最终用量还没算完",
+   * 出队 = 主动放弃这笔已经预扣的 Freebucks.
    */
   dropPendingRefund(key, instanceId) {
     if (!key || !instanceId) return false
@@ -247,7 +250,7 @@ export class SessionHandleStore {
     return removed
   }
 
-  /** 移除一条孤儿记录（清理成功后调用）。 */
+  /** 移除一条孤儿记录(清理成功后调用). */
   dropOrphan(instanceId) {
     const before = this.orphans.length
     this.orphans = this.orphans.filter((o) => o.instanceId !== instanceId)
@@ -255,16 +258,16 @@ export class SessionHandleStore {
   }
 
   /**
-   * 启动扫尾：对所有遗留句柄发 DELETE 拿退款。**只清理本进程已确认结束的**，
-   * 失败的保留在 index 里等下次启动继续（绝不谎报、绝不丢弃）。
+   * 启动扫尾:对所有遗留句柄发 DELETE 拿退款.只清理本进程已确认结束的,
+   * 失败的保留在 index 里等下次启动继续(绝不谎报,绝不丢弃).
    *
-   * ⚠️ **必须有总预算与单次超时**：早期版本对每个句柄用 admitTimeoutMs(30s)
-   * 且最多重放 3 次，一个连不上的上游（DNS 黑洞 / 代理挂起 / 账号已删）就能把
-   * 启动**整整卡住**十几分钟，用户看到的是"起不来"，而删掉 sessions.json 立刻
-   * 就好——这正是"删这个文件就正常"最典型的形态。启动路径只允许有界等待：
-   * 超预算的句柄留在索引里，下次启动或后续释放流程继续（信息不丢，只是不挡路）。
-   * @param {(key: string) => any} resolveUpstream key → upstream client（可为空）
-   * @param {{budgetMs?: number}} [opts] 本次扫尾的总预算（默认 15s）
+   * 必须有总预算与单次超时:早期版本对每个句柄用 admitTimeoutMs(30s)
+   * 且最多重放 3 次,一个连不上的上游(DNS 黑洞 / 代理挂起 / 账号已删)就能把
+   * 启动整整卡住十几分钟,用户看到的是"起不来",而删掉 sessions.json 立刻
+   * 就好——这正是"删这个文件就正常"最典型的形态.启动路径只允许有界等待:
+   * 超预算的句柄留在索引里,下次启动或后续释放流程继续(信息不丢,只是不挡路).
+   * @param {(key: string) => any} resolveUpstream key → upstream client(可为空)
+   * @param {{budgetMs?: number}} [opts] 本次扫尾的总预算(默认 15s)
    * @returns {Promise<{cleaned: number, failed: number, skipped: number, deferred: number}>}
    */
   async cleanupOrphans(resolveUpstream, opts = {}) {
@@ -282,13 +285,13 @@ export class SessionHandleStore {
       }
       const upstream = resolveUpstream?.(o.key)
       if (!upstream) {
-        // 账号已删除/凭据变更：没有对应 token 就删不掉，保留记录
+        // 账号已删除/凭据变更:没有对应 token 就删不掉,保留记录
         skipped += 1
         continue
       }
-      // 单次尝试同样受预算约束，并且**预算内也必须有上限**：上游客户端会 abort
-      // 挂起的 fetch，但假死连接可能永远不 settle——所以这里再加一道本地硬超时，
-      // 让「启动绝不长时间卡住」成为可证明的性质（而不是依赖上游客户端行为）。
+      // 单次尝试同样受预算约束,并且预算内也必须有上限:上游客户端会 abort
+      // 挂起的 fetch,但假死连接可能永远不 settle——所以这里再加一道本地硬超时,
+      // 让[启动绝不长时间卡住]成为可证明的性质(而不是依赖上游客户端行为).
       const attempt = () => {
         const left = deadline - Date.now()
         const ms = Math.max(250, Math.min(DELETE_ATTEMPT_TIMEOUT_MS, left))
@@ -301,10 +304,10 @@ export class SessionHandleStore {
       }
       try {
         let body = await attempt()
-        // 2026-09 实测：上游对提前结束的会话会持续回 freebucksRefundPending
-        // （1.5s/7s/17s/37s/67s 五次重放全是 pending）。有界重放后仍挂起
-        // **不能丢弃句柄**——结算还没跑完，丢了这笔预扣就永远要不回来。
-        // 重放同样吃预算：启动路径上只允许 1 次，其余留给下次启动。
+        // 2026-09 实测:上游对提前结束的会话会持续回 freebucksRefundPending
+        // (1.5s/7s/17s/37s/67s 五次重放全是 pending).有界重放后仍挂起
+        // 不能丢弃句柄——结算还没跑完,丢了这笔预扣就永远要不回来.
+        // 重放同样吃预算:启动路径上只允许 1 次,其余留给下次启动.
         let pending = body?.freebucksRefundPending === true
         for (let i = 0; pending && i < 1; i += 1) {
           if (Date.now() >= deadline - 300) break
@@ -345,16 +348,16 @@ export class SessionHandleStore {
   }
 
   /**
-   * 周期扫尾：**追问所有待结算退款**，拿到终态回执才出队。
+   * 周期扫尾:追问所有待结算退款,拿到终态回执才出队.
    *
-   * 为什么必须有它（而不是只在启动时扫一次）：上游对提前结束的会话回
-   * `freebucksRefundPending`，要求**用同一个 instanceId 重放 DELETE** 取回执。
-   * 只在启动扫一次 = 进程不重启就再也没人问过，那笔预扣会永远挂在 pending 里。
-   * 参考实现（trefeon/freebuff-proxy）同样把这件事做成常驻的：单飞重放 + 手动
-   * Refresh 入口 + 夜间补跑。
+   * 为什么必须有它(而不是只在启动时扫一次):上游对提前结束的会话回
+   * freebucksRefundPending,要求用同一个 instanceId 重放 DELETE 取回执.
+   * 只在启动扫一次 = 进程不重启就再也没人问过,那笔预扣会永远挂在 pending 里.
+   * 参考实现(trefeon/freebuff-proxy)同样把这件事做成常驻的:单飞重放 + 手动
+   * Refresh 入口 + 夜间补跑.
    *
-   * 与 cleanupOrphans 的分工：那个删句柄腾槽位，这个只追钱。两者共用一份预算，
-   * 且都**绝不**因为"还是 pending"就丢弃记录。
+   * 与 cleanupOrphans 的分工:那个删句柄腾槽位,这个只追钱.两者共用一份预算,
+   * 且都绝不因为"还是 pending"就丢弃记录.
    * @param {(key: string) => any} resolveUpstream
    * @param {{budgetMs?: number, onSettled?: (info: {key: string, instanceId: string, refund: number | null}) => void}} [opts]
    * @returns {Promise<{settled: number, pending: number, failed: number, skipped: number, deferred: number}>}
@@ -377,7 +380,7 @@ export class SessionHandleStore {
       }
       const upstream = resolveUpstream?.(r.key)
       if (!upstream) {
-        // 账号已删/凭据已换：没有 token 就问不了，记录留着（绝不静默丢弃）。
+        // 账号已删/凭据已换:没有 token 就问不了,记录留着(绝不静默丢弃).
         skipped += 1
         continue
       }
@@ -394,17 +397,17 @@ export class SessionHandleStore {
       try {
         const body = await attempt()
         if (body?.freebucksRefundPending === true) {
-          // 还没算完：留在队列里等下一次（记一次尝试次数）。
+          // 还没算完:留在队列里等下一次(记一次尝试次数).
           this.notePendingRefund(r.key, r.instanceId, r.model)
           pending += 1
           continue
         }
         if (body?.status !== 'ended') {
-          // 既非终态也非 pending：保留记录（绝不当作退 0）。
+          // 既非终态也非 pending:保留记录(绝不当作退 0).
           pending += 1
           continue
         }
-        // 终态：没有金额字段就是退 0（vendor af898dc 口径），0 也是终态，可以收工。
+        // 终态:没有金额字段就是退 0(vendor af898dc 口径),0 也是终态,可以收工.
         const refund =
           typeof body?.freebucksRefund === 'number' ? body.freebucksRefund : 0
         this.dropPendingRefund(r.key, r.instanceId)
@@ -444,7 +447,7 @@ export class SessionHandleStore {
       const tmp = `${this.file}.tmp`
       fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), { mode: 0o600 })
       fs.renameSync(tmp, this.file)
-      // 控制台「系统」页的"待结算句柄数"跟着落盘一起刷新（claim/释放都会改它）。
+      // 控制台[系统]页的"待结算句柄数"跟着落盘一起刷新(claim/释放都会改它).
       noteOpenHandles(this.file, this.sessions.size + this.orphans.length)
     } catch (err) {
       logger.warn('session handle store save failed', {
@@ -455,9 +458,9 @@ export class SessionHandleStore {
   }
 }
 
-/** 待结算退款队列的键：一个账号上同一条 instance 只该有一条记录。 */
+/** 待结算退款队列的键:一个账号上同一条 instance 只该有一条记录. */
 function refundKey(key, instanceId) {
-  // 用 NUL 分隔（与冷却键同约定）：uuid/email 都不含它，不会撞键。
+  // 用 NUL 分隔(与冷却键同约定):uuid/email 都不含它,不会撞键.
   return key + String.fromCharCode(0) + instanceId
 }
 
@@ -471,7 +474,7 @@ function normalize(s) {
   }
 }
 
-/** 有界等待（毫秒）。 */
+/** 有界等待(毫秒). */
 function sleep(ms) {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms)

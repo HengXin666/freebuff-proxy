@@ -91,10 +91,10 @@ async function main() {
     return
   }
   /**
-   * ⚠️ 不再用 GET /api/v1/me：客户端 165 条抓包里它出现 **0 次**
-   * （docs/reverse/20 §20.2）。doctor 是用户**主动**执行的诊断工具，
-   * 允许探测，但只准用客户端真实发过的端点 —— 这里改用
-   * `GET /api/v1/freebuff/session`（客户端 17 次）。
+   - 不再用 GET /api/v1/me:客户端 165 条抓包里它出现 0 次
+   - (docs/reverse/20 §20.2).doctor 是用户主动执行的诊断工具,
+   - 允许探测,但只准用客户端真实发过的端点 —— 这里改用
+   - GET /api/v1/freebuff/session(客户端 17 次).
    */
   try {
     const session = await ctx.upstream.freebuffSession('GET')

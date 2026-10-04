@@ -1,5 +1,7 @@
 # 命令与本地开发
 
+> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 真源: development
 > 本文是 [freebuff-proxy](../README.md) 的详细文档之一。npm 脚本、本地启动、CLI 登录、冒烟测试。
 > 快速上手 / 一键部署请看 [主页 README](../README.md)。
 ## 命令 / 本地开发
@@ -24,7 +26,7 @@ npm version patch -m "chore(release): %s"   # 自动 bump + commit + 打 v* tag
 git push origin main --tags
 ```
 
-⚠️ **不要把 `npm version --dry-run` 当预演用**。实测 npm 12.0.2 下它**不是只读的**：
+ **不要把 `npm version --dry-run` 当预演用**。实测 npm 12.0.2 下它**不是只读的**：
 照样会改 `package.json` / `package-lock.json`、建一个版本提交并打上 tag。用它"看一眼版本号"，
 再跑一次正式命令，就会得到**两个** release 提交和**两个** tag。想预览下一个版本号，用：
 

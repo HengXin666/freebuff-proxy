@@ -1,5 +1,7 @@
 # Web 控制台
 
+> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 真源: web-console
 > 本文是 [freebuff-proxy](../README.md) 的详细文档之一。登录/找回密码、添加 Freebuff 账号的浏览器回调流程、用户管理。
 > 快速上手 / 一键部署请看 [主页 README](../README.md)。
 ## Web 控制台：登录 / 用户管理 / 添加账号回调

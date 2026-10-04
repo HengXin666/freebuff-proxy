@@ -1,134 +1,83 @@
-import { randomUUID } from 'node:crypto'
+/**
+ - HTTP 装配层 —— 把三张面(对外 LLM / 控制台 / 静态资源)接到一个 server 上.
+ *
+ - 这个文件刻意保持只有装配:路由分流在 ./server/route-table.js,
+ - 请求上下文在 ./server/request-context.js,启动副作用在 ./server/startup-tasks.js.
+ - 理由是它是全仓最容易膨胀的地方(每加一个路由就想往里塞一段),而它同时是
+ - 所有模块的汇聚点 —— 一旦超过 300 行,读它的人得同时装下四五个模块的接口.
+ *
+ - @see ./server/route-table.js   pathname → 面(含未知路径的处置)
+ - @see ./server/startup-tasks.js 启动期副作用(catalog 缓存 seed)
+ */
 import http from 'node:http'
-import { runWithLogContext } from './util/log.js'
-import path from 'node:path'
+
+import { projectRootFromModule } from './config.js'
 import { createProxyHandler } from './proxy.js'
+import { FACES, faceOf } from './server/route-table.js'
+import { withRequestId } from './server/request-context.js'
+import { seedCatalogCache } from './server/startup-tasks.js'
 import { createWebApi } from './web/api.js'
 import { serveStatic } from './web/static.js'
 import { logger } from './util/log.js'
 import { sendJson } from './util/http.js'
-import { projectRootFromModule } from './config.js'
+import path from 'node:path'
 
 const dashboardDir = path.join(projectRootFromModule(), 'dashboard')
 
 /**
- * @param {object} deps
- * @param {import('./config.js').ProxyConfig} deps.config
- * @param {import('./session-manager.js').SessionManager} deps.sessions
- * @param {ReturnType<import('./upstream/client.js').createUpstreamClient>} deps.upstream
- * @param {string} deps.authToken
- * @param {import('./web/user-store.js').UserStore} deps.userStore
- * @param {import('./web/session-store.js').WebSessionStore} deps.webSessions
- * @param {import('./web/login-flows.js').LoginFlowManager} deps.loginFlows
- * @param {import('./web/model-store.js').ModelStore} [deps.modelStore] 前端「模型管理」自定义模型
- * @param {() => void} [deps.restart] 前端「重启服务」回调（admin 触发）
+ - 启动 HTTP 服务器.
+ - @param {object} deps 依赖集合(直接透传给 proxy / web 两层)
+ - @param {import('./config.js').ProxyConfig} deps.config
+ - @param {object} deps.sessions 会话管理器
+ - @param {object} deps.upstream 上游客户端
+ - @param {string} deps.authToken
+ - @param {object} deps.userStore 用户存储
+ - @param {object} deps.webSessions 控制台会话
+ - @param {object} deps.loginFlows 登录流程管理
+ - @param {object} [deps.modelStore] 前端[模型管理]自定义模型
+ - @param {() => void} [deps.restart] 前端[重启服务]回调(admin 触发)
+ - @returns {Promise<import('node:http').Server>} 已监听的 server
  */
 export function startServer(deps) {
   const { config } = deps
   const proxy = createProxyHandler(deps)
   const web = createWebApi(deps)
 
-  // 运行时 catalog 自动同步（对齐 trefeon Registry.Refresh：启动立即一次 + 每 6h，
-  // 失败保留旧缓存）。不阻塞启动；失败静默回落内置 catalog。
-  //
-  // 缓存路径必须落在 dataDir（Docker 挂载卷 /data）：旧版写死源码目录旁的
-  // <repo>/data，容器里就是只读的 /app/data → mkdir EACCES，同步永远失败
-  // （issue #9）。这里先把路径切到 <dataDir>/ 并重读缓存，再启动同步循环。
-  try {
-    import('./model.js')
-      .then(async (m) => {
-        // 缓存缺失（首次启动 / 挂载卷为空）时先落一份内置 catalog：写不进就
-        // 只告警，绝不影响启动与代理可用性。
-        try {
-          const cache = m.applyCatalogCache?.(config.server.dataDir)
-          if (cache?.path && cache.models?.length) {
-            const { writeCatalogCache } = await import('./catalog/runtime-sync.mjs')
-            writeCatalogCache(cache.path, {
-              version: 1,
-              syncedAt: new Date().toISOString(),
-              source: 'builtin:src/catalog/freebuff-catalog.json',
-              models: cache.models,
-            })
-          }
-        } catch (err) {
-          logger.warn('catalog cache seed skipped', {
-            error: err instanceof Error ? err.message : String(err),
-          })
-        }
-        /**
-         * ⚠️ 启动自动同步**已停用**（docs/reverse/20 §20.3：零自动探测）。
-         *
-         * 它每隔一段时间去 GitHub 拉 Codebuff 的常量文件，写出来的正是
-         * `data/catalog-cache.json` —— 那份 2026-08 的快照**已经不再是
-         * 模型清单的来源**（清单现在取上游目录 rows，见
-         * docs/reverse/19）。留着它只会持续用陈旧数据覆盖缓存。
-         *
-         * 保留函数不调用：需要时可由维护者手动触发（npm run 脚本或控制台）。
-         */
-        void m.startCatalogSync
-      })
-      .catch((err) => {
-        logger.warn('catalog auto-sync disabled', {
-          error: err instanceof Error ? err.message : String(err),
-        })
-      })
-  } catch (err) {
-    logger.warn('catalog auto-sync disabled', {
-      error: err instanceof Error ? err.message : String(err),
-    })
-  }
+  seedCatalogCache(config)
 
   const server = http.createServer((req, res) => {
-    handle(req, res).catch((err) => {
+    withRequestId(req, res, dispatch).catch((err) => {
       logger.error('unhandled request error', {
         error: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error ? err.stack : undefined,
         url: req.url,
       })
-      if (!res.headersSent) {
-        sendJson(res, 500, {
-          error: {
-            message: 'Internal proxy error',
-            type: 'proxy_error',
-          },
-        })
-      } else {
+      if (res.headersSent) {
         res.destroy()
+        return
       }
+      sendJson(res, 500, {
+        error: { message: 'Internal proxy error', type: 'proxy_error' },
+      })
     })
   })
 
-  async function handle(req, res) {
-    // 给这次下游请求一个全链路 id：其后所有日志（选号 / 会话 / 上游）都会自动
-    // 带上它，控制台「日志」页据此把一次请求的多条日志聚成一组，而不是几十条
-    // 无主记录交织在一起。账号在选号后由 patchLogContext 补上。
-    const reqId = randomUUID().slice(0, 8)
-    return runWithLogContext({ reqId }, () => handleInner(req, res))
-  }
-
-  async function handleInner(req, res) {
-    const url = new URL(
-      req.url || '/',
-      `http://${req.headers.host || 'localhost'}`,
-    )
-    const pathname = url.pathname
-
-    if (
-      pathname === '/healthz' ||
-      pathname === '/health' ||
-      pathname.startsWith('/v1/')
-    ) {
-      await proxy.handle(req, res)
-      return
-    }
-    if (pathname.startsWith('/api/')) {
-      await web.handle(req, res, url)
-      return
-    }
-    // dashboard (/) and anything else
+  /**
+   - 把一次请求交给所属的面.
+   - @param {import('node:http').IncomingMessage} req 下游请求
+   - @param {import('node:http').ServerResponse} res 下游响应
+   - @returns {Promise<void>} 处理完成
+   */
+  async function dispatch(req, res) {
+    const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`)
+    const face = faceOf(url.pathname)
+    if (face === FACES.proxy) return proxy.handle(req, res)
+    if (face === FACES.console) return web.handle(req, res, url)
     serveStatic(req, res, url, dashboardDir)
   }
 
+  // 上游超时 + 余量:请求超时必须比上游宽松,否则代理会在收到上游回执前自行掐断
+  // (客户端看到 408,而上游其实成功并已经扣了钱).
   server.requestTimeout = (config.limits.upstreamTimeoutSec + 30) * 1000
   server.headersTimeout = (config.limits.upstreamTimeoutSec + 60) * 1000
 

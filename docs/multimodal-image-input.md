@@ -1,5 +1,13 @@
 # Freebuff 多模态（图片输入）支持调研
 
+> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 真源: multimodal-research
+> **状态：建议未采纳（截至 2026-10-05）。本文是"可行性调研 + 未执行建议书"，不是已实现说明。**
+> §四 的三条建议经复核**均未实施**：`src/catalog/parser.mjs:116` 仍写死 `multimodal: false`；
+> `src/catalog/runtime-sync.mjs:27` 仍指向 `CodebuffAI/freebuff`（re-export 残页）；
+> 内置 catalog 的 `deepseek/deepseek-v4-flash` 仍为 `multimodal: false`。
+> **保鲜期**：上游目录每月变动，§六 的实测结论以 2026-09-13 为准。
+
 > 本文是 [freebuff-proxy](../README.md) 的详细文档之一。**结论性调研，只查证、不改代码**。
 > 对象是上游 Freebuff/Codebuff 本体（CLI / Desktop / Web）+ 本代理的转发行为。
 > 快速上手 / 一键部署请看 [主页 README](../README.md)。
@@ -76,24 +84,24 @@ wc -c /tmp/cb/common/src/constants/freebuff-models.ts /tmp/upstream-freebuff-mod
 
 | 模型 id | 显示名 | 原生看图 | premium |
 |---|---|---|---|
-| `openai/gpt-5.6-luna` | GPT-5.6 Luna | ✅ | 是 |
-| `openai/gpt-5.6-luna-max` | GPT-5.6 Luna (Max context) | ❌ | 是 |
-| `openai/gpt-5.6-luna-es` | Codex (test) | ❌ | 是 |
-| `deepseek/deepseek-v4-flash` | DeepSeek V4.1 Flash | ✅（**2026-09-10 起**） | 否 |
-| `deepseek/deepseek-v4-flash-max` | DeepSeek V4 Flash (Max context) | ❌ | 否 |
-| `deepseek/deepseek-v4-pro` | DeepSeek V4 Pro | ❌ | 是 |
-| `deepseek/deepseek-v4-pro-max` | DeepSeek V4 Pro (Max context) | ❌ | 否 |
-| `mimo/mimo-v2.5` | MiMo 2.5 | ✅ | 否 |
-| `minimax/minimax-m3` | MiniMax M3 | ✅ | 是 |
-| `google/gemini-3.8-flash` | Gemini 3.8 Flash | ✅ | 是 |
-| `anthropic/claude-fable-5` | Claude Fable 5 | ✅ | 是 |
-| `z-ai/glm-5.3-flash` | GLM 5.3 Flash | ✅ | 否 |
-| `z-ai/glm-5.2` | GLM 5.2 | ❌ | 是 |
-| `stealth/ox-alpha` | Ox Alpha | ✅（已撤出免费模式） | 否 |
-| `crof/kimi-k3-eco` | Kimi K3 | ❌ | 是 |
-| `meta/muse-spark-1.2-contributor` | Muse Spark 1.2 | ❌ | 是 |
-| `meta/muse-spark-1.3-contributor` | Muse Spark 1.3 | ❌ | 是 |
-| Solar Pro 4 | Solar Pro 4 | ❌ | 见 entitlement |
+| `openai/gpt-5.6-luna` | GPT-5.6 Luna |  | 是 |
+| `openai/gpt-5.6-luna-max` | GPT-5.6 Luna (Max context) |  | 是 |
+| `openai/gpt-5.6-luna-es` | Codex (test) |  | 是 |
+| `deepseek/deepseek-v4-flash` | DeepSeek V4.1 Flash | （**2026-09-10 起**） | 否 |
+| `deepseek/deepseek-v4-flash-max` | DeepSeek V4 Flash (Max context) |  | 否 |
+| `deepseek/deepseek-v4-pro` | DeepSeek V4 Pro |  | 是 |
+| `deepseek/deepseek-v4-pro-max` | DeepSeek V4 Pro (Max context) |  | 否 |
+| `mimo/mimo-v2.5` | MiMo 2.5 |  | 否 |
+| `minimax/minimax-m3` | MiniMax M3 |  | 是 |
+| `google/gemini-3.8-flash` | Gemini 3.8 Flash |  | 是 |
+| `anthropic/claude-fable-5` | Claude Fable 5 |  | 是 |
+| `z-ai/glm-5.3-flash` | GLM 5.3 Flash |  | 否 |
+| `z-ai/glm-5.2` | GLM 5.2 |  | 是 |
+| `stealth/ox-alpha` | Ox Alpha | （已撤出免费模式） | 否 |
+| `crof/kimi-k3-eco` | Kimi K3 |  | 是 |
+| `meta/muse-spark-1.2-contributor` | Muse Spark 1.2 |  | 是 |
+| `meta/muse-spark-1.3-contributor` | Muse Spark 1.3 |  | 是 |
+| Solar Pro 4 | Solar Pro 4 |  | 见 entitlement |
 
 **flash 的 `multimodal: true` 是实测换来的**（`freebuff-models.ts:1379-1388`）：
 

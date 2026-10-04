@@ -1,17 +1,17 @@
 /**
- * 排验脚本：粘性调度（drain, not rotate）vs 每账号并发上限
+ - 排验脚本:粘性调度(drain, not rotate)vs 每账号并发上限
  *
- * 2026-09 改版后的调度原则：请求集中到尽可能少的账号上，用尽才换号；从未用过的
- * 账号排最后。上游把"轮换健康账号"当账号农场特征，Freebucks 又按会话占用时长
- * 计费（换号 = 新买一条计费行），所以"全钉一个账号"现在是**预期行为**。
+ - 2026-09 改版后的调度原则:请求集中到尽可能少的账号上,用尽才换号;从未用过的
+ - 账号排最后.上游把"轮换健康账号"当账号农场特征,Freebucks 又按会话占用时长
+ - 计费(换号 = 新买一条计费行),所以"全钉一个账号"现在是预期行为.
  *
- * 用法:
- *   node test/repro-concurrency.mjs sticky 2 3 8        # 2 账号、上限 3、8 并发 → 全在 A 上排队
- *   node test/repro-concurrency.mjs sticky 2 3 8 broken # 账号 B admit 一直失败（被冷却）
- *   node test/repro-concurrency.mjs sticky 2 3 8 seq    # 顺序请求（一个个来）→ 复用同一热 session
- *   node test/repro-concurrency.mjs sticky 2 3 8 mix    # 先 3 并发占满 A，再顺序来
+ - 用法:
+ - node test/repro-concurrency.mjs sticky 2 3 8        # 2 账号,上限 3,8 并发 → 全在 A 上排队
+ - node test/repro-concurrency.mjs sticky 2 3 8 broken # 账号 B admit 一直失败(被冷却)
+ - node test/repro-concurrency.mjs sticky 2 3 8 seq    # 顺序请求(一个个来)→ 复用同一热 session
+ - node test/repro-concurrency.mjs sticky 2 3 8 mix    # 先 3 并发占满 A,再顺序来
  *
- * 输出: 账号分配 / 响应头账号序列 / 每账号流峰值 / 是否粘性优先
+ - 输出: 账号分配 / 响应头账号序列 / 每账号流峰值 / 是否粘性优先
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -35,7 +35,7 @@ const MIX = extraArg === 'mix'
 const originalFetch = globalThis.fetch
 let sessionPosts = 0
 let completionAttempts = 0
-/** token -> 当前在途流数（按账号 token 区分） */
+/** token -> 当前在途流数(按账号 token 区分) */
 const activeByToken = new Map()
 /** token -> 峰值 */
 const peakByToken = new Map()
@@ -48,7 +48,7 @@ function jsonRes(body, status = 200) {
 }
 
 const enc = new TextEncoder()
-const STREAM_DELAY_MS = 300 // 每块间隔，决定单流时长
+const STREAM_DELAY_MS = 300 // 每块间隔,决定单流时长
 
 globalThis.fetch = async (url, init = {}) => {
   const u = String(url)
@@ -165,16 +165,16 @@ const fire = (i) =>
 
 let results
 if (SEQ) {
-  // 顺序请求：一个结束才开始下一个（间隔 10ms，保证上一个流已释放锁）
+  // 顺序请求:一个结束才开始下一个(间隔 10ms,保证上一个流已释放锁)
   results = []
   for (let i = 0; i < REQS; i++) {
     results.push(await fire(i))
     await new Promise((r) => setTimeout(r, 10))
   }
 } else if (MIX) {
-  // 先 CAP 个并发把 A 占满（不 await 完成，让流保持活跃），再顺序发剩余请求
+  // 先 CAP 个并发把 A 占满(不 await 完成,让流保持活跃),再顺序发剩余请求
   const head = Array.from({ length: CAP }, (_, i) => fire(i))
-  await new Promise((r) => setTimeout(r, 150)) // 等 A 的在途流真正建立（锁已持有）
+  await new Promise((r) => setTimeout(r, 150)) // 等 A 的在途流真正建立(锁已持有)
   const tail = []
   for (let i = CAP; i < REQS; i++) {
     tail.push(await fire(i))
@@ -209,8 +209,8 @@ if (results.some((r) => r.status !== 200)) {
   console.log('非 200 明细:', results.filter((r) => r.status !== 200).map((r) => ({ status: r.status, account: r.account, body: r.body, elapsed: r.elapsed })))
 }
 
-// 判定：粘性优先是预期行为——只要没超过单账号并发上限、且没有故障换号，
-// 请求集中在一个账号上就是对的（换号 = 多买一条 Freebucks 计费会话）。
+// 判定:粘性优先是预期行为——只要没超过单账号并发上限,且没有故障换号,
+// 请求集中在一个账号上就是对的(换号 = 多买一条 Freebucks 计费会话).
 const accountCount = Object.keys(byAccount).length
 const overCap = [...peakByToken.entries()].filter(([, v]) => v > CAP)
 const spilled = accountCount > 1
@@ -218,13 +218,13 @@ const spilled = accountCount > 1
 console.log(`\n--- 结论 ---`)
 console.log(`用了 ${accountCount}/${ACCOUNTS} 个账号; 单账号流峰值是否超上限: ${overCap.length ? JSON.stringify(overCap) : '否'}`)
 if (overCap.length) {
-  console.log('⚠ 单账号并发超过上限（调度异常）')
+  console.log(' 单账号并发超过上限（调度异常）')
 } else if (BROKEN_B && spilled) {
-  console.log(`✓ 账号被冷却后换号（用了 ${accountCount} 个账号，共 admit ${sessionPosts} 次）`)
+  console.log(` 账号被冷却后换号（用了 ${accountCount} 个账号，共 admit ${sessionPosts} 次）`)
 } else if (accountCount === 1) {
-  console.log(`✓ 粘性优先：请求集中在一个账号上（共 admit ${sessionPosts} 次），未用过的账号保持未启用`)
+  console.log(` 粘性优先：请求集中在一个账号上（共 admit ${sessionPosts} 次），未用过的账号保持未启用`)
 } else {
-  console.log(`✓ 换号了 ${accountCount} 个账号（并发上限/故障溢出），共 admit ${sessionPosts} 次`)
+  console.log(` 换号了 ${accountCount} 个账号（并发上限/故障溢出），共 admit ${sessionPosts} 次`)
 }
 
 globalThis.fetch = originalFetch

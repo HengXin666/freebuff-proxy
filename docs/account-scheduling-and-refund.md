@@ -1,5 +1,9 @@
 # 账号并发 / 调度最优解 / 归还点数 —— 调研与结论
 
+> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 真源: scheduling-research
+>  **本文是纠错史 + 现行结论混合体**：§3 含三个已被推翻的中间版本。只看结论请读
+> 「§3 开头读法」与 §3.7；现行真值 = **Freebucks 早退不退，付费时段内不为空闲释放**。
 > 本文是 [freebuff-proxy](../README.md) 的专题调研文档，回答三个问题 + 一个前端需求。
 > **证据等级**：`实测`（跑出来的数据）> `代码`（读一手源码得出）> `推理`（由前两者推出）> `未知`（没有证据，不当结论用）。
 > 调研日期 2026-09-13。上游随时会变，价目/限额一律以**实时探测**为准，不要把本文数字当常量。
@@ -12,7 +16,7 @@
 > - **线上服务只读探测**：`GET /v1/freebuff/status`（管理员 key，不做任何写操作）；
 > - **rotator 独立账本**：`freebuff-rotator/rotator/LEDGER.md` + `state/ledger.json`。
 >
-> ⚠️ **本文第 3 节经过四次公开自我纠错，现行第 5 版（2026-09-14）。**
+>  **本文第 3 节经过四次公开自我纠错，现行第 5 版（2026-09-14）。**
 > **现行结论（一手实测，`docs/evidence/ledger-session-units-vs-freebucks.json`）：**
 >
 > 1. `session_units` 与 `Freebucks` **不是同一笔钱的两个视角，而是两道并行闸门**——
@@ -83,7 +87,9 @@ node test/repro-concurrency.mjs sticky 3 2 16   # 3 个账号、每账号上限 
 ### 1.3 真正的限制是**点数**，不是并发
 
 上游 2026-09 改成 **Freebucks**：每模型有单价（FB/小时），session 从 admit 起**按实际占用时长**结算，
-每日池 100，太平洋午夜重置。**线上实时价目**（`实测`，2026-09-13 从 `/v1/freebuff/status` 的 `freebucks.prices` 读取）：
+每日池 **25**（官方档;走代理时实测 20），**太平洋午夜**重置
+(`freebucks.daily.resetTimeZone` 实测为 `Asia/Shanghai`，而 `rateLimitsByModel` 用
+`America/Los_Angeles` + `period: pacific_day` —— 两个字段各自成立，别混)。**线上实时价目**（`实测`，2026-09-13 从 `/v1/freebuff/status` 的 `freebucks.prices` 读取）：
 
 ```
 z-ai/glm-5.3-flash                5
@@ -97,7 +103,7 @@ openai/gpt-5.6-luna(-es)         20
 google/gemini-3.8-flash          50
 ```
 
-> ⚠️ 价目**变动过**：`rotator/LEDGER.md` 2026-09-13 早些时候实测 flash = **25**，线上同时段是 **15**；
+>  价目**变动过**：`rotator/LEDGER.md` 2026-09-13 早些时候实测 flash = **25**，线上同时段是 **15**；
 > 另有记录曾为 15。**不要把任何一次快照当常量**，一律读实时值。
 
 **算账**：池子 100、flash 单价 15/h → 一个账号一天约 **6.7 个会话小时**。
@@ -128,7 +134,9 @@ google/gemini-3.8-flash          50
 ### 2.2 为什么这么设计（不是拍脑袋）
 
 - 上游把"轮换健康账号"当**账号农场特征**（ADR-0012：*cycling healthy keys looks like account farming*）；
-- **换号 = 新起一条计费会话**：admit 按整小时单价**预扣** Freebucks，早退虽会按实际占用退还（§3.1），
+- **换号 = 新起一条计费会话**：admit 按整小时单价**预扣** Freebucks，而早退**拿不回**它
+  （ 现行真值，见 §3.7；本节早期版本写的"会按实际占用退还"**已被 2026-09-14 一手实测推翻**，
+  详见 §3 开头读法）；
 - 所以"把请求集中到尽量少的账号、用尽才换"在**点数口径**上是对的。
 
 ### 2.3 代价（就是你遇到的）
@@ -136,8 +144,10 @@ google/gemini-3.8-flash          50
 1. **高并发被串行化**：上限 2 而有 4 路在途 → 后 2 路在同一账号干等。
    它们虽未产生上游 compute，但对**客户端就是"卡了"**（首字节延迟 ≈ 前一条流的剩余时间）。
 2. **冷账号基本用不上**：除非排队超时（120s / 45s 预算），否则第 2、3 个号永远不动。
-3. **空闲释放放大了这个效应**：`idle_release_sec`（默认 60s）会频繁早退会话（退款见 §3.1——会退，所以这条现在是**收益**），
-   老会话更容易在"重建窗口"里命中排队 → 抢锁更激烈、尾延迟更差。
+3. **空闲释放曾经放大这个效应**：`idle_release_sec`（默认 60s）会频繁早退会话。
+    本节早期版本把这条写成"**收益**（因为会退 Freebucks）"——**已被推翻**：早退不退，
+   所以频繁早退是**纯亏损**。现行实现在**付费时段内一律不释放**（见 §3.7 与
+   `.agents/notes/implemented/architecture/2026-09-14-paid-hour-hold.md`）。
 
 ### 2.4 历史：项目**曾经**有你要的那个模式
 
@@ -182,9 +192,18 @@ google/gemini-3.8-flash          50
 
 ---
 
-## 3. 归还（关闭会话 / 早退 DELETE）到底退不退 Freebucks？—— ✅ 会退（2026-09-13 反转）
+## 3. 归还（关闭会话 / 早退 DELETE）到底退不退 Freebucks？——  **不退**（2026-09-14 一手实测定案）
 
-### 3.1 结论
+> **本节读法（2026-10-05 整理）**：本文经历了三次结论反复，**只有最后一版是现行真值**。
+> - §3.1 / §3.2 / §3.4 / §3.5 **以及 §2.2 / §2.3** 记录的是**已被推翻的中间版本**（2026-09-13 的"会退"）与其纠错过程，
+>   **保留是为了防止后人重犯**，不是现行口径。
+> - §3.1 末尾与 §3.3 / §3.6 / §3.7 是**现行口径**。
+> - 一句话现行真值：**`session_units` 当场按比例退；Freebucks 不退**（只回
+>   `freebucksRefundPending`，重开吃 `rate_limited` + `freebucksShortfall`）。
+>   所以策略是**付费时段内不为空闲释放**。
+> - 决策记录：`.agents/notes/implemented/architecture/2026-09-14-paid-hour-hold.md`。
+
+### 3.1 结论（ 本节前半是 2026-09-13 的中间版本，末尾有 09-14 的反转）
 
 > **分开看：`session_units` 当场就退（本仓库一手实测）；Freebucks 仍只回 pending、至今未观测到到账。**
 > 一笔会话**两本账同时各扣一次**——`upstage/solar-pro4` 一次 admit 让 units `0.1→1.1` **且**
@@ -192,7 +211,7 @@ google/gemini-3.8-flash          50
 > 而 Freebucks 侧只回 `freebucksRefundPending: true`。
 > 原始记录：`docs/evidence/ledger-session-units-vs-freebucks.json`。
 >
-> ⚠️ **2026-09-13 当晚的真实上游复测结果（必须一并读）：** 三臂（占用 2s / 3min / 50min，
+>  **2026-09-13 当晚的真实上游复测结果（必须一并读）：** 三臂（占用 2s / 3min / 50min，
 > 模型 5 FB/h）与一条线上真实会话（占用 53min，15 FB/h）**全部**只拿到
 > `{"status":"ended","freebucksRefundPending":true}`（**无金额字段**）；那条 53 分钟的会话
 > 拿到的是**终态** `freebucksRefund: 0`（expected 1.66）。观测窗口最长约 10 分钟，**未跨过
@@ -208,8 +227,10 @@ google/gemini-3.8-flash          50
 > **它不是「不退」**。要拿到金额必须用**同一个 instanceId** 重放 DELETE，且结算窗口可能
 > 跨到会话窗口结束才落地。
 >
-> **所以「早退省钱」是成立的**：挂着的空闲会话在按小时计价，早退把没用上的时间换回点数。
-> 策略按此调整（见 §3.5、§3.7）。
+> ** 但「早退省钱」不成立（2026-09-14 一手实测推翻本节）**：挂着的空闲会话**不在**
+> 按分钟计价——admit 已买断整小时，这一小时内继续用**边际成本为 0**；早退**拿不回** Freebucks，
+> 且重开要吃 `rate_limited` + `freebucksShortfall`。现行策略是**付费时段内不为空闲释放**
+> （见 §3.7 与 `.agents/notes/implemented/architecture/2026-09-14-paid-hour-hold.md`）。
 
 #### 一笔会话的两本账：**两道并行闸门**（不是同一笔钱，而是一起扣）
 
@@ -222,8 +243,8 @@ google/gemini-3.8-flash          50
 | 池标识 | `pool: limited` / `poolLabel: Daily` | `pool: freebucks` |
 | 本账号额度 | limit **6**（可为小数） | limit **25** + balance |
 | admit 预扣 | **+1.0**（整条会话单位） | **整小时单价**（`freebucks.prices[m]`） |
-| 早退是否退 | **✅ 当场按实际占用比例重算退还**（实测 `1.1 → 0.2`） | ⚠️ 回 `freebucksRefundPending`，**至今未观测到金额落地** |
-| 是否上游拒付判据 | ❌ 否（units 充足时仍可能被拒） | ✅ **是**（`freebucksShortfall` 是 `rate_limited` 的明示理由） |
+| 早退是否退 | ** 当场按实际占用比例重算退还**（实测 `1.1 → 0.2`） |  **不退**（2026-09-14 一手实测定案：只回 `freebucksRefundPending`，重开吃 `rate_limited`+`freebucksShortfall`） |
+| 是否上游拒付判据 |  否（units 充足时仍可能被拒） |  **是**（`freebucksShortfall` 是 `rate_limited` 的明示理由） |
 | 在调度里的角色 | 时长闸门 `units_exhausted` | 货币闸门 `freebucks_exhausted` |
 
 #### 为什么我们一度得出「不退」（这次误判的机理）
@@ -332,7 +353,15 @@ Amount`` 三态 + 「A zero receipt is a real receipt」**——与我们当年�
 > 4. 结论反转时，**策略也要跟着翻**：`idle_release_sec` 的方向、`spread` 模式的划算与否、
 >    「少 admit 才是唯一省钱路径」的整套推理，全部依赖旧前提。
 
-### 3.5 策略变更（**本次调研的真正产出**）
+### 3.5 策略变更（**已被 2026-09-14 一手实测推翻，保留作纠错记录**）
+
+>  **本节结论已作废**。下面"早退会退 Freebucks / 空闲释放重新变回省钱手段"的说法
+> 已被 2026-09-14 的一手实测**直接证伪**：账号 `lolid8faw4er` / 模型 `upstage/solar-pro4`
+> （纯 Freebucks 计费）admit 后 `rem 5→0`，25s 后 DELETE 只回
+> `{freebucksRefundPending:true}`（无金额），+20/+40/+60/+120s 重放 DELETE ×2 仍无金额，
+> **重开同模型直接吃 `rate_limited` + `freebucksShortfall`** —— 钱确实没了。
+> 现行结论见 §3.7 与 `.agents/notes/implemented/architecture/2026-09-14-paid-hour-hold.md`。
+> 本节原文保留，因为它记录了"把 `pending` 误读成"会退""这一次误判是怎么发生的。
 
 既然早退**会**退还 Freebucks，那么：
 
@@ -355,7 +384,7 @@ Amount`` 三态 + 「A zero receipt is a real receipt」**——与我们当年�
 
 ### 3.6 仍未完全确定的部分（诚实标注）
 
-> ⚠️ **这是本文最重要的一节。** §3.1 里 **`session_units` 当场按比例退**是**本仓库一手实测**
+>  **这是本文最重要的一节。** §3.1 里 **`session_units` 当场按比例退**是**本仓库一手实测**
 > （`0.1→1.1→0.2`，见 `docs/evidence/ledger-session-units-vs-freebucks.json`）；
 > 但 **Freebucks 侧「早退是否真退钱」仍然未证实**——至今**没有观测到任何一笔金额落地**。
 >
@@ -382,27 +411,30 @@ Amount`` 三态 + 「A zero receipt is a real receipt」**——与我们当年�
    （可以收工，不必再问）。
 
 
-### 3.7 建议值（反转后）
+### 3.7 建议值（**2026-09-14 实测定案后**）
 
 | 设置 | 原值 | 现值 | 理由 |
 | --- | --- | --- | --- |
-| `session.idle_release_sec` | ~~600~~ | **60s** | 早退会退还未用时长，挂着才是花钱（控制台按账号池实时推荐） |
+| `session.idle_release_sec` | ~~600~~ | **60s** |  语义已改：它是**付费时段结束之后**的空闲释放时长（付费时段内一律不释放）。不是"早退省钱"——早退拿不回 Freebucks |
 | `session.free_model_re_admit_lead_sec` | 60 | 保持 60 | 避免请求打到即将过期的会话上（必要） |
-| `limits.max_new_sessions_per_request` | 2 | 保持 2 | 仍不该无谓换号，但不再是「一换就亏一整小时」 |
+| `limits.max_new_sessions_per_request` | 2 | 保持 2 | 仍不该无谓换号（换号 = 新买一条整小时计费会话） |
 | `accountMaxConcurrency` | 2 | 1~4 按场景 | 见 §1.2；同一 instance 并发 chat 不额外扣费 |
 
-**控制台推荐值算法也已反向重算**（`dashboard/app.js` 的 `idleReleaseAdvice`）：
+**控制台推荐值算法也已随实测重算**（`dashboard/app.js` 的 `idleReleaseAdvice`）：
 
 | 账号池状态 | 推荐 | 直觉 |
 | --- | --- | --- |
 | 无活跃会话 | 60s | 无从判断，用默认值 |
-| 活跃模型数 ÷ 账号数 **≥ 0.8** | **60s** | 槽位最紧，尽快释放（同时把未用时长退回来） |
+| 活跃模型数 ÷ 账号数 **≥ 0.8** | **60s** | 槽位最紧，付费时段结束后尽快释放腾槽位 |
 | 活跃模型数 ÷ 账号数 **≤ 0.5** | **300s** | 模型集中、热会话复用充分，可容忍稍长的空闲 |
 | 其余 | **120s** | 平衡点 |
 
-**护栏（防回归，已反向）**：`test/smoke.mjs` 现在断言 `idleReleaseSec` 默认 **60s**，
-且 `REFUND-COPY` 扫描**「早退不退」这类旧说法**——谁再把它写回来，测试即失败；
+**护栏（防回归）**：`test/smoke.mjs` 断言 `idleReleaseSec` 默认 **60s**，
+且 `REFUND-COPY` 全仓扫描**「早退能退 Freebucks / 挂着空闲才花钱」这类已被证伪的说法**；
 同时断言 `sweepPendingRefunds` 与 `serve.js` 的周期调用必须存在（少了它就等于放弃那笔预扣）。
+
+>  该守卫当前**只覆盖一种词序**（`按实际占用退还 Freebucks`）。`README.md` 里的
+> 「按实际占用**时长**退回」曾长期逃过它 —— 2026-10-05 已就地改正，并把该句补进扫描词表。
 
 
 
@@ -526,17 +558,17 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 
 | # | 文件 | 改动 | 状态 |
 | --- | --- | --- | --- |
-| 1 | `src/config.js` / `src/web/settings-store.js` / `config.example.yaml` | `session.idle_release_sec` 默认值 **600 → 60** | ✅ |
-| 2 | `dashboard/app.js` | 文案改为「早退按实际占用退还未用时长」，并给出 pending 的准确含义 | ✅ |
-| 3 | `dashboard/app.js` | `idleReleaseAdvice` 推荐值**反向重算**（60 / 120 / 300s） | ✅ |
-| 4 | `src/*.js` + `docs/*.md` + `config.example.yaml` + `README.md` + `bin/pricing.js` | 清掉「早退不退 / 整小时买断」的旧口径 | ✅ |
-| 5 | `test/smoke.mjs` | `idleReleaseSec` 断言改回 **60s** | ✅ |
-| 6 | `test/smoke.mjs` | `REFUND-COPY` **反向**：现在钉死「早退不退」这类旧说法 | ✅ |
-| 7 | `src/session-handles.js` | **持久化待结算退款队列** + `sweepPendingRefunds()` | ✅ |
-| 8 | `src/session-manager.js` | `_replayPendingRefund()` + 30s 追问定时器（1 小时窗口，pending 时入队） | ✅ |
-| 9 | `bin/serve.js` | 5 分钟一次的常驻扫尾（有界 30s 预算、unref） | ✅ |
-| 10 | `test/smoke.mjs` | 回归：断言 `sweepPendingRefunds` 与 serve.js 的周期调用存在 | ✅ |
-| 11 | `test/repro-refund.mjs` | 头部标注：默认参数（3 分钟占用）**不足以区分竞争假设**，需 55 分钟级占用 | ✅ |
+| 1 | `src/config.js` / `src/web/settings-store.js` / `config.example.yaml` | `session.idle_release_sec` 默认值 **600 → 60** |  |
+| 2 | `dashboard/app.js` | 文案改为「早退按实际占用退还未用时长」，并给出 pending 的准确含义 |  |
+| 3 | `dashboard/app.js` | `idleReleaseAdvice` 推荐值**反向重算**（60 / 120 / 300s） |  |
+| 4 | `src/*.js` + `docs/*.md` + `config.example.yaml` + `README.md` + `bin/pricing.js` | 清掉「早退不退 / 整小时买断」的旧口径 |  |
+| 5 | `test/smoke.mjs` | `idleReleaseSec` 断言改回 **60s** |  |
+| 6 | `test/smoke.mjs` | `REFUND-COPY` **反向**：现在钉死「早退不退」这类旧说法 |  |
+| 7 | `src/session-handles.js` | **持久化待结算退款队列** + `sweepPendingRefunds()` |  |
+| 8 | `src/session-manager.js` | `_replayPendingRefund()` + 30s 追问定时器（1 小时窗口，pending 时入队） |  |
+| 9 | `bin/serve.js` | 5 分钟一次的常驻扫尾（有界 30s 预算、unref） |  |
+| 10 | `test/smoke.mjs` | 回归：断言 `sweepPendingRefunds` 与 serve.js 的周期调用存在 |  |
+| 11 | `test/repro-refund.mjs` | 头部标注：默认参数（3 分钟占用）**不足以区分竞争假设**，需 55 分钟级占用 |  |
 
 #### 推荐值算法（本次已反向重算）
 
@@ -547,7 +579,7 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 | 活跃模型数 / 账号数 **≤ 0.5** | **300s** | 模型集中、热会话复用充分，可容忍稍长空闲 |
 | 其余 | **120s** | 平衡点 |
 
-#### 实施过程中发现的两个「不说就不知道」的坑（⚠️ 第 2 条现在**反转了**）
+#### 实施过程中发现的两个「不说就不知道」的坑（ 第 2 条现在**反转了**）
 
 1. **推荐值拿不到数据会静默退化成默认值。** `renderProxySettings` 只拉 `/api/proxy`，
    而它的 `accounts` 字段只回 `key/id/email/proxy`，**不含 `session.model`**。于是
@@ -564,7 +596,7 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 
 
 
-> ⚠️ **`AGENTS.md` 冲突提示**：AGENTS.md 写着"**绝不主动把并发平摊到多个账号**"、
+>  **`AGENTS.md` 冲突提示**：AGENTS.md 写着"**绝不主动把并发平摊到多个账号**"、
 > "**并发上限是'溢出'阈值而非'换号'阈值**"。本次新增的 `spread` 模式与该表述冲突——
 > `AGENTS.md` 是最高优先级约定，**修改它需要用户明确同意**。因此实现上 `spread` **默认关闭**，
 > 与现约定保持一致；是否改 AGENTS.md 由用户决定。

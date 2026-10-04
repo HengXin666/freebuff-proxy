@@ -1,5 +1,7 @@
 # 代码质量全景 — freebuff-proxy
 
+> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 真源: code-quality-landscape
 > 生成于 2026-10-04。按 `hx-code-quality` 的取证 → 本地 → 远程 → 全景顺序产出。
 > 本文件描述**现状**；具体决策与放弃的选项记在
 > `.agents/notes/implemented/architecture/2026-10-03-upstream-contract-single-source.md`
@@ -15,6 +17,12 @@
 已存在且有效的防线：类型检查、冒烟、i18n 红线、note 门禁、镜像启动门禁、
 发版版本号门禁、pre-commit。
 
+>  **2026-10-05 更正**：下面这段说「端点头名分散在两个实现里各写一份」**已不成立**。
+> 主服务现已**经 `official-rpc` 委托 `cli-bridge` 执行**，官方形态**只有一份实现**，
+> 主服务不再自己拼上游请求（见 `README.md`「上游请求链路」节、
+> `.agents/notes/implemented/architecture/2026-10-03-official-channel-rpc-delegation.md`）。
+> 本文件其余「现状」描述仍以 2026-10-04 为准，**结构类结论请以 `src/` 为准**。
+
 本轮补的是**此前完全没有的那一层**：上游契约的单一真源与机器对账。
 这是本项目最该被结构约束的地方 —— 因为上游端点/头名分散在两个实现
 （主服务 `src/` 与官方形态实现 `cli-bridge/`）里各写一份。
@@ -28,7 +36,7 @@
 | `typecheck`（tsc --noEmit） | package.json | 已接线 CI |
 | `test:smoke`（mock 上游） | test/smoke.mjs 7815 行 | 覆盖调度/冷却/换号/代理 |
 | i18n 红线 | `.github/workflows/docker-image.yml` 的 `i18n` job + `scripts/check-i18n.mjs` | 三条判据钉死多语言退化 |
-| 镜像启动门禁 | `image-boot` job + `scripts/pipeline-image-test.mjs` | 真实起容器 + 打坏 data 验证 |
+| 镜像启动门禁 | `image-boot` job + `scripts/ci/pipeline-image-test.mjs` | 真实起容器 + 打坏 data 验证 |
 | 发版版本号门禁 | `check-version` job | tag 与 package.json 必须一致 |
 | note 门禁 | `agent-notes.yml` + pre-commit | 受保护改动必须带决策记录 |
 | pre-commit | `.git/hooks/pre-commit` | 已装，跑 format/backlinks/coverage（本轮追加契约门禁） |
@@ -42,7 +50,7 @@
 | 真源 | `src/upstream/upstream-contract.js` | 端点与头名的**唯一定义处** |
 | 快照 | `docs/reverse/upstream-contract.json` | 从抓包**生成**的客户端真值（7 端点 / 19 头 / 顺序） |
 | 门禁 | `scripts/check-upstream-contract.mjs` | 四条判据对账 |
-| 生成器 | `scripts/gen-upstream-contract.mjs` | 重建快照（上游变更后第一步） |
+| 生成器 | `scripts/catalog/gen-upstream-contract.mjs` | 重建快照（上游变更后第一步） |
 
 ### 四条判据（每条都有判据 + 检查点 + 自证）
 

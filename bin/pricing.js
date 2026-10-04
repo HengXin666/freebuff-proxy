@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 /**
- * 打印上游 Freebuff 的实时计费 / 定价表（Freebucks）。
+ - 打印上游 Freebuff 的实时计费 / 定价表(Freebucks).
  *
- * 为什么需要这个命令：**官方没有一份可引用的静态价格表**。上游把定价放在
- * 每次 session 响应的 `freebucks.prices` 里（模型 → N Freebucks/小时），
- * 这是唯一真源；网页版定价页并不公开这份「按模型」的价目。
- * 所以这里直接读上游实时数据，并把「今日池余额能买多少时长」折算出来，
- * 等价于把控制台的额度列搬到命令行。
+ - 为什么需要这个命令:官方没有一份可引用的静态价格表.上游把定价放在
+ - 每次 session 响应的 freebucks.prices 里(模型 → N Freebucks/小时),
+ - 这是唯一真源;网页版定价页并不公开这份[按模型]的价目.
+ - 所以这里直接读上游实时数据,并把[今日池余额能买多少时长]折算出来,
+ - 等价于把控制台的额度列搬到命令行.
  *
- * 只读：走 GET /api/v1/freebuff/session（探测），**不创建 session、不消耗额度**。
+ - 只读:走 GET /api/v1/freebuff/session(探测),不创建 session,不消耗额度.
  *
- * 用法：
- *   npm run pricing                 # 人类可读的价目表
- *   npm run pricing -- --json       # 机器可读（脚本/CI 用）
- *   node bin/pricing.js --config /path/to/config.yaml
+ - 用法:
+ - npm run pricing                 # 人类可读的价目表
+ - npm run pricing -- --json       # 机器可读(脚本/CI 用)
+ - node bin/pricing.js --config /path/to/config.yaml
  */
 import process from 'node:process'
 import { loadConfig } from '../src/config.js'
@@ -27,7 +27,7 @@ function parseConfigPath(argv) {
   return undefined
 }
 
-/** 把分钟数写成「1 小时 5 分」这类人话；不足 1 分钟显示 <1 分钟。 */
+/** 把分钟数写成[1 小时 5 分]这类人话;不足 1 分钟显示 <1 分钟. */
 function fmtDuration(minutes) {
   if (!Number.isFinite(minutes) || minutes < 0) return '—'
   if (minutes === 0) return '0 分钟'
@@ -43,7 +43,7 @@ function fmtNum(n) {
   return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, '')
 }
 
-/** 本地时区的可读时间（上游 resetAt 是 ISO，别让用户自己算时区）。 */
+/** 本地时区的可读时间(上游 resetAt 是 ISO,别让用户自己算时区). */
 function fmtTime(iso) {
   if (!iso) return '—'
   const t = Date.parse(iso)
@@ -67,7 +67,7 @@ async function main() {
   const argv = process.argv.slice(2)
   const asJson = argv.includes('--json')
   const config = loadConfig(parseConfigPath(argv))
-  // --json 时压掉日志，保证 stdout 是纯 JSON，可直接被管道消费
+  // --json 时压掉日志,保证 stdout 是纯 JSON,可直接被管道消费
   configureLogger(asJson ? { ...config.logging, level: 'error' } : config.logging)
 
   let ctx
@@ -82,7 +82,7 @@ async function main() {
 
   let session
   try {
-    // GET 探测：不创建 session、不占额度（与控制台「检测」同一路径）
+    // GET 探测:不创建 session,不占额度(与控制台[检测]同一路径)
     session = await ctx.upstream.freebuffSession('GET')
   } catch (err) {
     console.error('上游探测失败：', err instanceof Error ? err.message : err)
@@ -117,7 +117,7 @@ async function main() {
     }))
     .sort((a, b) => b.price - a.price || a.model.localeCompare(b.model))
 
-  // 计次模型（有 rateLimitsByModel 但不在 prices 里）：不走 Freebucks，按次/日限流
+  // 计次模型(有 rateLimitsByModel 但不在 prices 里):不走 Freebucks,按次/日限流
   const counted = Object.keys(session?.rateLimitsByModel || {}).filter((m) => !(m in prices))
 
   const payload = {
@@ -169,9 +169,9 @@ async function main() {
     }
     console.log()
   }
-  // 参考模型：优先用 README 常见的 deepseek flash，否则取最便宜的有价模型。
-  // 刻意不用 /flash/ 之类模糊匹配——它会命中 gemini-3.8-flash 这种最贵的，
-  // 报出来的「今日池约等于多久」会是最悲观的值，反而误导读者。
+  // 参考模型:优先用 README 常见的 deepseek flash,否则取最便宜的有价模型.
+  // 刻意不用 /flash/ 之类模糊匹配——它会命中 gemini-3.8-flash 这种最贵的,
+  // 报出来的[今日池约等于多久]会是最悲观的值,反而误导读者.
   const ref =
     rows.find((r) => r.model === 'deepseek/deepseek-v4-flash' && r.price > 0) ||
     [...rows].filter((r) => r.price > 0).sort((a, b) => a.price - b.price)[0]

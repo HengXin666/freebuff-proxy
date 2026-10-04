@@ -1,6 +1,6 @@
-# 05 — 思考强度（reasoning effort）
+# 05 — 思考强度(reasoning effort)
 
-## 5.1 官方枚举（源码 `orchestrator.js:120829`）
+## 5.1 官方枚举(源码 `orchestrator.js:120829`)
 
 ```js
 var REASONING_EFFORTS = ["minimal","low","medium","high","xhigh","max","ultra"];
@@ -8,7 +8,7 @@ var DEFAULT_REASONING_EFFORT = "high";
 var BYOK_REASONING_EFFORTS = ["low","medium","high"];   // BYOK 只有三档
 ```
 
-目录里每个模型行自带可用档位与默认值（`orchestrator.js:134790`）：
+目录里每个模型行自带可用档位与默认值(`orchestrator.js:134790`):
 
 ```js
 freebuffCatalogRowSchema = {
@@ -20,8 +20,8 @@ freebuffCatalogRowSchema = {
 }
 ```
 
-**所以"支持哪些档位"是每模型不同的，必须从 catalog 读**，不能硬编码。
-本机实测（limited 档目录）示例：
+**所以"支持哪些档位"是每模型不同的,必须从 catalog 读**,不能硬编码.
+本机实测(limited 档目录)示例:
 
 | 模型 | efforts | defaultEffort |
 |---|---|---|
@@ -32,28 +32,28 @@ freebuffCatalogRowSchema = {
 | GPT-6.1 Sol | `["low","medium","high"]` | `medium` |
 | MiMo 3 Flash / Qwen4 Flash / Solar Pro 4 | 未声明 | — |
 
-未声明 `efforts` 的模型：不要主动发 `reasoning_effort`。
+未声明 `efforts` 的模型:不要主动发 `reasoning_effort`.
 
 ## 5.2 传输方式
 
-在 **请求体顶层**发 `reasoning_effort`（OpenAI 兼容字段名）。
-源码 `orchestrator.js:103278` 的缓存调试归一化列出了 provider 请求体字段全集，
-其中就含 `reasoning_effort`：
+在 **请求体顶层**发 `reasoning_effort`(OpenAI 兼容字段名).
+源码 `orchestrator.js:103278` 的缓存调试归一化列出了 provider 请求体字段全集,
+其中就含 `reasoning_effort`:
 
 ```js
 ["model","messages","tools","tool_choice","response_format",
  "reasoning","reasoning_effort","verbosity","provider"]
 ```
 
-即上游认识两个思考字段：`reasoning`（对象式）与 `reasoning_effort`（字符串式）。
+即上游认识两个思考字段:`reasoning`(对象式)与 `reasoning_effort`(字符串式).
 
-⚠️ **只能发一个**：仓库 `src/proxy.js` 的 `normalizeReasoningFields(body)`
+ **只能发一个**:仓库 `src/proxy.js` 的 `normalizeReasoningFields(body)`
 注释写得很直白 —— "One reasoning field only — avoids Freebuff default +
-client dual fields."。同时发两个会与上游默认值打架。
+client dual fields.".同时发两个会与上游默认值打架.
 
-## 5.3 每模型的默认档（源码 `orchestrator.js:124816-124988`）
+## 5.3 每模型的默认档(源码 `orchestrator.js:124816-124988`)
 
-部分模型在官方定义里写死默认档，例如：
+部分模型在官方定义里写死默认档,例如:
 
 ```js
 FREEBUFF_GPT_5_6_LUNA_REASONING_EFFORT   // GPT-5.6 Luna
@@ -64,9 +64,9 @@ OX_ALPHA_REASONING_EFFORTS    = ["low","high","max"]
 GLM_V53_FLASH_REASONING_EFFORTS = ["low","high","max"]
 ```
 
-## 5.4 与"mission effort"的区别（别混淆）
+## 5.4 与"mission effort"的区别(别混淆)
 
-源码里另有一套 **任务投入度**，与思考强度是**两个不同维度**：
+源码里另有一套 **任务投入度**,与思考强度是**两个不同维度**:
 
 ```js
 var MISSION_EFFORT_LEVELS = [1,2,3,4,5], DEFAULT_MISSION_EFFORT = 3;
@@ -80,11 +80,11 @@ MISSION_TIME_EFFORT_LABELS = {
 }
 ```
 
-- `reasoning_effort` = 模型**每条回复**的思考深度（low/medium/high/...）
-- `mission effort` = 整个**任务**允许花多少分钟（1~5 级）
+- `reasoning_effort` = 模型**每条回复**的思考深度(low/medium/high/...)
+- `mission effort` = 整个**任务**允许花多少分钟(1~5 级)
 
 ## 5.5 代理侧要做的事
 
-1. 从 catalog 读 `efforts` / `defaultEffort`，模型未声明则不发该字段。
-2. 客户端传了值 → 校验它在该模型 `efforts` 里；不在则回落到 `defaultEffort`。
-3. 发之前先 `normalizeReasoningFields`，保证只剩一个思考字段。
+1. 从 catalog 读 `efforts` / `defaultEffort`,模型未声明则不发该字段.
+2. 客户端传了值 → 校验它在该模型 `efforts` 里;不在则回落到 `defaultEffort`.
+3. 发之前先 `normalizeReasoningFields`,保证只剩一个思考字段.

@@ -1,17 +1,17 @@
-/* Freebuff Proxy 控制台 — 多语言支持（零依赖）
+/* Freebuff Proxy 控制台 — 多语言支持(零依赖)
  *
- * 设计约束（项目铁律：轻量优先）：
- *   - 无构建步骤、无第三方库：字典是普通对象，t() 是普通函数。
- *   - 后端零改动：语言是纯前端偏好，存 localStorage，不进 /data、不进 API。
- *   - 新增文案**必须**走 t('key')，禁止直接写中文字面量 ——
- *     由 scripts/check-i18n.mjs 在 CI 里强制（见 .github/workflows/docker-image.yml
- *     的 i18n job）。红线内容：
- *       1) dashboard/app.js 里出现硬编码 CJK 字面量 → 失败
- *       2) 各语言词条 key 与 zh-CN 不一致（缺/多） → 失败
- *       3) 代码里用到但字典里没有的 key → 失败
+ - 设计约束(项目铁律:轻量优先):
+ - - 无构建步骤,无第三方库:字典是普通对象,t() 是普通函数.
+ - - 后端零改动:语言是纯前端偏好,存 localStorage,不进 /data,不进 API.
+ - - 新增文案必须走 t('key'),禁止直接写中文字面量 ——
+ - 由 scripts/check-i18n.mjs 在 CI 里强制(见 .github/workflows/docker-image.yml
+ - 的 i18n job).红线内容:
+ - 1) dashboard/app.js 里出现硬编码 CJK 字面量 → 失败
+ - 2) 各语言词条 key 与 zh-CN 不一致(缺/多) → 失败
+ - 3) 代码里用到但字典里没有的 key → 失败
  *
- * 语种：zh-CN（基准）/ en。
- * 基准语言是 zh-CN：新增 key 先写进 zh-CN，其它语种缺失会被红线拦下。
+ - 语种:zh-CN(基准)/ en.
+ - 基准语言是 zh-CN:新增 key 先写进 zh-CN,其它语种缺失会被红线拦下.
  */
 
 export const LOCALES = ['zh-CN', 'en']
@@ -19,23 +19,25 @@ export const DEFAULT_LOCALE = 'zh-CN'
 const STORAGE_KEY = 'fb_locale'
 
 /**
- * 语种**自己**的名字（语言切换器里显示）。
+ - 语种自己的名字(语言切换器里显示).
  *
- * ⚠️ 故意**不翻译**：切换器必须让每个人都能认出自己的语言
- * （中文用户看 "简体中文"、英文用户看 "English"），把 "English" 翻成
- * "英文" 反而害了不懂当前界面语言的用户。这是语言列表的通行做法。
- * 放在 i18n.js 而非 app.js：它是字典元数据，且红线只扫 app.js 的界面文案。
+ - 故意不翻译:切换器必须让每个人都能认出自己的语言
+ - (中文用户看 "简体中文",英文用户看 "English"),把 "English" 翻成
+ - "英文" 反而害了不懂当前界面语言的用户.这是语言列表的通行做法.
+ - 放在 i18n.js 而非 app.js:它是字典元数据,且红线只扫 app.js 的界面文案.
  */
 export const LOCALE_LABELS = {
   'zh-CN': '简体中文',
   en: 'English',
 }
 
-/** 字典：key → { 'zh-CN': ..., en: ... } */
+/** 字典:key → { 'zh-CN': ..., en: ... } */
 const DICT = {
   // ---- 通用 ----
   'common.ok': { 'zh-CN': '正常', en: 'OK' },
   'common.cancel': { 'zh-CN': '取消', en: 'Cancel' },
+  'hooks.notFunction': { 'zh-CN': 'registerHooks: {name} 不是函数(传进来的是 {type})', en: 'registerHooks: {name} is not a function (got {type})' },
+  'hooks.notRegistered': { 'zh-CN': '跨视图回调未注册: {name}(检查装配层的 registerHooks)', en: 'Cross-view callback not registered: {name} (check registerHooks wiring)' },
   'common.save': { 'zh-CN': '保存', en: 'Save' },
   'common.delete': { 'zh-CN': '删除', en: 'Delete' },
   'common.refresh': { 'zh-CN': '刷新', en: 'Refresh' },
@@ -122,7 +124,7 @@ const DICT = {
   'account.waitingCallback': { 'zh-CN': '等待登录回调…', en: 'Waiting for the sign-in callback…' },
   'account.waitingCallbackPolling': { 'zh-CN': '等待登录回调…（服务端正在轮询）', en: 'Waiting for the sign-in callback… (server is polling)' },
   'account.loginStartFailed': { 'zh-CN': '发起登录失败', en: 'Failed to start sign-in' },
-  // 按 err.code 给出的可操作引导（不再是只能看 AbortError 原文）
+  // 按 err.code 给出的可操作引导(不再是只能看 AbortError 原文)
   'account.loginHintTimeout': {
     'zh-CN': '上游响应超时（已自动重试一次）。请重试；若持续超时，检查到 freebuff.com 的链路或被墙情况。',
     en: 'Upstream timed out (one retry already attempted). Please retry; if it keeps timing out, check the route to freebuff.com.',
@@ -147,10 +149,10 @@ const DICT = {
   },
   'account.refundSuffix': { 'zh-CN': '，退款 {n} FB', en: ', refunded {n} FB' },
   'account.interrupted': { 'zh-CN': '（在途回复被中断）', en: ' (in-flight reply interrupted)' },
-  'account.sessionClosed': { 'zh-CN': '✅ 已关闭 {email} 的会话{extra}{cut}', en: '✅ Closed the session of {email}{extra}{cut}' },
+  'account.sessionClosed': { 'zh-CN': ' 已关闭 {email} 的会话{extra}{cut}', en: ' Closed the session of {email}{extra}{cut}' },
   'account.sessionCloseFailed': {
-    'zh-CN': '⚠️ 会话未关闭成功：{msg}（句柄已记录，服务重启时会自动重试退款）',
-    en: '⚠️ Could not close the session: {msg} (the handle is recorded; the refund is retried on service restart)',
+    'zh-CN': ' 会话未关闭成功：{msg}（句柄已记录，服务重启时会自动重试退款）',
+    en: ' Could not close the session: {msg} (the handle is recorded; the refund is retried on service restart)',
   },
   'account.upstreamRejected': { 'zh-CN': '上游拒绝', en: 'upstream rejected' },
   'account.cooldownCleared': { 'zh-CN': '已解除冷却', en: 'Cooldown cleared' },
@@ -206,7 +208,7 @@ const DICT = {
     en: 'Close this upstream session (immediate early DELETE, stops time-based billing; waits for an in-flight reply to finish first)',
   },
   'account.clearCooldownTitle': { 'zh-CN': '解除冷却', en: 'Clear cooldown' },
-  // 按钮 title（无变量）；弹窗标题用 account.credentialTitle（带 {email}）
+  // 按钮 title(无变量);弹窗标题用 account.credentialTitle(带 {email})
   'account.credentialButtonTitle': { 'zh-CN': '查看/复制凭证', en: 'View / copy credentials' },
   'account.deleteTitle': { 'zh-CN': '删除账号', en: 'Delete account' },
   'account.lastUsed': { 'zh-CN': '最近使用', en: 'Recently used' },
@@ -222,15 +224,15 @@ const DICT = {
   'account.probeRateLimited': { 'zh-CN': '限流', en: 'Rate limited' },
   'account.probeRateLimitedTip': { 'zh-CN': '账号限流/额度：{msg}', en: 'Account rate / quota limited: {msg}' },
   'account.probeInvalidCred': { 'zh-CN': '凭证失效', en: 'Credentials rejected' },
-  // ⚠️ tip 必须带**上游原文 + 怎么修**：只写"凭证无效"用户只能猜，
-  // 而"重新登录"与"等等再看"是两条成本完全不同的动作。
+  //  tip 必须带上游原文 + 怎么修:只写"凭证无效"用户只能猜,
+  // 而"重新登录"与"等等再看"是两条成本完全不同的动作.
   'account.probeInvalidCredTip': {
     'zh-CN': '上游不认这个 token（{msg}）。处置：用浏览器重新登录该账号并重新导入凭据；这不是限流，等待不会恢复。',
     en: 'Upstream rejected this token ({msg}). Fix: sign in again in a browser and re-import the credential; this is not rate limiting — waiting will not help.',
   },
   'account.probeFailed': { 'zh-CN': '探测失败', en: 'Probe failed' },
-  // 付费时段内会话只服务它绑定的那个模型（issue #24）
-  // ── 上游会话清单（跨部署可见）────────────────────────────────
+  // 付费时段内会话只服务它绑定的那个模型(issue #24)
+  // ── 上游会话清单(跨部署可见)────────────────────────────────
   'account.upstreamInventory': {
     'zh-CN': '上游占用中（{n}）— 含其它部署建的会话',
     en: 'Held upstream ({n}) — includes sessions from other deployments',
@@ -247,18 +249,18 @@ const DICT = {
     en: 'This hour is already paid for “{model}” (until {until}). Switching to another model now voids the paid hour and cannot be undone, so the proxy will not switch — keep using this model, or switch after the window ends.',
   },
   'account.refreshed': { 'zh-CN': '账号状态已刷新', en: 'Account status refreshed' },
-  'account.probeOk': { 'zh-CN': '✅ {email} 可用 · {n} 个模型', en: '✅ {email} available · {n} models' },
+  'account.probeOk': { 'zh-CN': ' {email} 可用 · {n} 个模型', en: ' {email} available · {n} models' },
   'account.probeModelList': { 'zh-CN': '：{list}', en: ': {list}' },
   'account.probeAbnormal': {
-    'zh-CN': '⚠️ {email} 检测异常：{label} — {tip}',
-    en: '⚠️ {email} check abnormal: {label} — {tip}',
+    'zh-CN': ' {email} 检测异常：{label} — {tip}',
+    en: ' {email} check abnormal: {label} — {tip}',
   },
   'account.probeFail': { 'zh-CN': '检测失败: {msg}', en: 'Check failed: {msg}' },
-  'account.refreshOk': { 'zh-CN': '✅ {n} 个正常', en: '✅ {n} healthy' },
-  'account.refreshBanned': { 'zh-CN': '⛔ {n} 个已封禁', en: '⛔ {n} banned' },
+  'account.refreshOk': { 'zh-CN': ' {n} 个正常', en: ' {n} healthy' },
+  'account.refreshBanned': { 'zh-CN': ' {n} 个已封禁', en: ' {n} banned' },
   'account.refreshAbnormal': {
-    'zh-CN': '⚠️ {n} 个异常（限流/风控/凭证）',
-    en: '⚠️ {n} abnormal (rate limit / risk control / credentials)',
+    'zh-CN': ' {n} 个异常（限流/风控/凭证）',
+    en: ' {n} abnormal (rate limit / risk control / credentials)',
   },
   'account.refreshModels': { 'zh-CN': '模型 {n} 个', en: '{n} models' },
   'account.refreshReadOnly': {
@@ -315,7 +317,7 @@ const DICT = {
     en: 'Upstream request quota {used}/{limit} ({pool})',
   },
   'quota.resetLine': { 'zh-CN': '重置 {at} · {in}', en: 'Resets {at} · {in}' },
-  // 悬停提示首行：给人看的名字在前、服务端标识在后（排障要对得上上游日志）。
+  // 悬停提示首行:给人看的名字在前,服务端标识在后(排障要对得上上游日志).
   'quota.modelWithKey': { 'zh-CN': '{name}（{key}）', en: '{name} ({key})' },
   'quota.poolEmpty': { 'zh-CN': ' · 池空', en: ' · pool empty' },
   'quota.resetSoon': { 'zh-CN': '即将重置', en: 'resetting now' },
@@ -359,9 +361,9 @@ const DICT = {
     'zh-CN': '内置目录 + 上游实时 + 自定义覆盖。上游新模型不用等发版——点「同步上游模型」自动拉取并更新 agent，或手动添加。',
     en: 'Built-in catalog + live upstream + custom overrides. New upstream models need no release — click "Sync from upstream" or add manually.',
   },
-  // ── 同步后的对齐报告（2026-10-04）────────────────────────────
-  // 旧文案只报「自定义 {n} 条」：数字越大看着越成功，而那批自定义里
-  // 绝大部分上游目录根本没有、调用必失败。改成按上游目录三向对账。
+  // ── 同步后的对齐报告(2026-10-04)────────────────────────────
+  // 旧文案只报[自定义 {n} 条]:数字越大看着越成功,而那批自定义里
+  // 绝大部分上游目录根本没有,调用必失败.改成按上游目录三向对账.
   'model.syncReportTitle': { 'zh-CN': '模型已对齐上游', en: 'Models aligned with upstream' },
   'model.syncReportAligned': { 'zh-CN': '上游可用 {n} 个', en: '{n} available upstream' },
   'model.syncReportAdded': { 'zh-CN': '本次新增 {n} 个', en: '{n} added' },
@@ -375,7 +377,7 @@ const DICT = {
     en: '{n} more are not in the upstream catalog (leftover built-ins or manual entries) and will always fail — consider pruning them.',
   },
   'model.syncReportPrune': { 'zh-CN': '清理这 {n} 个', en: 'Prune these {n}' },
-  // ── 模型管理页的「账号可用」标记 ─────────────────────────────
+  // ── 模型管理页的[账号可用]标记 ─────────────────────────────
   'model.liveHeader': { 'zh-CN': '账号可用', en: 'Usable' },
   'model.liveYes': { 'zh-CN': '可用', en: 'yes' },
   'model.liveNo': { 'zh-CN': '不可用', en: 'no' },
@@ -596,7 +598,7 @@ const DICT = {
   },
   'system.adviceTitle': { 'zh-CN': '推荐值（按当前账号池实时算）', en: 'Recommended (computed live from the current pool)' },
   'system.adviceApply': { 'zh-CN': '采用推荐值 {sec}s', en: 'Apply recommended {sec}s' },
-  'system.adviceInSync': { 'zh-CN': '✅ 当前设置已与推荐值一致', en: '✅ Current setting already matches the recommendation' },
+  'system.adviceInSync': { 'zh-CN': ' 当前设置已与推荐值一致', en: ' Current setting already matches the recommendation' },
   'system.adviceAdminHint': { 'zh-CN': '（管理员可一键采用）', en: '(an admin can apply it in one click)' },
   'system.adviceNoAccounts': {
     'zh-CN': '还没有账号，先给默认值 1 分钟。导入账号后这里会按真实模型分布重新计算。',
@@ -685,7 +687,7 @@ const DICT = {
   'overview.noRequestsYet': { 'zh-CN': '尚无请求记录', en: 'No requests recorded yet' },
   'overview.shareBarTip': { 'zh-CN': '{email} {pct}%（{req}/{total}）', en: '{email} {pct}% ({req}/{total})' },
 
-  // ---- 系统（数据文件自检 / 服务操作）----
+  // ---- 系统(数据文件自检 / 服务操作)----
   'system.reconnectConfirm': {
     'zh-CN': '确定要全部断开重连吗？\n\n将释放所有账号的 session（正在传输的 SSE 可能被中断），下一个请求会自动重建新 session。',
     en: 'Reconnect everything?\n\nThis releases every account session (in-flight SSE streams may be cut) and the next request rebuilds a fresh session.',
@@ -705,12 +707,12 @@ const DICT = {
   'system.filesDirty': { 'zh-CN': '{n} 个含非法条目（已自动丢弃）', en: '{n} with invalid entries (auto-dropped)' },
   'system.filesPending': { 'zh-CN': '{n} 条上游会话待结算', en: '{n} upstream sessions pending settlement' },
   'system.invalidHint': {
-    'zh-CN': '⚠ 损坏的文件会让对应功能降级（配置回落默认值 / 账号履历丢失 / 会话退款索引丢失）。停服后把文件移走再启动即可自动重建；下面的命令可直接照做。',
-    en: '⚠ Corrupt files degrade the matching feature (config falls back to defaults / account history lost / session refund index lost). Stop the service, move the file away, start again — it rebuilds automatically. The commands below are ready to copy.',
+    'zh-CN': ' 损坏的文件会让对应功能降级（配置回落默认值 / 账号履历丢失 / 会话退款索引丢失）。停服后把文件移走再启动即可自动重建；下面的命令可直接照做。',
+    en: ' Corrupt files degrade the matching feature (config falls back to defaults / account history lost / session refund index lost). Stop the service, move the file away, start again — it rebuilds automatically. The commands below are ready to copy.',
   },
   'system.dirtyHint': {
-    'zh-CN': '⚠ 有文件里混进了结构非法的记录（null / 缺关键字段）。这类文件**本身没坏**，新版本会逐条丢弃并留证，不影响启动——但请核对丢掉的原文，必要时从备份恢复。',
-    en: '⚠ Some files contain structurally invalid records (null / missing key fields). The files themselves are fine: the current version drops those entries one by one, keeps evidence, and still starts — but review what was dropped and restore from backup if needed.',
+    'zh-CN': ' 有文件里混进了结构非法的记录（null / 缺关键字段）。这类文件**本身没坏**，新版本会逐条丢弃并留证，不影响启动——但请核对丢掉的原文，必要时从备份恢复。',
+    en: ' Some files contain structurally invalid records (null / missing key fields). The files themselves are fine: the current version drops those entries one by one, keeps evidence, and still starts — but review what was dropped and restore from backup if needed.',
   },
   'system.statusBroken': { 'zh-CN': '损坏', en: 'Corrupt' },
   'system.statusMissing': { 'zh-CN': '尚未生成', en: 'Not created yet' },
@@ -761,7 +763,7 @@ const DICT = {
     en: 'Search (matches full fields, e.g. country / banned / 503 / email)',
   },
   'logs.clearFilters': { 'zh-CN': '清除筛选', en: 'Clear filters' },
-  // 只清**内存里的日志缓冲**：不动任何落盘数据，也不影响在途请求
+  // 只清内存里的日志缓冲:不动任何落盘数据,也不影响在途请求
   'logs.clear': { 'zh-CN': '清空', en: 'Clear' },
   'logs.clearConfirm': {
     'zh-CN': '清空进程内日志缓冲？只清显示的日志，不影响账号/会话/配置等任何落盘数据，也不会重启服务。',
@@ -829,7 +831,7 @@ const DICT = {
   'playground.modelSelect': { 'zh-CN': '模型（{n} 个可选{extra}）', en: 'Model ({n} available{extra})' },
   'playground.modelQuotaSuffix': { 'zh-CN': ' · 上游当前给额度 {n} 个', en: ' · {n} currently granted quota upstream' },
   'playground.reloadModels': { 'zh-CN': '刷新模型列表', en: 'Reload model list' },
-  'playground.checkMark': { 'zh-CN': '✅ = 上游此刻给了该模型额度', en: '✅ = upstream is granting quota for this model right now' },
+  'playground.checkMark': { 'zh-CN': ' = 上游此刻给了该模型额度', en: ' = upstream is granting quota for this model right now' },
   'playground.catalogEmpty': { 'zh-CN': '上游目录为空：请确认账号已导入并完成一次探测', en: 'Upstream catalog is empty: import an account and run a probe first' },
   'playground.notProbed': { 'zh-CN': '尚未探测上游目录（服务不会自动探测）：请到「账号」点「一键刷新」', en: 'Upstream catalog not probed yet (no auto-probe): click "Refresh all" under Accounts' },
   'playground.catalogLoadFail': {
@@ -845,7 +847,7 @@ const DICT = {
   'playground.errorPrefix': { 'zh-CN': '错误: ', en: 'Error: ' },
 }
 
-/** 当前语种（模块级缓存，避免每次读 localStorage）。 */
+/** 当前语种(模块级缓存,避免每次读 localStorage). */
 let current = DEFAULT_LOCALE
 
 function normalize(locale) {
@@ -856,7 +858,7 @@ function normalize(locale) {
   return null
 }
 
-/** 初始化语种：localStorage > 浏览器语言 > 默认。 */
+/** 初始化语种:localStorage > 浏览器语言 > 默认. */
 export function initLocale() {
   let saved = null
   try {
@@ -869,12 +871,12 @@ export function initLocale() {
   return current
 }
 
-/** 返回当前语种。 */
+/** 返回当前语种. */
 export function getLocale() {
   return current
 }
 
-/** 切换语种并持久化；返回新语种。 */
+/** 切换语种并持久化;返回新语种. */
 export function setLocale(locale) {
   const next = normalize(locale) || DEFAULT_LOCALE
   current = next
@@ -887,11 +889,11 @@ export function setLocale(locale) {
 }
 
 /**
- * 取文案。支持 {name} 占位符替换。
- * 缺 key 时返回 key 本身 —— 界面上会露出一个可读的 key，
- * 而不是空白（红线脚本会在 CI 里拦下真正缺失的 key）。
- * @param {string} key
- * @param {Record<string, string | number>} [vars]
+ - 取文案.支持 {name} 占位符替换.
+ - 缺 key 时返回 key 本身 —— 界面上会露出一个可读的 key,
+ - 而不是空白(红线脚本会在 CI 里拦下真正缺失的 key).
+ - @param {string} key
+ - @param {Record<string, string | number>} [vars]
  */
 export function t(key, vars) {
   const entry = DICT[key]
@@ -905,7 +907,7 @@ export function t(key, vars) {
   return text
 }
 
-/** 暴露字典给红线脚本（CI 校验各语种 key 一致性）。 */
+/** 暴露字典给红线脚本(CI 校验各语种 key 一致性). */
 export function dictKeys() {
   return Object.keys(DICT)
 }

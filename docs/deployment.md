@@ -1,5 +1,7 @@
 # 部署与运维
 
+> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 真源: deployment
 > 本文是 [freebuff-proxy](../README.md) 的详细文档之一。数据持久化（/data 里都有什么）与 GitHub Actions 自动构建镜像的细节。
 > 快速上手 / 一键部署请看 [主页 README](../README.md)。
 ## 数据与持久化（/data 挂载）
@@ -10,12 +12,15 @@
 data/
 ├── config.yaml            # 首次启动自动生成，可直接编辑（重启生效）
 ├── credentials/           # Freebuff 账号凭据（每账号一个 <账号ID>.json，见下）
+├── device-keys/           # 每账号一个 Ed25519 设备签名密钥（<账号ID>.json）
 ├── users.json             # Web 控制台用户（密码 scrypt 哈希）
 ├── web-sessions.json      # Web 登录会话
 ├── login-flows.json       # 浏览器登录回调流程（重启不丢）
 ├── catalog-cache.json     # 上游模型目录缓存（首启写入，每 6h 自动刷新）
 ├── custom-models.json     # 前端「模型管理」的自定义模型
 ├── proxies.json           # 前端「代理设置」的全局代理池
+├── account-state.json     # 账号运行状态账本（冷却/Freebucks/退款流水/时间轴）
+├── sessions.json          # 未释放的上游会话句柄（重启/换容器后仍可寻址 DELETE）
 └── settings.json          # 前端可调的运行参数（并发/额度保护等）
 ```
 
@@ -46,7 +51,7 @@ data/
 docker logs --tail 60 freebuff-proxy
 ```
 
-- 看到 `[freebuff-proxy] ⚠ 数据文件损坏: /data/xxx.json` → `data/` 里某个 JSON 坏了。
+- 看到 `[freebuff-proxy]  数据文件损坏: /data/xxx.json` → `data/` 里某个 JSON 坏了。
   停服后把该文件移走再启动即可（程序按默认值重建）：
   ```bash
   docker compose down
@@ -80,7 +85,7 @@ docker logs --tail 60 freebuff-proxy
   `failed` 这次失败、`skipped` 找不到账号、`deferred` 这次没轮到。
   **不要为了让它快点而删 sessions.json**——那会让这些句柄永久无法寻址
   （上游槽位要等会话自然过期才回来）。治本请接上可用上游 / 换可用代理。
-- 看到 `[freebuff-proxy] ✗ 启动失败（服务未能进入监听状态）` → 兜底诊断段：它会把
+- 看到 `[freebuff-proxy]  启动失败（服务未能进入监听状态）` → 兜底诊断段：它会把
   "哪些数据文件损坏 / 哪些含非法条目 / 残留的 `*.tmp`"连同可照抄的处置命令一起列出，
   下面紧跟真实堆栈。按它给的命令处置即可。
 - 日志里没有上面任何一行、但进程就是起不来 → 大概率不是数据问题，看容器退出码
@@ -116,20 +121,20 @@ docker logs --tail 60 freebuff-proxy
 
 | 文件 | 损坏/删除的后果 | 能否自动重建 |
 | --- | --- | --- |
-| `catalog-cache.json` | 无（启动会用内置目录重新生成） | ✅ 自动重建，损坏原件备份为 `*.corrupt-<时间>` |
-| `custom-models.json` | 自定义模型 / 隐藏列表丢失 | ✅ 空着启动，重新配置即可 |
-| `proxies.json` | 全局代理池变空 → 直连 | ✅ 空着启动，前端重新填 |
-| `settings.json` | 额度保护等参数回落 `config.yaml` 默认值 | ✅ 空着启动 |
-| `web-sessions.json` | 所有人需要重新登录控制台 | ✅ 空着启动 |
-| `login-flows.json` | 等待中的登录流程作废（重新发起即可） | ✅ 空着启动 |
-| `account-state.json` | 账号履历（加入/封禁时间、冷却、Freebucks 余额）丢失 | ✅ 空着启动（但「余额买不起就别 admit」的闸门暂时失效） |
-| `sessions.json` | **丢失未释放的上游会话句柄 → 删不掉**（会一直占着该账号的上游会话槽位，导致它没法 admit 新模型） | ⚠️ 会重建，但那些槽位要等会话自然过期才回来 |
-| `users.json` | **丢失控制台账号与 API Key** | ❌ 拒绝启动，必须人工处置 |
+| `catalog-cache.json` | 无（启动会用内置目录重新生成） |  自动重建，损坏原件备份为 `*.corrupt-<时间>` |
+| `custom-models.json` | 自定义模型 / 隐藏列表丢失 |  空着启动，重新配置即可 |
+| `proxies.json` | 全局代理池变空 → 直连 |  空着启动，前端重新填 |
+| `settings.json` | 额度保护等参数回落 `config.yaml` 默认值 |  空着启动 |
+| `web-sessions.json` | 所有人需要重新登录控制台 |  空着启动 |
+| `login-flows.json` | 等待中的登录流程作废（重新发起即可） |  空着启动 |
+| `account-state.json` | 账号履历（加入/封禁时间、冷却、Freebucks 余额）丢失 |  空着启动（但「余额买不起就别 admit」的闸门暂时失效） |
+| `sessions.json` | **丢失未释放的上游会话句柄 → 删不掉**（会一直占着该账号的上游会话槽位，导致它没法 admit 新模型） |  会重建，但那些槽位要等会话自然过期才回来 |
+| `users.json` | **丢失控制台账号与 API Key** |  拒绝启动，必须人工处置 |
 
 > 结论：出问题时**优先只删派生/配置类文件**（表格前 7 行），
 > `sessions.json` 与 `users.json` 请先备份再动。
 
-## 镜像流水线（scripts/pipeline-image-test.mjs）
+## 镜像流水线（scripts/ci/pipeline-image-test.mjs）
 
 CI 里的 `npm test` 用 mock 上游、**不启动容器**，所以覆盖不到「新镜像 + 真实 /data」
 这条路 —— 真实事故正是发生在这里（换镜像后容器起不来，删几个 json 才恢复）。

@@ -1,36 +1,36 @@
 /**
- * 模型标识映射：**三种形式必须互相归一** + **真源唯一性**。
+ - 模型标识映射:三种形式必须互相归一 + 真源唯一性.
  *
- * 为什么单独有此文件（用户原话，2026-10-04）：
+ - 为什么单独有此文件(用户原话,2026-10-04):
  *
- *   "所有的对下游都会映射，所有的对上游的也会映射，你每次都忘这个东西。"
+ - "所有的对下游都会映射,所有的对上游的也会映射,你每次都忘这个东西."
  *
- * 模型标识有三套形式，必须能互相归一：
+ - 模型标识有三套形式,必须能互相归一:
  *
- *   ① 目录 key      `m-096e75164d`                 服务端标识，调度内部一律用它
- *   ② 上游 legacy id `deepseek/deepseek-v4-flash`   上游会话清单 desktopPurchases[].model 用的
- *   ③ 可读名         `DeepSeek V4.1 Flash`          前端 / /v1/models 展示用
+ - ① 目录 key      m-096e75164d                 服务端标识,调度内部一律用它
+ - ② 上游 legacy id deepseek/deepseek-v4-flash   上游会话清单 desktopPurchases[].model 用的
+ - ③ 可读名         DeepSeek V4.1 Flash          前端 / /v1/models 展示用
  *
- * 历史故障（真实的、花过钱的）：缺 ②→① 这条映射，于是上游会话清单里
- * `model: 'deepseek/deepseek-v4-flash'` 与调度内部的 `m-096e75164d` 严格相等
- * 永远匹配不上 → **面板能显示一条已付费会话、调度却看不见它** → 白花钱去别处
- * 买新的。
+ - 历史故障(真实的,花过钱的):缺 ②→① 这条映射,于是上游会话清单里
+ - model: 'deepseek/deepseek-v4-flash' 与调度内部的 m-096e75164d 严格相等
+ - 永远匹配不上 → 面板能显示一条已付费会话,调度却看不见它 → 白花钱去别处
+ - 买新的.
  *
- * 唯一真源 = `src/upstream/catalog-protocol.js` 的 `CatalogHolder`：
- *   - `keyForName(name)`           三种输入（可读名 / 上游 id / 已是 key）→ 目录 key
- *   - `handleFor()` / `handleForModel()`  标识 → 目录句柄（fbm1.xxx）
- *   - `freebuffLegacyModelDigest()`       上游 id 的 FNV-1a 摘要（官方算法）
+ - 唯一真源 = src/upstream/catalog-protocol.js 的 CatalogHolder:
+ - - keyForName(name)           三种输入(可读名 / 上游 id / 已是 key)→ 目录 key
+ - - handleFor() / handleForModel()  标识 → 目录句柄(fbm1.xxx)
+ - - freebuffLegacyModelDigest()       上游 id 的 FNV-1a 摘要(官方算法)
  *
- * ── 可证伪（硬要求，本仓方法论）───────────────────────────────────────
+ - ── 可证伪(硬要求,本仓方法论)───────────────────────────────────────
  *
- * 破坏方式（实测过，见 Agent Note / 交付报告）：
- *   把 `catalog-protocol.js` 的 `keyForName()` 里
- *   `const byDigest = this.keyByDigest?.get(freebuffLegacyModelDigest(k))`
- *   这一行注释掉，重跑本文件 —— 「上游 id → 目录 key」的断言必须变红。
- *   注意 `handleFor()` 那条路径用的是**另一张表**（legacyIndex），所以句柄断言
- *   不该红；红在哪几条本身就是"这条映射挂在哪个索引上"的证据。
+ - 破坏方式(实测过,见 Agent Note / 交付报告):
+ - 把 catalog-protocol.js 的 keyForName() 里
+ - const byDigest = this.keyByDigest?.get(freebuffLegacyModelDigest(k))
+ - 这一行注释掉,重跑本文件 —— [上游 id → 目录 key]的断言必须变红.
+ - 注意 handleFor() 那条路径用的是另一张表(legacyIndex),所以句柄断言
+ - 不该红;红在哪几条本身就是"这条映射挂在哪个索引上"的证据.
  *
- * 用法：node test/verify-model-mapping-truth.mjs
+ - 用法:node test/verify-model-mapping-truth.mjs
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
@@ -45,9 +45,9 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..')
 
 /**
- * 断言：真值判定交给 `node:assert/strict`，但**不立即中断** ——
- * 失败逐条累积、最后统一报，这样"破坏实现后红了哪几条"是可读的证据
- * （立即抛只能在第一条红处停下，掩盖了映射挂在哪个索引上这个信息）。
+ - 断言:真值判定交给 node:assert/strict,但不立即中断 ——
+ - 失败逐条累积,最后统一报,这样"破坏实现后红了哪几条"是可读的证据
+ - (立即抛只能在第一条红处停下,掩盖了映射挂在哪个索引上这个信息).
  */
 let assertions = 0
 const failures = []
@@ -57,7 +57,7 @@ function verdict(cond, msg, detail = '') {
     assert.ok(cond, msg)
   } catch (err) {
     failures.push({ msg, detail: detail || err.message })
-    console.error(`   ❌ ${msg}${detail ? `\n        ${detail}` : ''}`)
+    console.error(`    ${msg}${detail ? `\n        ${detail}` : ''}`)
     return false
   }
   return true
@@ -73,20 +73,20 @@ function checkEqual(actual, expected, msg) {
   )
 }
 
-// ── 真机取值（与服务端目录逐字对照过的锚点，不是编的）────────────────
+// ── 真机取值(与服务端目录逐字对照过的锚点,不是编的)────────────────
 const LEGACY_ID = 'deepseek/deepseek-v4-flash'
 const KEY = 'm-096e75164d'
 const NAME = 'DeepSeek V4.1 Flash'
 const HANDLE = 'fbm1.AAEAAUPe2UsTESTHANDLE'
-/** 服务端目录里该行 legacyDigests 的原文（真机值）。 */
+/** 服务端目录里该行 legacyDigests 的原文(真机值). */
 const DIGEST = '1e303ac563a6f9cc'
 
 /**
- * 构造一个持有本目录行的 CatalogHolder。
+ - 构造一个持有本目录行的 CatalogHolder.
  *
- * `_apply(body)` 是目录落地的**真实入口**（`fetch()` 成功后调它），body 形态
- * 与上游响应一致。直接调它跳过网络 —— 测的是映射，不是抓取。
- * `fetchImpl` 必须给（构造器要用），但不发任何请求。
+ - _apply(body) 是目录落地的真实入口(fetch() 成功后调它),body 形态
+ - 与上游响应一致.直接调它跳过网络 —— 测的是映射,不是抓取.
+ - fetchImpl 必须给(构造器要用),但不发任何请求.
  */
 function makeHolder() {
   const holder = new CatalogHolder({
@@ -107,8 +107,8 @@ function makeHolder() {
   })
   check(ok === true, '对照前提：CatalogHolder._apply 必须接受测试目录行')
   check(holder.ready === true, '对照前提：目录必须有 fetchId（否则 ready=false）')
-  // 反查前提：真源桶确实被填上了。破坏 keyForName 后这条**仍绿**，
-  // 所以「变红的是 keyForName 而不是桶为空」这件事可分辨。
+  // 反查前提:真源桶确实被填上了.破坏 keyForName 后这条仍绿,
+  // 所以[变红的是 keyForName 而不是桶为空]这件事可分辨.
   checkEqual(
     holder.keyByDigest.get(DIGEST),
     KEY,
@@ -117,11 +117,11 @@ function makeHolder() {
   return holder
 }
 
-// ═══ ① 三形式归一：上游 id / 可读名 / 已是 key → 同一个目录 key ═══════
+// ═══ ① 三形式归一:上游 id / 可读名 / 已是 key → 同一个目录 key ═══════
 {
   const holder = makeHolder()
 
-  // 摘要算法本身必须先对（官方双 FNV-1a，不是 sha256 —— 曾猜错一次）
+  // 摘要算法本身必须先对(官方双 FNV-1a,不是 sha256 —— 曾猜错一次)
   checkEqual(
     freebuffLegacyModelDigest(LEGACY_ID),
     DIGEST,
@@ -140,14 +140,14 @@ function makeHolder() {
   checkEqual(viaName, KEY, '可读名 → 目录 key')
   checkEqual(viaKey, KEY, '已是目录 key → 自反')
 
-  // 三形式必须收敛到**同一个**值，而不只是各自"非 null"
+  // 三形式必须收敛到同一个值,而不只是各自"非 null"
   check(
     viaLegacy === viaName && viaName === viaKey,
     '三种形式必须归一为同一个目录 key，got ' +
       JSON.stringify({ viaLegacy, viaName, viaKey }),
   )
 
-  // 可读名大小写不敏感（下游照抄 display_name 时首字母大小写不固定）
+  // 可读名大小写不敏感(下游照抄 display_name 时首字母大小写不固定)
   checkEqual(
     holder.keyForName(NAME.toLowerCase()),
     KEY,
@@ -159,7 +159,7 @@ function makeHolder() {
     '可读名首尾空白 / 大小写不敏感',
   )
 
-  // 未知输入一律 null，**不抛异常**（调用方据此保持原值，绝不让请求失败）
+  // 未知输入一律 null,不抛异常(调用方据此保持原值,绝不让请求失败)
   checkEqual(holder.keyForName('不存在的模型'), null, '未知可读名返回 null')
   checkEqual(holder.keyForName('unknown/model-xyz'), null, '未知上游 id 返回 null')
   checkEqual(holder.keyForName(''), null, '空串返回 null')
@@ -169,7 +169,7 @@ function makeHolder() {
   checkEqual(holder.keyForName(123), null, '非字符串返回 null')
 }
 
-// ═══ ② 句柄路径：上游 id 必须能换到 fbm1. 句柄 ═══════════════════════
+// ═══ ② 句柄路径:上游 id 必须能换到 fbm1. 句柄 ═══════════════════════
 {
   const holder = makeHolder()
 
@@ -195,7 +195,7 @@ function makeHolder() {
     '已是句柄则原样返回（幂等）',
   )
 
-  // 反例（防"全放行"式假绿）：不在册的模型必须原样返回，绝不替上游猜
+  // 反例(防"全放行"式假绿):不在册的模型必须原样返回,绝不替上游猜
   checkEqual(
     holder.handleFor('unknown/model-xyz'),
     'unknown/model-xyz',
@@ -208,7 +208,7 @@ function makeHolder() {
   )
 }
 
-// ═══ ③ 回归护栏：返回值形态只能是目录 key 或 null ════════════════════
+// ═══ ③ 回归护栏:返回值形态只能是目录 key 或 null ════════════════════
 {
   const holder = makeHolder()
   const KEY_RE = /^m-[0-9a-z]+$/i
@@ -220,7 +220,7 @@ function makeHolder() {
       out === null || KEY_RE.test(out),
       `keyForName(${JSON.stringify(input)}) 只能是目录 key 或 null，got ${JSON.stringify(out)}`,
     )
-    // 映射没生效的典型症状：把**入参原样**吐回来（上游 id / 可读名被当成 key）
+    // 映射没生效的典型症状:把入参原样吐回来(上游 id / 可读名被当成 key)
     if (input !== KEY) {
       check(
         out !== input,
@@ -230,17 +230,17 @@ function makeHolder() {
   }
 }
 
-// ═══ ④ 真源唯一性：除 catalog-protocol.js 外不得有第二套映射实现 ═════
+// ═══ ④ 真源唯一性:除 catalog-protocol.js 外不得有第二套映射实现 ═════
 {
   const TRUTH_SOURCE = join('src', 'upstream', 'catalog-protocol.js')
 
   /**
-   * 判据（用户点名）：其它文件不得调用 `freebuffLegacyModelDigest(`，
-   * 也不得直接读取 `keyByDigest`。
+   - 判据(用户点名):其它文件不得调用 freebuffLegacyModelDigest(,
+   - 也不得直接读取 keyByDigest.
    *
-   * 额外加一条**方向判据**（不需要任何例外）：把摘要**当作查询键**去查表
-   * （`X.get(freebuffLegacyModelDigest(...))`）—— 这正是"上游 id → 目录 key"
-   * 的实现形态，任何非真源文件出现它都直接判违规。
+   - 额外加一条方向判据(不需要任何例外):把摘要当作查询键去查表
+   - (X.get(freebuffLegacyModelDigest(...)))—— 这正是"上游 id → 目录 key"
+   - 的实现形态,任何非真源文件出现它都直接判违规.
    */
   const FORBIDDEN = [
     {
@@ -254,23 +254,23 @@ function makeHolder() {
   ]
   const DIGEST_AS_LOOKUP_KEY = /\.\s*get\s*\(\s*freebuffLegacyModelDigest\s*\(/
   /**
-   * 兜底判据：要调用真源的摘要函数，就必须 import 它 —— 而 import 的来源
-   * **必须指向真源文件**。任何从别处 import 同名符号（= 自造一份摘要/映射）
-   * 都直接判违规。这条不给任何例外，比"豁免 import 行"更紧。
+   - 兜底判据:要调用真源的摘要函数,就必须 import 它 —— 而 import 的来源
+   - 必须指向真源文件.任何从别处 import 同名符号(= 自造一份摘要/映射)
+   - 都直接判违规.这条不给任何例外,比"豁免 import 行"更紧.
    */
   const IMPORT_DIGEST = /import\s*\{[^}]*\bfreebuffLegacyModelDigest\b[^}]*\}\s*from\s*(['"])([^'"]+)\1/
 
   /**
-   * 既有邻接点（**逐行、逐字**授权，不是文件级豁免）。
+   - 既有邻接点(逐行,逐字授权,不是文件级豁免).
    *
-   * 这些点借用真源的摘要函数做**反方向**检索（目录 key → 摘要 → 内置可读
-   * id），键**来自真源桶**、不产生第二张"上游 id → 目录 key"表。
-   * 它们的存在是债务，不是许可：
-   *   - 任何**新增**的行都不在此列 → 立即 FAIL；
-   *   - 本表里任何一条**未被命中**（被删/改写了）→ 也 FAIL，逼着同步收拢，
-   *     免得例外清单腐烂成后门。
-   * 收拢进 `AccountRuntimes.resolveModelAlias` / `displayNameFor` 之后，
-   * 本表应清空，判据即可升级为"零例外"。
+   - 这些点借用真源的摘要函数做反方向检索(目录 key → 摘要 → 内置可读
+   - id),键来自真源桶,不产生第二张"上游 id → 目录 key"表.
+   - 它们的存在是债务,不是许可:
+   - - 任何新增的行都不在此列 → 立即 FAIL;
+   - - 本表里任何一条未被命中(被删/改写了)→ 也 FAIL,逼着同步收拢,
+   - 免得例外清单腐烂成后门.
+   - 收拢进 AccountRuntimes.resolveModelAlias / displayNameFor 之后,
+   - 本表应清空,判据即可升级为"零例外".
    */
   const KNOWN_NEIGHBOURS = new Map([
     [
@@ -281,27 +281,29 @@ function makeHolder() {
       `src/app-context.js|if (m?.id && freebuffLegacyModelDigest(m.id) === digest) return m.id`,
       '_modelCatalogId 兜底：同上，反方向检索内置可读 id。',
     ],
-    [
-      `src/web/api.js|for (const [digest, k] of cat.keyByDigest || []) {`,
-      'catalogIdForKey 只**读**真源桶，按 k === key 反查摘要，不写不建表。',
-    ],
-    [
-      `src/web/api.js|if (m?.id && freebuffLegacyModelDigest(m.id) === digestForKey) return m.id`,
-      '同上反方向：摘要 → 内置可读 id。',
-    ],
+    // 注：原两条 src/web/api.js 的邻接点（catalogIdForKey 自己读 keyByDigest
+    // 并调 freebuffLegacyModelDigest）已在 2026-10-05 收拢进单一真源
+    // （改为调 AccountRuntimes.modelAliases），因此从本表删除 —— 例外清单
+    // 只许收拢，收拢后必须同步删条目，否则本文件的 stale 判据会 FAIL。
   ])
 
-  function listJsFiles(dir) {
+  // 迁移期必须同时扫两种后缀：只扫 .js 时，一旦某文件转成 .ts，它就整体
+  // 退出判据面 —— 实测 src/web 转 .ts 后 4 个授权邻接点全部不再被扫，
+  // 而"例外清单未被命中"这条又会把它们报成 stale，看起来像"债务清完了"。
+  const SCAN_EXT = ['.js', '.mjs', '.ts']
+  function listSourceFiles(dir) {
     const out = []
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, e.name)
-      if (e.isDirectory()) out.push(...listJsFiles(p))
-      else if (e.isFile() && p.endsWith('.js')) out.push(p)
+      if (e.isDirectory()) out.push(...listSourceFiles(p))
+      else if (e.isFile() && SCAN_EXT.some((x) => p.endsWith(x))) out.push(p)
     }
     return out
   }
+  /** 扫描面下限：防止路径/后缀写错时"零违规"与"什么都没扫"无法区分。 */
+  const SCAN_MIN = 40
 
-  /** 整行注释不计（注释里的提及不是实现；不做行内剥离以免误切字符串里的 //）。 */
+  /** 整行注释不计(注释里的提及不是实现;不做行内剥离以免误切字符串里的 //). */
   function isCommentLine(text) {
     return (
       text.startsWith('//') ||
@@ -311,9 +313,10 @@ function makeHolder() {
     )
   }
 
-  const scanned = listJsFiles(join(ROOT, 'src'))
+  const scanned = listSourceFiles(join(ROOT, 'src'))
     .map((p) => relative(ROOT, p))
     .filter((rel) => rel !== TRUTH_SOURCE)
+  checkEqual(scanned.length >= SCAN_MIN, true, `真源扫描面必须覆盖足够多文件（实测 ${scanned.length}，下限 ${SCAN_MIN}）`)
 
   const violations = []
   const hitNeighbours = new Set()
@@ -324,7 +327,7 @@ function makeHolder() {
       const text = lines[i].trim()
       if (!text || isCommentLine(text)) continue
 
-      // (A) 方向判据：算摘要去查表 = 这就是第二真源的实现本身
+      // (A) 方向判据:算摘要去查表 = 这就是第二真源的实现本身
       if (DIGEST_AS_LOOKUP_KEY.test(text)) {
         violations.push({
           rel,
@@ -334,7 +337,7 @@ function makeHolder() {
         })
         continue
       }
-      // (A2) import 来源必须是真源文件本身（不许自造一份摘要）
+      // (A2) import 来源必须是真源文件本身(不许自造一份摘要)
       const imp = text.match(IMPORT_DIGEST)
       if (imp) {
         const spec = imp[2]
@@ -364,7 +367,7 @@ function makeHolder() {
     }
   }
 
-  // 例外清单不许腐烂：声明了却没命中 = 代码变了，必须同步订正
+  // 例外清单不许腐烂:声明了却没命中 = 代码变了,必须同步订正
   const stale = [...KNOWN_NEIGHBOURS.keys()].filter((k) => !hitNeighbours.has(k))
 
   console.log(
@@ -374,7 +377,7 @@ function makeHolder() {
 
   if (violations.length || stale.length) {
     if (violations.length) {
-      console.error('❌ 检出「模型标识映射」的第二真源实现：')
+      console.error(' 检出「模型标识映射」的第二真源实现：')
       for (const v of violations) {
         console.error(`   ${v.rel}:${v.line}  ${v.what}`)
         console.error(`     ${v.text}`)
@@ -384,7 +387,7 @@ function makeHolder() {
       )
     }
     if (stale.length) {
-      console.error('❌ 例外清单已失效（声明的邻接点不再存在，须同步订正本文件）：')
+      console.error(' 例外清单已失效（声明的邻接点不再存在，须同步订正本文件）：')
       for (const s of stale) console.error(`   ${s}`)
     }
     process.exitCode = 1
@@ -409,14 +412,14 @@ console.log(
 
 // ── ⑤ SessionManager 必须真的接收并启用 resolveModelAlias ──────────────
 //
-// ⚠️ 实测缺陷（2026-10-05）：`SessionManager` 的构造函数解构列表里**漏了**
-// `resolveModelAlias` —— 而 app-context 一直在传。JS 解构不会因为"多传了参数"
-// 报错，于是 `this.resolveModelAlias` 恒为 `undefined`，
-// `holderFor()` / `freebucksFor()` 的归一**静默退化成严格相等**。
+//  实测缺陷(2026-10-05):SessionManager 的构造函数解构列表里漏了
+// resolveModelAlias —— 而 app-context 一直在传.JS 解构不会因为"多传了参数"
+// 报错,于是 this.resolveModelAlias 恒为 undefined,
+// holderFor() / freebucksFor() 的归一静默退化成严格相等.
 //
-// 后果正是要修的那个 bug：上游清单用**上游 id**、调度内部用**目录 key** →
-// 永远匹配不上 → 面板能显示已付费会话、调度却看不见 → 白花钱重买。
-// 而既有用例都用同形态标识，把这个缺陷掩盖了。
+// 后果正是要修的那个 bug:上游清单用上游 id,调度内部用目录 key →
+// 永远匹配不上 → 面板能显示已付费会话,调度却看不见 → 白花钱重买.
+// 而既有用例都用同形态标识,把这个缺陷掩盖了.
 {
   const { SessionManager } = await import('../src/session-manager.js')
   const marker = (v) => 'K:' + v
@@ -435,7 +438,7 @@ console.log(
     'K:x',
     '接收到的必须是调用方传的那个函数本体',
   )
-  // 端到端：跨标识必须能命中同一条会话
+  // 端到端:跨标识必须能命中同一条会话
   const { CatalogHolder, freebuffLegacyModelDigest } = await import(
     '../src/upstream/catalog-protocol.js'
   )

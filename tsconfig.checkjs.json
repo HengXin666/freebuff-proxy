@@ -1,0 +1,11 @@
+{
+  "//": "后端类型棘轮专用 project.不改 tsconfig.json.",
+  "//为什么单独一份而不直接打开 tsconfig.json 的 checkJs": "npm run typecheck 用的是 tsconfig.json, 且被 CI 的 test job 直接跑. 直接把它改成 checkJs:true 会让 CI 立刻因近千条存量 implicit-any 失败 -- 那是把门禁变成路障, 最后只会被人关掉. 棘轮要的是新增即红, 不是先全绿.",
+  "//为什么不复用命令行 --checkJs": "实测(2026-10-05): tsc -p tsconfig.json --checkJs 会被 tsconfig 里显式的 checkJs: false 盖掉, 只报 1 条解析级错误 -- 看起来像后端很干净, 实际是没扫. 凡是配置已存在但从不执行的形态都属这一类, 必须用独立 project 把开关真正打开.",
+  "//TS 迁移期的形态": "src 下正在从 .js 逐步转 .ts. 本 project 用 allowJs 同时覆盖两种后缀, 迁移过程中棘轮总数只许降不许涨.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "checkJs": true
+  },
+  "include": ["src/**/*", "bin/**/*"]
+}

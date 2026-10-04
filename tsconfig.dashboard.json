@@ -1,0 +1,23 @@
+{
+  "//": "控制台前端(dashboard/)的类型检查配置 -- 必须与后端分开.",
+  "//为什么单独一份": "tsconfig.json 的 lib 只有 ES2022, 跑 dashboard 会满屏 document is not defined, 那不是类型问题而是环境声明缺失, 会把基线数字灌成噪音. 前端要 DOM lib, 后端要纯 ES2022.",
+  "//怎么生效": "scripts/gates/checks/code/types.mjs 的 PROJECTS 会分别跑两份并合并错误计数, 进同一份 .gates/types-baseline.json 棘轮.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true
+  },
+  "include": ["dashboard/**/*"]
+}

@@ -1,12 +1,12 @@
 /**
- * Narrow compatibility alias for Hermes' `delegate_task`.
+ - Narrow compatibility alias for Hermes' delegate_task.
  *
- * Freebuff currently classifies that exact name as a foreign-harness signal.
- * Hermes itself dispatches on the literal name, so the proxy aliases it only
- * on the upstream wire and restores it before returning tool_calls.
+ - Freebuff currently classifies that exact name as a foreign-harness signal.
+ - Hermes itself dispatches on the literal name, so the proxy aliases it only
+ - on the upstream wire and restores it before returning tool_calls.
  *
- * Decision record:
- * .agents/notes/implemented/bug-fix/2026-09-19-hermes-delegate-task-alias.md
+ - Decision record:
+ - .agents/notes/implemented/bug-fix/2026-09-19-hermes-delegate-task-alias.md
  */
 
 export const HERMES_DELEGATE_TOOL_NAME = 'delegate_task'
@@ -23,11 +23,11 @@ function offeredToolNames(tools) {
 }
 
 /**
- * Return a deterministic collision-free alias when the client offers
- * delegate_task, otherwise null.
+ - Return a deterministic collision-free alias when the client offers
+ - delegate_task, otherwise null.
  *
- * @param {unknown} tools
- * @returns {string | null}
+ - @param {unknown} tools
+ - @returns {string | null}
  */
 export function chooseHermesDelegateAlias(tools) {
   const names = offeredToolNames(tools)
@@ -80,13 +80,13 @@ function rewriteMessage(message, from, to) {
 }
 
 /**
- * Rewrite the Hermes name everywhere it can participate in an OpenAI
- * chat-completions request: tool definitions, forced tool_choice, and
- * multi-turn tool history.
+ - Rewrite the Hermes name everywhere it can participate in an OpenAI
+ - chat-completions request: tool definitions, forced tool_choice, and
+ - multi-turn tool history.
  *
- * @param {Record<string, any>} body
- * @param {string | null} alias
- * @returns {Record<string, any>}
+ - @param {Record<string, any>} body
+ - @param {string | null} alias
+ - @returns {Record<string, any>}
  */
 export function rewriteHermesDelegateForUpstream(body, alias) {
   if (!alias || !body || typeof body !== 'object' || Array.isArray(body)) {
@@ -143,12 +143,12 @@ function restoreToolCalls(toolCalls, alias) {
 }
 
 /**
- * Restore the client-visible Hermes tool name in a non-streaming response or
- * in one parsed streaming chunk.
+ - Restore the client-visible Hermes tool name in a non-streaming response or
+ - in one parsed streaming chunk.
  *
- * @param {any} payload
- * @param {string | null} alias
- * @returns {any}
+ - @param {any} payload
+ - @param {string | null} alias
+ - @returns {any}
  */
 export function restoreHermesDelegateInResponse(payload, alias) {
   if (!alias || !payload || typeof payload !== 'object') return payload
@@ -189,12 +189,12 @@ export function restoreHermesDelegateInResponse(payload, alias) {
 }
 
 /**
- * Rewrite a single SSE line. Non-data lines, [DONE], and malformed JSON pass
- * through byte-for-byte.
+ - Rewrite a single SSE line. Non-data lines, [DONE], and malformed JSON pass
+ - through byte-for-byte.
  *
- * @param {string} line
- * @param {string | null} alias
- * @returns {string}
+ - @param {string} line
+ - @param {string | null} alias
+ - @returns {string}
  */
 export function rewriteHermesDelegateSseLine(line, alias) {
   if (!alias || typeof line !== 'string') return line
@@ -219,12 +219,12 @@ export function rewriteHermesDelegateSseLine(line, alias) {
 }
 
 /**
- * Transform an OpenAI-compatible SSE stream while preserving incremental
- * delivery. function.name is normally present only on the first tool-call
- * chunk; argument chunks pass through unchanged.
+ - Transform an OpenAI-compatible SSE stream while preserving incremental
+ - delivery. function.name is normally present only on the first tool-call
+ - chunk; argument chunks pass through unchanged.
  *
- * @param {string} alias
- * @returns {TransformStream<Uint8Array, Uint8Array>}
+ - @param {string} alias
+ - @returns {TransformStream<Uint8Array, Uint8Array>}
  */
 export function createHermesDelegateSseTransform(alias) {
   const decoder = new TextDecoder()

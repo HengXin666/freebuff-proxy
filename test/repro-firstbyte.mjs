@@ -1,8 +1,8 @@
 /**
- * 首字节耗时（TTFB）剖析：首次请求 vs 热请求。
+ - 首字节耗时(TTFB)剖析:首次请求 vs 热请求.
  *
- * 目的：量化"首次耗时有点久"，并把每一段可观测的耗时归因到具体上游调用。
- * 用法: node test/repro-firstbyte.mjs [上游每次调用延迟ms] [是否 spread]
+ - 目的:量化"首次耗时有点久",并把每一段可观测的耗时归因到具体上游调用.
+ - 用法: node test/repro-firstbyte.mjs [上游每次调用延迟ms] [是否 spread]
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -18,7 +18,7 @@ const UPSTREAM_MS = Number(process.argv[2] || 150)
 const MODE = process.argv[3] === 'spread' ? 'spread' : 'sticky'
 
 const originalFetch = globalThis.fetch
-/** 上游调用流水（用于归因首字节前的串行往返）。 */
+/** 上游调用流水(用于归因首字节前的串行往返). */
 const calls = []
 function jsonRes(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -32,7 +32,7 @@ globalThis.fetch = async (url, init = {}) => {
   const headers = init.headers || {}
   const auth = headers.Authorization || headers.authorization || headers['x-codebuff-api-key'] || ''
   const token = String(auth).replace('Bearer ', '').trim()
-  // 所有上游调用都带固定延迟，模拟真实网络 RTT
+  // 所有上游调用都带固定延迟,模拟真实网络 RTT
   await sleep(UPSTREAM_MS)
 
   if (u.includes('/api/v1/freebuff/session') && method === 'POST') {
@@ -60,9 +60,9 @@ globalThis.fetch = async (url, init = {}) => {
   }
   if (u.includes('/api/v1/agent-runs') && method === 'POST') {
     const body = JSON.parse(init.body || '{}')
-    // START 在**首字节之前**（阻塞）；FINISH 是 best-effort、不阻塞首字节
-    // （proxy.js 里是 `void finishAgentRun(...)`），必须分开统计，否则会
-    // 误以为上游被调了两次。
+    // START 在首字节之前(阻塞);FINISH 是 best-effort,不阻塞首字节
+    // (proxy.js 里是 void finishAgentRun(...)),必须分开统计,否则会
+    // 误以为上游被调了两次.
     calls.push({ t: Date.now(), kind: 'agent-runs:' + (body.action || '?') })
     if (body.action === 'START') return jsonRes({ runId: '00000000-0000-4000-8000-000000000001' })
     return jsonRes({ ok: true })
@@ -133,8 +133,8 @@ console.log('=== 上游每次调用延迟 ' + UPSTREAM_MS + 'ms, 模式 ' + MODE
 await ttfb('[1] 首次请求（冷启动：无热 session）')
 await ttfb('[2] 紧接着第二次（应复用热 session）')
 await ttfb('[3] 第三次（热）')
-// 空闲释放后再次请求：默认 idle_release_sec=60s 会早退 DELETE 掉会话，
-// 于是"隔一会儿再来一条"会重新走一遍冷路径 —— 这是**日常最常付**的那段。
+// 空闲释放后再次请求:默认 idle_release_sec=60s 会早退 DELETE 掉会话,
+// 于是"隔一会儿再来一条"会重新走一遍冷路径 —— 这是日常最常付的那段.
 config.session.idleReleaseSec = 0
 const rt = runtimes.getAny()
 console.log('\n[4] 主动释放会话后再请求（模拟空闲释放后的下一条）')

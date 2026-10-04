@@ -1,21 +1,21 @@
 /**
- * 上游契约**单一真源**（端点 + 头名）。
+ - 上游契约单一真源(端点 + 头名).
  *
- * ⚠️ 这个文件是架构级的约束，不是常量收集的便利：
+ - 这个文件是架构级的约束,不是常量收集的便利:
  *
- *   主服务（src/）与官方形态实现（cli-bridge/）**都必须从这里取端点与头名**，
- *   不得各自硬编码字符串。
+ - 主服务(src/)与官方形态实现(cli-bridge/)都必须从这里取端点与头名,
+ - 不得各自硬编码字符串.
  *
- * 为什么：上游一旦改 API（改头名、加端点），若两端各写一份就会出现
- *   "改了一处、另一处静默过期" —— 这正是 2026-10-03 反复踩到的形状
- *   （主服务加了 `x-freebuff-client`，cli-bridge 里还没有；反过来 cli-bridge
- *   有 `x-freebuff-install-id`，主服务却缺失）。
+ - 为什么:上游一旦改 API(改头名,加端点),若两端各写一份就会出现
+ - "改了一处,另一处静默过期" —— 这正是 2026-10-03 反复踩到的形状
+ - (主服务加了 x-freebuff-client,cli-bridge 里还没有;反过来 cli-bridge
+ - 有 x-freebuff-install-id,主服务却缺失).
  *
- * 契约真值来自客户端抓包，由以下两个脚本机器维护：
- *   - `scripts/gen-upstream-contract.mjs`  从抓包生成 docs/reverse/upstream-contract.json
- *   - `scripts/check-upstream-contract.mjs` 拿那份 JSON 与本文件对账（CI 跑）
+ - 契约真值来自客户端抓包,由以下两个脚本机器维护:
+ - - scripts/gen-upstream-contract.mjs  从抓包生成 docs/reverse/upstream-contract.json
+ - - scripts/check-upstream-contract.mjs 拿那份 JSON 与本文件对账(CI 跑)
  *
- * 上游变更后只需：重抓包 → 重生成 JSON → 门禁报出差异 → 改本文件一处。
+ - 上游变更后只需:重抓包 → 重生成 JSON → 门禁报出差异 → 改本文件一处.
  */
 
 // ── 端点 ────────────────────────────────────────────────────────────────
@@ -26,7 +26,7 @@ export const EP_SESSION_ADMISSION = '/api/v1/freebuff/session/admission'
 export const EP_AGENT_RUNS = '/api/v1/agent-runs'
 export const EP_CHAT = '/api/v1/chat/completions'
 
-/** 全部必需端点（用于门禁与文档对账）。 */
+/** 全部必需端点(用于门禁与文档对账). */
 export const REQUIRED_ENDPOINTS = [
   EP_CATALOG,
   EP_DEVICE_KEYS,
@@ -59,7 +59,7 @@ export const H_DEVICE_KEY = 'x-freebuff-device-key'
 export const H_DEVICE_TS = 'x-freebuff-device-ts'
 export const H_DEVICE_SIG = 'x-freebuff-device-sig'
 
-/** 业务头全集（传输层头不在此列）。 */
+/** 业务头全集(传输层头不在此列). */
 export const BUSINESS_HEADERS = [
   H_AUTHORIZATION,
   H_TIMEZONE,
@@ -84,8 +84,8 @@ export const BUSINESS_HEADERS = [
 ]
 
 /**
- * 已**废弃**的头：客户端 165 条抓包里出现 0 次，不得再发送。
- * 列在这里是为了让门禁能拦住回潮（有人"顺手加回来"会直接红）。
+ - 已废弃的头:客户端 165 条抓包里出现 0 次,不得再发送.
+ - 列在这里是为了让门禁能拦住回潮(有人"顺手加回来"会直接红).
  */
 export const RETIRED_HEADERS = [
   'x-codebuff-api-key', // 客户端 0 次（docs/reverse/20 §20.4）
@@ -94,7 +94,7 @@ export const RETIRED_HEADERS = [
 ]
 
 // ── 常量值 ──────────────────────────────────────────────────────────────
-/** 官方客户端 bun 的 UA（抓包实测，勿用 CLI 侧历史值 1.3.14）。 */
+/** 官方客户端 bun 的 UA(抓包实测,勿用 CLI 侧历史值 1.3.14). */
 export const OFFICIAL_BUN_UA = 'Bun/1.4.2'
 export const CATALOG_PROTOCOL_VERSION = '1'
 export const CLIENT_DESKTOP = 'desktop'

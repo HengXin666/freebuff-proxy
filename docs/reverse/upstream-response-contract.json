@@ -1,0 +1,37 @@
+{
+  "//": "上游**响应契约**快照 —— 从 `src/upstream/response-contract.js` 生成，供门禁对账。",
+  "//为什么单独一份而不是塞进 upstream-contract.json": "那份是**抓包生成**的客户端真值（我们发什么），这份是**代码声明**的解析面（我们读什么）。两者真源不同、变更节奏不同：上游改头名要重抓包，上游改回执字段名只要改常量 + 重生成这一份。混在一起会让『重抓包』这个动作变得不安全（会顺手覆盖掉解析面）。",
+  "//生成方式": "node scripts/gates/meta/gen-response-contract.mjs",
+  "version": 1,
+  "generatedAt": "2026-10-04",
+  "generatedFrom": "src/upstream/response-contract.js",
+  "fields": [
+    "desktopPurchases",
+    "freebucks",
+    "freebucksRefund",
+    "freebucksRefundPending",
+    "freebucksShortfall",
+    "holderInstanceId",
+    "instanceId",
+    "purchaseClaim",
+    "rateLimitsByModel",
+    "recentCount",
+    "resetAt",
+    "sessionId"
+  ],
+  "codes": [
+    "banned",
+    "free_mode_capacity_deferred",
+    "ip_capped",
+    "model_unavailable",
+    "premium_slot_taken",
+    "purchase_capacity",
+    "purchase_claim_released",
+    "purchase_in_use",
+    "rate_limited",
+    "session_expired",
+    "spend_limited",
+    "superseded",
+    "waiting_room_required"
+  ]
+}

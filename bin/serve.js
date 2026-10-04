@@ -38,8 +38,8 @@ function parseConfigPath(argv) {
 }
 
 /**
- * 自重启子进程的端口等待：旧进程退出需要一点时间，轮询直到端口可绑定，
- * 避免子进程启动时撞上 EADDRINUSE（裸机/非 Docker 场景）。
+ - 自重启子进程的端口等待:旧进程退出需要一点时间,轮询直到端口可绑定,
+ - 避免子进程启动时撞上 EADDRINUSE(裸机/非 Docker 场景).
  */
 function waitForPortFree(host, port, timeoutMs) {
   const target =
@@ -61,20 +61,20 @@ function waitForPortFree(host, port, timeoutMs) {
 }
 
 /**
- * 启动失败兜底：把"为什么起不来"直接写在日志最后一段。
+ - 启动失败兜底:把"为什么起不来"直接写在日志最后一段.
  *
- * 起因是真实故障——镜像升级后容器起不来，用户只能靠"删几个 json 试试"恢复。
- * 根因是几个 store 在**构造期**直接抛（数据文件数组里混进 null 条目），那时
- * logDataFileAudit() 还没轮到执行，日志里既没有文件名字也没有处置办法。
- * 现在无论哪个阶段抛，都保证输出：错误本身 + 已登记的数据文件状态 +
- * 残留的写盘中间文件 + 可直接照做的处置命令。
- * @param {unknown} err
+ - 起因是真实故障——镜像升级后容器起不来,用户只能靠"删几个 json 试试"恢复.
+ - 根因是几个 store 在构造期直接抛(数据文件数组里混进 null 条目),那时
+ - logDataFileAudit() 还没轮到执行,日志里既没有文件名字也没有处置办法.
+ - 现在无论哪个阶段抛,都保证输出:错误本身 + 已登记的数据文件状态 +
+ - 残留的写盘中间文件 + 可直接照做的处置命令.
+ - @param {unknown} err
  */
 function reportStartupFailure(err) {
   const detail = err instanceof Error ? err.stack || err.message : String(err)
   const lines = [
     '',
-    '[freebuff-proxy] ✗ 启动失败（服务未能进入监听状态）',
+    '[freebuff-proxy]  启动失败（服务未能进入监听状态）',
     `  错误: ${err instanceof Error ? err.message : String(err)}`,
   ]
 
@@ -98,7 +98,7 @@ function reportStartupFailure(err) {
     }
   }
 
-  // 写盘被中断的残留：*.tmp 是原子写的中间态，正常完成后不会留在盘上。
+  // 写盘被中断的残留:*.tmp 是原子写的中间态,正常完成后不会留在盘上.
   try {
     const dataDir = loadConfig(parseConfigPath(process.argv.slice(2))).server.dataDir
     const tmps = fs.readdirSync(dataDir).filter((f) => f.endsWith('.tmp'))
@@ -110,7 +110,7 @@ function reportStartupFailure(err) {
     // 数据目录读不了不影响诊断输出
   }
 
-  // 配置 / 凭据这两类问题的堆栈一眼看不出处置办法，单独点名。
+  // 配置 / 凭据这两类问题的堆栈一眼看不出处置办法,单独点名.
   if (/YAMLParseError|YAML/i.test(detail)) {
     lines.push(
       '  看起来是 config.yaml 解析失败（多为手工编辑出错）。',
@@ -143,10 +143,10 @@ async function main() {
   configureLogger(config.logging)
 
   /**
-   * 数据文件定点自检（启动横幅）：把 data/ 下每个 JSON 的装载结果打印一行。
-   * 起因是真实故障——镜像升级后服务起不来，而日志里只有一行 warn，用户只能
-   * 靠"删掉几个 json 就好了"这种试错。现在启动时**明确说清楚**：哪些文件正常、
-   * 哪些缺失（首次启动）、哪些损坏以及怎么处置。
+   - 数据文件定点自检(启动横幅):把 data/ 下每个 JSON 的装载结果打印一行.
+   - 起因是真实故障——镜像升级后服务起不来,而日志里只有一行 warn,用户只能
+   - 靠"删掉几个 json 就好了"这种试错.现在启动时明确说清楚:哪些文件正常,
+   - 哪些缺失(首次启动),哪些损坏以及怎么处置.
    */
   function logDataFileAudit() {
     const files = dataFileAudit()
@@ -158,12 +158,12 @@ async function main() {
       ok: files.filter((f) => f.status === 'ok').length,
       missing: files.filter((f) => f.status === 'missing').length,
       invalid: bad.length,
-      // 条目级问题（文件合法但丢过脏条目）：与"文件损坏"分开计数，处置办法也不同
+      // 条目级问题(文件合法但丢过脏条目):与"文件损坏"分开计数,处置办法也不同
       droppedEntries: dirty.reduce((n, f) => n + (f.droppedEntries || 0), 0),
     })
     for (const f of bad) {
       console.error(
-        `[freebuff-proxy] ⚠ 数据文件损坏: ${f.file}\n` +
+        `[freebuff-proxy]  数据文件损坏: ${f.file}\n` +
           `  原因: ${f.reason}\n` +
           `  处置: 停服后把该文件移走（mv ${f.file} ${f.file}.broken）再启动即可，\n` +
           `        程序会按默认值重建；要保留历史就先备份。控制台「系统 → 数据文件自检」也会列出。\n`,
@@ -171,7 +171,7 @@ async function main() {
     }
     for (const f of dirty) {
       console.error(
-        `[freebuff-proxy] ⚠ 数据文件含非法条目: ${f.file}\n` +
+        `[freebuff-proxy]  数据文件含非法条目: ${f.file}\n` +
           `  原因: ${f.droppedReason}（丢弃 ${f.droppedEntries} 条）\n` +
           (f.droppedBackup ? `  原文留证: ${f.droppedBackup}\n` : '') +
           `  处置: 无需人工干预——坏条目已被丢弃，服务照常运行；\n` +
@@ -186,7 +186,7 @@ async function main() {
     }
   }
 
-  // 自重启子进程：等旧进程释放端口后再走正常启动流程
+  // 自重启子进程:等旧进程释放端口后再走正常启动流程
   if (process.env.FREEBUFF_PROXY_RESTART_CHILD === '1') {
     logger.info('restart child starting; waiting for port to free', {
       host: config.server.host,
@@ -198,11 +198,11 @@ async function main() {
   const dataDir = config.server.dataDir
   const userStore = new UserStore(path.join(dataDir, 'users.json'))
   /**
-   * users.json 损坏**必须拒绝启动**，绝不能"当成还没有账号"继续跑：
-   * ensureDefaultAdmin 会立刻新建一个 admin，用户看到的是"我的账号和密码全没了"；
-   * 而实际上文件还在盘上（多半是被写坏/版本不兼容），把旧文件挪开就能重新引导。
-   * 数据目录里的其它文件坏了都只是降级（各自有兜底），只有这一份是登录凭据真源，
-   * 静默重建的代价远大于"暂停启动并把原因写清楚"。
+   - users.json 损坏必须拒绝启动,绝不能"当成还没有账号"继续跑:
+   - ensureDefaultAdmin 会立刻新建一个 admin,用户看到的是"我的账号和密码全没了";
+   - 而实际上文件还在盘上(多半是被写坏/版本不兼容),把旧文件挪开就能重新引导.
+   - 数据目录里的其它文件坏了都只是降级(各自有兜底),只有这一份是登录凭据真源,
+   - 静默重建的代价远大于"暂停启动并把原因写清楚".
    */
   if (userStore.loadStatus === 'invalid') {
     console.error(
@@ -223,10 +223,10 @@ async function main() {
     path.join(dataDir, 'web-sessions.json'),
     (config.web.sessionTtlHours || 24 * 7) * 3600 * 1000,
   )
-  // 前端「代理设置」管理的全局代理池（优先于 config.yaml 的 upstream.proxies）
+  // 前端[代理设置]管理的全局代理池(优先于 config.yaml 的 upstream.proxies)
   const proxyStore = new ProxyStore(path.join(dataDir, 'proxies.json'))
   const settingsStore = new SettingsStore(path.join(dataDir, 'settings.json'))
-  // 前端「模型管理」管理的自定义模型列表（覆盖/扩展内置目录）
+  // 前端[模型管理]管理的自定义模型列表(覆盖/扩展内置目录)
   const modelStore = new ModelStore(path.join(dataDir, 'custom-models.json'))
   if (proxyStore.list().length) {
     config.upstream.proxies = proxyStore.list()
@@ -237,10 +237,10 @@ async function main() {
     config.users.defaultAdminUsername,
     config.users.defaultAdminPassword || null,
   )
-  // 密码来源：env(ADMIN_PASSWORD) / users.default_admin_password(config.yaml) /
-  // generated(随机，仅首次启动打印一次)。issue #9：旧日志只说
-  // "password from env"，用户既不知道密码是什么、也分不清是不是 env 生效，
-  // 只能干瞪眼看不出"管理员无法登录"的原因——这里必须把来源和找回方式写清楚。
+  // 密码来源:env(ADMIN_PASSWORD) / users.default_admin_password(config.yaml) /
+  // generated(随机,仅首次启动打印一次).issue #9:旧日志只说
+  // "password from env",用户既不知道密码是什么,也分不清是不是 env 生效,
+  // 只能干瞪眼看不出"管理员无法登录"的原因——这里必须把来源和找回方式写清楚.
   const adminPasswordSource = process.env.ADMIN_PASSWORD
     ? 'env'
     : config.users.defaultAdminPassword
@@ -252,7 +252,7 @@ async function main() {
         'default admin created — credentials shown once in logs below',
         { username: admin.username, passwordSource: adminPasswordSource },
       )
-      // Visible in `docker compose logs` for one-click onboarding
+      // Visible in docker compose logs for one-click onboarding
       console.log(
         `\n[freebuff-proxy] 首次启动：已创建管理员账号\n` +
           `  登录地址: http://<host>:${config.server.port}/\n` +
@@ -280,7 +280,7 @@ async function main() {
       error: admin.error,
     })
   }
-  // 已存在管理员且没给密码：把"怎么找回/重置"写进日志，避免重复开 issue。
+  // 已存在管理员且没给密码:把"怎么找回/重置"写进日志,避免重复开 issue.
   if (!admin.created && !admin.password && adminPasswordSource === 'generated') {
     logger.warn(
       'admin password is not printed again — reset by setting ADMIN_PASSWORD or editing users.default_admin_password',
@@ -302,37 +302,37 @@ async function main() {
   }
 
   const ctx = buildAppContext(config, {
-    // 账号并发上限来自控制台设置（/data/settings.json，默认 1:1），实时生效
+    // 账号并发上限来自控制台设置(/data/settings.json,默认 1:1),实时生效
     getAccountConcurrency: () => settingsStore.get().accountMaxConcurrency,
-    // 账号调度模式（控制台可调）：'sticky'（默认，最少换号）| 'spread'（并发优先）
+    // 账号调度模式(控制台可调):'sticky'(默认,最少换号)| 'spread'(并发优先)
     getSchedulingMode: () => settingsStore.get().accountSchedulingMode,
-    // 额度保护（控制台可调）：空闲自动释放秒数 / 单请求新会话预算
+    // 额度保护(控制台可调):空闲自动释放秒数 / 单请求新会话预算
     getSessionSettings: () => settingsStore.get(),
-    // 自定义模型列表（前端「模型管理」，覆盖内置目录），实时生效
+    // 自定义模型列表(前端[模型管理],覆盖内置目录),实时生效
     getCustomModels: () => modelStore.list(),
   })
   /**
-   * 上游相关的启动工作（**一律不 await**）。
+   - 上游相关的启动工作(一律不 await).
    *
-   * 为什么：这些动作全都依赖"上游此刻可达"，而对**服务本身能不能用**毫无影响
-   * ——控制台、账号/额度查看、代理设置都不需要它们成功。把它们放在监听之前等待，
-   * 等于让一个不可达的上游决定"服务起不起来"：实测（真实数据 + 黑洞上游）v1.13.3
-   * 要 54s 才监听，期间 Docker HEALTHCHECK 一直失败，restart 策略就会把**还在启动
-   * 中**的容器反复杀掉重来——用户看到的就是"反复重启"。
+   - 为什么:这些动作全都依赖"上游此刻可达",而对服务本身能不能用毫无影响
+   - ——控制台,账号/额度查看,代理设置都不需要它们成功.把它们放在监听之前等待,
+   - 等于让一个不可达的上游决定"服务起不起来":实测(真实数据 + 黑洞上游)v1.13.3
+   - 要 54s 才监听,期间 Docker HEALTHCHECK 一直失败,restart 策略就会把还在启动
+   - 中的容器反复杀掉重来——用户看到的就是"反复重启".
    *
-   * 所以顺序固定为：**先把端口监听起来，上游的活再异步做**。
-   * 扫尾本身仍有硬预算（SessionHandleStore：总预算 + 单次超时 + 本地竞速），
-   * 不会带着一个卡死的上游在后台无限堆积。
+   - 所以顺序固定为:先把端口监听起来,上游的活再异步做.
+   - 扫尾本身仍有硬预算(SessionHandleStore:总预算 + 单次超时 + 本地竞速),
+   - 不会带着一个卡死的上游在后台无限堆积.
    */
   function startUpstreamWarmup() {
     /**
-     * ⚠️ 启动时的 npm 版本拉取**已停用**（零自动探测，
-     * docs/reverse/20 §20.3）：它会在每次启动自动打
-     * `registry.npmjs.org`，属于"我们不请自来的外部请求"。
+     - 启动时的 npm 版本拉取已停用(零自动探测,
+     - docs/reverse/20 §20.3):它会在每次启动自动打
+     - registry.npmjs.org,属于"我们不请自来的外部请求".
      *
-     * CLI 版本号改用仓库内的已知值（`getCliVersion()` 的默认值，
-     * 抓包实测 0.2.12）；要跟进官方发版由维护者显式触发，或打开
-     * 设置里的开关（见下）。功能保留、默认不动。
+     - CLI 版本号改用仓库内的已知值(getCliVersion() 的默认值,
+     - 抓包实测 0.2.12);要跟进官方发版由维护者显式触发,或打开
+     - 设置里的开关(见下).功能保留,默认不动.
      */
     const cliVersionAuto = settingsStore?.get?.().cliVersionAutoRefresh === true
     if (!cliVersionAuto) {
@@ -344,9 +344,9 @@ async function main() {
     void refreshCliVersion()
       .then((version) => {
         logger.info('cli fingerprint version aligned', { version })
-        // 遥测上报（可选）：官方 CLI 起进程就会发 app_launched +
-        // fingerprint_generated。我们从不上报 = 服务端眼里一个"只发 chat、
-        // 没有任何客户端生命迹象"的连接。这里按真实时序补上。
+        // 遥测上报(可选):官方 CLI 起进程就会发 app_launched +
+        // fingerprint_generated.我们从不上报 = 服务端眼里一个"只发 chat,
+        // 没有任何客户端生命迹象"的连接.这里按真实时序补上.
         // 判据与取舍见
         // .agents/notes/proposed/architecture/2026-09-30-cli-telemetry-reports.md
         if (settingsStore?.get?.().cliTelemetryEnabled === true) {
@@ -356,9 +356,9 @@ async function main() {
             })
             .catch(() => {})
         }
-        // 周期对齐：CLI 版本随官方发版变化，写死一个过时值本身是可用指纹。
-        // 每 6h 拉一次 npm latest；版本变了就 warn（一眼看出该跟进官方）。
-        // unref：定时器绝不挡进程退出。
+        // 周期对齐:CLI 版本随官方发版变化,写死一个过时值本身是可用指纹.
+        // 每 6h 拉一次 npm latest;版本变了就 warn(一眼看出该跟进官方).
+        // unref:定时器绝不挡进程退出.
         const versionSweeper = setInterval(() => {
           if (settingsStore?.get?.().cliVersionAutoRefresh !== true) return
           const before = getCliVersion()
@@ -377,9 +377,9 @@ async function main() {
       })
       .catch(() => {})
 
-    // 会话句柄扫尾：把上次进程遗留的句柄 DELETE 掉（进程退出后 instanceId 就没了，
-    // 不扫就是"无法寻址的计费孤儿"，一直占着上游槽位；见
-    // docs/account-scheduling-and-refund.md §3）。
+    // 会话句柄扫尾:把上次进程遗留的句柄 DELETE 掉(进程退出后 instanceId 就没了,
+    // 不扫就是"无法寻址的计费孤儿",一直占着上游槽位;见
+    // docs/account-scheduling-and-refund.md §3).
     void ctx.runtimes
       .cleanupOrphanSessions({ budgetMs: 15_000 })
       .then((sweep) => {
@@ -393,10 +393,10 @@ async function main() {
         })
       })
 
-    // **退款追问**：待结算的挂起退款必须持续追，不能只等下次重启。
-    // 上游要求用同一个 instanceId 重放 DELETE 才给终态回执，且结算窗口可能跨
-    // 分钟级；只扫一次 = 进程活着就永远问不到那笔钱（见 docs/account-scheduling-and-refund.md §3）。
-    // 低频（5 分钟）、有界（30s 预算）、unref（不挡进程退出）。
+    // 退款追问:待结算的挂起退款必须持续追,不能只等下次重启.
+    // 上游要求用同一个 instanceId 重放 DELETE 才给终态回执,且结算窗口可能跨
+    // 分钟级;只扫一次 = 进程活着就永远问不到那笔钱(见 docs/account-scheduling-and-refund.md §3).
+    // 低频(5 分钟),有界(30s 预算),unref(不挡进程退出).
     const refundSweeper = setInterval(() => {
       void ctx.runtimes
         .sweepPendingRefunds({ budgetMs: 30_000 })
@@ -409,10 +409,10 @@ async function main() {
     if (refundSweeper.unref) refundSweeper.unref()
 
     if (ctx.authEmail) {
-      // ⚠️ 启动路径**不发任何上游请求**（用户裁决，见
-      // docs/reverse/20-upstream-endpoint-whitelist.md §20.3）。
-      // 以前的 /api/v1/me 自检已删除：客户端 165 条抓包里它出现 **0 次**，
-      // 是我们凭空多出来的流量，本身就是"非客户端"信号。
+      //  启动路径不发任何上游请求(用户裁决,见
+      // docs/reverse/20-upstream-endpoint-whitelist.md §20.3).
+      // 以前的 /api/v1/me 自检已删除:客户端 165 条抓包里它出现 0 次,
+      // 是我们凭空多出来的流量,本身就是"非客户端"信号.
       logger.info('upstream auth ready (no upstream request on startup)', {
         account: ctx.authEmail,
         accounts: ctx.runtimes.list().map((a) => a.email),
@@ -428,12 +428,12 @@ async function main() {
     file: path.join(dataDir, 'login-flows.json'),
     credentialsDir: ctx.runtimes.dir,
     config,
-    // 浏览器登录回调也是写凭据的入口：记「凭证更新时间」到账号账本。
+    // 浏览器登录回调也是写凭据的入口:记[凭证更新时间]到账号账本.
     onCredentialSaved: (key) => ctx.runtimes.markCredentialUpdated(key),
   })
-  // catalog 运行时缓存是**懒加载**的（第一次用到模型才读）。这里先按 dataDir
-  // 切路径并读一次，一是保证 /v1/models 与内置目录一致（原来由 startServer 里的
-  // 异步分支兜底，容器里可能晚于首个请求），二是让"缓存损坏"能出现在下面的自检里。
+  // catalog 运行时缓存是懒加载的(第一次用到模型才读).这里先按 dataDir
+  // 切路径并读一次,一是保证 /v1/models 与内置目录一致(原来由 startServer 里的
+  // 异步分支兜底,容器里可能晚于首个请求),二是让"缓存损坏"能出现在下面的自检里.
   try {
     const { applyCatalogCache } = await import('../src/model.js')
     applyCatalogCache(dataDir)
@@ -442,8 +442,8 @@ async function main() {
       error: err instanceof Error ? err.message : String(err),
     })
   }
-  // 到这里 data/ 下的 JSON 已全部装载过一遍（控制面 6 个 + 句柄索引 + 账号账本
-  // + 登录流程 + catalog 缓存），一次性把自检结果打到启动日志里。
+  // 到这里 data/ 下的 JSON 已全部装载过一遍(控制面 6 个 + 句柄索引 + 账号账本
+  // + 登录流程 + catalog 缓存),一次性把自检结果打到启动日志里.
   logDataFileAudit()
 
   let server = null
@@ -451,9 +451,9 @@ async function main() {
     logger.info('shutting down', { signal })
     loginFlows.shutdown()
     try {
-      // strict：等到每条上游会话真的 DELETE 掉（或退避重试耗尽）再退出。
-      // 退出即失去内存里的 instanceId，不严格释放就会留下占着槽位的孤儿；
-      // 失败的句柄已落盘 sessions.json，下次启动扫尾继续删。
+      // strict:等到每条上游会话真的 DELETE 掉(或退避重试耗尽)再退出.
+      // 退出即失去内存里的 instanceId,不严格释放就会留下占着槽位的孤儿;
+      // 失败的句柄已落盘 sessions.json,下次启动扫尾继续删.
       const rel = await ctx.runtimes.shutdown({ strict: true })
       if (rel && rel.failed && rel.failed.length) {
         logger.warn('sessions still live at shutdown (handles persisted)', {
@@ -467,7 +467,7 @@ async function main() {
     }
     if (server) {
       server.close(() => process.exit(0))
-      // 重启场景下立即断开存量连接，让端口尽快释放给子进程
+      // 重启场景下立即断开存量连接,让端口尽快释放给子进程
       server.closeAllConnections?.()
     } else {
       process.exit(0)
@@ -476,9 +476,9 @@ async function main() {
   }
 
   /**
-   * 前端「重启服务」：spawn 一个 detached 子进程（等待端口释放后接管），
-   * 然后当前进程优雅退出。Docker 场景下容器主进程退出会触发 restart 策略
-   * 整容器重建；裸机场景由子进程无缝接管。
+   - 前端[重启服务]:spawn 一个 detached 子进程(等待端口释放后接管),
+   - 然后当前进程优雅退出.Docker 场景下容器主进程退出会触发 restart 策略
+   - 整容器重建;裸机场景由子进程无缝接管.
    */
   function scheduleRestart() {
     const child = spawn(
@@ -517,8 +517,8 @@ async function main() {
     restart: scheduleRestart,
   })
 
-  // 端口已经在监听了 —— 现在才去碰上游（扫尾 + 身份自检）。
-  // 顺序是刻意的：上游可达与否绝不能决定"服务起不起来"。
+  // 端口已经在监听了 —— 现在才去碰上游(扫尾 + 身份自检).
+  // 顺序是刻意的:上游可达与否绝不能决定"服务起不起来".
   startUpstreamWarmup()
 
   process.on('SIGINT', () => shutdown('SIGINT'))

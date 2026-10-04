@@ -3,9 +3,13 @@
 > **本文件是对照的唯一真源。** 判断"我方某个请求是否与客户端一致"，
 > 一律以此为准 —— **不要只看代码**（代码写的头 ≠ 实际发出的头，见 §21.7）。
 >
-> 数据来源：两次 mitm 抓包共 **165 条**（`captures/2026-10-03-official-client.jsonl`
-> 88 条 + `captures/2026-10-03-e2/...-e2.jsonl` 77 条）。
+> 数据来源：两次 mitm 抓包共 **165 行记录**（`captures/2026-10-03-official-client.jsonl`
+> 88 行 + `captures/2026-10-03-e2/...-e2.jsonl` 77 行）。
 > 抓取方法见 `19` §19.1。
+>
+>  **三个数字别混**（2026-10-05 实测校准）：**165 = 文件行数**；
+> **按 `(ts, method, path)` 去重 = 83**；**折算掉 `?query` 后的路径类型 = 15**（即下表 15 行）。
+> 本文早期版本另有一处写「合计 82」，与三种口径都不符，已删除。
 
 ---
 
@@ -13,21 +17,21 @@
 
 | # | Method | Path | 总次数 | 用途 | 是否必需 |
 |---|---|---|---|---|---|
-| 1 | GET | `/api/v1/freebuff/models` | 1 | **取模型目录**（13 行 + `fetchId` + 句柄） | ✅ 必需 |
-| 2 | POST | `/api/v1/freebuff/device-keys` | 1 | 注册 Ed25519 设备公钥 → 拿 `keyId` | ✅ 必需（签名前置） |
-| 3 | GET | `/api/v1/freebuff/session` | 17 | 查会话状态 / 额度 / 单价 | ✅ 必需（只读） |
-| 4 | POST | `/api/v1/freebuff/session/admission` | 3 | **建会话**（买断一小时） | ✅ 必需 |
-| 5 | DELETE | `/api/v1/freebuff/session` | 2 | 释放会话（退槽位） | ✅ 必需 |
-| 6 | POST | `/api/v1/agent-runs` | 6 | START / FINISH（desktop 世代 agentId） | ✅ 必需 |
-| 7 | POST | `/api/v1/chat/completions` | 8 | **真正的对话**（唯一 chat 端点） | ✅ 必需 |
-| 8 | GET | `/api/v1/ads/policy` | 1 | 广告策略 | ⚪ 可免 |
-| 9 | GET | `/api/v1/ads/proposal` | 5 | 广告位 | ⚪ 可免 |
-| 10 | POST | `/api/v1/ads` | 1 | 广告上报 | ⚪ 可免 |
-| 11 | POST | `/api/v1/ads/impression` | 9 | 广告曝光（**其中 7 次 404**） | ⚪ 可免 |
-| 12 | POST | `/api/ads` | 2 | 广告（另一 origin 路径） | ⚪ 可免 |
-| 13 | POST | `/api/logs` | 7 | 遥测 | ⚪ 可免 |
-| 14 | GET | `/api/v1/project-profile` | 1 | 项目画像 | ⚪ 可免 |
-| 15 | HEAD | `/` | 18 | 连通性探测 | ⚪ 可免 |
+| 1 | GET | `/api/v1/freebuff/models` | 1 | **取模型目录**（13 行 + `fetchId` + 句柄） |  必需 |
+| 2 | POST | `/api/v1/freebuff/device-keys` | 1 | 注册 Ed25519 设备公钥 → 拿 `keyId` |  必需（签名前置） |
+| 3 | GET | `/api/v1/freebuff/session` | 17 | 查会话状态 / 额度 / 单价 |  必需（只读） |
+| 4 | POST | `/api/v1/freebuff/session/admission` | 3 | **建会话**（买断一小时） |  必需 |
+| 5 | DELETE | `/api/v1/freebuff/session` | 2 | 释放会话（退槽位） |  必需 |
+| 6 | POST | `/api/v1/agent-runs` | 6 | START / FINISH（desktop 世代 agentId） |  必需 |
+| 7 | POST | `/api/v1/chat/completions` | 8 | **真正的对话**（唯一 chat 端点） |  必需 |
+| 8 | GET | `/api/v1/ads/policy` | 1 | 广告策略 |  可免 |
+| 9 | GET | `/api/v1/ads/proposal` | 5 | 广告位 |  可免 |
+| 10 | POST | `/api/v1/ads` | 1 | 广告上报 |  可免 |
+| 11 | POST | `/api/v1/ads/impression` | 9 | 广告曝光（**其中 7 次 404**） |  可免 |
+| 12 | POST | `/api/ads` | 2 | 广告（另一 origin 路径） |  可免 |
+| 13 | POST | `/api/logs` | 7 | 遥测 |  可免 |
+| 14 | GET | `/api/v1/project-profile` | 1 | 项目画像 |  可免 |
+| 15 | HEAD | `/` | 18 | 连通性探测 |  可免 |
 
 **客户端从未发过的端点**（我方曾误用，已删）：
 `GET /api/v1/me`（0 次）、`POST /api/chat/stream`（0 次，web 世代残留）。
@@ -47,7 +51,7 @@
 [5] DELETE /api/v1/freebuff/session       ← 释放（清理上一次残留）
 ```
 
-⚠️ **顺序铁律**：`models` **先于** `device-keys`，`device-keys` **先于** 任何带签名的请求。
+ **顺序铁律**：`models` **先于** `device-keys`，`device-keys` **先于** 任何带签名的请求。
 因为签名需要 `keyId`，而 `keyId` 来自 `device-keys`；`catalog-fetch` 需要 `fetchId`，
 而 `fetchId` 来自 `models`。
 
@@ -67,7 +71,7 @@
 [11] POST /api/v1/agent-runs                      ← START worker
 [12] POST /api/v1/freebuff/session/admission      ← 换模型时重新 admission
 [13] POST /api/v1/agent-runs
-[14] POST /api/v1/chat/completions                ← worker 层（37 工具）★ 真正干活
+[14] POST /api/v1/chat/completions                ← worker 层（37 工具） 真正干活
 [15] POST /api/logs
 [16] …worker 多轮 chat（每轮 llm_step_number 递增）…
 [17] POST /api/v1/agent-runs       {"action":"FINISH", ...}   ← 收尾（我们目前缺）
@@ -97,7 +101,9 @@ x-freebuff-catalog-protocol: 1
 x-freebuff-client: desktop
 ```
 
-⚠️ **不带设备签名**。全 165 条里只有 `/api/v1/freebuff/session` 带签名（13 次）。
+ **不带设备签名**。签名三头**只出现在需要它的几跳**（`session` / `admission` / `DELETE session` / `chat/completions`），
+目录与 device-keys 注册**都不带** —— 真值表见 §21.4。（文中早期版本写的「全 165 条里只有 session 带签名、13 次」
+与 §21.4 互斥，已按实测删除。）
 带了会让目录行数从 13 变 53（`19` §19.9）。
 body：无。
 
@@ -134,7 +140,7 @@ x-freebuff-multi-session: 1
 ```
 x-freebuff-desktop-attempt-id: <uuid>      ← 每次购买尝试独立生成
 x-freebuff-instance-id: <裸 uuid>          ← 整场复用，同一值
-x-freebuff-model: <fbm1.句柄>              ← ⚠️ 必须是句柄，不是模型名/key
+x-freebuff-model: <fbm1.句柄>              ←  必须是句柄，不是模型名/key
 x-freebuff-purchase-continuity: 1
 x-freebuff-wallet-spend-limit: 0
 ```
@@ -145,7 +151,7 @@ x-freebuff-wallet-spend-limit: 0
 Authorization: Bearer <token>
 x-freebuff-catalog-fetch: <fetchId>
 x-freebuff-device-key / -sig / -ts
-x-freebuff-instance-id: <uuid>             ← ⚠️ 必带，否则上游 400 instance_required
+x-freebuff-instance-id: <uuid>             ←  必带，否则上游 400 instance_required
 x-freebuff-multi-session: 1
 x-freebuff-purchase-continuity: 1
 ```
@@ -158,7 +164,7 @@ x-freebuff-acting-user-id: <userId>
 Content-Type: application/json
 ```
 
-⚠️ **没有** `x-codebuff-api-key`、**没有** catalog 头、**没有** 设备签名。
+ **没有** `x-codebuff-api-key`、**没有** catalog 头、**没有** 设备签名。
 body：`{"action":"START","agentId":"freebuff-desktop-autorun","ancestorRunIds":[]}`
 worker 层 agentId：`freebuff-desktop-thread-local-v3`
 
@@ -170,7 +176,7 @@ Content-Type: application/json
 User-Agent: ai-sdk/openai-compatible/0.0.0-test/codebuff
             ai-sdk/provider-utils/3.0.25 runtime/bun/1.4.2     ← 三段，非 Bun/1.4.2
 x-freebuff-acting-user-id: <userId>
-x-freebuff-catalog-fetch: <fetchId>        ← ⚠️ 只有 -fetch，没有 -protocol
+x-freebuff-catalog-fetch: <fetchId>        ←  只有 -fetch，没有 -protocol
 x-freebuff-device-key / -sig / -ts
 ```
 
@@ -189,13 +195,13 @@ body 顶层恒为 7 键：`model` / `codebuff_metadata` / `provider` / `messages
 
 | 端点 | 签名 |
 |---|---|
-| `GET /models` | ❌ 不带 |
-| `POST /device-keys` | ❌ 不带 |
-| `GET /session` | ✅ 带 |
-| `POST /session/admission` | ✅ 带 |
-| `DELETE /session` | ✅ 带 |
-| `POST /agent-runs` | ❌ 不带 |
-| `POST /chat/completions` | ✅ 带 |
+| `GET /models` |  不带 |
+| `POST /device-keys` |  不带 |
+| `GET /session` |  带 |
+| `POST /session/admission` |  带 |
+| `DELETE /session` |  带 |
+| `POST /agent-runs` |  不带 |
+| `POST /chat/completions` |  带 |
 
 签名载荷（官方 `freebuffDeviceSignaturePayload`）：
 
@@ -215,15 +221,15 @@ freebuff-device-v1
 
 | 端点 | 状态 | 说明 |
 |---|---|---|
-| `GET /models` | ✅ **一致** | 走 bun 通道，逐字节相同（`19` §19.10 / note `...catalog-request-via-bun`） |
-| `POST /device-keys` | ✅ **一致** | 走 bun（`rpcRegisterDeviceKey`）；注册是惰性的，
+| `GET /models` |  **一致** | 走 bun 通道，逐字节相同（`19` §19.10 / note `...catalog-request-via-bun`） |
+| `POST /device-keys` |  **一致** | 走 bun（`rpcRegisterDeviceKey`）；注册是惰性的，
   首次需要签名时才发 |
-| `GET /session` | ✅ **一致** | 走 bun 端口 `rpcSession()`，实测头集逐项相同（见下） |
-| `POST /admission` | ✅ 已对齐 | P0 项，见 `15` |
-| `DELETE /session` | ✅ **一致** | 走 bun（`rpcReleaseSession`），实测含
+| `GET /session` |  **一致** | 走 bun 端口 `rpcSession()`，实测头集逐项相同（见下） |
+| `POST /admission` |  已对齐 | P0 项，见 `15` |
+| `DELETE /session` |  **一致** | 走 bun（`rpcReleaseSession`），实测含
   `x-freebuff-instance-id` + 签名三头 |
-| `POST /agent-runs` | ✅ 已对齐 | 3 个业务头 + desktop 世代 agentId |
-| `POST /chat/completions` | ✅ 已对齐 | 8 个业务头，实测 200 + 工具调用（`16`） |
+| `POST /agent-runs` |  已对齐 | 3 个业务头 + desktop 世代 agentId |
+| `POST /chat/completions` |  已对齐 | 8 个业务头，实测 200 + 工具调用（`16`） |
 
 ### session 改走 bun 端口（**不在主服务手写头**）
 
@@ -236,12 +242,12 @@ freebuff-device-v1
 现在 `freebuffSession('GET')` 走 `rpcSession()` 端口，
 官方形态的实现只有一份，在 cli-bridge。
 
-⚠️ **踩到的坑**：主服务私钥落盘是 **PEM**，cli-bridge 的
+ **踩到的坑**：主服务私钥落盘是 **PEM**，cli-bridge 的
 `derFromB64u()` 要 **base64url 裸 DER** → `atob()` 抛
 "The string contains invalid characters." → 整个 bun 请求**静默失败并
 回落 Node**，表现就是"通道没生效"。已在 `buildRpcCfg()` 做格式归一。
 
-⚠️ **教训**：通道接上 ≠ 通道生效。失败会静默回落，必须抓实际报文
+ **教训**：通道接上 ≠ 通道生效。失败会静默回落，必须抓实际报文
 确认走了哪条路径。
 
 本地镜像实测 bun 通道发出的 session 头（与客户端真值逐项一致）：
@@ -284,15 +290,17 @@ node tools/cdp-ui.mjs send  '.composer-input' '<文本>'
 
 ---
 
-## 21.7 ⚠️ 方法铁律：代码写的头 ≠ 实际发出的头
+## 21.7  方法铁律：代码写的头 ≠ 实际发出的头
 
 判断"是否一致"**必须抓真实报文**。做法：起一个本地镜像，
-把 `config.yaml` 的 `api_base` 指向它，打印收到的原始头。
+用环境变量 `FREEBUFF_UPSTREAM_API_BASE` 把上游主机指向它（**不是** `config.yaml` 的
+`api_base` —— 那个已被硬编码真源覆盖、写了无效，见 `docs/configuration.md` 与 `src/config.js:381`），
+打印收到的原始头。
 
 ```bash
 # 镜像（HTTP 即可，排除 TLS 干扰）
 node /tmp/mirror.mjs        # listen 9544，打印 req.headers
-# config.yaml: api_base: http://127.0.0.1:9544
+# 启动本服务时：FREEBUFF_UPSTREAM_API_BASE=http://127.0.0.1:9544 node bin/serve.js
 ```
 
 实测发现的两类坑：

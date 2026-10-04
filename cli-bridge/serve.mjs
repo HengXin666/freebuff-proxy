@@ -1,14 +1,14 @@
 /**
- * serve.mjs — OpenAI 兼容服务（Node 侧入口），上游请求交给 bun 执行。
+ - serve.mjs — OpenAI 兼容服务(Node 侧入口),上游请求交给 bun 执行.
  *
- * 端点：
- *   GET  /v1/models
- *   POST /v1/chat/completions      （stream / 非 stream）
- *   GET  /healthz
+ - 端点:
+ - GET  /v1/models
+ - POST /v1/chat/completions      (stream / 非 stream)
+ - GET  /healthz
  *
- * 与 freebuff-proxy 的关系：**独立实现，不改动它**。
- * 本目录是验证「用官方 bun 运行时承载上游请求」的可行性，
- * 结论成立后再决定如何并回主项目。
+ - 与 freebuff-proxy 的关系:独立实现,不改动它.
+ - 本目录是验证[用官方 bun 运行时承载上游请求]的可行性,
+ - 结论成立后再决定如何并回主项目.
  */
 
 import { createServer } from 'node:http';
@@ -32,15 +32,15 @@ let CATALOG_AT = 0;
 const CATALOG_TTL_MS = 10 * 60 * 1000;
 
 /**
- * 把上游的 **SSE 流式响应**聚合成一次性结果。
+ - 把上游的 SSE 流式响应聚合成一次性结果.
  *
- * 为什么需要：上游是流式的（官方链路即流式，stream=false 实测 503），
- * 而下游客户端可能要非流式。不解析的话会把 `data: {...}` 原文塞进 content，
- * 客户端拿到一堆无法使用的文本（2026-10-03 实测踩到）。
+ - 为什么需要:上游是流式的(官方链路即流式,stream=false 实测 503),
+ - 而下游客户端可能要非流式.不解析的话会把 data: {...} 原文塞进 content,
+ - 客户端拿到一堆无法使用的文本(2026-10-03 实测踩到).
  *
- * @param {string} text SSE 原文
- * @returns {{ content: string, toolCalls: any[], id: string|null, reasoning: string }|null}
- *   不是 SSE（或无有效块）时返回 null
+ - @param {string} text SSE 原文
+ - @returns {{ content: string, toolCalls: any[], id: string|null, reasoning: string }|null}
+ - 不是 SSE(或无有效块)时返回 null
  */
 function aggregateSse(text) {
   const src = String(text || '');
@@ -91,7 +91,7 @@ async function getCatalog(force = false) {
 }
 
 function toModelId(row) {
-  // 对外暴露可读 id：优先 legacy 风格名，回落到 key
+  // 对外暴露可读 id:优先 legacy 风格名,回落到 key
   return row.displayName ? String(row.displayName).toLowerCase() : row.key;
 }
 
@@ -162,10 +162,10 @@ const server = createServer(async (req, res) => {
           },
         });
       }
-      // ⚠️ 不再在这里拼 system / 补签名工具 / 指定 agent —— 那些是**副仓库**
-      // 的职责（官方形态只在 cli-bridge 有一份）。这里只传原始 messages/tools。
+      //  不再在这里拼 system / 补签名工具 / 指定 agent —— 那些是副仓库
+      // 的职责(官方形态只在 cli-bridge 有一份).这里只传原始 messages/tools.
       //
-      // ⚠️ stream 恒为 true：官方链路就是流式的，实测 stream=false 会 503。
+      //  stream 恒为 true:官方链路就是流式的,实测 stream=false 会 503.
       const out = await callBun(
         {
           cfg: CONFIG,
@@ -187,7 +187,7 @@ const server = createServer(async (req, res) => {
       const chat = out.chat || {};
       const status = chat.status || 502;
 
-      // 上游非 200：原样透传（保留业务码，便于归因）
+      // 上游非 200:原样透传(保留业务码,便于归因)
       if (status !== 200) {
         let parsed = null;
         try {
@@ -204,9 +204,9 @@ const server = createServer(async (req, res) => {
         });
       }
 
-      // 200：转成 OpenAI 形态返回。
-      // ⚠️ 上游是 SSE（stream 恒 true），非流式请求必须**先聚合**再返回，
-      // 否则会把 `data: {...}` 原文塞进 content。
+      // 200:转成 OpenAI 形态返回.
+      //  上游是 SSE(stream 恒 true),非流式请求必须先聚合再返回,
+      // 否则会把 data: {...} 原文塞进 content.
       const sse = aggregateSse(chat.text || '');
       if (sse) {
         const msg = { role: 'assistant', content: sse.content || '' }
@@ -285,11 +285,11 @@ const server = createServer(async (req, res) => {
   return json(res, 404, { error: { message: 'not found' } });
 });
 
-// 可用环境变量指定账号（客户端未登录 / 想用另一个号时）。
-// 例：FREEBUFF_TOKEN=xxx FREEBUFF_USER_ID=xxx node serve.mjs
+// 可用环境变量指定账号(客户端未登录 / 想用另一个号时).
+// 例:FREEBUFF_TOKEN=xxx FREEBUFF_USER_ID=xxx node serve.mjs
 //
-// 为什么需要：loadConfig() 默认读官方客户端的登录态，一台机器同时只有
-// 一个登录账号；而多账号池场景常常要显式指定用哪个号。
+// 为什么需要:loadConfig() 默认读官方客户端的登录态,一台机器同时只有
+// 一个登录账号;而多账号池场景常常要显式指定用哪个号.
 const override = {}
 if (process.env.FREEBUFF_TOKEN) override.token = process.env.FREEBUFF_TOKEN
 if (process.env.FREEBUFF_USER_ID) override.userId = process.env.FREEBUFF_USER_ID
