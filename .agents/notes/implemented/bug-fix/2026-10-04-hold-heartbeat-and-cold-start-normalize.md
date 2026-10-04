@@ -58,11 +58,18 @@ bun 侧 `getSession()` 也不构造这两个头。
   （fire-and-forget）；轮询 `refresh({heartbeat: true})` 走心跳形态保活。
   控制台「检测/刷新」仍走普通形态（要拿额度/单价）。
 
-### 二、把「目录加载」提到「归一化」之前
+### 二、把「目录加载」提到「归一化」之前，且让它在冷启动时真的能抓
 
 `proxy.js`：在 `resolveModelAlias()` **之前**加一步「目录为空则先
 `refreshCatalogs({force:false})`」。该请求本来就必须抓目录（admission 要句柄），
 与零自动探测不冲突（§20.3 禁的是启动/导入/首访模型表时空跑）。
+
+⚠️ **但这一步在冷启动时是空转的**（容器端到端实测发现）：`refreshCatalogs()`
+遍历的是 `this.byKey`（**已创建的 runtime**），而 runtime 是懒创建的 ——
+新部署的 `byKey` 为空 → **一次都不抓** → 目录永远空 → 全部模型
+`model_not_allowed`（400）。
+所以 `refreshCatalogs()` 开头补一步「按凭据文件列表 `this.get(row.key)` 先把
+runtime 建出来」。这与零自动探测同样不冲突：调用方只在请求路径上走到它。
 
 ### 三、`purchase_claim_released` 改为「换新 instanceId 重试」
 
@@ -113,6 +120,10 @@ bun 侧 `getSession()` 也不构造这两个头。
 
 - 真实 5 轮连跑（用户账号 `loli@woa.qzz.io`，25/25 额度）：
   **HTTP 200 ×5**，一条会话（`expiresAt 13:17`）撑住全部 5 轮。
+- **容器端到端 5 轮**（最接近远程环境的验证，冷启动首个请求即发）：
+  **HTTP 200 ×5**；日志里 `official channel: rpc result` ×5、
+  `hold heartbeat sent` ×1、`freebuff session active` ×1、
+  `superseded`/`refunded` **×0**。
 - 关键机制逐项验证（本地日志）：
   - `x-freebuff-model: "fbm1.AAEAAUPrFd6jDLqK..."`（句柄，不再是可读名）
   - `hold heartbeat sent ... status: active`（此前 0 次）

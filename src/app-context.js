@@ -651,6 +651,20 @@ export class AccountRuntimes {
     let ok = 0
     let failed = 0
     const jobs = []
+    /**
+     * ⚠️ **冷启动时 `byKey` 是空的**（runtime 懒创建），直接遍历它等于"一次都不抓"
+     * —— 实测（2026-10-04 容器端到端）：新部署第一个请求拿不到目录 →
+     * 全部模型被判 `model_not_allowed`（400）。
+     *
+     * 所以先按**凭据文件列表**把 runtime 建出来（`this.get()` 会懒创建），
+     * 再抓。这与"零自动探测"不冲突：调用方只在**用户正在发真实请求**时走到这里
+     * （目录是该请求的必要前置，admission 要用目录句柄）。
+     */
+    try {
+      for (const row of this.list()) this.get(row.key)
+    } catch {
+      // 取账号失败不阻塞：下面按现有 byKey 尽力抓
+    }
     for (const rt of this.byKey.values()) {
       const cat = rt?.upstream?.catalog
       if (!cat) continue
