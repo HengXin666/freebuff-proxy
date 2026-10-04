@@ -812,6 +812,44 @@ export class SessionManager {
       await this._releaseUnlocked()
     }
 
+    /**
+     * ★ **admission 前先把"待结束的会话"结清**（官方行为，2026-10-04 逆向后补）。
+     *
+     * 官方 `orchestrator.js:208130-208136`：
+     *
+     *   for (let end of journal.pending(owner)) {
+     *     if (end.instanceId !== instanceId) continue;
+     *     if ((await recovery.finish(end, auth, {...})).status === "ended") continue;
+     *     throw localSessionError("previous_end_unconfirmed");
+     *   }
+     *
+     * 即：**同一条 instanceId 上有未结清的会话时，先把它结束掉再 admission**。
+     * 否则上游会认为该账号的槽位仍被占（`purchase_capacity`）—— 而本地账本
+     * 却显示 `status: none`（因为 `_apply` 早把它覆盖成 none 了），
+     * 面板与上游各说各话，正是用户看到的"明明没会话却说槽位被占"。
+     *
+     * 实测（2026-10-04 远程 12:52:18）：账号直连上游 `status: none`、`
+     * balance 15`，但远程 admission 一直 `purchase_capacity`。
+     *
+     * 只在**确实处于待结束状态**时做（`_releasePending`），正常路径零开销。
+     */
+    if (this._releasePending && this.session?.instanceId) {
+      const stale = this.session.instanceId
+      logger.info('admit: clearing a pending session end first', {
+        model,
+        staleInstanceId: stale,
+      })
+      await this.upstream
+        .freebuffSession('DELETE', { instanceId: stale })
+        .catch((err) => {
+          logger.warn('admit: pending-end DELETE failed; continuing', {
+            staleInstanceId: stale,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        })
+      this._releasePending = false
+    }
+
     // 官方 CLI **自己生成** claim（`cli:<uuid>`）并带给服务端，而不是等服务端
     // 签发一个裸 uuid —— 服务端据此认出这是 CLI 的 claim
     // （"The server reads it to tell the CLI's claims from Desktop tabs"）。

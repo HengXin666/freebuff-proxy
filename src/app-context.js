@@ -1703,11 +1703,26 @@ export class AccountRuntimes {
             expiresAt: err?.body?.expiresAt ?? null,
           })
         } else if (SLOT_BUSY_CODES.has(String(err?.code))) {
+          /**
+           * ⚠️ 必须把**上游回执的细节**记下来（2026-10-04 教训）。
+           *
+           * `purchase_capacity` / `purchase_in_use` / `premium_slot_taken` 的
+           * 回执里带 `currentInstanceId` / `nextExpiryAt` / `slotLimit` ——
+           * 那是**定位"槽位被谁占"的唯一线索**。此前只记 code，于是用户遇到
+           * 「上游说 status:none、balance 15，本地却一直 slot busy」时
+           * 完全查不出是谁占的（我为此白查了一轮）。
+           */
+          const b = err?.body && typeof err.body === 'object' ? err.body : {}
           logger.warn('account session slot busy; not cooling', {
             key,
             email: emailByKey.get(key),
             code: err?.code,
             model,
+            currentInstanceId: b.currentInstanceId ?? null,
+            nextExpiryAt: b.nextExpiryAt ?? null,
+            slotLimit: b.slotLimit ?? null,
+            concurrency: b.concurrency ?? null,
+            requestedModel: b.requestedModel ?? null,
           })
         } else {
           const wrap =
@@ -1877,12 +1892,28 @@ export class AccountRuntimes {
      * 带上 balance / price / resetAt 后，这句话才自解释。
      */
     const fbSummary = summarizeFreebucks(failures, this, model)
+    /**
+     * ⚠️ message 里**逐账号列出**每一笔账，不再只报"最差那个"。
+     *
+     * 实测误导（2026-10-04 用户报）：池里 3 个号，其中**有 15 点**的那个被
+     * 正常放行、卡在槽位；而 message 只报 `balance 0 < price 15`（那是另外两个
+     * 0 余额号的账）→ 用户看到"页面明明显示 15，却说我一点都没有"。
+     *
+     * 数字必须与账号一一对应才不误导。message 不写邮箱（那是 PII，
+     * 且 message 最容易被整段转发），只按序号列出每笔账。
+     */
+    const ledger = (fbSummary?.accounts || [])
+      .map(
+        (a, i) =>
+          `#${i + 1} balance=${a.balance ?? '?'} price=${a.price ?? '?'}` +
+          ` (daily ${a.dailyRemaining ?? '?'}/${a.dailyLimit ?? '?'}${a.reason ? `, ${a.reason}` : ''})`,
+      )
+      .join('; ')
     throw new UpstreamError(
       `No available Freebuff account for model ${model}. Tried ${failures.length} account(s).` +
-        (fbSummary
-          ? ` Freebucks: balance ${fbSummary.balance ?? '?'} < price ${fbSummary.price ?? '?'}` +
-            ` (daily pool ${fbSummary.dailyRemaining ?? '?'}/${fbSummary.dailyLimit ?? '?'})` +
-            `${fbSummary.resetAt ? `; refills ${fbSummary.resetAt}` : ''}.` +
+        (ledger
+          ? ` Per-account Freebucks: ${ledger}.` +
+            (fbSummary?.resetAt ? ` Refills ${fbSummary.resetAt}.` : '') +
             ' One admit buys a whole hour and is charged upfront.'
           : ''),
       {
