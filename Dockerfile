@@ -75,8 +75,17 @@ RUN /opt/bun/bun --version > /dev/null && echo "bun runtime present: $(/opt/bun/
 VOLUME ["/data"]
 EXPOSE 8787
 
+# ⚠️ HEALTHCHECK 用 **node 自己探活**，不用 wget/curl。
+#
+# 为什么（2026-10-04 CI 实测踩到）：基镜像从 alpine 换成 slim 后，
+# `wget` **不存在**（alpine 是 busybox 内置，Debian 没有）——
+# 于是 HEALTHCHECK 永远失败，容器一直停在 `health: starting`，
+# CI 的 image-boot 13 个场景**全部 FAIL**（而应用其实起得好好的，
+# healthz 明明回 200）。这类"应用正常但探活工具缺失"的失败极具迷惑性。
+#
+# node 一定存在（基镜像就是 node），用它发一次 HTTP 请求最稳、零额外依赖。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD wget -qO- "http://127.0.0.1:${FREEBUFF_PROXY_PORT:-8787}/healthz" >/dev/null 2>&1 || exit 1
+  CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.FREEBUFF_PROXY_PORT||8787)+'/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["node", "bin/serve.js"]

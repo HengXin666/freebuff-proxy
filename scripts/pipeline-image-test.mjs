@@ -213,15 +213,42 @@ function stopContainer(name) {
  * 就是应用本身，等价于用户在本机浏览器打开控制台。失败返回 null。
  */
 function loginInsideContainer(name) {
-  const body = JSON.stringify({ username: 'admin', password: 'pipeline-admin-pw' })
-  const cmd =
-    "wget -qO- -S --header='Content-Type: application/json' --post-data='" +
-    body +
-    "' http://127.0.0.1:${FREEBUFF_PROXY_PORT:-8787}/api/auth/login 2>&1 | head -30"
+  /**
+   * ⚠️ 用 **node** 探活，且脚本必须**单行**（2026-10-04 CI 实测两次踩坑）。
+   *
+   * 坑一：基镜像从 alpine 换成 slim 后容器里**没有 wget**（alpine 是 busybox
+   *   内置，Debian 没有）。旧实现 `docker exec … wget …` 直接失败，表现为
+   *   「容器内 admin 登录失败（拿不到会话 cookie）」—— 而被测应用其实完全正常。
+   * 坑二：改成 `node -e "多行脚本"` 后，`JSON.stringify` 会把换行转义成**字面
+   *   `\n`**（反斜杠+n），而外层 `sh -c` 不解释它 → node 收到含字面 `\n` 的
+   *   单行 → `SyntaxError: Invalid or unexpected token`。
+   *
+   * 所以这里用**分号分隔的单行脚本**（不经 shell 转义新行），稳。
+   */
+  const parts = [
+    "const http=require('http')",
+    "const body=JSON.stringify({username:'admin',password:'pipeline-admin-pw'})",
+    "const req=http.request({host:'127.0.0.1',port:process.env.FREEBUFF_PROXY_PORT||8787,path:'/api/auth/login',method:'POST',headers:{'content-type':'application/json','content-length':Buffer.byteLength(body)}},res=>{console.log('STATUS '+res.statusCode)",
+    "console.log(JSON.stringify(res.headers))",
+    "res.resume()})",
+    "req.on('error',e=>console.log('ERR '+e.message))",
+    "req.write(body)",
+    "req.end()",
+  ]
+  const script = parts.join(';')
+  const cmd = 'node -e ' + JSON.stringify(script)
   const r = run('docker', ['exec', name, 'sh', '-c', cmd])
   const out = String(r.stdout || '') + String(r.stderr || '')
-  const m = out.match(/Set-Cookie:\s*(fb_session=[^;\r\n]+)/i)
-  return m ? m[1] : null
+  /**
+   * 提取 cookie：**直接从整段输出里抓 `fb_session=`**。
+   *
+   * 不要试图先 JSON.parse 那行 headers —— 输出里换行位置由 `console.log`
+   * 决定，JSON 对象可能跨行，按"单行大括号"匹配会漏（实测踩到：
+   * 登录明明返回 200 且带 set-cookie，却判定"拿不到会话 cookie"）。
+   * 直接抓值最稳，且不依赖任何打印格式。
+   */
+  const m = out.match(/fb_session=[^;\r\n"]+/i)
+  return m ? m[0] : null
 }
 
 /**
@@ -231,11 +258,32 @@ function loginInsideContainer(name) {
  * 500（真实用户故障），只测 /healthz 完全看不出来。
  */
 function probeAuthedEndpoint(name, cookie, endpoint) {
-  const cmd = "wget -qO- -S --header='Cookie: " + cookie +
-    "' http://127.0.0.1:${FREEBUFF_PROXY_PORT:-8787}" + endpoint + " 2>&1 | head -30"
+  /**
+   * 同上：容器里没有 wget；脚本必须单行。
+   *
+   * ⚠️ **options 与 callback 之间必须是逗号**，不能靠 `join(';')` 拼 ——
+   * `http.request({...}; res=>{...})` 是语法错误（`;` 把调用切断了），
+   * 脚本静默失败 → 输出为空 → 断言判成"接口无响应"（实测踩到：
+   * 登录已经成功，却报 8 个接口全部无响应）。
+   * 所以把这一段合成**单个字符串**，内部用逗号。
+   */
+  const optionsAndCb =
+    "{host:'127.0.0.1',port:process.env.FREEBUFF_PROXY_PORT||8787,path:" +
+    JSON.stringify(endpoint) +
+    ",method:'GET',headers:{cookie:" +
+    JSON.stringify(cookie) +
+    "}},res=>{console.log('STATUS '+res.statusCode);res.resume()}"
+  const parts = [
+    "const http=require('http')",
+    "const req=http.request(" + optionsAndCb + ")",
+    "req.on('error',e=>console.log('ERR '+e.message))",
+    "req.end()",
+  ]
+  const script = parts.join(';')
+  const cmd = 'node -e ' + JSON.stringify(script)
   const r = run('docker', ['exec', name, 'sh', '-c', cmd])
   const out = String(r.stdout || '') + String(r.stderr || '')
-  const m = out.match(/HTTP\/\S+\s+(\d{3})/)
+  const m = out.match(/STATUS\s+(\d{3})/)
   return m ? Number(m[1]) : 0
 }
 
