@@ -663,6 +663,30 @@ export function createProxyHandler(ctx) {
       return
     }
     /**
+     * ⚠️ **先确保目录已加载，再做名称→key 归一化**（2026-10-04 真实事故修正）。
+     *
+     * `resolveModelAlias()` 把可读名（"MiMo 2.6 Flash"）落回目录 key（m-xxx）
+     * 靠的是**已抓到的目录**（`CatalogHolder.keyForName`）。而目录是懒加载的
+     * （零自动探测，要等真正用到才抓）—— 于是**冷启动后的第一个请求**在归一化
+     * 时目录还是空的 → 归一化失败、原样返回可读名 → 一路传到 admission 的
+     * `x-freebuff-model` → 上游回
+     *   400 {"error":"invalid_request","message":"Unknown model."}
+     *
+     * 实测（2026-10-04 12:15）：三个账号全部 400 `invalid_request`，
+     * 日志里 `x-freebuff-model: "MiMo 2.6 Flash"` —— 本应是句柄 `fbm1.xxx`。
+     *
+     * 所以把"目录为空则先加载一次"提到归一化**之前**。这不算多余探测：
+     * 该请求本来就必须抓目录（admission 要目录句柄），docs/reverse/20 §20.3
+     * 禁的是启动/导入/首访模型表时空跑，不是请求驱动的必要前置。
+     */
+    if (!catalogModelKeys().length) {
+      try {
+        await runtimes.refreshCatalogs?.({ force: false })
+      } catch {
+        // 抓不到就照旧：归一化会原样返回，白名单随后拒绝（不猜模型）
+      }
+    }
+    /**
      * `/v1/models` 对外给的是可读口径（catalogId，内置目录没有对应条目时是
      * displayName），所以下游**照着模型表填的名字**必须能落地：
      * 'Solar Pro 4' 这类显示名要落回目录 key 再走句柄映射，否则白名单会拒、
@@ -693,43 +717,10 @@ export function createProxyHandler(ctx) {
       catalogKeys,
     })
     /**
-     * ⚠️ **目录还没加载时，先加载一次再判**，不要直接拒。
-     *
-     * 这是冷启动 400 的真正根因（不是缓存 —— 缓存已删）：
-     * 目录是懒加载的（零自动探测，要等真正用到才抓），所以**服务启动后的
-     * 第一个请求**面对的是空目录 → `catalogKeys` 为空 → 任何模型都不在白名单
-     * → 400 `model_not_allowed`。实测：冷启动立刻用目录 key 请求 = 400；
-     * 等一次请求把目录抓完后再试 = 正常进入调度（返回额度类错误）。
-     *
-     * 「先加载再判」与「零自动探测」**不冲突**：这条路径是**用户正在发
-     * 真实请求**才走到，抓目录本来就是该请求必须的前置（admission 要用
-     * 目录句柄），不是为了"探测"而多发请求。docs/reverse/20 §20.3 禁止的是
-     * 启动/导入/首访模型表时空跑一次上游 —— 那是无请求驱动的流量。
-     *
-     * 只在**目录为空**时做（正常路径零开销），且失败照旧拒绝（不猜模型）。
+     * 目录在本函数更上方已确保加载（"先加载再归一化"），所以这里的
+     * `catalogKeys` 已经包含了目录行。若仍为空（上游抓取失败），
+     * 下面的判定照旧拒绝 —— 不猜模型。
      */
-    if (!allowed && catalogKeys.length === 0) {
-      try {
-        await runtimes.refreshCatalogs?.({ force: false })
-      } catch {
-        // 抓不到就是抓不到：下面照旧拒绝，不猜模型
-      }
-      const reloaded = catalogModelKeys()
-      if (reloaded.length) {
-        allowed = isModelAllowed(upstreamModel, {
-          customModels: customModels(),
-          hiddenModels: hiddenModels(),
-          blockPremium: blockPremiumModels(),
-          catalogKeys: reloaded,
-        })
-        if (allowed) {
-          logger.info('model allowed after lazy catalog load', {
-            model: upstreamModel,
-            catalogRows: reloaded.length / 2,
-          })
-        }
-      }
-    }
     if (!allowed) {
       logger.warn('model not allowed; rejecting before upstream', {
         model: upstreamModel,

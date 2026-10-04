@@ -368,7 +368,18 @@ function bunEnabled() {
 
 function makeSessionViaBun(token, accountId, apiBase, deviceKeyPath) {
   let loader = null
-  return async () => {
+  /**
+   * ⚠️ 必须**接收并透传** `opts.instanceId` / `opts.heartbeat`。
+   *
+   * 旧签名 `async () => {}` 不收参数 → 调用方传的 instanceId 在 GET 路径被
+   * **静默丢弃** → bun 侧的 `/session` GET 从来不带 `x-freebuff-instance-id`、
+   * 也从不发 `x-freebuff-heartbeat: 1`。
+   *
+   * 官方在 admission 成功后**立刻**发一次这形态的心跳、之后每 45 秒一次
+   * （orchestrator.js:208918-208957）。我们一次没发 —— 与真实事故吻合：
+   * admission 后 25 秒就被上游退款（`session_superseded` + "purchase was refunded"）。
+   */
+  return async (opts = {}) => {
     try {
       if (!bunEnabled()) return null
       if (loader === null) loader = import('./official-rpc.js').catch(() => null)
@@ -387,7 +398,11 @@ function makeSessionViaBun(token, accountId, apiBase, deviceKeyPath) {
       cfg.installId = installIdFromClientState() || null
       // ⚠️ 主机随主服务配置走，否则本地镜像对照会变成真打上游
       cfg.apiHost = apiBase || null
-      const r = await mod.rpcSession({ cfg })
+      const r = await mod.rpcSession({
+        cfg,
+        instanceId: opts.instanceId || null,
+        heartbeat: opts.heartbeat === true,
+      })
       /**
        * ⚠️ 401 **绝不静默回落 Node**。
        *
@@ -820,7 +835,12 @@ export function createUpstreamClient(config, token, opts = {}) {
        */
       if (method === 'GET') {
         // _sessionViaBun() 已直接返回**会话体**（或 null），不是 {ok,body} 包装
-        const viaBun = await _sessionViaBun()
+        // ⚠️ 把 instanceId/heartbeat 透传下去 —— 不透传的话 bun 侧
+        // GET /session 永远不带实例标识、也永远不发持有心跳（见 makeSessionViaBun）
+        const viaBun = await _sessionViaBun({
+          instanceId: opts.instanceId || null,
+          heartbeat: opts.heartbeat === true,
+        })
         if (viaBun && typeof viaBun === 'object') return viaBun
       }
       /**

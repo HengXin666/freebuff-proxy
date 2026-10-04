@@ -50,10 +50,23 @@ const SWITCHABLE_CODES = new Set([
  * reacquireAfterGate）。见
  * .agents/notes/implemented/bug-fix/2026-10-03-model-name-fallback-and-slot-no-cooldown.md
  */
+/**
+ * 「槽位忙」类错误 —— 处置是**跳过该账号、不冷却**（等它空出来即可）。
+ *
+ * ⚠️ `purchase_claim_released` **已从这里移出**（2026-10-04）。
+ *
+ * 它此前被当成"槽位忙、等一等就好"，于是**永远卡在同一个已作废的 instanceId 上**：
+ * 实测连续三个模型全部返回该码（其中单价 0 的模型也失败 —— 证明卡的不是钱），
+ * 直到 expiresAt 到期才"恢复"。
+ *
+ * 官方真值（`orchestrator.js:208166-208176`）：这个码的处置是
+ * **删掉那条作废的 claim → 换全新 instanceId → 重试一次**（`rotated`）。
+ * 现在由 `SessionManager._admitUnlocked` 内部完成轮换，**不再向上暴露**
+ * 给调度层当"跳过"处理。
+ */
 const SLOT_BUSY_CODES = new Set([
   'purchase_capacity',
   'purchase_in_use',
-  'purchase_claim_released',
   'premium_slot_taken',
 ])
 
@@ -306,21 +319,42 @@ function summarizeFreebucks(failures, ctx = null, model = null) {
     }
   }
   if (!rows.length) return null
-  // 多账号时取"最该让用户知道的"那份：余额最小的（它最先卡住请求）
-  let worst = null
-  for (const r of rows) {
-    const fb = r.freebucks
-    if (!worst) { worst = fb; continue }
-    const a = Number(fb?.dailyRemaining ?? fb?.balance ?? Infinity)
-    const b = Number(worst?.dailyRemaining ?? worst?.balance ?? Infinity)
-    if (a < b) worst = fb
-  }
+  /**
+   * ⚠️ **逐账号列出各自的账**，不再只报"最差那个"。
+   *
+   * 旧实现取"余额最小"的一份当代表 —— 多账号池下这会**直接误导用户**：
+   * 实测用户看到页面显示 A 号有 10 FB，而 429 的错误体里报
+   * `balance 0 / dailyLimit 25`（那是 B 号的账），于是"明明有钱却说额度不足"。
+   * 每个账号的额度是独立的，错配任何一个都会让人往错方向查。
+   *
+   * 所以给出 `accounts: [{price, balance, dailyRemaining, dailyLimit,
+   * resetAt, reason}]`，一一对应 failures（同一个顺序）。
+   * 同时保留顶层平铺字段（取最差那份）**仅为兼容既有消费方**，
+   * 并在注释里标明它是汇总值而非某个具体账号。
+   */
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null)
+  const accounts = rows.map((r) => ({
+    price: num(r.freebucks?.price),
+    balance: num(r.freebucks?.balance),
+    dailyRemaining: num(r.freebucks?.dailyRemaining),
+    dailyLimit: num(r.freebucks?.dailyLimit),
+    resetAt: r.freebucks?.resetAt || null,
+    reason: r.freebucks?.reason || null,
+  }))
+  // 汇总（兼容字段）：取余额/日池最小的那份 —— 它最先卡住请求
+  let worst = null
+  for (const a of accounts) {
+    if (!worst) { worst = a; continue }
+    const x = Number(a.dailyRemaining ?? a.balance ?? Infinity)
+    const y = Number(worst.dailyRemaining ?? worst.balance ?? Infinity)
+    if (x < y) worst = a
+  }
   return {
-    price: num(worst?.price),
-    balance: num(worst?.balance),
-    dailyRemaining: num(worst?.dailyRemaining),
-    dailyLimit: num(worst?.dailyLimit),
+    accounts,
+    price: worst?.price ?? null,
+    balance: worst?.balance ?? null,
+    dailyRemaining: worst?.dailyRemaining ?? null,
+    dailyLimit: worst?.dailyLimit ?? null,
     resetAt: worst?.resetAt || null,
     reason: worst?.reason || null,
     /**

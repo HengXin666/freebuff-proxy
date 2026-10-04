@@ -416,7 +416,42 @@ class Bridge {
     return { status: res.status, body };
   }
 
-  async getSession() {
+  /**
+   * GET /api/v1/freebuff/session
+   *
+   * ⚠️ **必须支持"持有心跳"形态**（2026-10-04，逆向官方 0.0.158 后补）。
+   *
+   * 官方真值（`orchestrator.js:207945-207957` 的 `getSession`）：
+   *
+   *   getSession(auth, instanceId, heartbeat) {
+   *     headers: {
+   *       Authorization,
+   *       ...catalogHeaders,
+   *       ...(!heartbeat ? freebucksTimeZoneHeaders() : {}),   // 心跳不带时区
+   *       [x-freebuff-client]: desktop,
+   *       ...installIdHeaders(),
+   *       [first-tab-discount]: "0",
+   *       [multi-session]: "1",
+   *       ...(instanceId ? { [instance-id]: instanceId } : {}),  // ★ 必带
+   *       [heartbeat ? x-freebuff-heartbeat : include-unused-rate-limits]: "1",
+   *     }
+   *   }
+   *
+   * 而官方在 **admission 成功后立刻发一次**这形态的 GET，之后每 45 秒一次
+   * （`orchestrator.js:208918-208957` 的 syncHeartbeatTimer；常量
+   * `FREEBUFF_SESSION_HEARTBEAT_INTERVAL_MS = 45000`）。
+   *
+   * 我们此前**一次都没发过**：`makeSessionViaBun()` 返回的函数不收参数，
+   * `opts.instanceId` 在 GET 路径被静默丢弃，bun 侧也不构造这两个头。
+   * 后果与真实事故吻合：用户日志里 admission（11:25:16）之后 **25 秒**
+   * 就被上游退款（11:25:41 `session_superseded` + "purchase was refunded"），
+   * 而官方首个心跳窗口 ≤20.5 秒（抓包 line 8 → line 17）。
+   *
+   * @param {{ instanceId?: string | null, heartbeat?: boolean }} [opts]
+   */
+  async getSession(opts = {}) {
+    const instanceId = opts.instanceId || null
+    const heartbeat = opts.heartbeat === true
     const url = `${this.host}/api/v1/freebuff/session`;
     const res = await fetch(url, {
       headers: {
@@ -424,17 +459,25 @@ class Bridge {
         'x-freebuff-catalog-protocol': '1',
         ...(this.fid ? { 'x-freebuff-catalog-fetch': this.fid } : {}),
         'x-freebuff-client': 'desktop',
-        // ⚠️ 客户端真值（docs/reverse/21 §21.3）里 GET /session **带** x-fb-timezone
-        // ——此前只有 admit() 补了它，getSession() 漏了。那一栏在逐头对比表里
-        // 就是空的，属于"客户端有而我们没有"的缺失项（不是多余项）。
-        'x-fb-timezone':
-          this.cfg.timeZone ||
-          (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'),
+        // 官方：**心跳不带时区**（`...!heartbeat ? freebucksTimeZoneHeaders() : {}`）。
+        // 非心跳形态仍带（docs/reverse/21 §21.3 真值）。
+        ...(heartbeat
+          ? {}
+          : {
+              'x-fb-timezone':
+                this.cfg.timeZone ||
+                (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'),
+            }),
         // ⚠️ 不要发字面量 'null'：主服务没传 installId 时整个头应省略
         ...(this.cfg.installId ? { 'x-freebuff-install-id': this.cfg.installId } : {}),
         'x-freebuff-first-tab-discount': '0',
         'x-freebuff-multi-session': '1',
-        'x-freebuff-include-unused-rate-limits': '1',
+        // ★ 实例标识：官方只有"带 instanceId"这一种 GET 形态
+        ...(instanceId ? { 'x-freebuff-instance-id': instanceId } : {}),
+        // 二选一（官方三元）：心跳用 -heartbeat，普通查询用 -include-unused-rate-limits
+        ...(heartbeat
+          ? { 'x-freebuff-heartbeat': '1' }
+          : { 'x-freebuff-include-unused-rate-limits': '1' }),
         ...(await this.signHeaders('GET', url, null, this.fid)),
       },
     });
@@ -764,7 +807,11 @@ try {
   } else if (act === 'deviceKeys') {
     out.result = await bridge.registerDeviceKey(input.publicKey);
   } else if (act === 'session') {
-    out.result = await bridge.getSession();
+    // instanceId / heartbeat 由主服务下发（官方的"持有心跳"形态）
+    out.result = await bridge.getSession({
+      instanceId: input.instanceId || null,
+      heartbeat: input.heartbeat === true,
+    });
   } else if (act === 'release') {
     out.result = await bridge.release(input.instanceId);
   } else if (act === 'admit') {

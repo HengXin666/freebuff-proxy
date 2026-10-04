@@ -171,6 +171,11 @@ let calls = []
 /** @type {'ok' | 'gate_once' | 'rate_limit_a' | 'rate_limit_completion' | 'err_500_a' | 'capacity_once' | 'capacity_all' | 'run_500_a' | 'run_403_a' | 'network_err_a' | 'gate_twice_a' | 'hold_once' | 'legacy_luna_once' | 'luna_base2_retired'} */
 let mockMode = 'ok'
 let sessionPosts = 0
+/**
+ * `claim_released` 场景用：记录**已经作废过**的 instanceId。
+ * 同一个 id 第二次出现就放行 —— 用来验证实现确实**换了新 id**（而不是原地重试）。
+ */
+const claimReleasedSeen = new Set()
 let sessionDeletes = 0
 let completionAttempts = 0
 /** 历次 startAgentRun 使用的 agentId（agent 兜底/退役验证用）。 */
@@ -263,6 +268,36 @@ globalThis.fetch = async (url, init = {}) => {
     // 随后 chat 一律 503。改前这个字段从未被读取 → 归成 http_503 → 冷却换号
     // → 每个账号轮流买断一小时 Freebucks 却拿不到答案。
     // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
+    if (mockMode === 'claim_released') {
+      /**
+       * `purchase_claim_released` 的两段式 mock：**第一次**用旧 instanceId
+       * 请求时回这个码（模拟"购买声明已被作废"），**换新 instanceId 后**放行。
+       *
+       * 这样测的是官方语义（orchestrator.js:208166-208176）：
+       *   收到该码 → DELETE 作废 claim → 换全新 instanceId → 重试一次
+       * 若实现没有换 ID（旧行为：当"槽位忙"跳过），第二次仍带旧 ID →
+       * mock 继续返回该码 → 断言 `sessionPosts` 与最终状态会红。
+       */
+      const inst =
+        headers['x-freebuff-instance-id'] ||
+        headers['X-Freebuff-Instance-Id'] ||
+        null
+      if (inst && claimReleasedSeen.has(inst)) {
+        // 该 id 已被作废过 → 换新 id 后走正常 active
+        return jsonRes({
+          status: 'active',
+          accessTier: 'limited',
+          instanceId: inst,
+          model: 'm-00032eaeec',
+          admittedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + sessionExpiryMs).toISOString(),
+          remainingMs: sessionExpiryMs,
+          countryCode: 'US',
+        })
+      }
+      if (inst) claimReleasedSeen.add(inst)
+      return jsonRes({ status: 'purchase_claim_released', model }, 409)
+    }
     if (mockMode === 'country_block') {
       return jsonRes({
         status: 'active',
@@ -8055,5 +8090,170 @@ console.log('smoke ok')
   assert.ok(
     events.some((e) => e.startsWith('POST')),
     `释放后换模型应能 admit，got ${JSON.stringify(events)}`,
+  )
+}
+
+/* ================================================================
+   purchase_claim_released：必须换新 instanceId 重试（官方语义），且多轮稳定
+   ================================================================ */
+{
+  /**
+   * 官方真值（orchestrator.js:208166-208177）：
+   *   收到 purchase_claim_released
+   *     → recovery.finish（结束失败尝试）
+   *     → releasePurchaseClaim()（DELETE 那条作废的 claim）
+   *     → host.forget(instanceId) + crypto.randomUUID()（换全新 id）
+   *     → 重试**一次**（rotated）
+   *
+   * 我们此前把它当"槽位忙"跳过 → 永远卡在同一个作废 id 上（真实事故：
+   * 连续三个模型全部失败，含单价 0 的模型，直到 expiresAt 才恢复）。
+   *
+   * 这里用纯 mock 复现该形态，并**连跑 5 轮**（用户要求「至少测试五轮」——
+   * 单轮会漏掉"第一轮侥幸成功、后续卡死"这类问题）。
+   */
+  const events = []
+  const retired = new Set()          // 已被作废过的 instanceId
+  let admitCount = 0
+  const up = {
+    freebuffSession: async (method, opts = {}) => {
+      events.push(method + (opts.instanceId ? ':' + opts.instanceId : ''))
+      if (method === 'DELETE') {
+        // 官方 releasePurchaseClaim 就是 deleteSession —— 删掉作废的 claim
+        return { status: 'ended' }
+      }
+      if (method === 'POST') {
+        const id = opts.instanceId || null
+        /**
+         * 只让**第一个** id 作废一次（模拟上游对那条 claim 的作废）。
+         * 换新 id 后必须放行 —— 这正是本用例要验证的行为：
+         * 若不换 id（旧行为），会带同一个 id 再来 → 已在 retired 里 → 继续被拒。
+         * ⚠️ 不能写成"第一次见的 id 就作废"：那会让**换新后的 id 也被作废**
+         * （实测踩到，测试因此恒失败）。
+         */
+        if (id && !retired.has(id) && retired.size === 0) {
+          retired.add(id)
+          return { status: 'purchase_claim_released' }
+        }
+        admitCount += 1
+        return {
+          status: 'active',
+          instanceId: id,
+          model: 'm-00032eaeec',
+          admittedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+          remainingMs: 3600_000,
+          accessTier: 'limited',
+        }
+      }
+      return { status: 'none' }
+    },
+  }
+  const sm = new SessionManager({
+    upstream: up,
+    config: {
+      session: { reAdmitOnExpire: true, reAdmitLeadSec: 60, freeModelReAdmitLeadSec: 60 },
+      limits: {},
+    },
+    accountKey: 'claim-rotate',
+  })
+  const firstId = sm.instanceId
+  const session = await sm.ensureSession('m-00032eaeec')
+  assert.equal(session?.status, 'active', '换 ID 重试后必须拿到 active')
+  assert.notEqual(
+    sm.instanceId,
+    firstId,
+    'purchase_claim_released 后必须换一个**全新** instanceId（官方 crypto.randomUUID 同语义）',
+  )
+  assert.ok(
+    events.some((e) => e.startsWith('DELETE')),
+    `作废的 claim 必须被 DELETE（官方 releasePurchaseClaim），got ${JSON.stringify(events)}`,
+  )
+
+  /**
+   * 多轮稳定性：同一实例上连发 5 轮，每轮都要能复用热 session（零新增 admit）。
+   * 这条正是"第一轮成功、后续卡死"那类问题的守门人。
+   */
+  const before = admitCount
+  for (let i = 1; i <= 5; i += 1) {
+    const s2 = await sm.ensureSession('m-00032eaeec')
+    assert.equal(s2?.status, 'active', `第 ${i}/5 轮必须仍有可用会话`)
+  }
+  assert.equal(
+    admitCount,
+    before,
+    `5 轮必须全部复用热 session（不得反复重买），got 新增 admit=${admitCount - before}`,
+  )
+}
+
+/* ================================================================
+   持有心跳：admission 后必须立刻发一次（官方行为），且轮询走心跳形态
+   ================================================================ */
+{
+  /**
+   * 官方真值（orchestrator.js:208918-208957 的 syncHeartbeatTimer +
+   * 207945-207957 的 getSession(auth, instanceId, heartbeat=true)）：
+   *   - admission 成功后**立刻**发一次心跳，之后每 45 秒一次；
+   *   - 形态 = GET /session + `x-freebuff-instance-id` + `x-freebuff-heartbeat: 1`，
+   *     且**不带**时区（`...!heartbeat ? freebuffTimeZoneHeaders() : {}`）。
+   *
+   * 抓包实证：admission（line 8）→ 首个心跳（line 17）间隔 20.5 秒。
+   * 而真实事故里 admission 后 25 秒就被上游退款 —— 缺心跳是"上游认为这条
+   * 会话无人持有"的最强候选。
+   *
+   * ⚠️ 反向探针：删掉 `_sendHoldHeartbeat(...)` 调用后本用例必须变红。
+   */
+  const calls = []
+  const up = {
+    freebuffSession: async (method, opts = {}) => {
+      calls.push({ method, ...opts })
+      if (method === 'POST') {
+        return {
+          status: 'active',
+          instanceId: 'inst-heartbeat',
+          model: 'm-00032eaeec',
+          admittedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+          remainingMs: 3600_000,
+          accessTier: 'limited',
+        }
+      }
+      return { status: 'none' }
+    },
+  }
+  const sm = new SessionManager({
+    upstream: up,
+    config: {
+      session: { reAdmitOnExpire: true, reAdmitLeadSec: 60, freeModelReAdmitLeadSec: 60 },
+      limits: {},
+    },
+    accountKey: 'heartbeat-case',
+  })
+  await sm.ensureSession('m-00032eaeec')
+  // 心跳是 fire-and-forget，给它一个微任务窗口
+  await new Promise((r) => setTimeout(r, 50))
+  const beats = calls.filter((c) => c.method === 'GET' && c.heartbeat === true)
+  assert.ok(
+    beats.length >= 1,
+    `admission 成功后必须立刻发一次持有心跳，got ${JSON.stringify(calls.map((c) => c.method))}`,
+  )
+  assert.equal(
+    beats[0].instanceId,
+    'inst-heartbeat',
+    '心跳必须带**该会话的** instanceId（否则上游无从知道谁在持有）',
+  )
+
+  // 轮询也必须走心跳形态（官方保活）
+  calls.length = 0
+  await sm.refresh({ heartbeat: true })
+  assert.ok(
+    calls.some((c) => c.method === 'GET' && c.heartbeat === true && c.instanceId === 'inst-heartbeat'),
+    `轮询必须走持有心跳形态，got ${JSON.stringify(calls)}`,
+  )
+  // 普通刷新（控制台「检测」）**不是**心跳：要能拿回额度/单价
+  calls.length = 0
+  await sm.refresh()
+  assert.ok(
+    calls.some((c) => c.method === 'GET' && c.heartbeat !== true),
+    '控制台普通刷新不得被心跳形态替代（它要拿额度/单价）',
   )
 }

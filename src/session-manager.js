@@ -935,6 +935,22 @@ export class SessionManager {
         expiresAt: body.expiresAt,
         accessTier: body.accessTier,
       })
+      /**
+       * ★ **立刻发一次持有心跳**（官方行为，2026-10-04 逆向后补）。
+       *
+       * 官方 `syncHeartbeatTimer` 在有会话时**立即执行一次** heartbeat()，
+       * 之后每 45 秒一次（`orchestrator.js:208905-208957`；常量
+       * `FREEBUFF_SESSION_HEARTBEAT_INTERVAL_MS = 45000`）。
+       * 形态：`GET /session` + `x-freebuff-instance-id` + `x-freebuff-heartbeat: 1`。
+       *
+       * 抓包实证：admission（line 8）→ 首个心跳（line 17）间隔 **20.5 秒**。
+       * 而真实事故里我们在 admission 后 **25 秒**就被退款 —— 时间尺度吻合，
+       * 这是"上游认为这条会话无人持有"的最强候选。
+       *
+       * fire-and-forget：心跳失败不能影响 admit 的返回值（会话已经拿到手了），
+       * 失败只记日志。绝不 await 阻塞主流程。
+       */
+      this._sendHoldHeartbeat(body.instanceId)
       return this.session
     }
 
@@ -953,6 +969,71 @@ export class SessionManager {
         return this.session
       }
       throw this._terminalSessionError(again, model)
+    }
+
+    /**
+     * ⚠️ `purchase_claim_released` —— **必须换一个全新的 instanceId 再试一次**。
+     *
+     * 这是官方客户端的确切行为（官方 desktop 0.0.158 解包 `orchestrator.js:208166-208176`）：
+     *
+     *   if (response.status === "purchase_claim_released") {
+     *     let cancelled = await recovery.finish(attempt, auth);   // 结束失败尝试
+     *     if (cancelled.status !== "ended") throw localSessionError("release_unconfirmed");
+     *   }
+     *   if (response.status !== "purchase_claim_released" || rotated || !persistInstanceId)
+     *     throw error;                                            // rotated = 只重试一次
+     *   await releasePurchaseClaim({owner, instanceId, auth}, journal, host);  // DELETE 该 claim
+     *   host.forget(instanceId);                                  // 忘掉旧 id
+     *   instanceHint = crypto.randomUUID();                       // ★ 换全新 UUID
+     *   options.persistInstanceId(instanceHint);                  // 持久化新 id
+     *   rotated = true;
+     *
+     * `releasePurchaseClaim` 的实现（同文件 208111）就是 `deleteSession(instanceId)` ——
+     * 也就是说**官方确实会 DELETE，但删的是"已被作废的那条 claim"，删完立刻换新 id 重试**。
+     *
+     * 我们此前把它归进 `SLOT_BUSY_CODES` 当"槽位忙、跳过"，于是**永远卡在同一个
+     * 已作废的 instanceId 上**：每个模型都返回同样的错，直到 expiresAt 到期才恢复
+     * （实测日志 11:29:07 / 11:29:44 / 11:29:56 连续三个模型全部
+     * `purchase_claim_released`，其中 `m-22ff70c712` 单价 0 也失败 —— 证明卡的不是钱，
+     * 是那条 claim）。
+     *
+     * 判据：本方法只重试**一次**（与官方 `rotated` 同语义），避免无限循环。
+     */
+    if (body?.status === 'purchase_claim_released') {
+      const staleId = this.instanceId
+      logger.warn('purchase_claim_released; rotating instance id and retrying once', {
+        model,
+        staleInstanceId: staleId,
+      })
+      // ① 删掉那条已被作废的 claim（官方 releasePurchaseClaim 同语义）。
+      //    这一步**不会**动到任何仍在生效的会话 —— 它本来就已经被上游作废了。
+      await this.upstream
+        .freebuffSession('DELETE', { instanceId: staleId })
+        .catch(() => null)
+      // ② 换一个全新 instanceId（官方 crypto.randomUUID 同语义）
+      this.instanceId = newRawInstanceId()
+      this.session = { status: 'none' }
+      this._notifySessionChange()
+      // ③ 用新 id 重新 admission（只这一次）
+      const retry = await this.upstream
+        .freebuffSession('POST', { model, instanceId: this.instanceId })
+        .catch(() => null)
+      if (retry?.status === 'active' && retry.instanceId) {
+        this.admitCount += 1
+        this._apply(retry)
+        this._armPoll()
+        logger.info('re-admitted after claim rotation', {
+          model,
+          instanceId: retry.instanceId,
+          expiresAt: retry.expiresAt,
+        })
+        return this.session
+      }
+      logger.warn('claim rotation did not produce an active session', {
+        model,
+        status: retry?.status ?? null,
+      })
+      throw this._terminalSessionError(retry || body, model)
     }
 
     throw this._terminalSessionError(body, model)
@@ -1035,7 +1116,14 @@ export class SessionManager {
     this._notifySessionChange()
   }
 
-  async refresh() {
+  /**
+   * @param {{ heartbeat?: boolean }} [opts]
+   *   `heartbeat=true` = **持有心跳**形态（官方每 45s 一次的保活）：
+   *   `GET /session` + instance-id + `x-freebuff-heartbeat: 1`，**不带时区**。
+   *   轮询用这个；控制台「检测/刷新」用默认（普通形态，能拿回额度/单价）。
+   *   见 orchestrator.js:207945-207957（两种形态的唯一差别就是那几个头）。
+   */
+  async refresh(opts = {}) {
     return this.withLock(async () => {
       // 上游同一个号同一时间只能有一个客户端在线：轮询 GET 若撞上在途
       // chat 会干扰/顶掉活跃会话（428 waiting_room_required），因此跳过。
@@ -1048,13 +1136,15 @@ export class SessionManager {
       //   -heartbeat / -compact-session
       // 裸发的 GET 服务端只能按 legacy 处理，这是被拒的直接原因之一。
       // 见 .agents/notes/implemented/bug-fix/2026-10-01-cli-get-session-path.md
-      const opts = {
+      const reqOpts = {
         // 裸 UUID（desktop 形态）；没有会话时用本进程复用的那个
         instanceId: this.session?.instanceId || this.instanceId,
         compact: true,
+        // 持有心跳形态（官方保活）：轮询走它
+        heartbeat: opts.heartbeat === true,
       }
       try {
-        const body = await this.upstream.freebuffSession('GET', opts)
+        const body = await this.upstream.freebuffSession('GET', reqOpts)
         /**
          * ⚠️ 上游对**账号级故障**的 GET 回执也是 200 + `{status:'banned'}` 这种
          * 形态（见 upstream/client.js 里 403 的 country_blocked/banned 直通）。
@@ -1621,11 +1711,43 @@ export class SessionManager {
     })
   }
 
+  /**
+   * 发一次**持有心跳**（官方形态）：`GET /session` + instance-id + `-heartbeat: 1`。
+   *
+   * 见 `_admitUnlocked` 里的说明 —— 官方在 admission 后立刻发一次、之后每 45s
+   * 一次；我们此前一次都没发（`makeSessionViaBun` 丢弃 opts）。
+   * 失败只记日志，绝不影响调用方（可用性优先）。
+   * @param {string} instanceId
+   */
+  _sendHoldHeartbeat(instanceId) {
+    if (!instanceId) return
+    Promise.resolve()
+      .then(() =>
+        this.upstream.freebuffSession('GET', {
+          instanceId,
+          heartbeat: true,
+        }),
+      )
+      .then((body) => {
+        logger.info('hold heartbeat sent', {
+          instanceId,
+          status: body?.status ?? null,
+        })
+      })
+      .catch((err) => {
+        logger.warn('hold heartbeat failed (non-fatal)', {
+          instanceId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+  }
+
   _armPoll() {
     this._clearPoll()
     const ms = Math.max(5_000, (this.config.session.pollIntervalSec || 30) * 1000)
     this._pollTimer = setInterval(() => {
-      this.refresh().catch((err) => {
+      // 轮询 = 持有心跳（官方 45s 一次；我们按 pollIntervalSec 跑，更密更安全）
+      this.refresh({ heartbeat: true }).catch((err) => {
         logger.warn('session poll failed', {
           error: err instanceof Error ? err.message : String(err),
         })

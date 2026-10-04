@@ -308,9 +308,19 @@ export async function rpcChat(params) {
  *   null = bun 不可用，调用方应回落到主服务自己的实现
  */
 export async function rpcSession(params) {
-  const { cfg, timeoutMs = 30_000 } = params
+  const {
+    cfg,
+    timeoutMs = 30_000,
+    instanceId = null,
+    heartbeat = false,
+  } = params
   try {
-    const out = await callBun({ cfg, action: 'session' }, timeoutMs)
+    // instanceId / heartbeat 一起下发：bun 侧的 getSession(opts) 用它们构造
+    // 官方的"持有心跳"形态（x-freebuff-instance-id + x-freebuff-heartbeat: 1）。
+    const out = await callBun(
+      { cfg, action: 'session', instanceId, heartbeat },
+      timeoutMs,
+    )
     const result = out?.result || {}
     return {
       ok: result.status === 200,
