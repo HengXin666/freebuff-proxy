@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import {
   readRequestBody,
   sendJson,
@@ -27,6 +28,20 @@ import { requestSlotStats } from '../proxy.js'
 import { dataFileAudit } from '../util/json-store.js'
 
 const SESSION_COOKIE = 'fb_session'
+
+/**
+ * 凭据 token 的短指纹（sha256 前 12 位 hex）。
+ *
+ * 用途：**不暴露完整 token** 的前提下让导入/查看接口能自证"写进去的是哪一份"
+ * —— 控制台「凭证失效」排障时，这是区分「导入没生效」与「token 真被吊销」
+ * 的唯一手段（完整 token 落进日志/响应体等于泄露凭据）。
+ * @param {string | null | undefined} token
+ */
+function tokenFingerprint(token) {
+  const s = String(token || '')
+  if (!s) return null
+  return createHash('sha256').update(s).digest('hex').slice(0, 12)
+}
 
 /**
  * 刷新（只读探测）时，哪些 code 意味着"账号级故障、必须落冷却"。
@@ -854,7 +869,31 @@ export function createWebApi(deps) {
       // 导入账号不该顺带发一次上游 GET。要额度/状态，用户点「检测」
       // 或「一键刷新」。
       logger.info('account imported via web', { key: saved.key, email: saved.user.email })
-      sendJson(res, 200, { ok: true, account: saved.user.email, key: saved.key, id: saved.user.id || null })
+      /**
+       * 回显**落盘证据**，让导入可以自证。
+       *
+       * 为什么必须回显（2026-10-04 实测踩到的坑）：用户从上游拿了一份新
+       * token 导入，控制台显示「凭证失效」。排查发现磁盘上那个 id 下的
+       * authToken **还是旧的** —— 导入写进去的值与用户以为自己提交的值
+       * 不是同一个，而接口只回 `{ok:true}`，用户在控制台上**没有任何办法**
+       * 判断到底写进去没有，只能看着「凭证失效」去反复重登。
+       *
+       * 回显三样东西（都不暴露完整 token）：
+       *   - path：写到哪个文件（多 id 同邮箱时尤其关键）
+       *   - tokenFingerprint：落盘 token 的 sha256 前 12 位
+       *   - tokenTail：落盘 token 的末 6 位
+       * 用户拿它们与自己的凭据一比即可定案：不一致 = 这次导入没生效
+       * （或被别处覆盖），一致 = token 本身被上游吊销。
+       */
+      sendJson(res, 200, {
+        ok: true,
+        account: saved.user.email,
+        key: saved.key,
+        id: saved.user.id || null,
+        path: saved.path,
+        tokenFingerprint: tokenFingerprint(saved.user.authToken),
+        tokenTail: String(saved.user.authToken || '').slice(-6),
+      })
       return true
     }
 
@@ -920,7 +959,19 @@ export function createWebApi(deps) {
         fingerprintHash: raw.fingerprintHash || null,
         proxy: raw.proxy || null,
       }
-      sendJson(res, 200, { ok: true, key: row.key, credential })
+      /**
+       * 与 /api/accounts/import 同源的落盘证据：path + token 短指纹 + 末 6 位。
+       * 「查看凭证」是核对"控制台里这个号到底挂着哪一份 token"的唯一入口
+       * （多 id 同邮箱时尤其如此），必须能自证，否则只能靠猜。
+       */
+      sendJson(res, 200, {
+        ok: true,
+        key: row.key,
+        credential,
+        path: row.path,
+        tokenFingerprint: tokenFingerprint(raw.authToken),
+        tokenTail: String(raw.authToken || '').slice(-6),
+      })
       return true
     }
 

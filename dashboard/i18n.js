@@ -348,7 +348,47 @@ const DICT = {
     'zh-CN': '内置目录 + 上游实时 + 自定义覆盖。上游新模型不用等发版——点「同步上游模型」自动拉取并更新 agent，或手动添加。',
     en: 'Built-in catalog + live upstream + custom overrides. New upstream models need no release — click "Sync from upstream" or add manually.',
   },
-  'model.syncDone': { 'zh-CN': '已同步上游（自定义 {n} 条，内置按 catalog 为准）', en: 'Synced ({n} custom entries; built-ins follow the catalog)' },
+  // ── 同步后的对齐报告（2026-10-04）────────────────────────────
+  // 旧文案只报「自定义 {n} 条」：数字越大看着越成功，而那批自定义里
+  // 绝大部分上游目录根本没有、调用必失败。改成按上游目录三向对账。
+  'model.syncReportTitle': { 'zh-CN': '模型已对齐上游', en: 'Models aligned with upstream' },
+  'model.syncReportAligned': { 'zh-CN': '上游可用 {n} 个', en: '{n} available upstream' },
+  'model.syncReportAdded': { 'zh-CN': '本次新增 {n} 个', en: '{n} added' },
+  'model.syncReportStale': { 'zh-CN': '上游已无 {n} 个', en: '{n} no longer upstream' },
+  'model.syncReportBody': {
+    'zh-CN': '列表已按上游实时目录对齐：只有出现在上游目录里的模型，你的账号才真正调得动。',
+    en: 'The list is aligned with the live upstream catalog: only models present upstream can your account actually call.',
+  },
+  'model.syncReportStaleHint': {
+    'zh-CN': '另有 {n} 个不在上游目录里（内置或手动添加的残留），调用必然失败，建议清理。',
+    en: '{n} more are not in the upstream catalog (leftover built-ins or manual entries) and will always fail — consider pruning them.',
+  },
+  'model.syncReportPrune': { 'zh-CN': '清理这 {n} 个', en: 'Prune these {n}' },
+  // ── 模型管理页的「账号可用」标记 ─────────────────────────────
+  'model.liveHeader': { 'zh-CN': '账号可用', en: 'Usable' },
+  'model.liveYes': { 'zh-CN': '可用', en: 'yes' },
+  'model.liveNo': { 'zh-CN': '不可用', en: 'no' },
+  'model.liveYesTitle': {
+    'zh-CN': '上游目录里有这个模型，你的账号可以调用',
+    en: 'Present in the upstream catalog — your account can call it',
+  },
+  'model.liveNoTitle': {
+    'zh-CN': '上游目录里没有这个模型（内置残留或手动添加），调用必然失败；可隐藏或移除',
+    en: 'Not in the upstream catalog (stale built-in or manual entry) — calls will always fail; hide or remove it',
+  },
+  'model.liveCount': { 'zh-CN': '上游可用 {n} 个', en: '{n} usable upstream' },
+  'model.staleCount': { 'zh-CN': '{n} 个调不了', en: '{n} unusable' },
+  'model.staleHint': {
+    'zh-CN': '灰显且标「不可用」的不在上游目录里，你的账号调了必失败',
+    en: 'Rows greyed out and marked unusable are absent upstream; calls from your account will always fail',
+  },
+  'model.prune': { 'zh-CN': '清理 {n} 个', en: 'Prune {n}' },
+  'model.pruneTitle': {
+    'zh-CN': '隐藏/移除所有不在上游目录里的模型（内置可恢复，手动添加的彻底移除）',
+    en: 'Hide or remove every model absent upstream (built-ins are restorable; manual entries are removed for good)',
+  },
+  'model.pruned': { 'zh-CN': '已清理 {n} 个不可用的模型', en: 'Pruned {n} unusable models' },
+  'model.pruneFail': { 'zh-CN': '清理失败: {msg}', en: 'Prune failed: {msg}' },
   'model.syncFail': { 'zh-CN': '同步失败: {msg}', en: 'Sync failed: {msg}' },
   'model.fetchFail': { 'zh-CN': '拉取上游失败: {msg}', en: 'Failed to fetch upstream: {msg}' },
   'model.noneUpstream': { 'zh-CN': '上游暂无可用模型', en: 'No models available upstream' },

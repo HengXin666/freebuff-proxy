@@ -17,7 +17,7 @@
     "login": "node bin/login.js",
     "doctor": "node bin/doctor.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node test/smoke.mjs && node test/verify-catalog-models.mjs",
+    "test": "node test/smoke.mjs && node test/smoke-frontend.mjs && node test/verify-catalog-models.mjs",
     "pipeline:image": "node scripts/pipeline-image-test.mjs",
     "web": "node bin/serve.js",
     "pricing": "node bin/pricing.js",

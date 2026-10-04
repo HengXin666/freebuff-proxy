@@ -7696,13 +7696,20 @@ console.log('smoke ok')
     )
   }
 
-  // 占位符替换
+  /**
+   * 占位符替换。
+   *
+   * ⚠️ 断言的 key 从 `model.syncDone` 换成 `model.syncReportAligned`：
+   * 同步结果改成「按上游目录三向对账」的弹窗后，syncDone 被删（i18n 门禁
+   * 会把它判成死词条），这里必须跟着换，否则断言打在一个不存在的 key 上，
+   * 中英两语都回落到 key 原文 → notEqual 失败。
+   */
   setLocale('zh-CN')
   assert.equal(getLocale(), 'zh-CN')
-  const zhSync = t('model.syncDone', { n: 3 })
+  const zhSync = t('model.syncReportAligned', { n: 3 })
   setLocale('en')
   assert.equal(getLocale(), 'en')
-  const enSync = t('model.syncDone', { n: 3 })
+  const enSync = t('model.syncReportAligned', { n: 3 })
   assert.notEqual(zhSync, enSync, '中英文案必须不同')
   assert.ok(!zhSync.includes('{n}'), `占位符未替换: ${zhSync}`)
   assert.ok(!enSync.includes('{n}'), `占位符未替换: ${enSync}`)

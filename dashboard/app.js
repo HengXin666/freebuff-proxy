@@ -2356,7 +2356,33 @@ async function renderModelSettings(view) {
       known.set(m.id, { ...m, source: 'upstream' })
     }
   }
+  /**
+   * 「账号真实可用」的判据 = **上游目录里有没有这一行**。
+   *
+   * 用户质疑得对：表里有 15 条内置 + 53 条自定义，而上游目录只有 13 条。
+   * 那些上游根本没有的条目**调用必然失败**，却在列表里与可用模型长得一模一样
+   * —— 纯粹是误导。所以每一行都必须能一眼看出它在不在上游目录里。
+   *
+   * 匹配按**可读 id**（与 /v1/models 同源）比对；目录 key（m-xxx）作兜底，
+   * 因为旧自定义条目可能只存了 key。
+   */
+  const upstreamIdSet = new Set(
+    (upstream.models || []).map((m) => m.id || m.catalogId || m.key).filter(Boolean),
+  )
+  const upstreamKeySet = new Set((upstream.models || []).map((m) => m.key).filter(Boolean))
+  const isLiveUpstream = (m) =>
+    upstreamIdSet.has(m.id) || (m.key && upstreamKeySet.has(m.key))
+
   const rows = [...known.values()]
+  /**
+   * ⚠️ staleCount **必须在 rows 声明之后**算。
+   *
+   * 第一版把它写在 `const rows` 之前，而它要读 `rows` —— 命中 TDZ
+   * （`can't access lexical declaration 'rows' before initialization`），
+   * 整个模型管理页直接白屏。判据函数本身不碰 rows，可以前置；
+   * 但任何**消费** rows 的派生值都必须排在它后面。
+   */
+  const staleCount = rows.filter((m) => !isLiveUpstream(m)).length
   const isAdmin = state.me.role === 'admin'
   // 屏蔽收费模型开关（读全局设置，默认开）
   let settings = { blockPremiumModels: true }
@@ -2395,11 +2421,35 @@ async function renderModelSettings(view) {
       ? el('div', { class: 'muted', style: 'margin-top:6px;font-size:12px' },
           t('model.upstreamCatalog', { n: upstream.models.length, tier: upstream.accessTier }))
       : null,
+    /**
+     * 对账条：**先说清"表里哪些其实调不了"**，再说别的。
+     *
+     * 旧界面把 15 条内置 + 53 条自定义与上游 13 条平铺在同一张表里，
+     * 没有任何一处告诉用户"这 55 个你的账号用不了"——
+     * 用户只能一个个试，试到失败才知道。这里在表头上直接给总数与处置入口。
+     */
+    upstream.models?.length
+      ? el('div', {
+          class: 'row',
+          style: 'margin-top:8px;gap:8px;align-items:center;flex-wrap:wrap',
+        }, [
+          el('span', { class: 'badge ok' }, t('model.liveCount', { n: upstream.models.length })),
+          staleCount > 0
+            ? el('span', { class: 'badge warn' }, t('model.staleCount', { n: staleCount }))
+            : null,
+          el('span', { class: 'muted', style: 'font-size:12px' }, t('model.staleHint')),
+          isAdmin && staleCount > 0
+            ? el('button', { class: 'icon danger', onclick: pruneStaleModels, title: t('model.pruneTitle') },
+                [icon('trash', 12), t('model.prune', { n: staleCount })])
+            : null,
+        ])
+      : null,
     el('div', { class: 'table-wrap', style: 'margin-top:10px;max-height:280px;overflow:auto' }, [
       el('table', { style: 'font-size:12px' }, [
         el('thead', {}, el('tr', {}, [
           el('th', {}, t('model.id')),
           el('th', {}, t('model.displayName')),
+          el('th', {}, t('model.liveHeader')),
           el('th', {}, t('model.pool')),
           el('th', {}, t('model.quotaHeader')),
           el('th', {}, t('model.agentBase2')),
@@ -2407,7 +2457,12 @@ async function renderModelSettings(view) {
           el('th', {}, t('model.source')),
           isAdmin ? el('th', {}, t('common.actions')) : null,
         ])),
-        el('tbody', {}, rows.map((m) => el('tr', { 'data-key': m.key || m.id }, [
+        el('tbody', {}, rows.map((m) => el('tr', {
+          'data-key': m.key || m.id,
+          // 上游目录里没有的行整体淡化：它在列表里只是占位，调用必然失败。
+          // 视觉上必须与可用模型区分开，否则用户仍会一个个去试。
+          style: isLiveUpstream(m) ? null : 'opacity:.45',
+        }, [
           // 首列是**对外模型名**（catalogId || displayName），与 /v1/models 的 id 同源；
           // 目录 key（m-00032eaeec）退到 title 里 —— 排障时仍要能对上上游日志，
           // 但不该再出现在页面上（用户要求）。见
@@ -2417,6 +2472,13 @@ async function renderModelSettings(view) {
             title: m.key && m.key !== m.id ? t('model.idHint') + `: ${m.key}` : null,
           }, m.id),
           el('td', {}, m.display_name || m.displayName || '—'),
+          /**
+           * 「账号可用」列：上游目录里有 = 能调用；没有 = 调了必失败。
+           * 悬停给出处置建议（隐藏或移除），让"为什么用不了"有答案。
+           */
+          el('td', {}, isLiveUpstream(m)
+            ? el('span', { class: 'badge ok', title: t('model.liveYesTitle') }, t('model.liveYes'))
+            : el('span', { class: 'badge warn', title: t('model.liveNoTitle') }, t('model.liveNo'))),
           el('td', {}, el('span', { class: 'badge', class: poolBadgeClass(m.pool) }, poolLabel(m.pool))),
           el('td', {}, fmtModelPrice(m)),
           el('td', { style: 'font-family:var(--mono);font-size:11px' }, m.agentId || m.agent_id || t('common.none')),
@@ -2546,10 +2608,118 @@ async function syncUpstreamModels() {
       body: JSON.stringify({ models: merged }),
     })
     // save() 会把写回的自定义条目自动解除 hidden——被隐藏的内置模型同步后自然拉回
-    toast(t('model.syncDone', { n: r.models.length }))
+    /**
+     * ⚠️ 同步结果必须是**对齐报告**，不能只报"写了几条自定义"。
+     *
+     * 用户原话：点刷新应当是「同步上游」，而列表里那些**账号用不了的**
+     * （内置/手动添加、上游目录里根本不存在的）留着就是误导 ——
+     * 旧文案只说「自定义 {n} 条」，数字越大用户越以为同步成功，
+     * 实际那 53 条里绝大部分上游压根没有，调用必然失败。
+     *
+     * 所以这里按「上游真实目录」为基准做三向对账并如实报数：
+     *   - aligned：上游有、列表也有 → 能调用
+     *   - added：  上游有、列表原本没有 → 本次补进来的
+     *   - stale：  列表有、上游目录里没有 → 账号调用不了（提示可一键清理）
+     */
+    const upstreamIds = new Set(
+      (upstream.models || []).map((m) => m.id || m.catalogId || m.key).filter(Boolean),
+    )
+    const listIds = new Set([
+      ...(cur.catalog || []).map((m) => m.id),
+      ...merged.map((m) => m.id),
+    ])
+    let aligned = 0
+    for (const id of upstreamIds) if (listIds.has(id)) aligned += 1
+    const stale = [...listIds].filter((id) => !upstreamIds.has(id)).length
+    await showSyncReport({ aligned, added: upstreamIds.size - aligned, stale, total: upstreamIds.size })
     refreshModelSettingsCard()
   } catch (err) {
     toast(t('model.syncFail', { msg: err.message }), true)
+  }
+}
+
+/**
+ * 同步后的**对齐报告弹窗**。
+ *
+ * 为什么不用 toast：toast 一闪而过，而「哪些模型其实调不了」是用户必须
+ * 能看清、能据此操作的结论（旧实现把它塞进一行 toast，用户根本来不及读）。
+ * 这里用模态，把三向对账的数字与处置动作一起给全：
+ * 只有 stale > 0 时才显示「清理不可用模型」按钮 —— 没有脏数据时
+ * 多一个按钮就是噪音。
+ */
+function showSyncReport({ aligned, added, stale, total }) {
+  return new Promise((resolve) => {
+    const close = () => {
+      document.querySelector('#sync-report-backdrop')?.remove()
+      resolve()
+    }
+    const backdrop = el('div', {
+      id: 'sync-report-backdrop',
+      class: 'modal-backdrop',
+      onclick: (e) => {
+        if (e.target?.id === 'sync-report-backdrop') close()
+      },
+    }, [
+      el('div', { class: 'modal', style: 'max-width:420px' }, [
+        el('h3', { style: 'margin:0 0 10px' }, t('model.syncReportTitle')),
+        el('div', { class: 'row', style: 'gap:10px;margin-bottom:8px' }, [
+          el('span', { class: 'badge ok' }, t('model.syncReportAligned', { n: total })),
+          added > 0 ? el('span', { class: 'badge' }, t('model.syncReportAdded', { n: added })) : null,
+          stale > 0 ? el('span', { class: 'badge warn' }, t('model.syncReportStale', { n: stale })) : null,
+        ]),
+        el('p', { class: 'muted', style: 'margin:0 0 4px;font-size:12px;line-height:1.6' },
+          t('model.syncReportBody')),
+        stale > 0
+          ? el('p', { class: 'muted', style: 'margin:6px 0 0;font-size:12px;line-height:1.6' },
+              t('model.syncReportStaleHint', { n: stale }))
+          : null,
+        el('div', { class: 'row', style: 'margin-top:14px;justify-content:flex-end;gap:8px' }, [
+          stale > 0
+            ? el('button', { class: 'danger', onclick: async () => { close(); await pruneStaleModels() } },
+                t('model.syncReportPrune', { n: stale }))
+            : null,
+          el('button', { class: 'primary', onclick: close }, t('common.ok')),
+        ]),
+      ]),
+    ])
+    document.body.append(backdrop)
+  })
+}
+
+/**
+ * 一键清理「不在上游目录里」的模型（内置=隐藏、自定义=彻底移除）。
+ *
+ * 幂等且可恢复：内置模型走 hidden（可在「已删除的模型」区点回来），
+ * 手动添加的走彻底移除（上游没有它，留着只能误导）。
+ */
+async function pruneStaleModels() {
+  try {
+    const [up, cur] = await Promise.all([
+      api('/api/models/upstream'),
+      api('/api/models/custom'),
+    ])
+    const upstreamIds = new Set(
+      (up.models || []).map((m) => m.id || m.catalogId || m.key).filter(Boolean),
+    )
+    const builtinIds = new Set((cur.catalog || []).map((m) => m.id))
+    const staleBuiltin = []
+    const staleCustom = []
+    for (const m of cur.catalog || []) {
+      if (!upstreamIds.has(m.id)) staleBuiltin.push(m.key || m.id)
+    }
+    for (const m of cur.models || []) {
+      if (!upstreamIds.has(m.id) && !builtinIds.has(m.id)) staleCustom.push(m.id)
+    }
+    for (const id of staleBuiltin) {
+      await api('/api/models/custom/hide', { method: 'POST', body: JSON.stringify({ id }) })
+    }
+    for (const id of staleCustom) {
+      await api('/api/models/custom/remove', { method: 'POST', body: JSON.stringify({ id }) })
+    }
+    toast(t('model.pruned', { n: staleBuiltin.length + staleCustom.length }))
+    refreshModelSettingsCard()
+  } catch (err) {
+    toast(t('model.pruneFail', { msg: err.message }), true)
   }
 }
 

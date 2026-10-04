@@ -374,6 +374,12 @@ class Bridge {
         'x-freebuff-catalog-protocol': '1',
         ...(this.fid ? { 'x-freebuff-catalog-fetch': this.fid } : {}),
         'x-freebuff-client': 'desktop',
+        // ⚠️ 客户端真值（docs/reverse/21 §21.3）里 GET /session **带** x-fb-timezone
+        // ——此前只有 admit() 补了它，getSession() 漏了。那一栏在逐头对比表里
+        // 就是空的，属于"客户端有而我们没有"的缺失项（不是多余项）。
+        'x-fb-timezone':
+          this.cfg.timeZone ||
+          (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'),
         // ⚠️ 不要发字面量 'null'：主服务没传 installId 时整个头应省略
         ...(this.cfg.installId ? { 'x-freebuff-install-id': this.cfg.installId } : {}),
         'x-freebuff-first-tab-discount': '0',

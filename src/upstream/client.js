@@ -388,7 +388,43 @@ function makeSessionViaBun(token, accountId, apiBase, deviceKeyPath) {
       // ⚠️ 主机随主服务配置走，否则本地镜像对照会变成真打上游
       cfg.apiHost = apiBase || null
       const r = await mod.rpcSession({ cfg })
+      /**
+       * ⚠️ 401 **绝不静默回落 Node**。
+       *
+       * 旧行为：`r.ok === false` 就 `return null` → 主服务走 Node 实现
+       * **再发一次同样的请求** → 再吃一个 401 → 才抛 `auth_unauthorized`。
+       * 后果有两个，都直接误导排障：
+       *   1) 控制台点一次「检测」= 上游收到 **两次** 401（账号侧看到的
+       *      是同一个坏 token 被连打两遍，本身就是自动化特征）；
+       *   2) 日志里只留 Node 那一跳，bun 那一跳的关键字段
+       *      （status / hasKeyId）被吞掉 —— 于是"到底签没签名"永远查不到。
+       *
+       * 401 的语义是确定的：上游不认这个 token。重试换运行时不会改变它，
+       * 只会多制造一次被拒记录。所以这里直接把 bun 侧的结果**抛出去**，
+       * 并标注本次到底签没签名（`cfg.keyId`）—— 它是「token 真坏了」与
+       * 「设备未注册导致被拒」的分流判据：签名齐全仍 401 = token 坏；
+       * 没签名就 401 = 先去查设备密钥。
+       *
+       * 其余失败（网络/bun 本身挂了/status 非 401）保持原样回落 Node：
+       * 可用性优先，不能因为通道故障就让功能不可用。
+       * 见 docs/reverse/21 §21.5「通道接上 ≠ 通道生效」。
+       */
       if (!r?.ok) {
+        if (Number(r?.status) === 401) {
+          throw new UpstreamError(
+            r?.error ||
+              (typeof r?.body?.message === 'string' ? r.body.message : null) ||
+              'freebuff session GET rejected: 401 unauthorized',
+            {
+              status: 401,
+              code: 'auth_unauthorized',
+              body: r?.body ?? null,
+              // 本次是否带了设备签名：401 时它是第一分流判据
+              // （signed = token 真坏；unsigned = 先查设备密钥注册）
+              cause: cfg.keyId ? 'signed' : 'unsigned',
+            },
+          )
+        }
         logger.debug('session via bun failed; falling back to Node', {
           error: r?.error || null,
           status: r?.status ?? null,

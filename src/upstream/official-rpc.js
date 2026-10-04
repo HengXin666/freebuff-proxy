@@ -16,6 +16,8 @@
  */
 
 import { readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { callBun } from '../../cli-bridge/bridge.mjs'
 
 /**
@@ -67,6 +69,7 @@ export async function buildRpcCfg(upstream, config = {}) {
     timeZone: config?.upstream?.timeZone || 'Asia/Shanghai',
   }
   const p = upstream.deviceKeyPath
+  const host = config?.upstream?.apiBase || 'https://www.codebuff.com'
   if (p) {
     try {
       const dk = JSON.parse(await readFile(p, 'utf8'))
@@ -74,7 +77,6 @@ export async function buildRpcCfg(upstream, config = {}) {
        * scope 的主机随实际 apiBase 走：本地镜像对照时也要拼对，
        * 否则取不到 keyId → 退化成不签名（与客户端不一致）。
        */
-      const host = config?.upstream?.apiBase || 'https://www.codebuff.com'
       cfg.keyId =
         dk.registrations?.[`${host} user:${cfg.userId}`] ||
         dk.registrations?.[`https://www.codebuff.com user:${cfg.userId}`] ||
@@ -95,7 +97,60 @@ export async function buildRpcCfg(upstream, config = {}) {
       // 无设备密钥也能发（副仓库退化为不签名），不阻塞
     }
   }
+  /**
+   * ⚠️ 兜底**必须在 try 之外**。
+   *
+   * 第一版把它写在读主密钥的那个 `try` 里 —— 主密钥文件不存在时
+   * （本仓库当前的真实状态：`data/device-keys/` 只有调试残留，
+   * 唯独没有账号自己的文件）`readFile` 直接抛，
+   * 于是**整个兜底块被 catch 跳过**，keyId 依旧是 null。
+   * 实测确认：兜底跑完 keyId 仍为 null，等于没写。
+   *
+   * 这正是 docs/reverse/21 §21.5 那条教训的复现：
+   * 「通道接上 ≠ 通道生效，失败会静默回落」。
+   * 适用于兜底路径的同一条纪律：**兜底自己失败时也要看得见**，
+   * 绝不能和"主路径失败"共用同一个 catch。
+   */
+  if (!cfg.keyId) {
+    const official = await readOfficialDeviceKey(host, cfg.userId)
+    if (official) {
+      cfg.keyId = official.keyId
+      cfg.privateKey = normalizePrivateKeyForBun(official.privateKey)
+    }
+  }
   return cfg
+}
+
+/**
+ * 读官方桌面客户端**已注册**的设备密钥（只读，best-effort）。
+ *
+ * 官方客户端自己把注册结果落在 `~/.config/freebuff-desktop/
+ * state.json.device-key.json`，且 scope 就是
+ * `<host> user:<userId>` —— 与本项目约定的 scope 格式完全一致，
+ * 因此可以逐字复用，**不需要再发一次 device-keys 注册请求**。
+ *
+ * @param {string} host 上游 API 主机（随 config 走，支持本地镜像对照）
+ * @param {string | null} userId 账号用户 id
+ * @returns {Promise<{ keyId: string, privateKey: string } | null>}
+ */
+async function readOfficialDeviceKey(host, userId) {
+  if (!userId) return null
+  try {
+    const p = join(
+      homedir(),
+      '.config/freebuff-desktop/state.json.device-key.json',
+    )
+    const dk = JSON.parse(await readFile(p, 'utf8'))
+    const keyId =
+      dk.registrations?.[`${host} user:${userId}`] ||
+      dk.registrations?.[`https://www.codebuff.com user:${userId}`] ||
+      null
+    if (!keyId || typeof dk.privateKey !== 'string' || !dk.privateKey) return null
+    return { keyId, privateKey: dk.privateKey }
+  } catch {
+    // 官方客户端未安装 / 文件不可读：不是错误路径，照旧不签名
+    return null
+  }
 }
 
 /**
