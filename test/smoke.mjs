@@ -395,7 +395,26 @@ globalThis.fetch = async (url, init = {}) => {
       accessTier: 'full',
       rateLimit,
       rateLimitsByModel: { [model]: rateLimit },
-      ...(mockFreebucks ? { freebucks: mockFreebucks } : {}),
+      /**
+       * waiting_room_once：admit 回执带**扣费后**的余额（25 - 15 = 10）。
+       *
+       * 这是真机的真实形态（远程日志 2026-10-04T18:52:34Z）：admit 200 当场扣
+       * 整小时单价 15，回执里余额剩 10；紧接着 chat 回 428。此时若把 428 排在
+       * 额度闸门之后，`freebucksFor()` 会判"10 < 15 买不起"→ 续用被拦死。
+       * 测试必须复现这个**扣费后**的余额，否则闸门不会命中、断言变成假绿。
+       */
+      ...(mockFreebucks
+        ? {
+            freebucks:
+              mockMode === 'waiting_room_once'
+                ? {
+                    ...mockFreebucks,
+                    balance: 10,
+                    daily: { ...mockFreebucks.daily, spent: 15, remaining: 10 },
+                  }
+                : mockFreebucks,
+          }
+        : {}),
     })
   }
   if (u.includes('/api/v1/freebuff/session') && method === 'GET') {
@@ -758,6 +777,30 @@ globalThis.fetch = async (url, init = {}) => {
             'Free mode is briefly at capacity; your request will be retried automatically.',
         },
         429,
+      )
+    }
+    /**
+     * 428 `waiting_room_required`：**首次** completion 返回它（其后放行）。
+     *
+     * 真实事故（远程 2026-10-04T18:52:34Z）：
+     *   admit 200 扣 15 FB（余额 25→10）
+     *   chat  428 waiting_room_required
+     *   skip re-admit: freebucks cannot afford model  balance 10 < price 15  ← 卡在这
+     *   account cooling down  code=freebucks_exhausted
+     *   → 客户端 429
+     *
+     * 428 的正确处置是"带同一 instanceId 续用那一小时"（不产生新购买），
+     * 所以**不得**被"买不起下一个小时"拦下。这里顺带把余额扣到 10
+     * （模拟 admit 已收费），让闸门在续用时必然判"买不起"。
+     */
+    if (mockMode === 'waiting_room_once' && completionAttempts === 1) {
+      return jsonRes(
+        {
+          error: 'waiting_room_required',
+          message:
+            'Your free session has ended. Send your message again to start a new one.',
+        },
+        428,
       )
     }
     // 同账号连续 gate 失败（session_superseded ×2）→ 升级换号
@@ -6435,6 +6478,100 @@ server.close()
 
   mockMode = 'ok'
   mockFreebucks = null
+  // (3.4) 428 `waiting_room_required` **不得被额度闸门拦死**（2026-10-05 真实事故）
+  //
+  // 远程日志（2026-10-04T18:52:34Z, 账号 llh282000500）：
+  //   admit        200   active  扣 15 FB（余额 25→10）
+  //   agent-runs   200
+  //   chat         428   waiting_room_required
+  //   skip re-admit: freebucks cannot afford model   balance 10 < price 15
+  //   account cooling down  code=freebucks_exhausted
+  //   随后每个请求都 429 → 客户端 dsh 拿到「Upstream rate limit exceeded」
+  //
+  // 根因：`waiting_room_required` 的正确处置是 `readmitToContinue()`
+  // （带同一 instanceId + purchase-continuity 续用已买断的那一小时，
+  // **不产生任何新的购买**）。既然不花钱，"余额买不起下一个小时"就与它无关。
+  // 而代码里 428 的判断排在两道额度闸门**之后** → 续用被"买不起"拦死 →
+  // 冷却该号 + 已付的一小时白扔。
+  //
+  // 判据（可证伪）：
+  //   ① 客户端最终拿到 **200**，且**始终由同一个账号**承接（没被换号）；
+  //   ② 续用绝不 DELETE 已买断的那一小时（`sessionDeletes === 0`）；
+  //   ③ 参与本次请求的账号**没有**被冷却（旧行为在此冷却成 freebucks_exhausted）。
+  //
+  // ⚠️ 反向探针（已实测）：把 app-context 里 428 那段挪回两道闸门之后 →
+  //    ③ 立即变红（`a 不得因 428 续用被冷却（旧行为：code=freebucks_exhausted）`）。
+  //    ①里的"同一账号"断言是配套的护栏：旧顺序下客户端靠**换号**仍可能拿到
+  //    200，只看状态码会把"钱花了 + 号被冷却"整个漏掉。
+  for (const key of ['a', 'b', 'c']) fbRuntimes.clearCooldown(key)
+  for (const key of ['a', 'b', 'c']) {
+    await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})
+  }
+  mockFreebucks = {
+    balance: 25,
+    daily: { limit: 25, spent: 0, remaining: 25, resetAt: new Date(Date.now() + 6 * 3600_000).toISOString() },
+    wallet: { balance: 0, monthlyBonus: 0, nextBonusAt: null },
+    // 单价 15：admit 后余额被扣到 10（mock 在 428 分支里同步），
+    // 于是续用时两道闸门**必然**判"买不起"——这正是旧顺序被拦死的条件。
+    prices: { 'deepseek/deepseek-v4-flash': 15 },
+  }
+  mockMode = 'waiting_room_once'
+  sessionPosts = 0
+  sessionDeletes = 0
+  completionAttempts = 0
+  {
+    const res = await fbChat({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hi' }],
+    })
+    const text = await res.clone().text()
+    assert.equal(
+      res.status,
+      200,
+      `428 应走续用并成功（不得被"买不起"拦成 429），got ${res.status}: ${text.slice(0, 300)}`,
+    )
+    // ① 必须由**同一个账号**从头到尾承接：旧顺序会把该号冷却后换号重试，
+    //    于是"花了 15 点 + 号进冷却"被 200 掩盖（用户看到的却是"账号被警告"）。
+    const firstKey = res.headers.get('x-freebuff-proxy-account-id')
+    assert.ok(firstKey, '响应必须带 x-freebuff-proxy-account-id，否则无法判定是否换号')
+    assert.equal(
+      completionAttempts,
+      2,
+      `428 应只在同一账号上重试一次并成功，got attempts=${completionAttempts}`,
+    )
+    // ⚠️ 续用**本身**也是一次 POST /session/admission（官方就是"带同一
+    // instanceId + purchase-continuity 重新 admission"），所以这里计到 2 次是
+    // 正确的。**区分"续用"与"重买"的判据是有没有先 DELETE**：
+    //   forceReadmit（重买）= DELETE 再 admit → sessionDeletes>=1；
+    //   readmitToContinue  = 直接带 continuity 重 admission → sessionDeletes===0。
+    assert.equal(
+      sessionDeletes,
+      0,
+      `续用绝不 DELETE 已付的那一小时（旧行为：forceReadmit 先删再买），got ${sessionDeletes}`,
+    )
+    // 账号应仍可用：旧代码在这里会把它冷却成 freebucks_exhausted
+    for (const key of ['a', 'b', 'c']) {
+      assert.ok(
+        !fbRuntimes.isCoolingDown(key),
+        `${key} 不得因 428 续用被冷却（旧行为：code=freebucks_exhausted）`,
+      )
+    }
+    // 承接请求的账号必须就是最初选中的那个（没被换号）
+    assert.ok(
+      !fbRuntimes.isCoolingDown(firstKey),
+      `承接账号 ${firstKey} 本身不得被冷却`,
+    )
+  }
+  mockMode = 'ok'
+  mockFreebucks = null
+  for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
+  for (const key of ['a', 'b', 'c']) fbRuntimes.clearCooldown(key)
+  for (const key of ['a', 'b', 'c']) {
+    await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})
+  }
+
+
+
   await fbRuntimes.shutdown()
   fbServer.close()
   fs.rmSync(fbDir, { recursive: true, force: true })

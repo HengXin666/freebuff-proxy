@@ -61,6 +61,27 @@ admission（`officialSessionHeaders()` 在有 instanceId 时自带
 **顺序关键**：该分支必须在 freebucks 闸门**之前** —— 续用不产生新购买，
 不该被"买不起"拦下（那正是本次把它拦死的那道闸）。
 
+> ⚠️ **该顺序在首版实现里没有被落实**（2026-10-05 修正）。当时新增了 428 分支，
+> 却把它写在 `unitGate` / `fbGate` 两道额度闸门**之后** —— 注释写着"必须在
+> freebucks 闸门之前"，代码却在之后，注释与代码相反。已经 `npm test` 全绿，
+> 因为**测试完全没有覆盖 428 路径**（无任何用例走 `readmitToContinue`）。
+>
+> 症状复现（远程 2026-10-04T18:52:34Z，账号 llh282000500）：
+> ```
+> admit  200  扣 15 FB，余额 25→10   ← 买断一小时
+> chat   428  waiting_room_required
+> skip re-admit: freebucks cannot afford model   balance 10 < price 15  ← 被闸门拦死
+> account cooling down  code=freebucks_exhausted
+> → 全池没有买得起的号 → 客户端 429 rate_limit_error
+> ```
+> 即：这一小时**已经付过款**，续用不花新的钱，却因为"买不起下一个小时"被拦下 →
+> 号被冷却 + 已付的一小时白扔。用户观感正是「花了 15 点、一次没用上、账号还被警告」。
+>
+> 修正：把 428 分支整体**前移到两道额度闸门之前**；并补测试
+> （`test/smoke.mjs` 的 (3.4) 段，mock 模式 `waiting_room_once`，让 admit 回执
+> 带**扣费后**余额 10 以真实命中闸门）。反向探针：把 428 挪回闸门之后 →
+> 「不得因 428 续用被冷却（旧行为：code=freebucks_exhausted）」立即变红（已实测）。
+
 官方真值（官方 desktop 0.0.158 解包 `orchestrator.js`）：
 `179243` `waiting_room_required: {status:428, endsTheSession:!0}`；
 `180126` 命中后存进度 → 重新 admission → **用同一条消息重跑**；

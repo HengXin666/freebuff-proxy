@@ -172,4 +172,61 @@ for (const name of [
   assert.ok(!/dropped/.test(src), 'cli-bridge 里不应再残留丢弃逻辑（dropped）')
 }
 
+// ── ⑦ mergeOfficialTools 必须**可执行**（不得再出现未声明变量）────────
+//
+// 2026-10-05 真实回归：882de20 重写 `if (!mapped)` 分支时把
+// `const mapped = MAP_TOOLS[n] || null;` **整行删掉了** —— 分支代码却还在用
+// `mapped`。`node --check` 只做语法检查，**抓不到 ReferenceError**，
+// 于是这个致命错误一路进了远程镜像：
+//
+//   远程实测（2026-10-04T18:52:34Z）：55 个工具一进来，
+//   `mergeOfficialTools` 在第一轮循环就抛
+//     ReferenceError: mapped is not defined
+//   → cli-bridge 的 bun 进程整轮失败 → 上层 `official channel rpc failed`
+//     → 降级 legacy → chat 428/503 → 用户看到"花了 15 点、一次没用上"
+//
+// 上面的 ⑥ 只是**源码正则**检查（能过），所以它漏掉了这个错误。这里补一条
+// **真执行**断言：把 MAP_TOOLS + mergeOfficialTools 抽出来跑，任何未声明变量
+// 都会立刻抛 ReferenceError。
+{
+  const src = fs.readFileSync(path.join(ROOT, 'cli-bridge/upstream.mjs'), 'utf8')
+  const mapStart = src.indexOf('const MAP_TOOLS = Object.freeze({')
+  const mapEnd = src.indexOf('})', mapStart) + 2
+  const fnStart = src.indexOf('function mergeOfficialTools')
+  const fnEnd = src.indexOf('\n}\n', fnStart) + 3
+  assert.ok(mapStart > 0 && mapEnd > mapStart, '必须能定位 MAP_TOOLS')
+  assert.ok(fnStart > 0 && fnEnd > fnStart, '必须能定位 mergeOfficialTools')
+
+  let merge
+  assert.doesNotThrow(() => {
+    merge = new Function(
+      `${src.slice(mapStart, mapEnd)}\n${src.slice(fnStart, fnEnd)}\nreturn mergeOfficialTools;`,
+    )()
+  }, 'mergeOfficialTools 必须可构造（与 MAP_TOOLS 同作用域）')
+
+  // 有官方等价物：改名
+  const renamed = merge([], [{ function: { name: 'bash' } }])
+  assert.deepEqual(
+    renamed.map((t) => t.function.name),
+    ['run_terminal_command'],
+    'bash 必须映射为官方名 run_terminal_command',
+  )
+  // 无官方等价物：原样保留（这是 882de20 的意图，也是它引入 bug 的那条分支）
+  const kept = merge([], [{ function: { name: 'memory_save' } }])
+  assert.deepEqual(
+    kept.map((t) => t.function.name),
+    ['memory_save'],
+    '官方没有等价物时必须原样保留',
+  )
+  // 官方已有同名：不重复追加
+  const dedup = merge(
+    [{ function: { name: 'run_terminal_command' } }],
+    [{ function: { name: 'bash' } }],
+  )
+  assert.equal(dedup.length, 1, '官方优先，重复不追加')
+  // 空工具集：不进入循环（这条以前能过，因为提前 return，掩盖了 bug）
+  assert.equal(merge([{ function: { name: 'x' } }], []).length, 1, '空客户端工具直接返回官方集')
+  console.log('mergeOfficialTools 真执行验证通过（4 条）')
+}
+
 console.log(`工具名双向映射验证通过（断言 ${n} 条）`)

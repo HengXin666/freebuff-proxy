@@ -2189,6 +2189,44 @@ export class AccountRuntimes {
           // Freebucks 高于余额 → 直接封号"的判定。买不起就冷却该号并交给下面的
           // 全新选号去挑一个买得起的账号。
           // 同号重试会**新买一条**计费会话，所以两本账都要先过。
+          //
+          /**
+           * ⚠️ **428 必须排在两道额度闸门之前**（2026-10-05 真实事故修正，二次修复）。
+           *
+           * 这道判断原本写在两个闸门**之后**，与它自己的注释（"必须在 freebucks
+           * 闸门之前判断 428"）自相矛盾 —— 于是续用被"买不起"拦死：
+           *
+           *   远程实测（2026-10-04T18:52:34Z，账号 llh282000500）：
+           *     admit         200  扣 15 Freebucks → 余额 25→10
+           *     chat          428  waiting_room_required
+           *     skip re-admit: freebucks cannot afford model  balance 10 < price 15  ← 被这里拦下
+           *     account cooling down  code=freebucks_exhausted
+           *     → 全池没有买得起的号 → 客户端 429 rate_limit_error
+           *
+           * 而 428 的正确处置是 `readmitToContinue()`：**带同一 instanceId +
+           * purchase-continuity 续用那一小时，不产生任何新的购买**。既然不花钱，
+           * "买不起"就与它无关 —— 用"余额不足"把它拦下，等于把刚付过款的那一小时
+           * 白扔掉，还顺手把唯一有钱的号冷却掉（用户观感：花了 15 点、一次都没用上、
+           * 账号还进冷却）。
+           */
+          if (opts.gateCode === 'waiting_room_required') {
+            const cont = await rt.sessions.readmitToContinue(model)
+            if (cont.continued) {
+              this.clearCooldown(opts.preferredKey, model)
+              this._setLastSuccessKey(opts.preferredKey)
+              logger.info('re-admitted with continuity (428: reused the paid hour)', {
+                key: opts.preferredKey,
+                model,
+                instanceId: cont.instanceId || null,
+              })
+              return rt
+            }
+            // 续用没成：**保留会话现场**抛出，让上层换号；绝不在此释放
+            throw new UpstreamError(
+              `waiting_room_required: could not continue the existing session (${cont.reason || 'not_active'})`,
+              { status: 428, code: 'waiting_room_required' },
+            )
+          }
           const unitGate = rt.sessions.sessionUnitsFor?.(model)
           if (unitGate?.known && unitGate.exhausted) {
             throw new UpstreamError(
@@ -2214,40 +2252,9 @@ export class AccountRuntimes {
               { status: 429, code: 'freebucks_exhausted' },
             )
           }
-          /**
-           * ⚠️ **428 走"续用"，其它 gate 才走"重买"**（2026-10-04 真实事故修正）。
-           *
-           * `waiting_room_required` 的字面语义是"请把你的消息再发一遍"
-           * （上游原话 "Send your message again to start a new one"），
-           * 官方客户端对它的处置是**带同一 instanceId + purchase-continuity
-           * 重新 admission 以续用那一小时**（orchestrator.js:180126 / 207147），
-           * **从不先 DELETE**。
-           *
-           * 而 `forceReadmit()` 是"先 DELETE 再 admit"—— 用它处理 428 等于
-           * 把已经买断的一小时扔掉、再买一个新的：钱白花、新的一小时还可能
-           * 因为余额已扣光而买不成（实测 `skip re-admit: freebucks cannot afford model`）。
-           *
-           * 注意顺序：这里必须在 freebucks 闸门**之前**判断 428 —— 续用不产生
-           * 新的购买，不该被"买不起"拦下（那正是本次故障里把它拦死的那道闸）。
-           */
-          if (opts.gateCode === 'waiting_room_required') {
-            const cont = await rt.sessions.readmitToContinue(model)
-            if (cont.continued) {
-              this.clearCooldown(opts.preferredKey, model)
-              this._setLastSuccessKey(opts.preferredKey)
-              logger.info('re-admitted with continuity (428: reused the paid hour)', {
-                key: opts.preferredKey,
-                model,
-                instanceId: cont.instanceId || null,
-              })
-              return rt
-            }
-            // 续用没成：**保留会话现场**抛出，让上层换号；绝不在此释放
-            throw new UpstreamError(
-              `waiting_room_required: could not continue the existing session (${cont.reason || 'not_active'})`,
-              { status: 428, code: 'waiting_room_required' },
-            )
-          }
+          // 428 已在上方先行处理（续用不花钱，必须先于额度闸门）。
+          // 走到这里的是**其它**需换号的 gate：forceReadmit 先 DELETE 再 admit，
+          // 会新买一条计费会话 —— 两道闸门刚已确认买得起，这一步才安全。
           await rt.sessions.forceReadmit(model)
           this.clearCooldown(opts.preferredKey, model)
           this._setLastSuccessKey(opts.preferredKey)

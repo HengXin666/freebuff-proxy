@@ -354,6 +354,7 @@ function mergeOfficialTools(official, clientTools) {
      * `run_terminal_command` 等）映射过去，让上游按官方语义理解和计费；
      * 没有等价物的保持原名，两边都不丢。
      */
+    const mapped = MAP_TOOLS[n] || null;
     if (!mapped) {
       // 无官方等价物：原样保留（不改名、不丢弃）
       if (!seen.has(n)) {

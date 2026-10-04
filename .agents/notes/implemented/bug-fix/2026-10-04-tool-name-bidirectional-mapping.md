@@ -53,9 +53,9 @@ Status: implemented
 
 ## Decision
 
-### 一、下行映射：客户端名 → **真实抓包的官方名**，映射不到的丢弃
+### 一、下行映射：客户端名 → **真实抓包的官方名**，映射不到的**原样保留**
 
-`cli-bridge/upstream.mjs` 的 `MAP_TOOLS` + `mergeOfficialTools(official, client, dropped)`：
+`cli-bridge/upstream.mjs` 的 `MAP_TOOLS` + `mergeOfficialTools(official, client)`：
 
 ```
 bash  → run_terminal_command      read  → read_files
@@ -64,8 +64,8 @@ write → write_file                ls    → list_directory
 …（34 条，目标全部在真实抓包里）
 ```
 
-- 映射不到的**丢弃**（记入 `dropped` 并打日志）—— 宁可某工具在此链路不可用，
-  也不能让整条链路因一个陌生名被拒。
+- 映射不到的**原样保留**（不改名、不丢弃；见文末「重大更正」一节 ——
+  "映射不到即丢弃"已被单变量实测证伪）。
 - 去重保留（客户端声明了官方已有名时以官方定义为准）。
 
 ### 二、上行还原：官方名 → 客户端名
@@ -178,6 +178,23 @@ typecheck 过。
 
 把该分支改回丢弃 → `test/verify-tool-name-mapping.mjs` 的
 「映射不到的客户端工具必须 list.push 原样保留（不得丢弃）」断言变红（已实测）。
+
+### 伴随的致命回归：`mapped` 未声明（同日修复）
+
+改这一分支时把 `const mapped = MAP_TOOLS[n] || null;` **整行删掉了**，
+分支与后面却仍在用 `mapped` —— 而 `node --check`（仓库 typecheck/test 里唯一的
+静态门禁）**只查语法、抓不到 ReferenceError**，于是它一路进了远程镜像。
+
+远程后果（2026-10-04T18:52:34Z）：55 个工具一进来，`mergeOfficialTools` 在
+第一轮循环即抛 `ReferenceError: mapped is not defined` → bun 侧整轮失败 →
+`official channel rpc failed` → 降级 legacy → chat 428 → 用户看到
+「花了 15 点、一次没用上」。
+
+**教训：源码正则断言（本 note 的 ⑥）挡不住"代码能编译但不能运行"。**
+本次补了一条**真执行**断言 —— 把 `MAP_TOOLS` 与 `mergeOfficialTools` 源码
+抽进同一作用域后 `new Function(...)` 构造并实际调用；任何未声明变量都会立刻抛
+`ReferenceError`。反向探针：删掉那行 `const mapped` → 该断言以
+`ReferenceError: mapped is not defined` 变红（已实测），而 `node --check` 仍然通过。
 
 ### 这次更正说明什么
 
