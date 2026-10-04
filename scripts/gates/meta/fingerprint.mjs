@@ -74,17 +74,11 @@ function strictness() {
   }
 }
 
-/** 抽取 hook 接线(pre-commit 里跑哪组开关). */
-function hooks() {
-  const out = {}
-  for (const rel of ['.git/hooks/pre-commit', '.git/hooks/pre-push']) {
-    const text = readOrEmpty(rel)
-    out[rel] = /scripts\/gates\/run\.mjs (\S+)/.exec(text)?.[1] ?? '<not-wired>'
-  }
-  return out
-}
 
-const snapshot = { version: 1, algorithm: 'sha256', ...strictness(), wiring: wiring(), hooks: hooks() }
+// 快照不含 hooks: .git/hooks 不入库, 本地装了而 CI 没有, 同一份代码会算出
+// 两个指纹(v1.27.0 的 quality job 实测被这条卡红). 指纹只能记录"仓库里的真相",
+// 本地环境状态不属于它. hook 是否跑门禁, 由 CI 直接跑 check:gates 来守.
+const snapshot = { version: 1, algorithm: 'sha256', ...strictness(), wiring: wiring() }
 snapshot.fingerprint = createHash('sha256').update(stable(snapshot)).digest('hex')
 
 if (process.argv.includes('--update')) {
@@ -131,7 +125,7 @@ const strictPrev = {
 diff('阈值/白名单/棘轮（有多严）', strictPrev, strictNow)
 diff('棘轮水位', prev.ratchets, snapshot.ratchets)
 diff('总线注册表（还跑不跑）', prev.wiring, snapshot.wiring)
-diff('hook 接线', prev.hooks, snapshot.hooks)
+
 
 report.note(`接线指纹: ${prev.fingerprint?.slice(0, 16)}… → ${snapshot.fingerprint.slice(0, 16)}…`)
 report.note(
