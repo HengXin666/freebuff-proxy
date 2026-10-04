@@ -15,7 +15,7 @@ if [ "$(id -u)" = "0" ]; then
   # 唯一要紧的判据：降权用户能否写数据目录。不能写时给出**准确**的原因与补救，
   # 而不是让用户对着 EROFS/EACCES 堆栈猜（issue #9 要的就是这份可诊断性）。
   # 实测：/data 真只读时应用起不来（要写 users.json），所以这里是「错误」不是「提示」。
-  if ! su-exec node test -w "$DATA_DIR" 2>/dev/null; then
+  if ! setpriv --reuid=node --regid=node --init-groups test -w "$DATA_DIR" 2>/dev/null; then
     echo "[freebuff-proxy] 错误: $DATA_DIR 对 node 用户不可写，应用将无法启动（需要写 users.json 等）。只读挂载请改为可写；root 拥有的宿主目录可执行: chown -R 1000:1000 <宿主机 data 目录>" >&2
   fi
 
@@ -31,7 +31,7 @@ if [ "$(id -u)" = "0" ]; then
     fi
   fi
 
-  exec su-exec node "$@"
+  exec setpriv --reuid=node --regid=node --init-groups "$@"
 else
   mkdir -p "$DATA_DIR/credentials" 2>/dev/null || true
   exec "$@"

@@ -5661,8 +5661,31 @@ server.close()
       ),
       '应记录 session_budget_exhausted',
     )
-    // 失败账号的会话必须被早退释放（拿退款），不能空挂后台
-    await waitFor('失败账号会话被释放', () => sessionDeletes >= 1, 3_000)
+    /**
+     * ⚠️ 断言已按**真实计费机制**改写（2026-10-04）。
+     *
+     * 旧断言：`sessionDeletes >= 1`（"失败账号的会话必须被早退释放，拿退款"）。
+     * 它的前提是"早退能拿回钱"—— **实测是错的**：上游对早退 DELETE 只回
+     * `freebucksRefundPending`，观察 2 分钟未到账；Freebucks 是**买断制**
+     * （POST 当场扣整小时单价），所以释放 = 已付的钱直接扔掉。
+     *
+     * 真实事故：远程请求 428 后走 re-admit（先 DELETE 再 admit），
+     * 结果"钱花了、货退了、新的还买不起"，用户看到「请求完积分变零还失败」。
+     *
+     * 现在的正确行为：**付费时段内（expiresAt 未到）绝不释放** ——
+     * 留着它下一跳还能续用（readmitToContinue），闲置不额外花钱。
+     * 本用例的 mock 会话是 `Date.now() + 3600_000`（+1 小时），
+     * 所以期望是 **sessionDeletes === 0**。
+     *
+     * 保留原意（"不能空挂后台"由**付费时段结束后**的释放保证 —— 另见
+     * idle release 与 release_on_shutdown 的用例）。
+     */
+    await waitFor('付费时段内未释放已买断的会话', () => sessionPosts >= 2, 3_000)
+    assert.equal(
+      sessionDeletes,
+      0,
+      `付费时段内不得 DELETE 已买断的会话（那是直接烧钱），got ${sessionDeletes}`,
+    )
   }
 
 
@@ -5676,6 +5699,21 @@ server.close()
   fbConfig.limits.maxNewSessionsPerRequest = 0
   mockFreebucks = null
   for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
+  /**
+   * ⚠️ 必须**显式清掉上一段留下的热会话**（2026-10-04）。
+   *
+   * 上一个用例改成"付费时段内不释放已买断的会话"后，会话会**留在原地**
+   * （这正是新行为的目的：那一小时已付款，扔掉就没了）。而本用例要断言
+   * `sessionPosts === 1`（首个请求应正常 admit），复用一个热 session 就不会
+   * 再 admit —— 于是断言失败。
+   *
+   * 这是**用例间共享状态**的问题，不是实现问题：每个用例应自足地建立自己的
+   * 前置状态，而不是依赖上一个用例"恰好把会话清干净了"。
+   * 用 releaseStrict 真正结束它（这里测的是预算语义，不是付费时段保护）。
+   */
+  for (const key of ['a', 'b', 'c']) {
+    await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})
+  }
   mockMode = 'ok'
   sessionPosts = 0
   sessionDeletes = 0
@@ -5717,6 +5755,20 @@ server.close()
   // 上面的故障换号把 3 个账号都冷却了；恢复预算并清掉冷却，别污染后续用例。
   for (const key of ['a', 'b', 'c']) fbRuntimes.clearCooldown(key)
   fbConfig.limits.maxNewSessionsPerRequest = 2
+  /**
+   * ⚠️ 同时清掉遗留的热会话（2026-10-04）。
+   *
+   * 前面的用例改成"付费时段内不释放已买断的会话"后，热 session 会留在原地
+   * （新行为的目的就是别扔掉已付的钱）。本段要断言 `sessionPosts === 1`
+   * （排队复用同一会话、不新建），复用旧会话就不会再 admit → 计数对不上。
+   *
+   * 每个用例自足地建立前置状态，不依赖上一个用例"恰好清干净了"。
+   * `releaseStrict` 在这里是合法的：测的是排队/空闲释放语义，
+   * **不是**付费时段保护（那条由 (3) 的 `sessionDeletes === 0` 覆盖）。
+   */
+  for (const key of ['a', 'b', 'c']) {
+    await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})
+  }
 
 
   // (4) 排队等 chat 锁的请求不得被空闲释放误删会话（选号阶段就 admit、请求
@@ -5948,9 +6000,27 @@ server.close()
     }
   }
 
-  // (8) 最终失败也必须早退释放会话（不再等空闲释放 / 挂到过期白扣时长）
+  /**
+   * (8) 最终失败时**不再**早退释放（2026-10-04 按真实计费机制改写）。
+   *
+   * 旧断言：「最终失败也必须早退释放会话（不再等空闲释放 / 挂到过期白扣时长）」
+   * → `sessionDeletes >= 1`。
+   *
+   * 前提已被实测证伪：Freebucks 是**买断制**（POST 当场扣整小时单价），
+   * 早退 DELETE **不退钱**（只回 `freebucksRefundPending`，观察 2 分钟未到账）。
+   * 所以"早退"不是"省时长"，而是**把已付的那一小时直接扔掉**。
+   *
+   * 真实事故：远程 428 后 re-admit（先 DELETE 再 admit）→ 钱花了、货退了、
+   * 新的买不起 → 用户看到「请求完积分变零还失败」。
+   *
+   * 新行为：付费时段内**保留**会话（下一跳还能续用）。本段 mock 的会话是
+   * +1 小时，所以 `sessionDeletes === 0`。
+   */
   mockFreebucks = null
   for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
+  for (const key of ['a', 'b', 'c']) {
+    await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})
+  }
   mockMode = 'err_500_all'
   sessionPosts = 0
   sessionDeletes = 0
@@ -5961,7 +6031,13 @@ server.close()
       messages: [{ role: 'user', content: 'final-fail' }],
     })
     assert.equal(res.status, 429, await res.clone().text())
-    await waitFor('最终失败后会话被早退释放', () => sessionDeletes >= 1, 3_000)
+    // 给释放逻辑留出与旧断言相同的时间窗，确认它**确实没有**发生
+    await new Promise((r) => setTimeout(r, 300))
+    assert.equal(
+      sessionDeletes,
+      0,
+      `付费时段内不得早退释放已买断的会话（那是直接烧钱），got ${sessionDeletes}`,
+    )
   }
 
   mockMode = 'ok'

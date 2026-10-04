@@ -721,6 +721,13 @@ const DICT = {
 
   // ---- 日志 ----
   'logs.copyJson': { 'zh-CN': '复制 JSON', en: 'Copy JSON' },
+  'logs.export': { 'zh-CN': '导出', en: 'Export' },
+  'logs.exportTitle': {
+    'zh-CN': '把当前筛选结果导出为 .jsonl 文件（每行一个 JSON，可直接交给别人分析）',
+    en: 'Export the current filter result as a .jsonl file (one JSON per line)',
+  },
+  'logs.exported': { 'zh-CN': '已导出 {n} 条 → {name}', en: 'Exported {n} entries → {name}' },
+  'logs.exportEmpty': { 'zh-CN': '当前筛选没有可导出的日志', en: 'Nothing to export for the current filter' },
   'logs.empty': {
     'zh-CN': '没有匹配的日志。缓冲只保留最近若干条（进程内，重启即清空）。',
     en: 'No matching log entries. The buffer keeps only a bounded tail (in-process; cleared on restart).',

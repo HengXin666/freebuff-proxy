@@ -1973,6 +1973,40 @@ export class AccountRuntimes {
               { status: 429, code: 'freebucks_exhausted' },
             )
           }
+          /**
+           * ⚠️ **428 走"续用"，其它 gate 才走"重买"**（2026-10-04 真实事故修正）。
+           *
+           * `waiting_room_required` 的字面语义是"请把你的消息再发一遍"
+           * （上游原话 "Send your message again to start a new one"），
+           * 官方客户端对它的处置是**带同一 instanceId + purchase-continuity
+           * 重新 admission 以续用那一小时**（orchestrator.js:180126 / 207147），
+           * **从不先 DELETE**。
+           *
+           * 而 `forceReadmit()` 是"先 DELETE 再 admit"—— 用它处理 428 等于
+           * 把已经买断的一小时扔掉、再买一个新的：钱白花、新的一小时还可能
+           * 因为余额已扣光而买不成（实测 `skip re-admit: freebucks cannot afford model`）。
+           *
+           * 注意顺序：这里必须在 freebucks 闸门**之前**判断 428 —— 续用不产生
+           * 新的购买，不该被"买不起"拦下（那正是本次故障里把它拦死的那道闸）。
+           */
+          if (opts.gateCode === 'waiting_room_required') {
+            const cont = await rt.sessions.readmitToContinue(model)
+            if (cont.continued) {
+              this.clearCooldown(opts.preferredKey, model)
+              this._setLastSuccessKey(opts.preferredKey)
+              logger.info('re-admitted with continuity (428: reused the paid hour)', {
+                key: opts.preferredKey,
+                model,
+                instanceId: cont.instanceId || null,
+              })
+              return rt
+            }
+            // 续用没成：**保留会话现场**抛出，让上层换号；绝不在此释放
+            throw new UpstreamError(
+              `waiting_room_required: could not continue the existing session (${cont.reason || 'not_active'})`,
+              { status: 428, code: 'waiting_room_required' },
+            )
+          }
           await rt.sessions.forceReadmit(model)
           this.clearCooldown(opts.preferredKey, model)
           this._setLastSuccessKey(opts.preferredKey)

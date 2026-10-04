@@ -89,6 +89,46 @@ export function createProxyHandler(ctx) {
   }
 
   /**
+   * 释放账号的上游会话 —— **付费时段内一律拒绝**，这是唯一允许的释放入口。
+   *
+   * 为什么要有这个统一入口（2026-10-04 真实事故）：
+   * `runtimes.releaseSession(key)` 此前散落在 **7 处**重试/换号路径上，
+   * 每一处都是无条件的早退 DELETE。而 Freebucks 是**买断制**（POST 当场扣
+   * 整小时单价），早退 **不退钱**（实测只回 `freebucksRefundPending`，
+   * 观察 2 分钟未到账）—— 于是每一次换号/最终失败都在**把已付的一小时扔掉**。
+   *
+   * 用户看到的后果：请求一次 → 钱扣光 → 请求失败 → 会话也没了 →
+   * 下一个请求买不起（`freebucks_exhausted`）→ 表现成"账号废了"。
+   *
+   * 修法：把释放收敛到这一个函数，**在付费时段内直接拒绝**（并留日志），
+   * 只允许"付费时段已过"时释放。这样将来新增重试路径也不会再漏 ——
+   * 只要它调的是这个函数。
+   *
+   * @param {string} key 账号 key
+   * @param {string} why 释放原因（写进日志，便于复盘谁在释放）
+   * @returns {boolean} 是否真的发起了释放
+   */
+  function releaseSessionUnlessPaid(key, why) {
+    if (!key) return false
+    let inPaid = false
+    try {
+      inPaid = runtimes.get?.(key)?.sessions?.inPaidWindow?.() === true
+    } catch {
+      inPaid = false
+    }
+    if (inPaid) {
+      logger.info('refusing to release session: paid hour still running', {
+        key,
+        why,
+        note: 'early DELETE does not refund Freebucks — releasing would burn the money',
+      })
+      return false
+    }
+    runtimes.releaseSession(key)
+    return true
+  }
+
+  /**
    * ⚠️ 已删除 `probeUpstreamSessionCached()` 及其 60s 缓存。
    *
    * 它做过两件都错的事：
@@ -1200,9 +1240,14 @@ export function createProxyHandler(ctx) {
             pendingRetryAfterMs = result.retryAfterMs ?? null
             pendingSwitchAccount = willSwitch
             pendingNoCooldown = result.noCooldown === true
-            // 换号前把失败账号的会话早退 DELETE：它已经在冷却，没人会再用它，
-            // 留着只会白占一个上游会话槽位（该账号再也 admit 不了别的模型）。
-            if (willSwitch && lastKey) runtimes.releaseSession(lastKey)
+            // 换号前**不再无条件**早退 DELETE：那一小时是实付买断的，
+            // 而上游早退不退 Freebucks。旧注释说"它已经在冷却，没人会再用它"——
+            // 但冷却只有 60 秒，而这一小时还剩几十分钟可用（下一跳还能续用）。
+            // 只有**付费时段已过**才真正没有保留价值，那时才释放。
+            // 换号前释放：走统一入口（付费时段内会被拒绝 —— 那一小时是实付的）
+            if (willSwitch && lastKey) {
+              releaseSessionUnlessPaid(lastKey, 'switch account after gate error')
+            }
             continue
           }
 
@@ -1215,6 +1260,26 @@ export function createProxyHandler(ctx) {
           // 换模型才需要早退腾槽位（那一小时已付款，闲置不额外花钱）。
           // 释放失败也不丢句柄（SessionManager
           // 会保留 instanceId 并重试，sessions.json 里还有一份）。
+          /**
+           * ⚠️ **付费时段内绝不释放**（2026-10-04 真实事故修正）。
+           *
+           * 旧行为：最后一次尝试失败就 `releaseSession()`，日志写
+           * `releasing session to free the slot`。但那一小时是**实付买断**的，
+           * 上游早退 DELETE **不退 Freebucks**（实测只回 `freebucksRefundPending`
+           * 且观察 2 分钟未到账）—— 于是"请求失败 + 钱白花 + 会话没了"，
+           * 用户看到的就是「请求完积分变零，还失败了」。
+           *
+           * 更要命的是 428 `waiting_room_required`：上游原话是
+           * "Send your message again to start a new one" —— **它要的是重发，
+           * 不是重买**；而我们把会话扔了，重发就真的只能重买。
+           *
+           * 现在：只要会话仍在已付费时段内（`inPaidWindow()`），就**保留句柄**。
+           * 闲置不额外花钱，而留着它下一跳还能续用（见 readmitToContinue）。
+           * 只有**付费时段已过**才释放腾槽位。
+           *
+           * 释放失败也不丢句柄（SessionManager 会保留 instanceId 并重试，
+           * sessions.json 里还有一份）。
+           */
           if (lastKey) {
             const st = result.status
             const clientError =
@@ -1224,13 +1289,8 @@ export function createProxyHandler(ctx) {
               st !== 429 &&
               result.noCooldown !== true
             if (!clientError || result.gateCode === 'stream_idle_timeout') {
-              logger.info('final attempt failed; releasing session to free the slot', {
-                key: lastKey,
-                model: upstreamModel,
-                gateCode: result.gateCode,
-                status: st,
-              })
-              runtimes.releaseSession(lastKey)
+              // 统一入口：付费时段内会被拒绝（避免把已买断的一小时扔掉）
+              releaseSessionUnlessPaid(lastKey, 'final attempt failed')
             }
           }
           if (result.switchAccount && !result.noCooldown) {
@@ -1291,7 +1351,9 @@ export function createProxyHandler(ctx) {
                 pendingGateCode = err.code
                 pendingSwitchAccount = willSwitch
                 pendingNoCooldown = false
-                if (willSwitch && lastKey) runtimes.releaseSession(lastKey)
+                if (willSwitch && lastKey) {
+                  releaseSessionUnlessPaid(lastKey, 'switch account (recoverable error)')
+                }
                 continue
               }
               // 上游错误（startAgentRun 失败 / no_session / 5xx 等）：
@@ -1320,19 +1382,16 @@ export function createProxyHandler(ctx) {
               pendingRetryAfterMs = err.retryAfterMs ?? null
               pendingSwitchAccount = willSwitch
               pendingNoCooldown = false
-              if (willSwitch && lastKey) runtimes.releaseSession(lastKey)
+              if (willSwitch && lastKey) {
+                  releaseSessionUnlessPaid(lastKey, 'switch account (session error)')
+                }
               continue
             }
             // 最后一次尝试也失败（无重试机会）：会话不会再被用，立刻早退
             // DELETE 释放槽位，而不是等空闲释放 / 挂到过期。
             if (lastKey) {
-              logger.info('final upstream error; releasing session to free the slot', {
-                key: lastKey,
-                model: upstreamModel,
-                code: err.code,
-                status: err.status,
-              })
-              runtimes.releaseSession(lastKey)
+              // 统一入口（付费时段内拒绝释放）
+              releaseSessionUnlessPaid(lastKey, 'final upstream error')
             }
             mapAndSendError(res, err)
             return
@@ -1359,7 +1418,9 @@ export function createProxyHandler(ctx) {
             pendingRetryAfterMs = null
             pendingSwitchAccount = willSwitch
             pendingNoCooldown = false
-            if (willSwitch && lastKey) runtimes.releaseSession(lastKey)
+            if (willSwitch && lastKey) {
+                  releaseSessionUnlessPaid(lastKey, 'switch account (session error)')
+                }
             continue
           }
           logger.error('chat completions failed', {
@@ -1374,7 +1435,7 @@ export function createProxyHandler(ctx) {
               model: upstreamModel,
               error: err instanceof Error ? err.message : String(err),
             })
-            runtimes.releaseSession(lastKey)
+            releaseSessionUnlessPaid(lastKey, 'final upstream error')
           }
           if (!res.headersSent) {
             sendJson(res, 500, {

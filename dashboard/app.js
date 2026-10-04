@@ -661,6 +661,43 @@ function renderLogsList() {
   }
 }
 
+/**
+ * 导出当前筛选结果（.jsonl 下载）。
+ *
+ * 为什么（用户实测诉求）：排障要把日志交给别人分析，而进程内缓冲只有一个
+ * 可滚动页面 —— 复制几行就丢上下文（多账号池并发时几十条交织）。导出把
+ * **当前筛选条件**下的完整条目一次性落成文件：按账号筛完再导出，
+ * 就得到那个账号的独立日志。
+ *
+ * 导出的是 `logsView.lines`（当前已加载的），与页面所见严格一致；
+ * 每行一个 JSON 对象（jsonl），人能读、`jq` 也能直接消费。
+ * 文件名带上筛选条件，避免多份导出混淆。
+ */
+function exportLogs() {
+  const lines = logsView.lines || []
+  if (!lines.length) {
+    toast(t('logs.exportEmpty'), true)
+    return
+  }
+  const body = lines.map((l) => JSON.stringify(l)).join('\n') + '\n'
+  const parts = ['freebuff-logs']
+  if (logsView.account) parts.push(String(logsView.account).replace(/[^\w.@-]/g, '_'))
+  if (logsView.level && logsView.level !== 'all') parts.push(logsView.level)
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  const name = `${parts.join('_')}_${stamp}.jsonl`
+  const blob = new Blob([body], { type: 'application/x-ndjson' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  document.body.append(a)
+  a.click()
+  a.remove()
+  // 释放对象 URL：不释放会一直占着内存（长时间开着日志页反复导出会累积）
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  toast(t('logs.exported', { n: lines.length, name }))
+}
+
 async function refreshLogs() {
   const q = new URLSearchParams({ level: logsView.level, limit: '300' })
   if (logsView.q.trim()) q.set('q', logsView.q.trim())
@@ -717,6 +754,24 @@ async function renderLogs(view) {
         },
       }, [icon('refresh', 13), logsView.auto ? t('logs.stopAuto') : t('logs.auto')]),
       el('button', { class: 'muted', onclick: () => refreshLogs() }, [icon('refresh', 13), t('common.refresh')]),
+      /**
+       * 导出当前筛选结果（.jsonl 下载）。
+       *
+       * 为什么必须有（用户实测诉求）：排障需要把日志交给别人分析，而
+       * 进程内缓冲只有一个可滚动的页面 —— 复制几行就丢上下文（多账号池
+       * 并发时几十条交织）。导出把**当前筛选条件**下的完整条目一次性落成
+       * 文件：按账号筛完再导出，就是那个账号的独立日志。
+       *
+       * 导出的是 `logsView.lines`（**当前已加载的**），与页面所见严格一致 ——
+       * 不用"导出全部"这种会让用户意外的东西。每行一个 JSON 对象（jsonl），
+       * 既是人能读的文本，也能被 jq / 脚本直接消费。
+       */
+      el('button', {
+        class: 'muted',
+        id: 'logs-export-btn',
+        title: t('logs.exportTitle'),
+        onclick: () => exportLogs(),
+      }, [icon('download', 13), t('logs.export')]),
       /**
        * 清空缓冲：环形缓冲会**自动丢最旧的**，但用户想"从现在起只看新的"时
        * 旧条目仍占满整页（一次故障刷出几百条后新日志被挤到最底下）。
