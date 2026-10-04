@@ -41,9 +41,28 @@ export class SessionManager {
     logContext = null,
     onSessionChange = null,
     onStateChange = null,
+    /**
+     * ⚠️ **模型标识归一函数（必须解构，否则静默失效）**。
+     *
+     * 上层（`app-context.js`）创建本类时**一直在传**这个函数，但早期版本的
+     * 解构列表里**漏了它** —— JS 解构不会因为"多传了参数"报错，
+     * 于是 `this.resolveModelAlias` 恒为 `undefined`，`holderFor()` /
+     * `freebucksFor()` 的归一**静默退化成严格相等**。
+     *
+     * 后果（正是要修的那个 bug 的复现条件）：上游会话清单用**上游 id**
+     * （`deepseek/deepseek-v4-flash`），而调度内部用**目录 key**
+     * （`m-096e75164d`）—— 两侧标识不同 → 永远匹配不上 →
+     * **面板能显示那条已付费会话、调度却看不见它** → 白花钱重买。
+     *
+     * 而使用**同形态标识**的既有用例全绿，把这个缺陷掩盖了（实测：
+     * 构造时传 `v => 'K:'+v`，`sm.resolveModelAlias` 仍是 `undefined`）。
+     */
+    resolveModelAlias = null,
   }) {
     this.upstream = upstream
     this.config = config
+    /** 模型标识归一（目录 key / 上游 id / 可读名 → 目录 key）；见上方说明。 */
+    this.resolveModelAlias = resolveModelAlias
     /**
      * 会话实例 id：**裸 UUID，整个进程生命周期内复用同一个**。
      *

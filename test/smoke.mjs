@@ -9178,3 +9178,16 @@ console.log('smoke ok')
   const u = sm.sessionUnitsFor('upstage/solar-mini4')
   assert.equal(u.exhausted, true, '免费模型仍受会话次数闸门约束（上游的独立额度）')
 }
+
+/* ────────────────────────────────────────────────────────────────
+   边界结论（2026-10-05，**不放测试**，理由如下）
+
+   全新账号（从未对过账，`freebucksFor().known === false`）**不会**触发上面那条
+   惰性探测 —— 因为门槛是"闸门已判定拒绝"。它的兜底路径是另一条：
+   正常 admit → 上游回 `purchase_capacity`（槽位被别处占着）
+   → `_admitUnlocked` 的 takeover 分支接管。
+
+   该路径**已由 `_admitUnlocked` 内的 takeover 测试覆盖**（见"槽位被占时用
+   takeover 显式接管"用例，含反向探针）。此处不再重复造一条需要 mock 整条
+   chat 链路的用例：投入产出不成比例，且重复覆盖同一逻辑。
+   ──────────────────────────────────────────────────────────────── */

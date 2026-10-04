@@ -327,19 +327,39 @@ const UNMAP_TOOLS = Object.freeze(
  *
  * @param {any[]} official 官方工具定义
  * @param {any[]} clientTools 下游声明的工具
- * @param {Record<string,string>} [dropped] 出参：被丢弃的客户端工具名（供日志）
  */
-function mergeOfficialTools(official, clientTools, dropped = {}) {
+function mergeOfficialTools(official, clientTools) {
   const list = Array.isArray(official) ? [...official] : [];
   if (!Array.isArray(clientTools) || clientTools.length === 0) return list;
   const seen = new Set(list.map((t) => t?.function?.name).filter(Boolean));
   for (const t of clientTools) {
     const n = t?.function?.name;
     if (!n) continue;
-    const mapped = MAP_TOOLS[n] || null;
+    /**
+     * ⚠️ **映射不到时「原样保留」，不是丢弃** —— 这是实测结论，不是推断。
+     *
+     * 2026-10-05 单变量实测：声明 8 个**官方完全不存在**的工具名
+     * （`memory_save` / `git_status` / `subagent` / `send_message` /
+     * `job_list` / `list_agents` / `git_diff` / `memory_search`），
+     * 出站 45 个工具（官方 37 + 这 8 个），上游回 **HTTP 200**。
+     *
+     * 即：**上游并不因为"工具名官方没有"就拒绝请求**。早期版本"映射不到即丢弃"
+     * 是错的 —— 实测 dsh 的 44 个工具里 **30 个（68%）会被静默丢弃**，
+     * 用户以为声明了能调、实际根本没发出去（模型永远不会调用它们）。
+     *
+     * 保留的意义：模型至少**看得见**这个工具、能按它的 schema 生成 tool_call，
+     * 由客户端自己执行（本代理不执行工具，只转发）。
+     *
+     * 那映射还要不要？要 —— 对**有官方等价物**的名字（`bash`→
+     * `run_terminal_command` 等）映射过去，让上游按官方语义理解和计费；
+     * 没有等价物的保持原名，两边都不丢。
+     */
     if (!mapped) {
-      // 官方没有等价物 → 丢弃（附理由给调用方记日志），绝不原样发出
-      dropped[n] = 'no-official-equivalent';
+      // 无官方等价物：原样保留（不改名、不丢弃）
+      if (!seen.has(n)) {
+        seen.add(n)
+        list.push(t)
+      }
       continue;
     }
     if (seen.has(mapped)) continue; // 官方优先，重复不追加
@@ -823,24 +843,33 @@ class Bridge {
      * 原样发出后，上游回 503；同会话同模型不带工具则是 200。唯一变量就是工具集。
      * 官方工具集是固定 37 个，里面没有 `bash`/`edit`/`read`/`write`/`skill`。
      */
-    const droppedTools = {};
-    const clientToolNames = {};
-    for (const t of Array.isArray(tools) ? tools : []) {
-      const n = t?.function?.name;
-      if (n && MAP_TOOLS[n]) clientToolNames[n] = MAP_TOOLS[n];
-    }
     let outTools = tools || [];
     if (layer === 'manager' && OFFICIAL_DECIDE?.length) {
-      outTools = mergeOfficialTools(OFFICIAL_DECIDE, tools, droppedTools);
+      outTools = mergeOfficialTools(OFFICIAL_DECIDE, tools);
     } else if (layer === 'worker' && OFFICIAL_TOOLS.length > 0) {
-      outTools = mergeOfficialTools(OFFICIAL_TOOLS, tools, droppedTools);
+      outTools = mergeOfficialTools(OFFICIAL_TOOLS, tools);
     }
-    const droppedNames = Object.keys(droppedTools);
-    if (droppedNames.length) {
-      console.error(
-        '[tool-map] dropped client tools with no official equivalent:',
-        droppedNames.join(', '),
-      );
+    /**
+     * 观测：把"哪些客户端工具被改名、哪些保持原名"记一条。
+     *
+     * ⚠️ **不再有"丢弃"这个类别**（旧版有，实测证伪）—— 上游接受官方不存在的
+     * 工具名（8 个陌生名实测 200），所以映射不到的**原样保留**。
+     * 保留这条日志是为了能看出"这次请求里有多少名字不是官方原生的"。
+     */
+    {
+      const renamed = [];
+      const kept = [];
+      for (const t of Array.isArray(tools) ? tools : []) {
+        const n = t?.function?.name;
+        if (!n) continue;
+        if (MAP_TOOLS[n]) renamed.push(`${n}→${MAP_TOOLS[n]}`)
+        else kept.push(n)
+      }
+      if (renamed.length || kept.length) {
+        console.error(
+          `[tool-map] renamed ${renamed.length}: ${renamed.join(', ')} | kept-as-is ${kept.length}: ${kept.slice(0, 12).join(', ')}${kept.length > 12 ? ' …' : ''}`,
+        )
+      }
     }
     const sysTpl = OFFICIAL_SYS?.[layer] || OFFICIAL_SYS?.worker;
 

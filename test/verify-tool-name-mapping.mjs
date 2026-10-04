@@ -7,8 +7,14 @@
  * 唯一变量就是工具集。
  *
  * 所以必须有双向映射：
- *   下行（发请求）：客户端名 → 官方等价名；映射不到的**丢弃**
+ *   下行（发请求）：有官方等价物的 → 映射过去；**没有的 → 原样保留（不丢）**
  *   上行（回响应）：官方名 → 客户端名
+ *
+ * ⚠️ **「映射不到就丢弃」是错的**（2026-10-05 单变量实测证伪）：
+ * 声明 8 个官方完全不存在的工具名（memory_save / git_status / subagent /
+ * send_message / job_list / list_agents / git_diff / memory_search），
+ * 出站 45 个工具，上游回 **HTTP 200** —— 上游并不因"名字官方没有"而拒绝。
+ * 丢弃会让 dsh 的 44 个工具里 30 个（68%）静默消失。
  *
  * 判据（可证伪）：
  *   ① 两侧映射表（bun 侧 MAP_TOOLS / Node 侧 CLIENT_TO_OFFICIAL_TOOL）**逐条一致**
@@ -128,6 +134,42 @@ for (const name of [
   'write_file',
 ]) {
   ok(official.has(name), `官方工具集里必须有等价物 ${name}`)
+}
+
+
+// ── ⑥ 映射不到的客户端工具必须**原样保留**（不得丢弃）────────────────
+//
+// 2026-10-05 单变量实测证伪了"丢弃"策略：8 个官方不存在的工具名（memory_save /
+// git_status / subagent / send_message / job_list / list_agents / git_diff /
+// memory_search）出站后上游回 **HTTP 200**。而"丢弃"会让 dsh 的 44 个工具里
+// 30 个（68%）静默消失 —— 用户以为声明了能调、模型永远看不到。
+//
+// 判据用**源码级检查**（cli-bridge 是 bun 的 CLI 入口，不是可导入模块，
+// 用正则抽函数再 _compile 太脆弱、已实测会在抽取处炸）。检查的是
+// `if (!mapped)` 分支里**不得出现 `continue` 丢弃**、且必须 `list.push`。
+{
+  const src = fs.readFileSync(path.join(ROOT, 'cli-bridge/upstream.mjs'), 'utf8')
+  const fn = src.match(/function mergeOfficialTools\([\s\S]*?\n\}/m)
+  assert.ok(fn, '必须能定位 mergeOfficialTools 源码')
+  const body = fn[0]
+  const branch = body.match(/if \(!mapped\) \{([\s\S]*?)\n    \}/)
+  assert.ok(branch, '必须存在 `if (!mapped)` 分支')
+  const inner = branch[1]
+  assert.ok(
+    inner.includes('list.push'),
+    '映射不到的客户端工具必须 list.push 原样保留（不得丢弃）',
+  )
+  assert.ok(
+    !/dropped\s*\[/.test(inner),
+    '该分支不得再把工具记入 dropped（"丢弃"策略已被实测证伪）',
+  )
+  // 对照：有等价物时仍须改名（list.push 里带 mapped）
+  assert.ok(
+    /function: \{ \.\.\.t\.function, name: mapped \}/.test(body),
+    '有官方等价物时必须改名为 mapped',
+  )
+  // 且整段不得再有 dropped 出参（已清理）
+  assert.ok(!/dropped/.test(src), 'cli-bridge 里不应再残留丢弃逻辑（dropped）')
 }
 
 console.log(`工具名双向映射验证通过（断言 ${n} 条）`)

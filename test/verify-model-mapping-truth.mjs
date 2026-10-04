@@ -406,3 +406,78 @@ if (process.exitCode || failures.length) {
 console.log(
   `模型标识映射真源验证通过（断言 ${assertions} 条）：三形式归一 + 句柄路径 + 真源唯一`,
 )
+
+// ── ⑤ SessionManager 必须真的接收并启用 resolveModelAlias ──────────────
+//
+// ⚠️ 实测缺陷（2026-10-05）：`SessionManager` 的构造函数解构列表里**漏了**
+// `resolveModelAlias` —— 而 app-context 一直在传。JS 解构不会因为"多传了参数"
+// 报错，于是 `this.resolveModelAlias` 恒为 `undefined`，
+// `holderFor()` / `freebucksFor()` 的归一**静默退化成严格相等**。
+//
+// 后果正是要修的那个 bug：上游清单用**上游 id**、调度内部用**目录 key** →
+// 永远匹配不上 → 面板能显示已付费会话、调度却看不见 → 白花钱重买。
+// 而既有用例都用同形态标识，把这个缺陷掩盖了。
+{
+  const { SessionManager } = await import('../src/session-manager.js')
+  const marker = (v) => 'K:' + v
+  const sm = new SessionManager({
+    upstream: { freebuffSession: async () => null },
+    config: { session: {}, limits: {} },
+    accountKey: 'ctor-check',
+    resolveModelAlias: marker,
+  })
+  assert.ok(
+    typeof sm.resolveModelAlias === 'function',
+    'SessionManager 必须接收 resolveModelAlias（漏解构会让归一静默失效）',
+  )
+  assert.equal(
+    sm.resolveModelAlias('x'),
+    'K:x',
+    '接收到的必须是调用方传的那个函数本体',
+  )
+  // 端到端：跨标识必须能命中同一条会话
+  const { CatalogHolder, freebuffLegacyModelDigest } = await import(
+    '../src/upstream/catalog-protocol.js'
+  )
+  const holder = new CatalogHolder({
+    apiHost: 'https://x',
+    token: 'x',
+    fetchImpl: async () => new Response('{}'),
+  })
+  holder._apply({
+    fetchId: 'f',
+    rows: [
+      {
+        key: 'm-096e75164d',
+        displayName: 'DeepSeek V4.1 Flash',
+        handle: 'fbm1.D',
+        legacyDigests: [freebuffLegacyModelDigest('deepseek/deepseek-v4-flash')],
+      },
+    ],
+  })
+  const sm2 = new SessionManager({
+    upstream: { freebuffSession: async () => null, catalog: holder },
+    config: { session: {}, limits: {} },
+    accountKey: 'xid-check',
+    resolveModelAlias: (v) => holder.keyForName(v) || v,
+  })
+  sm2.desktopPurchases = [
+    {
+      model: 'deepseek/deepseek-v4-flash', // 清单侧：上游 id
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      holderInstanceId: 'other-deploy',
+    },
+  ]
+  assert.equal(
+    sm2.holderFor('m-096e75164d'),
+    'other-deploy',
+    '调度用目录 key 时必须能命中清单里的上游 id 条目（归一必须真的生效）',
+  )
+  assert.equal(
+    sm2.holderFor('deepseek/deepseek-v4-flash'),
+    'other-deploy',
+    '上游 id 侧同样应命中',
+  )
+}
+
+console.log('模型标识映射真源验证通过（断言 41 条 + 构造接线 4 条）：三形式归一 + 句柄路径 + 真源唯一 + 构造接线')
