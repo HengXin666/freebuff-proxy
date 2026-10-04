@@ -16,6 +16,33 @@ import { sanitizeProxyList } from './util/json-store.js'
  * @property {{level: 'debug' | 'info' | 'warn' | 'error'}} logging
  */
 
+/**
+ * 上游 API 主机 —— **硬编码真源，不接受配置文件覆盖**。
+ *
+ * 为什么不能可配（2026-10-04 Docker 部署事故，用户裁决"硬编码吧，不可能
+ * 有人会去改"）：全新容器把 config.example.yaml 复制成 /data/config.yaml，
+ * 而 example 里写的是 `https://codebuff.com`（**少 www**）。后果链：
+ *
+ *   所有上游请求打到不带 www 的主机
+ *     → 401 {"error":"unauthorized","message":"Missing or invalid Authorization header"}
+ *     → 设备密钥注册失败（拿不到 keyId）
+ *     → session GET 无签名 → 控制台显示「凭证失效」
+ *
+ * 而 token 完全有效：同一份凭证在 api_base 正确的实例上探测 ok=true，
+ * 在全新容器上 401。差异**只有**这个主机字符串。
+ *
+ * 它能潜伏到用户头上的原因：两个值都是"看起来合理的 URL"，少一个 www 肉眼
+ * 看不出来；本地开发读的是仓库根那份 config.yaml（写对了），只有**全新
+ * 部署**（Docker 空卷走 example）才会踩中。
+ *
+ * 因此：这个值是代码常量，不是配置。配置文件里即便写了也**一律忽略**，
+ * 老配置文件里写错的会被自动纠正。
+ *
+ * 唯一例外：`FREEBUFF_UPSTREAM_API_BASE` 环境变量 —— 仅供本地镜像对照/
+ * 离线契约测试（docs/reverse 里有这条用法），生产不设。
+ */
+export const UPSTREAM_API_BASE = 'https://www.codebuff.com'
+
 const DEFAULTS = {
   server: {
     host: '127.0.0.1',
@@ -26,7 +53,7 @@ const DEFAULTS = {
     dataDir: './data',
   },
   upstream: {
-    apiBase: 'https://www.codebuff.com',
+    apiBase: UPSTREAM_API_BASE,
     loginBase: 'https://freebuff.com',
     /**
      * 请求形态通道。**'legacy' 已废弃**。
@@ -328,7 +355,19 @@ export function loadConfig(configPath) {
   if (process.env.ADMIN_USERNAME) merged.users.defaultAdminUsername = process.env.ADMIN_USERNAME
   if (process.env.ADMIN_PASSWORD) merged.users.defaultAdminPassword = process.env.ADMIN_PASSWORD
 
-  merged.upstream.apiBase = stripTrailingSlash(merged.upstream.apiBase)
+  /**
+   * ⚠️ api_base **不接受配置文件覆盖**：一律以硬编码真源为准。
+   *
+   * 老配置文件（含全新容器从 config.example.yaml 生成的那份）里可能写着
+   * `https://codebuff.com`（少 www），那会让所有上游请求 401、控制台显示
+   * 「凭证失效」。这里无条件纠正，而不是"用户没配才用默认值"。
+   * 详见 UPSTREAM_API_BASE 的注释。
+   *
+   * 唯一可覆盖口是环境变量 `FREEBUFF_UPSTREAM_API_BASE`（本地镜像对照用）。
+   */
+  merged.upstream.apiBase = stripTrailingSlash(
+    process.env.FREEBUFF_UPSTREAM_API_BASE || UPSTREAM_API_BASE,
+  )
   merged.upstream.loginBase = stripTrailingSlash(merged.upstream.loginBase)
 
   if (!Array.isArray(merged.server.apiKeys)) merged.server.apiKeys = []

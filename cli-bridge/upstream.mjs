@@ -286,9 +286,59 @@ class Bridge {
     return this.priv;
   }
 
+  /**
+   * 确保拿到 keyId：**没有就自己注册一个**（惰性注册）。
+   *
+   * 为什么必须有这一步（2026-10-04 Docker 部署事故）：
+   * 主服务的设备密钥是**每个部署各自生成**的（data/device-keys/<key>.json），
+   * Docker 里 /data 是全新卷 → **密钥文件有、但 registrations 为空**
+   * （没注册过就没有 keyId）。而 `signHeaders()` 见 keyId 为空直接返回 {}，
+   * session GET 于是**不带设备签名**发出。
+   *
+   * 抓包真值（docs/reverse/21 §21.2）：全 165 条里**只有
+   * /api/v1/freebuff/session 带签名**（13 次）。也就是说我们恰好在唯一
+   * 的必签端点上裸奔 → 上游按未注册设备拒 → 401 → 控制台显示
+   * 「凭证失效」，而 token 本身完全有效。
+   *
+   * 「本地能通、远程不通」的全部差异就在这里：本地那份注册过了
+   * （keyId 已落盘），远程那份没有。
+   *
+   * 主服务侧的 Node 路径（DeviceSigner）本来就有惰性注册，但 session 走
+   * bun 通道时**根本不经过它** —— 两条通道的能力不对等，这是缺口本身。
+   * 这里在 bun 侧补齐，让「走 bun」不再等于「放弃签名」。
+   *
+   * 注册成功后把 keyId 记在 `this.registeredKeyId`，由入口回传给主服务落盘
+   * （避免每次请求都重新注册）。
+   */
+  async ensureKeyId() {
+    if (this.cfg.keyId) return this.cfg.keyId;
+    // 没有公钥就没有注册原料（主服务未生成密钥）：保持"不签名"的原行为
+    if (!this.cfg.publicKey) return null;
+    if (this._registering) return this._registering;
+    this._registering = (async () => {
+      try {
+        const r = await this.registerDeviceKey(this.cfg.publicKey);
+        const kid = r?.body?.keyId || null;
+        if (r?.status === 200 && kid) {
+          this.cfg.keyId = kid;
+          this.registeredKeyId = kid;
+          return kid;
+        }
+        return null;
+      } catch {
+        return null;
+      } finally {
+        this._registering = null;
+      }
+    })();
+    return this._registering;
+  }
+
   /** 设备签名三头。没有 catalog 就不签（对齐官方 RequestIntegrity 行为）。 */
   async signHeaders(method, url, body, fetchId) {
-    if (!this.cfg.keyId || !this.cfg.privateKey) return {};
+    if (!this.cfg.privateKey) return {};
+    // keyId 缺失时先惰性注册（Docker 全新卷上的首次运行就走这条路）
+    if (!this.cfg.keyId && !(await this.ensureKeyId())) return {};
     const priv = await this.ensureKey();
     const ts = Date.now();
     const payload = devicePayload({

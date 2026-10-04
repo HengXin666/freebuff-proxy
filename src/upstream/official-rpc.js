@@ -15,10 +15,11 @@
  * 见 docs/reverse/17-current-status-and-gaps.md。
  */
 
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { callBun } from '../../cli-bridge/bridge.mjs'
+import { createDeviceKeyRecord } from './device-signing.js'
 
 /**
  * 用主服务的 upstream 客户端构造副仓库需要的 cfg。
@@ -71,8 +72,32 @@ export async function buildRpcCfg(upstream, config = {}) {
   const p = upstream.deviceKeyPath
   const host = config?.upstream?.apiBase || 'https://www.codebuff.com'
   if (p) {
+    let dk = null
     try {
-      const dk = JSON.parse(await readFile(p, 'utf8'))
+      dk = JSON.parse(await readFile(p, 'utf8'))
+    } catch {
+      dk = null
+    }
+    /**
+     * 密钥文件不存在时**就地生成**（纯本地 IO，不发任何请求）。
+     *
+     * ⚠️ Docker 上这是必经之路：/data 是全新卷，密钥文件从来没有过。
+     * 而生成它的 `DeviceSigner.ensureKey()` 只在 **Node 路径**被调用
+     * （apiFetch → headersFor）；session 走 bun 通道时压根不经过它 →
+     * 文件永远不会被创建 → bun 侧既没有密钥也没有 keyId → 死锁。
+     * 这里在装配 cfg 时就保证原料存在，把死锁从根上解开。
+     */
+    if (!dk || typeof dk !== 'object' || !dk.privateKey || !dk.publicKey) {
+      dk = createDeviceKeyRecord()
+      try {
+        await mkdir(dirname(p), { recursive: true })
+        await writeFile(p, JSON.stringify(dk, null, 2), { mode: 0o600 })
+        logger.info('device key generated for account', { path: p })
+      } catch {
+        // 落盘失败不阻塞：本次仍发请求（无签名），下次重试
+      }
+    }
+    if (dk) {
       /**
        * scope 的主机随实际 apiBase 走：本地镜像对照时也要拼对，
        * 否则取不到 keyId → 退化成不签名（与客户端不一致）。
@@ -93,8 +118,15 @@ export async function buildRpcCfg(upstream, config = {}) {
        * PEM → 剥头尾 → base64 → base64url。已经是 base64url 的原样透传。
        */
       cfg.privateKey = normalizePrivateKeyForBun(dk.privateKey)
-    } catch {
-      // 无设备密钥也能发（副仓库退化为不签名），不阻塞
+      /**
+       * 公钥是 bun 侧**惰性注册**的原料。
+       *
+       * Docker 全新卷上 `registrations` 为空（有密钥、没注册过），
+       * bun 侧见此会用这个公钥自己注册一个 keyId —— 否则 session GET
+       * 将不带签名，而它是抓包里唯一必签的端点。
+       */
+      cfg.publicKey =
+        typeof dk.publicKey === 'string' && dk.publicKey ? dk.publicKey : null
     }
   }
   /**

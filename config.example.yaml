@@ -10,7 +10,11 @@ server:
   data_dir: ./data
 
 upstream:
-  api_base: https://codebuff.com
+  # ⚠️ api_base 已**硬编码**在代码里（src/config.js 的 UPSTREAM_API_BASE），
+  # 不再从配置读取 —— 配置文件里即便写了也一律忽略。
+  # 原因：本文件此前写的是 https://codebuff.com（少 www），全新容器复制它后
+  # 所有上游请求 401、控制台误报「凭证失效」，而凭证本身完全有效。
+  # 上游地址不是可调项，写进配置只会给出错的机会。
   login_base: https://freebuff.com
   # 默认 <data_dir>/credentials（<email>.json / 每账号一个）
   # credentials_dir: ./credentials

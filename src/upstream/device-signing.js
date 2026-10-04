@@ -205,6 +205,33 @@ function signPayload(privateKeyPem, payload) {
 }
 
 /**
+ * 生成一份新的设备密钥记录（Ed25519）。
+ *
+ * 独立导出而非只作为 DeviceSigner 的方法：bun 通道装配 cfg 时
+ * （official-rpc.js buildRpcCfg）也需要在密钥文件缺失时**就地生成**——
+ * Docker 全新卷上该文件从来没有过，而生成它的 DeviceSigner 只在 Node
+ * 路径被调用，session 走 bun 时压根不经过它（死锁）。
+ * 同一份生成逻辑，两处复用，避免私钥格式漂移。
+ */
+export function createDeviceKeyRecord() {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519', {
+    publicKeyEncoding: { type: 'spki', format: 'der' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+  });
+
+  // 从 SPKI 格式中提取原始的 32 字节 Ed25519 公钥
+  // SPKI 格式: 头部(12字节) + 原始公钥(32字节)
+  const rawPublicKey = publicKey.slice(-32);
+
+  return {
+    version: 1,
+    publicKey: base64UrlEncode(rawPublicKey),
+    privateKey: privateKey,
+    registrations: {}
+  };
+}
+
+/**
  * 设备签名器
  */
 export class DeviceSigner {
@@ -232,21 +259,7 @@ export class DeviceSigner {
    * 生成设备密钥对
    */
   generateKeyPair() {
-    const { publicKey, privateKey } = generateKeyPairSync('ed25519', {
-      publicKeyEncoding: { type: 'spki', format: 'der' },
-      privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
-    });
-
-    // 从 SPKI 格式中提取原始的 32 字节 Ed25519 公钥
-    // SPKI 格式: 头部(12字节) + 原始公钥(32字节)
-    const rawPublicKey = publicKey.slice(-32);
-
-    return {
-      version: 1,
-      publicKey: base64UrlEncode(rawPublicKey),
-      privateKey: privateKey,
-      registrations: {}
-    };
+    return createDeviceKeyRecord()
   }
 
   /**
