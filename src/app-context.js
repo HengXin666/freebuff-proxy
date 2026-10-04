@@ -238,6 +238,102 @@ function countReasons(failures) {
 }
 
 /**
+ * 把「Freebucks 这笔账」聚合成**纯数值**，带进 429 错误体。
+ *
+ * 为什么要它（2026-10-04 真实部署）：用户刷新看到余额 25，发一个请求失败后
+ * 再发就一直 429 —— 错误只说 `no_available_account` / `freebucks_exhausted`，
+ * 既不告诉**这次花了多少**、也不说**什么时候恢复**。用户因此判断不了"是账号
+ * 坏了还是额度没了"，只能反复重试（每试一次都在烧钱）。
+ *
+ * 根子在语义：**一次 admit = 买断一整小时**，当场扣掉整小时单价，不是按用量
+ * 扣。所以"25"是每日池的上限而非余额，一个请求就能打光 —— 这个机制不写进
+ * 回执，用户永远只能靠猜。
+ *
+ * ⚠️ 脱敏纪律（与 sanitizeFailuresForClient / maskEmail 同源）：**只带聚合
+ * 数值，绝不带 key / email / 账号标识** —— 429 响应会被下游整段转发与打日志，
+ * 带标识等于泄露账号池规模。
+ *
+ * @param {Array<{ freebucks?: object }>} failures
+ * @returns {object | null} 没有任何额度信息时返回 null（不塞空壳字段）
+ */
+function summarizeFreebucks(failures, ctx = null, model = null) {
+  const rows = (failures || []).filter(
+    (f) => f?.freebucks && typeof f.freebucks === 'object',
+  )
+  /**
+   * 失败项上没挂账时，**回查 runtime 现取**。
+   *
+   * 只在 failures 里挂是不够的（实测漏了）：额度拦截会走多条路径——
+   * 选号闸门（`freebucksFor` 判定 affordable=false）、admit 失败后的
+   * 通用 err 分支、冷却分支…… 只在其中一条挂上，用户换个触发路径
+   * 就又拿不到数字。这里以 failures 为准，缺失时按 key 现取一份，
+   * 保证**任何**触发路径下 429 都带着这笔账。
+   */
+  if (!rows.length && ctx && typeof ctx.get === 'function' && model) {
+    /**
+     * ⚠️ 必须用**目录 key** 查价，不能拿可读名。
+     *
+     * `freebucksFor()` 按目录 key（m-096e75164d）在 prices 表里取值；
+     * 传可读名（"DeepSeek V4.1 Flash"）取不到 → price=null 被当成
+     * "不计费模型"，于是回执里出现 `price 0 / dailyLimit 0` 这种假数字
+     * （实测踩到）。选号闸门那边传的是已归一化的 key，所以这里也必须
+     * 走同一个 `resolveModelAlias()` 口径（可读名 → 目录 key）。
+     */
+    const modelKey =
+      typeof ctx.resolveModelAlias === 'function'
+        ? ctx.resolveModelAlias(model)
+        : model
+    for (const f of failures || []) {
+      if (!f?.key) continue
+      try {
+        const rt = ctx.get(f.key)
+        const fb = rt?.sessions?.freebucksFor?.(modelKey)
+        if (fb?.known) {
+          rows.push({
+            freebucks: {
+              price: fb.price ?? null,
+              balance: fb.balance ?? null,
+              dailyRemaining: fb.dailyRemaining ?? null,
+              dailyLimit: fb.dailyLimit ?? null,
+              resetAt: fb.resetAt || null,
+              reason: fb.reason || null,
+            },
+          })
+        }
+      } catch {
+        // 该号拿不到 runtime（已删除等）：跳过，不影响其它账号
+      }
+    }
+  }
+  if (!rows.length) return null
+  // 多账号时取"最该让用户知道的"那份：余额最小的（它最先卡住请求）
+  let worst = null
+  for (const r of rows) {
+    const fb = r.freebucks
+    if (!worst) { worst = fb; continue }
+    const a = Number(fb?.dailyRemaining ?? fb?.balance ?? Infinity)
+    const b = Number(worst?.dailyRemaining ?? worst?.balance ?? Infinity)
+    if (a < b) worst = fb
+  }
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null)
+  return {
+    price: num(worst?.price),
+    balance: num(worst?.balance),
+    dailyRemaining: num(worst?.dailyRemaining),
+    dailyLimit: num(worst?.dailyLimit),
+    resetAt: worst?.resetAt || null,
+    reason: worst?.reason || null,
+    /**
+     * 一句话把机制说清：**买断制**，一次请求扣整小时单价。
+     * 用户看到"刚才还有 25"却失败，缺的正是这句话。
+     */
+    note:
+      'One admit buys a whole hour: the model\'s hourly price is charged upfront, ' +
+      'not per token. Early release does not refund Freebucks.',
+  }
+}
+
+/**
  * 邮箱脱敏：保留域名、掩码本地部分（`a***e@gmail.com`）。
  * 日志与 UI 展示用 —— 排障要能区分"哪个号"，但不能白给完整地址。
  * @param {string} [email]
@@ -1429,6 +1525,19 @@ export class AccountRuntimes {
             email: emailByKey.get(key),
             code: 'freebucks_exhausted',
             reason: fb.reason || null,
+            /**
+             * 把这笔账挂在 failure 上：顶层错误体据此聚合出"花了多少 /
+             * 剩多少 / 何时恢复"（见 summarizeFreebucks）。
+             * 只带数值、不带标识 —— 脱敏由聚合那一步负责。
+             */
+            freebucks: {
+              price: fb.price ?? null,
+              balance: fb.balance ?? null,
+              dailyRemaining: fb.dailyRemaining ?? null,
+              dailyLimit: fb.dailyLimit ?? null,
+              resetAt: fb.resetAt || null,
+              reason: fb.reason || null,
+            },
             message:
               (fb.reason === 'daily_exhausted'
                 ? `freebucks daily pool exhausted (${fb.dailyRemaining}/${fb.dailyLimit}) for ${model}`
@@ -1705,13 +1814,29 @@ export class AccountRuntimes {
             reasons: countReasons(failures),
             tried: failures.length,
             banned: failures.filter((f) => f.code === 'banned').length,
+            ...(summarizeFreebucks(failures, this, model) || {}),
           },
           retryAfterMs: this.earliestCooldownMs(),
         },
       )
     }
+    /**
+     * 笼统兜底：`no_available_account`。
+     *
+     * ⚠️ 这里**也必须**带上额度账。真实部署里最常见的就是这个码：账号没封
+     * （banned=0）、没冷却，只是余额买不起下一个小时。此前它只回"没有可用
+     * 账号"，用户据此去查账号/凭证 —— 查不出任何问题，只能反复重试。
+     * 带上 balance / price / resetAt 后，这句话才自解释。
+     */
+    const fbSummary = summarizeFreebucks(failures, this, model)
     throw new UpstreamError(
-      `No available Freebuff account for model ${model}. Tried ${failures.length} account(s).`,
+      `No available Freebuff account for model ${model}. Tried ${failures.length} account(s).` +
+        (fbSummary
+          ? ` Freebucks: balance ${fbSummary.balance ?? '?'} < price ${fbSummary.price ?? '?'}` +
+            ` (daily pool ${fbSummary.dailyRemaining ?? '?'}/${fbSummary.dailyLimit ?? '?'})` +
+            `${fbSummary.resetAt ? `; refills ${fbSummary.resetAt}` : ''}.` +
+            ' One admit buys a whole hour and is charged upfront.'
+          : ''),
       {
         status: 429,
         code: 'no_available_account',
@@ -1721,6 +1846,7 @@ export class AccountRuntimes {
           reasons: countReasons(failures),
           tried: failures.length,
           banned: failures.filter((f) => f.code === 'banned').length,
+          ...(fbSummary || {}),
         },
         retryAfterMs: this.earliestCooldownMs(),
       },
