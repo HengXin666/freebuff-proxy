@@ -39,6 +39,7 @@ import {
   ENFORCED_FOREIGN_SIGNALS,
   detectForeignClient,
 } from './upstream/foreign-client-signals.js'
+import { unmapToolCallsInBody } from './upstream/foreign-client-signals.js'
 import { withChatMetadataParity as chatMetadataParity } from './upstream/chat-metadata-parity.js'
 import {
   coerceUser,
@@ -1806,13 +1807,43 @@ export function createProxyHandler(ctx) {
             ok: rpc.ok,
             model: rpc.model?.name,
             error: rpc.error,
+            /**
+             * ⚠️ **非 200 时必须把上游原文记下来**（2026-10-04 教训）。
+             *
+             * 此前只记 `status`，于是 503 时日志里只有一行
+             * `official channel: rpc result status=503` —— 而**上游原文**
+             * （`{"error":{"message":"The model is temporarily unavailable.",…}}`
+             * 之类）我们明明拿到了（放在 `rpc.text` 里），却只塞进 Response
+             * 不记日志。排障时只能看见"503"这个数字，看不到上游给的原因。
+             *
+             * 截断到 300 字符：够看清 message/code，又不至于把整段流式体写进日志。
+             */
+            body:
+              rpc.ok || !rpc.text
+                ? undefined
+                : String(rpc.text).slice(0, 300),
           })
           if (rpc.status) {
             _rpcResponse = true
-            upstreamRes = new Response(rpc.text || '', {
-              status: rpc.status,
-              headers: { 'content-type': 'application/json' },
-            })
+            /**
+             * ★ **上行工具名还原**（与 bun 侧的下行映射配对）。
+             *
+             * 下行把 `bash`→`run_terminal_command` 等换成官方等价名（否则上游
+             * 回 503，见 `cli-bridge/upstream.mjs` 的 `MAP_TOOLS` 说明）。
+             * 客户端拿到响应时，`tool_calls[].function.name` 是**官方名**——
+             * 下游不认识，也没法派发。所以在透传前逐行还原成它声明的名字。
+             *
+             * SSE 逐行处理：只在 `data: {...}` 行上做 JSON 解析 + 名字替换，
+             * 不是 JSON 的行（`[DONE]`、空行）原样保留。
+             */
+            const rawText = rpc.text || ''
+            upstreamRes = new Response(
+              unmapToolCallsInSse(rawText),
+              {
+                status: rpc.status,
+                headers: { 'content-type': 'application/json' },
+              },
+            )
             upstreamErrText = rpc.ok ? null : (rpc.text || '')
           }
         }
@@ -2275,7 +2306,74 @@ export function upstreamBodyEmbeddedError(text) {
  * @param {unknown} code
  * @returns {boolean}
  */
-function shouldSwitchAccountOnError(status, code) {
+export /**
+ * 对上游响应文本做**工具名还原**（支持 SSE 流式与整体 JSON 两种形态）。
+ *
+ * SSE：逐行看 `data: {...}`，仅对可解析的 JSON 行做替换，其余原样。
+ * 非 SSE（application/json 整体）：直接 JSON.parse → 还原 → stringify。
+ *
+ * 任何解析失败都**原样返回该行/原文** —— 这条路径绝不能因为还原而破坏响应
+ * （还原是"锦上添花"，不是"必须成功"）。
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function unmapToolCallsInSse(text) {
+  if (!text || typeof text !== 'string') return text
+  const looksSse = text.includes('data: ')
+  if (!looksSse) {
+    try {
+      return JSON.stringify(unmapToolCallsInBody(JSON.parse(text)))
+    } catch {
+      return text
+    }
+  }
+  return text
+    .split('\n')
+    .map((line) => {
+      if (!line.startsWith('data: ')) return line
+      const payload = line.slice(6).trim()
+      if (!payload || payload === '[DONE]') return line
+      try {
+        const obj = JSON.parse(payload)
+        const hasCalls = Array.isArray(obj?.choices)
+          ? obj.choices.some(
+              (c) =>
+                Array.isArray(c?.message?.tool_calls) ||
+                Array.isArray(c?.delta?.tool_calls),
+            )
+          : false
+        if (!hasCalls) return line
+        return 'data: ' + JSON.stringify(unmapToolCallsInBody(obj))
+      } catch {
+        return line
+      }
+    })
+    .join('\n')
+}
+
+export function shouldSwitchAccountOnError(status, code) {
+  /**
+   * ★ **503 不冷却账号**（2026-10-04 真实事故修正）。
+   *
+   * `docs/reverse/07` 的定因：`503 The model is temporarily unavailable`
+   * **不是账号故障**，是**模型侧**问题（该文档实测：三个价格档、多个模型、
+   * 多种身份组合全部 503 → 变量不在请求里，也不在账号上）。
+   *
+   * 旧行为把它当 5xx → `switchAccount` → `markCooldown`：
+   * 于是**唯一有余额的账号被踢出池子**，剩下全是 0 余额号 →
+   * 后续每个请求都 429 `freebucks_exhausted`。
+   * 实测远程日志（15:02:21-15:02:37）：`loli@woa.qzz.io`（25 点）
+   * 被 503 冷却后，其余请求只剩两个 0 余额号可跳，用户看到
+   * 「明明有 25 点却一直 429」。
+   *
+   * 处置与 `purchase_capacity` 同类：**跳过、不冷却**（模型侧问题等它自己恢复 /
+   * 换个模型），绝不把可用的账号判死。
+   *
+   * ⚠️ 仍保留 `switchAccount` 语义（试下一个账号**不冷却**当前账号）——
+   * 多账号池里换个号确实可能成功，但不该留下冷却记录。
+   */
+  if (status === 503) return false
   if (status >= 500) return true
   if (status === 429) return true
   const codeStr = String(code)

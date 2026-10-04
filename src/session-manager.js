@@ -1913,6 +1913,8 @@ export class SessionManager {
    */
   _absorbInventory(body) {
     if (!body || typeof body !== 'object') return
+    // 只要收到过上游回执（任何 status），就说明"对过账"了 —— 见 hasInventorySnapshot。
+    if (Array.isArray(body.desktopPurchases)) this._inventorySeen = true
     const purchases = Array.isArray(body.desktopPurchases)
       ? body.desktopPurchases.filter(
           (p) =>
@@ -1949,13 +1951,45 @@ export class SessionManager {
    * @param {string} model 目录 key（m-xxx）
    * @returns {string | null} 占用者 instanceId；无人占用返回 null
    */
+  /**
+   * 上游此刻**谁占着这个模型的槽位**（官方 `knownHolder`，orchestrator.js:208639）。
+   *
+   * 上游清单里的 `model` 是**上游模型 id**（`deepseek/deepseek-v4-flash`），
+   * 而我们调用方传的是**目录 key**（`m-096e75164d`）—— 两套标识不同，严格相等
+   * **永远匹配不上**，这正是"面板能显示那条已付费会话、调度却看不见"的原因
+   * （2026-08-04 用户当场指出：展示了却不复用 = 白花钱）。
+   *
+   * 所以这里**复用仓库既有的唯一映射真源**（`SessionManager` 不认识
+   * AppContext，故由构造时注入的 `resolveModelAlias` 提供；缺失时退回严格相等）：
+   * 把两侧都归一成**目录 key** 再比。**不另写一套映射** —— 那只会制造第二真源。
+   *
+   * @param {string} model 目录 key / 上游 id / 可读名，任一形式
+   * @returns {string | null} 占用者 instanceId；无人占用返回 null
+   */
+  /**
+   * 本进程是否**已经拿到过**上游会话清单快照。
+   *
+   * 用于区分"从没对过账"与"对过账但这次没命中" —— 前者不该为了让某个
+   * 尚未决定购买的请求去探测（那个 GET 在官方建会话路径上会**建出会话**）。
+   * @returns {boolean}
+   */
+  hasInventorySnapshot() {
+    return this._inventorySeen === true
+  }
+
   holderFor(model) {
     if (!model || !Array.isArray(this.desktopPurchases)) return null
     const now = Date.now()
+    const norm = (v) =>
+      typeof this.resolveModelAlias === 'function'
+        ? this.resolveModelAlias(v)
+        : String(v ?? '')
+    const want = norm(model)
     const hit = this.desktopPurchases.find(
       (p) =>
         p &&
-        p.model === model &&
+        p.model &&
+        norm(p.model) === want &&
         typeof p.holderInstanceId === 'string' &&
         p.holderInstanceId &&
         (!p.expiresAt || Date.parse(p.expiresAt) > now),

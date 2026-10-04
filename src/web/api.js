@@ -199,14 +199,21 @@ export function createWebApi(deps) {
    */
   function modelDisplayName(keyOrId) {
     if (typeof keyOrId !== 'string' || !keyOrId) return keyOrId
-    for (const row of runtimes.list()) {
-      try {
-        const cat = runtimes.get(row.key)?.upstream?.catalog
-        const name = cat?.displayNameForKey?.(keyOrId)
-        if (name) return name
-      } catch {
-        // 单个 runtime 取不到就换下一个
-      }
+    /**
+     * ⚠️ 复用 `AccountRuntimes.displayNameFor()` —— 那是**唯一**的展示侧映射
+     * 入口（内部先归一再做 key→名，支持目录 key / 上游 legacy id / 可读名
+     * 三种输入，并带内置静态表兜底）。
+     *
+     * 这里此前自己遍历 runtime 的 catalog，是**第二套实现**：既漏掉了
+     * "上游 legacy id"这种输入（会话清单用的就是它），也没有内置表兜底
+     * —— 目录未抓到时整列渲染成裸 key。用户明确要求过"所有的映射只有一个
+     * 真源"，所以收拢到此。
+     */
+    try {
+      const name = runtimes.displayNameFor?.(keyOrId)
+      if (name) return name
+    } catch {
+      // 取不到就回落原值
     }
     return keyOrId
   }

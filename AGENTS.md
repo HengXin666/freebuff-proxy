@@ -16,13 +16,10 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点:
 
 ### 定位红线(用户明确裁决, 永久有效)
 
-- **BYOK 永久禁止。** 不得实现 provider=`openrouter`/`openai-compatible`
-  的自备 key 通道, 不得在代码、提案或文档里把它当成出路重提。
-  官方源码里确实存在 BYOK(`normalizeByokBaseUrl` / `byokCompletionUrl`),
-  也不得据此提出。它要求用户自备 key, 与「免费额度反向代理」是两个产品形态。
-- **只做免费链路。** 所有工作必须在 freebuff 免费额度通道内推进,
-  不得绕道第三方 provider。
-- **只做用户当前要求的任务。** 不顺带提出定位之外的替代方案或路线建议。
+- **BYOK 永久禁止**: 不得实现自备 key 通道(provider=`openrouter`/`openai-compatible`),
+  代码/提案/文档里都不得把它当出路重提(官方源码里存在 `normalizeByokBaseUrl` 也不得据此提出)。
+- **只做免费链路**, 不绕道第三方 provider。
+- **只做用户当前要求的任务**, 不顺带提替代方案。
 
 ## 铁律(用户明确要求)
 
@@ -65,52 +62,44 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**。核心卖点:
   **禁止**在前端要求用户按账号配置出口(用户明确反对)。
 - 优先级: 账号显式 `proxy`(凭据文件字段, 仅内部支持)> 全局池 > `upstream.proxy` > `HTTP(S)_PROXY` env > 直连。
 - **代理测试**: `POST /api/proxy/test`, 输出出口 IP / 国家 / 延迟 / codebuff 状态;
-  前端可测任意代理或已配置代理。用户曾因代理"是否有效"不明确而质疑, 测试功能必须可用、报错要带底层原因码(ENOTFOUND/ECONNREFUSED/ETIMEDOUT)。
-- 容器内 `127.0.0.1` = 容器自己; 访问**宿主机代理**用 docker 网关 IP(`docker network inspect bridge` 查, 通常 172.17.0.1)或 `host.docker.internal`(两者都要求代理监听 0.0.0.0)。
-- **不要**把 `host.docker.internal` 当首选教用户用(曾误导用户, 被明确批评)。
+  报错必须带底层原因码(ENOTFOUND/ECONNREFUSED/ETIMEDOUT)。
+- 容器内 `127.0.0.1` = 容器自己; 访问宿主机代理用 docker 网关 IP 或 `host.docker.internal`
+  (前者优先, 后者曾被批评为误导)。
 
 ## 额度 / 配额 / 负载均衡
 
 - 前端展示上游 `rateLimitsByModel`(每模型 `已用/上限/重置时间`); 额度仅在 admit/活跃 session 时由上游返回。
 - 提供**只读探测刷新**(`POST /api/accounts/probe`, 只 GET、不创建 session、不占额度); 导入账号后自动探测。
-- 多账号池自动切号: `rate_limited / spend_limited / ip_capped / free_mode_rate_limited / banned` 整号冷却并换下一个; `model_unavailable` 只冷却该模型。上游报错(chat 429 限流 / 5xx / 403 账号级封禁 / startAgentRun 失败 / 网络超时)冷却当前账号并继续轮询下一个; 4xx 客户端错误不换号。
+- 切号规则: 账号级故障(`rate_limited`/`spend_limited`/`ip_capped`/`banned`/403/5xx/startAgentRun 失败/网络超时)
+  整号冷却换下一个; `model_unavailable` 只冷却该模型; **4xx 客户端错误不换号**;
+  槽位类(`purchase_capacity`/`purchase_in_use`/`premium_slot_taken`)与 **503** 只跳过不冷却。
 - **两本账是并行的两道闸门**(一手实测: 一笔会话 units `0.1→1.1` **且** Freebucks `5→0`):
   `session_units`(`rateLimitsByModel.recentCount`, 上限 6, **小数**)与 **Freebucks(每日池 + 余额)**
   各自独立扣费, 所以调度**两道都要过**(`units_exhausted` / `freebucks_exhausted` 各自成立)。
   ⚠️ **Freebucks 才是上游真正的拒付判据**(units 充足时仍可能因 `freebucksShortfall` 被 `rate_limited`),
   **绝不能拆掉**。
-- **一次 admit = 买断一小时**(2026-09-14 一手实测): POST 当场扣满整小时单价(Freebucks `5→0`,
-  回执带 `expiresAt`)。**这一小时内继续发请求边际成本为 0**; DELETE 之后那一小时作废,
-  重开 = 重新买一整小时。早退 DELETE 的退款**两本账不对称**: `session_units` **当场**按比例退还
-  (实测 `1.1→0.2`); Freebucks 侧**只回 `freebucksRefundPending`**, 实测 25s 早退后重放 DELETE ×2、
-  观察 2 分钟**未到账**。实测 24 个「账号 × 模型」组合里 **22 个是 Freebucks 先见底**,
-  所以早退等于**拿稀缺的账去省不稀缺的账**——**付费时段内绝不为空闲而释放**。
-  句柄仍须保留并重放追问(pending 时丢弃就连追问机会都没了), 但**不得**把 pending 当成"钱会回来"。
-  见 `docs/freebucks-strategy.html`、`docs/account-scheduling-and-refund.md` §3 第 5 版。
-- **换号有成本(一次 admit 买断一整小时)**: 单个下游请求最多新建 `limits.max_new_sessions_per_request`(默认 2)条会话; 复用热 session 与被上游拒绝的 admit 不占预算; 换号前先把失败账号的会话早退 DELETE **腾出槽位**; 非账号级瞬时故障(网络抖动)先同账号重试一次, 不新建会话。
-- **`free_mode_capacity_deferred`("Free mode is briefly at capacity")不冷却**: 是免费模式瞬时容量排队, 上游自己说 "will be retried automatically", 实测同 session 立即重试即恢复(flash 尤常见)。优先复用当前热 session 重试, 绝不为此无谓新建 session 或把账号钉死。
-- gate 错误(session_expired/superseded/waiting_room 等): 先同账号 re-admit 一次(不冷却), 连续两次仍失败才升级为换号冷却。
-- **session 轮询 GET 跳过在途请求**: 上游同一个号同一时间只能一个客户端在线, 轮询若撞上正在进行的 chat 会干扰/顶掉活跃会话, 因此有请求在途时本轮刷新跳过。
-- **粘性优先调度(drain, not rotate)**: Freebuff 会话是**无状态**的(每次请求由客户端带全量历史),
-  **不做 conversation_id 粘性/分组/记忆**。选号排序 = 同模型热 session > 已用过的账号(最近用过的优先)
-  > **从未用过的账号(排最后, 只有已用账号都不可用/满员排队超时才启用)**; 上游把"轮换健康账号"
-  直接当账号农场特征, 而每次 admit 都买断一整小时, 所以**绝不主动把并发平摊到多个账号**。
-  冷启动的"选号 + admit"必须串行化, 同一账号的并发请求只创建一个 session。
-  **并发上限是"溢出"阈值而非"换号"阈值**: 单账号在途流数达到 `accountMaxConcurrency`(默认 2)时,
-  新请求先在该账号上有界排队(超时 `account_busy` 后再换下一个账号), **不为了并发去启用新账号**。
-- 没有同模型热 session 时: 优先冷账号(无活跃 session)而不是替换别的模型的热 session(避免同一账号
-  反复 release/admit); 同一层级内已用账号 > 未用账号、最近用过的优先、轮询打破平局;
-  限流/封禁/网络或上游故障仍冷却当前账号并切下一个。
+- **一次 admit = 买断一小时**; 这一小时内继续发请求**边际成本为 0**;
+  早退 DELETE **不退 Freebucks**(只回 `freebucksRefundPending`), 所以**付费时段内绝不为空闲释放**。
+  详见 `notes/architecture/2026-09-14-paid-hour-hold.md`、`docs/freebucks-strategy.html`。
+- **换号有成本**: 单请求最多新建 `limits.max_new_sessions_per_request`(默认 2)条会话;
+  复用热 session 与被拒的 admit 不占预算; 非账号级瞬时故障先同账号重试一次。
+- **`free_mode_capacity_deferred` 不冷却**(瞬时容量排队, 同 session 重试即恢复);
+  gate 错误(session_expired/superseded/waiting_room)先同账号 re-admit **一次**, 仍失败才换号冷却。
+- **session 轮询 GET 在有请求在途时跳过**(否则干扰活跃会话)。
+- **粘性优先调度(drain, not rotate)**: 选号排序 = 同模型热 session > 已用过的账号 >
+  从未用过的账号(最后); **绝不主动把并发平摊到多个账号**(上游把轮换账号当农场特征,
+  且每次 admit 都买断一小时)。并发上限是"溢出"阈值, 不是"换号"阈值
+  —— 满了先有界排队(`account_busy` 后才换号)。
+- 无同模型热 session 时: 优先**冷账号**, 未用账号排最后; 同层内已用 > 未用、最近用过的优先。
 - **Flash / MiMo 纳入每日配额**: `deepseek/deepseek-v4-flash`、`mimo/mimo-v2.5`
   不再硬编码为不限量; 前端和 API 始终以上游 `rateLimitsByModel` 的实时 `recentCount / limit / resetAt` 为准。
 
 ## Session 行为
 
-- 创建 session 才扣额度 → **同模型活跃 session 始终优先复用**, 避免重复 admit 占额度。
-- **无会话记忆/分组**: `conversation_id` 不决定账号; 同模型请求由热 session 优先策略统一调度。
-- 同一个 `instanceId` 支持并发 chat; 后台 session GET 在有请求在途时仍必须跳过, 避免客户端身份/轮询干扰活跃会话。
-- 新模型优先使用空闲(冷)账号; 没有空闲账号而必须复用同一账号时, 先释放旧 session。gate 错误(session_expired/superseded/waiting room 等)自动 re-admit **一次**。
-- **空闲自动释放(付费时段内不释放)**: 一次 admit 买断一小时, **这一小时内绝不为空闲而释放**(闲置不花钱, 释放才是把已买的钱丢掉)。`session.idle_release_sec`(默认 60s, 控制台「额度保护」可调)现在是**付费时段结束之后**的空闲释放时长; 到期后即释放, **腾出该账号的上游会话槽位**(一个账号同时只有一条 session 且绑定模型)。DELETE 必须带 `x-freebuff-instance-id`(否则上游 400 `instance_required`)。有请求排队等待该会话时不得释放。实现在 `session-manager._armIdleRelease` + `inPaidWindow()`(见 `docs/freebucks-strategy.html`)。
+- **同模型活跃 session 始终优先复用**(创建才扣额度); 无会话记忆/分组, `conversation_id` 不决定账号。
+- 同一 `instanceId` 支持并发 chat; 后台 session GET 在有请求在途时**必须跳过**。
+- **付费时段内不释放**; 到期后按 `session.idle_release_sec` 释放以腾出槽位。
+  DELETE 必须带 `x-freebuff-instance-id`。实现在 `session-manager._armIdleRelease` + `inPaidWindow()`。
 
 ## Web 控制台
 
@@ -159,6 +148,32 @@ docker build .
 
 - 改动网络/代理/部署相关, 必须本地起容器端到端验证(healthz / 登录 / 导入 / 探测 / 代理测试 / 真实对话)后再提交。
 - 真实账号验证注意: admit 会消耗每日额度, 尽量用 GET 探测或控制次数。
+- **额度为 0 不等于账号不可用**: 先看上游会话清单有没有**同模型、未过期**的已付费会话
+  (`desktopPurchases[].holderInstanceId`, 含**别的部署**建的) —— 有就接管复用,
+  **绝不**因为余额不足跳过该账号。见「按症状查文档」的 *余额不足* 行。
+
+---
+
+## 按症状查文档(先读这里, 再动手)
+
+> 遇到下列情况**先读对应文档**, 不要凭直觉改代码 —— 这些坑都踩过, 结论与反例都在文档里。
+> 路径相对仓库根; `notes` 指 `.agents/notes/implemented/`。
+
+| 症状 / 场景 | 先读 |
+|---|---|
+| 模型名/标识对不上、映射错模型、清单匹配不上 | `docs/reverse/19-catalog-is-the-model-list.md` + `notes/architecture/2026-10-04-model-name-three-layers.md`。**唯一真源** = `CatalogHolder.keyForName`(支持目录 key / 上游 legacy id / 可读名), 上层入口 `AccountRuntimes.resolveModelAlias` / `displayNameFor`。禁止另写映射 |
+| 余额不足 / 明明有额度却 429 / 有会话不复用 | `notes/architecture/2026-10-04-session-inventory-from-upstream.md`。先查上游 `desktopPurchases` 并 takeover 复用 |
+| 上游 503 / "model is temporarily unavailable" | `docs/reverse/07-503-root-cause.md`。**模型侧**问题, 不得冷却账号(会把唯一有钱的号踢出池子) |
+| 账号被封 / 排查封禁原因 | `docs/reverse/06-ban-forensics.md`、`docs/reverse/08-second-ban-and-byok.md` |
+| 工具集 / 客户端自带工具 / foreign client 警告 | `docs/reverse/18-channel-guide-and-tool-mapping.md`(含 §4.1 单变量实测)、`docs/reverse/04-chat-and-tools.md` |
+| session 建不起来 / purchase_claim_released / purchase_capacity | `docs/reverse/03-session-admission.md`、`docs/reverse/12-waiting-room-slot-contention.md` |
+| 付费时段不能换模型 / 早退退不退款 | `notes/architecture/2026-09-14-paid-hour-hold.md`、`notes/architecture/2026-09-14-two-ledgers-parallel-gates.md` |
+| 请求头/形态与官方不符、通道选择 | `docs/reverse/21-client-request-reference.md`、`notes/architecture/2026-10-03-official-channel-rpc-delegation.md` |
+| 该不该发请求给上游(零自动探测) | `docs/reverse/20-upstream-endpoint-whitelist.md` |
+
+**验证方法论(硬性)**: 结论必须来自**实测**(远程日志 / 直连上游回执 / 单变量对照),
+不得只凭源码推断 —— 本仓已多次出现"源码看起来该如此、实测相反"。
+断言必须**可证伪**: 写完测试后临时破坏实现, 确认它变红, 再还原。
 
 ---
 

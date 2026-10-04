@@ -188,6 +188,23 @@ let sessionExpiryMs = 3600_000
  * @type {null | { balance: number, daily?: any, wallet?: any, prices?: Record<string, number>, quotaExempt?: boolean, planId?: string | null }}
  */
 let mockFreebucks = null
+/**
+ * 真实链路复现：**余额 0，但上游会话清单里有一条同模型、未过期的已付费会话**
+ * （`desktopPurchases[].holderInstanceId`，可能是**别的部署**建的）。
+ *
+ * 置成对象后：
+ *   - `GET /freebuff/session` 回 `status: none` + 一份**买不起**的 Freebucks
+ *     （balance 0 / 每日池 0/25），`listed=true` 时另带上面那条会话的清单；
+ *   - `POST /session/admission` 镜像上游槽位语义：**不带**占用者 id 的 takeover
+ *     一律回 `purchase_capacity`（槽位被占），带了才移交槽位。
+ *
+ * ⚠️ 与 `mockFreebucks` 分开是刻意的：那个变量会被**所有** session 回执
+ * （含 POST admission）带上，用它表达"余额 0"会把用例变成"admit 也失败"，
+ * 测不到「闸门放行 → takeover 复用」这条链路。
+ * @type {null | { holderInstanceId: string, model: string, listed: boolean,
+ *   freebucks: { balance: number, daily: any, prices: Record<string, number> } }}
+ */
+let mockPaidTakeover = null
 
 /** 每次 DELETE 退还给调用方的 Freebucks（模拟"提前结束退款"）。 */
 let mockRefund = 1.5
@@ -244,6 +261,36 @@ globalThis.fetch = async (url, init = {}) => {
   // 官方 POST 走 .../session/admission（GET/DELETE 走 .../session）。
   if (u.includes('/api/v1/freebuff/session/admission') && method === 'POST') {
     sessionPosts++
+    /**
+     * 真实链路复现：槽位被**别的部署**占着时，上游只认带占用者 id 的接管。
+     * 不带 → `purchase_capacity`（槽位被占，不是额度问题）。
+     * 这条镜像让用例能证明"确实发了 takeover"，而不只是"最后 status 200"。
+     */
+    if (mockPaidTakeover) {
+      const tk =
+        headers['x-freebuff-takeover-instance-id'] ||
+        headers['X-Freebuff-Takeover-Instance-Id'] ||
+        null
+      if (tk !== mockPaidTakeover.holderInstanceId) {
+        return jsonRes({
+          status: 'purchase_capacity',
+          currentInstanceId: mockPaidTakeover.holderInstanceId,
+          slotLimit: 1,
+        })
+      }
+      return jsonRes({
+        status: 'active',
+        accessTier: 'limited',
+        instanceId:
+          headers['x-freebuff-instance-id'] ||
+          headers['X-Freebuff-Instance-Id'] ||
+          'ours',
+        model: mockPaidTakeover.model,
+        admittedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + sessionExpiryMs).toISOString(),
+        remainingMs: sessionExpiryMs,
+      })
+    }
     const model =
       headers['x-freebuff-model'] ||
       headers['X-Freebuff-Model'] ||
@@ -352,6 +399,38 @@ globalThis.fetch = async (url, init = {}) => {
     })
   }
   if (u.includes('/api/v1/freebuff/session') && method === 'GET') {
+    /**
+     * 真实链路复现：上游清单里有**别的部署**占着一条已付费会话。
+     *
+     * 形态刻意与真机对齐：
+     *   - 回执 `status: none`（本部署没有自己的会话）；
+     *   - `desktopPurchases[].model` 是**上游 legacy id** 形式（不是目录 key）——
+     *     归一映射不生效时它匹配不上请求的模型，清单形同不存在；
+     *   - Freebucks 是**买不起**（balance 0 / 每日池 0/25），逼出额度闸门。
+     */
+    if (mockPaidTakeover) {
+      return jsonRes({
+        status: 'none',
+        accessTier: 'limited',
+        freebucks: mockPaidTakeover.freebucks,
+        ...(mockPaidTakeover.listed
+          ? {
+              desktopPurchases: [
+                {
+                  model: mockPaidTakeover.model,
+                  expiresAt: new Date(Date.now() + sessionExpiryMs).toISOString(),
+                  holderInstanceId: mockPaidTakeover.holderInstanceId,
+                },
+              ],
+              desktopSessionCounts: {
+                premium: 0,
+                unlimited: 0,
+                nextExpiryAt: null,
+              },
+            }
+          : {}),
+      })
+    }
     // 官方建会话路径：GET + cli: claim + multi-session 头 → 直接 active。
     // 官方 CLI 0.2.6 全程只走这条路（18 次 GET + 1 次 DELETE /attempt），
     // **从不打 /admission**。见
@@ -2022,6 +2101,233 @@ for (const model of verifiedSpecialModels) {
   await gsRuntimes.shutdown()
   gsServer.close()
   fs.rmSync(gsDir, { recursive: true, force: true })
+  mockMode = 'ok'
+}
+
+/* ================================================================
+   余额 0 + 上游存在同模型的已付费会话 → 必须 takeover 复用，不得被额度闸门挡住
+   ================================================================ */
+{
+  /**
+   * 用户明确要求的能力（2026-10-04 铁律）：**余额为 0 不等于账号不可用**。
+   * 「一次 admit = 买断一小时」，这一小时内继续发请求**边际成本为 0**；
+   * `balance: 0` 只说明"再买一条买不起"，**不代表已付过钱的那一小时不能用**。
+   *
+   * 真实故障：面板显示 `DeepSeek V4.1 Flash · 49 分钟` 的已付费会话
+   * （上游 `desktopPurchases` 里 `deepseek/deepseek-v4-flash` 带
+   * `holderInstanceId`，**别的部署**建的），而调度因余额闸门跳过该账号 →
+   * 用户看到「有会话却一直 429」，那一小时的钱白扔。
+   *
+   * 本用例走**完整下游链路**（POST /v1/chat/completions → 选号 → 闸门 →
+   * 只读探测 → takeover → chat），并让 mock 遵守上游真实槽位语义：
+   * **不带占用者 id 的 POST admission 一律回 `purchase_capacity`** ——
+   * 所以"最后 200"无法由"照常新开一条会话"伪造出来（那次 POST 会被拒）。
+   *
+   * ⚠️ 两处刻意用**上游 id 形式**（`deepseek/deepseek-v4-flash`），而不是
+   * 目录 key：清单侧与请求侧都走 `keyForName`/legacy 摘要归一，映射不生效时
+   * 本用例直接变红。
+   *
+   * ⚠️ 反向探针（已实测）：把 `src/app-context.js` 里 `quotaLooksBlocked &&
+   * (await checkPaidUpstream())` 短路掉 → 本用例红在
+   * `res.status === 429`（`freebucks_exhausted`）；把 `holderFor` 的
+   * `resolveModelAlias` 归一退回严格相等 → 同样红（两侧标识不同）。
+   */
+  const UPTAKE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-paid-ups-'))
+  saveAccountUser(UPTAKE_DIR, {
+    id: 'paid',
+    email: 'paid@example.com',
+    authToken: 'token-paid',
+  })
+  const upConfig = loadConfig()
+  upConfig.server.host = '127.0.0.1'
+  upConfig.server.port = 0
+  upConfig.server.apiKeys = ['sk-test']
+  upConfig.upstream.credentialsDir = UPTAKE_DIR
+  upConfig.session.pollIntervalSec = 3600
+  const upRuntimes = new AccountRuntimes(upConfig)
+  const upServer = await startServer({
+    config: upConfig,
+    runtimes: upRuntimes,
+    ...(() => {
+      const rt = upRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const upPort = upServer.address().port
+
+  const HOLDER = 'other-deploy-inst'
+  /** 请求侧与清单侧都用**上游 legacy id**（不是目录 key m-xxx）。 */
+  const MODEL_ID = 'deepseek/deepseek-v4-flash'
+  mockPaidTakeover = {
+    holderInstanceId: HOLDER,
+    model: MODEL_ID,
+    listed: true,
+    freebucks: { balance: 0, daily: { limit: 25, remaining: 0 }, prices: { [MODEL_ID]: 15 } },
+  }
+  mockMode = 'ok'
+  sessionPosts = 0
+  completionAttempts = 0
+  calls = []
+
+  const upRes = await fetch(`http://127.0.0.1:${upPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: MODEL_ID,
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  const upText = await upRes.clone().text()
+
+  // ① 成功（不是 429，尤其**不是** freebucks_exhausted）
+  assert.equal(upRes.status, 200, upText)
+  assert.ok(
+    !upText.includes('freebucks_exhausted'),
+    '余额 0 但存在已付费会话时，不得被 Freebucks 闸门挡住：' + upText.slice(0, 300),
+  )
+  // ② 确实发了带「别的部署占用者」的 takeover
+  const admissionPosts = calls.filter(
+    (c) => c.url.includes('/session/admission') && c.method === 'POST',
+  )
+  const tookOver = admissionPosts.find(
+    (c) =>
+      (c.headers['x-freebuff-takeover-instance-id'] ||
+        c.headers['X-Freebuff-Takeover-Instance-Id']) === HOLDER,
+  )
+  assert.ok(
+    tookOver,
+    `必须带 x-freebuff-takeover-instance-id=${HOLDER} 接管别的部署的会话；` +
+      `实际 admission POST 的 takeover 头：` +
+      JSON.stringify(
+        admissionPosts.map(
+          (c) =>
+            c.headers['x-freebuff-takeover-instance-id'] ||
+            c.headers['X-Freebuff-Takeover-Instance-Id'] ||
+            null,
+        ),
+      ),
+  )
+  // ③ 反向对照：mock 对**不带** takeover 的 POST 一律回 purchase_capacity ——
+  //    若实现只是"照常新开一条"，这里必然出现一次不带 takeover 的 admission。
+  const noTakeover = admissionPosts.filter(
+    (c) =>
+      !(
+        c.headers['x-freebuff-takeover-instance-id'] ||
+        c.headers['X-Freebuff-Takeover-Instance-Id']
+      ),
+  )
+  assert.equal(
+    noTakeover.length,
+    0,
+    '不得先撞一次"槽位被占"再补 takeover（官方 knownHolder 是发请求前就知道）',
+  )
+  // ④ 真的把 chat 发上了上游（链路闭环，不是空转拿到 200）
+  assert.ok(completionAttempts >= 1, '必须真的发出 chat 请求')
+  // ⑤ 映射生效的旁证：会话回执给的是上游 id 形式，chat 必须回用它
+  const chatCall = calls.find((c) => c.url.includes('/chat/completions'))
+  assert.ok(chatCall, '应发出 chat 请求')
+  assert.ok(
+    JSON.parse(chatCall.body).model === MODEL_ID,
+    'chat 必须回用会话回执里服务端指派的模型标识',
+  )
+
+  await upRuntimes.shutdown()
+  upServer.close()
+  fs.rmSync(UPTAKE_DIR, { recursive: true, force: true })
+  mockPaidTakeover = null
+  mockMode = 'ok'
+}
+
+/* ================================================================
+   同一账号的清单里有会话、但**不是**本次请求的模型 → 不得被误认成可接管
+   ================================================================ */
+{
+  /**
+   * 反例（防"余额 0 一律放行"的假绿）：清单里那条已付费会话绑的是**别的模型**，
+   * 就没有任何"已付过钱、边际成本 0"的会话可用 —— 余额 0 仍然必须被闸门拦住。
+   *
+   * 若有人把 `paidUpstream` 写成"清单非空即放行"，本用例立刻变红。
+   */
+  const MIS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-paid-mism-'))
+  saveAccountUser(MIS_DIR, { id: 'p2', email: 'p2@example.com', authToken: 'token-p2' })
+  const misConfig = loadConfig()
+  misConfig.server.host = '127.0.0.1'
+  misConfig.server.port = 0
+  misConfig.server.apiKeys = ['sk-test']
+  misConfig.upstream.credentialsDir = MIS_DIR
+  misConfig.session.pollIntervalSec = 3600
+  const misRuntimes = new AccountRuntimes(misConfig)
+  const misServer = await startServer({
+    config: misConfig,
+    runtimes: misRuntimes,
+    ...(() => {
+      const rt = misRuntimes.getAny()
+      return {
+        authToken: rt.authToken,
+        authSource: rt.source,
+        authEmail: rt.email,
+        upstream: rt.upstream,
+        sessions: rt.sessions,
+      }
+    })(),
+  })
+  const misPort = misServer.address().port
+
+  mockPaidTakeover = {
+    holderInstanceId: 'someone-elses-inst',
+    // 清单绑另一个模型（上游 id 形式）
+    model: 'mimo/mimo-v2.5',
+    listed: true,
+    freebucks: {
+      balance: 0,
+      daily: { limit: 25, remaining: 0 },
+      prices: { 'deepseek/deepseek-v4-flash': 15 },
+    },
+  }
+  mockMode = 'ok'
+  calls = []
+  /**
+   * 先对一次账（等价于控制台点过「刷新」/此前建过会话）：本地既拿到"买不起"
+   * 的 Freebucks，也拿到会话清单。真实故障现场正是这个状态 ——
+   * 面板上都看得到那条会话，调度手上当然也有这份快照。
+   */
+  await misRuntimes.get('p2').sessions.refresh()
+  const misRes = await fetch(`http://127.0.0.1:${misPort}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer sk-test',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+  const misText = await misRes.clone().text()
+  assert.equal(
+    misRes.status,
+    429,
+    '清单里没有**本次请求模型**的已付费会话时，余额 0 仍须被闸门拦住：' + misText.slice(0, 300),
+  )
+  assert.ok(
+    misText.includes('freebucks_exhausted'),
+    '错误码必须是额度闸门（证明拦住它的正是那道闸门，而不是别的原因）：' +
+      misText.slice(0, 300),
+  )
+
+  await misRuntimes.shutdown()
+  misServer.close()
+  fs.rmSync(MIS_DIR, { recursive: true, force: true })
+  mockPaidTakeover = null
   mockMode = 'ok'
 }
 
@@ -8669,4 +8975,150 @@ console.log('smoke ok')
   const logMod = await import('../src/util/log.js')
   assert.equal(logMod.configureLogBuffer(321), 321, 'configureLogBuffer 必须真的改到容量')
   logMod.configureLogBuffer(c.logging.ringCap)
+}
+
+/* ================================================================
+   503 不得冷却账号（模型侧问题，不是账号故障）
+   ================================================================ */
+{
+  /**
+   * 真实事故（远程日志 2026-10-04 15:02:21-15:02:37）：
+   *
+   *   15:02:22  freebuff session active  ← loli@woa.qzz.io（25 点）被选中
+   *   15:02:24  official channel: rpc result  status=503
+   *   15:02:24  account cooling down  code=http_503     ← ❌ 唯一有钱的号被冷却
+   *   15:02:24~ 只剩两个 0 余额号 → 全部 skip → 用户看到 429
+   *
+   * `docs/reverse/07` 的定因：503 是**模型侧**问题（该文档实测三个价格档、
+   * 多个模型、多种身份组合全部 503 → 变量不在请求里，也不在账号上）。
+   * 把它当 5xx 冷却，等于**把唯一有余额的账号踢出池子**。
+   *
+   * ⚠️ 反向探针：把 `if (status === 503) return false` 删掉后本用例必须变红。
+   */
+  const { shouldSwitchAccountOnError } = await import('../src/proxy.js')
+  assert.equal(
+    shouldSwitchAccountOnError(503, 'http_503'),
+    false,
+    '503 是模型侧问题，不得触发冷却换号（否则会把唯一有余额的账号踢出池子）',
+  )
+  // 对照：其它 5xx 仍应换号（上游瞬时故障，换号可能成功）
+  assert.equal(shouldSwitchAccountOnError(502, 'http_502'), true, '502 仍应换号')
+  assert.equal(shouldSwitchAccountOnError(500, 'http_500'), true, '500 仍应换号')
+  // 对照：槽位类仍不换号（既有语义不变）
+  assert.equal(shouldSwitchAccountOnError(409, 'purchase_capacity'), false, '槽位忙仍不换号')
+}
+
+/* ================================================================
+   冷却的边界：banned 必须仍冷却（不能被任何"付费会话保护"吞掉）
+   ================================================================ */
+{
+  /**
+   * ⚠️ 这里**曾经**有一条断言要求"持有已付费会话时不得因
+   * `start_agent_run_failed` 整号冷却" —— 那条**已删除**，因为它与本文
+   * 既有的换号用例（`expected 2 session POSTs`）以及 AGENTS.md 明写的纪律
+   * **直接冲突**：
+   *
+   *   「上游报错(startAgentRun 失败 / 5xx / 403 账号级封禁 / 网络超时)
+   *     冷却当前账号并继续轮询下一个」
+   *
+   * 两者不可能同时成立。保留既有纪律（它先存在、且测完整链路），
+   * 删掉与之矛盾的断言 —— 已付费会话的价值由**「付费时段内绝不释放」**
+   * 那条纪律保护，不靠"禁止冷却"。
+   *
+   * 本用例只钉住不矛盾的边界：**banned 是账号终点，必须冷却**。
+   */
+  const { buildAppContext } = await import('../src/app-context.js')
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-bannedcool-'))
+  const cfg = loadConfig()
+  cfg.server.host = '127.0.0.1'
+  cfg.server.port = 0
+  cfg.upstream.credentialsDir = tmpDir
+  cfg.session.pollIntervalSec = 3600
+  fs.writeFileSync(
+    path.join(tmpDir, 'p.json'),
+    JSON.stringify({ id: 'p', email: 'paid@example.com', authToken: 'tok-p' }),
+  )
+  const rt = new AccountRuntimes(cfg)
+  const sm = rt.get('p').sessions
+  sm.session = {
+    status: 'active',
+    instanceId: 'inst-paid',
+    model: 'm-00032eaeec',
+    admittedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 3000_000).toISOString(),
+  }
+  assert.equal(sm.inPaidWindow(), true, '对照前提：应处于付费时段内')
+  rt.markCooldown('p', { code: 'banned', status: 403 })
+  assert.equal(
+    rt.cooldowns.has('p'),
+    true,
+    'banned 是账号终点，必须冷却（付费时段也不例外）',
+  )
+}
+
+/* ================================================================
+   余额 0 但有上游已付费会话 → 必须接管复用（不得被额度闸门挡住）
+   ================================================================ */
+{
+  /**
+   * 2026-10-04 铁律（用户明确要求「它有 1 个会话你可以复用啊，记得复用」）：
+   *
+   * 一次 admit 买断一小时 → 这一小时内继续发请求**边际成本为 0**。
+   * `balance: 0` 只说明"再买一条买不起"，**不代表已付费的会话不能用**。
+   * 实测代价：面板显示 `DeepSeek V4.1 Flash · 49 分钟` 的已付费会话，
+   * 而调度因余额闸门跳过该账号 → 用户看到"有会话却一直 429"，白扔那一小时。
+   *
+   * 判据：上游清单里有**同模型、未过期**的 `holderInstanceId` 时，
+   * 即使 `balance` 不够，也要走 takeover 复用，**不得**抛 `freebucks_exhausted`。
+   *
+   * ⚠️ 反向探针：把 `paidUpstream` 那段短路后本用例必须变红。
+   */
+  const HOLDER = 'other-deployment-paid-inst'
+  const calls = []
+  const up = {
+    freebuffSession: async (method, opts = {}) => {
+      calls.push({ method, ...opts })
+      if (method === 'DELETE') return { status: 'ended' }
+      if (method === 'GET') {
+        // 上游：该模型有一条**别人**建的已付费会话（余额其实够，但这里刻意压低）
+        return {
+          status: 'none',
+          freebucks: { balance: 0, daily: { limit: 25, remaining: 0 }, prices: { 'm-00032eaeec': 10 } },
+          desktopPurchases: [
+            { model: 'm-00032eaeec', expiresAt: new Date(Date.now() + 3000_000).toISOString(), holderInstanceId: HOLDER },
+          ],
+        }
+      }
+      if (method === 'POST') {
+        return {
+          status: 'active',
+          instanceId: opts.instanceId || 'ours',
+          model: 'm-00032eaeec',
+          admittedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 3000_000).toISOString(),
+          remainingMs: 3000_000,
+          accessTier: 'limited',
+        }
+      }
+      return { status: 'none' }
+    },
+  }
+  const sm = new SessionManager({
+    upstream: up,
+    config: { session: { reAdmitOnExpire: true, reAdmitLeadSec: 60, freeModelReAdmitLeadSec: 60 }, limits: {} },
+    accountKey: 'paid-upstream',
+  })
+  /**
+   * ⚠️ 请求的模型必须与清单里那条会话**绑定的模型一致** —— 否则会撞上另一条
+   * 独立规则（`paid_window_model_mismatch`：付费时段内换模型 = 纯亏损，
+   * 实测 DELETE 后接不回来）。本用例只测"余额不足不得挡住复用"。
+   */
+  const s = await sm.ensureSession('m-00032eaeec')
+  assert.equal(s?.status, 'active', '有上游已付费会话时必须能复用到 active')
+  const pk = calls.find((c) => c.method === 'POST' && c.takeoverInstanceId)
+  assert.equal(
+    pk?.takeoverInstanceId,
+    HOLDER,
+    `必须带上占用者做 takeover 复用，got ${JSON.stringify(calls.map((c) => c.method + (c.takeoverInstanceId ? '+tk' : '')))}`,
+  )
 }

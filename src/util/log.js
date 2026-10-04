@@ -67,15 +67,33 @@ export function configureLogger(opts) {
 export function log(level, msg, fields = undefined) {
   if ((LEVELS[level] ?? 99) < (LEVELS[settings.level] ?? 20)) return
   const ctx = currentLogContext()
+  const f = fields && typeof fields === 'object' ? fields : {}
+  /**
+   * ⚠️ **`email` 自动补成 `account`**（2026-10-04 用户报「日志里显示的是
+   * #84441506e 这种奇怪东西，能不能显示邮箱」）。
+   *
+   * 根因：`account` 只从**日志上下文**（als）取，而很多日志点是手写
+   * `email: ...` 字段 —— 两者不互通。于是选号阶段（还没 `patchLogContext`）
+   * 与跳过账号那几行**只有 `email`、没有 `account`**，前端 `line.account`
+   * 读到 undefined，那一行就只剩 `#reqId`（用户看到的"奇怪东西"）。
+   *
+   * 实测：60 条日志里 7 条缺 account，集中在
+   *   `selected account for model`（4）与 `skip account: …`（3）——
+   * 恰恰是最需要知道"哪个号"的行。
+   *
+   * 这里统一兜底：只要 fields 里有 email 而上下文没给 account，就用 email。
+   * 改一处，全站受益（不必逐个日志点补 patchLogContext）。
+   */
+  const account = ctx?.account || f.email || undefined
   const line = {
     ts: new Date().toISOString(),
     level,
     msg,
     // 上下文优先放前面，读日志时一眼看到"谁的哪次请求"
     ...(ctx?.reqId ? { reqId: ctx.reqId } : {}),
-    ...(ctx?.account ? { account: ctx.account } : {}),
+    ...(account ? { account } : {}),
     ...(ctx?.model ? { model: ctx.model } : {}),
-    ...(fields && typeof fields === 'object' ? fields : {}),
+    ...f,
   }
   const text = JSON.stringify(line)
   if (ringCap > 0) {

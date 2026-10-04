@@ -185,7 +185,28 @@ export class CatalogHolder {
     if (typeof name !== 'string') return null
     const k = name.trim()
     if (!k) return null
-    return this.keyByName.get(k) || this.keyByName.get(k.toLowerCase()) || null
+    // ① 可读名（displayName）→ key
+    const byName = this.keyByName.get(k) || this.keyByName.get(k.toLowerCase())
+    if (byName) return byName
+    /**
+     * ② **上游 legacy 模型 id → key**（`deepseek/deepseek-v4-flash` 这类）。
+     *
+     * 这是长期缺失的一环（2026-10-04 用户当场指出："所有的对下游都会映射，
+     * 所有的对上游的也会映射，你每次都忘这个东西"）。
+     *
+     * 为什么必须有：上游会话清单（`desktopPurchases[].model`）用的是
+     * **上游 id**，而调度内部一律用**目录 key**（m-xxx）。少了这条映射，
+     * 两侧标识不同 → 严格相等永远匹配不上 → **面板能显示那条已付费会话、
+     * 调度却看不见它**，于是白花钱去别处买新的。
+     *
+     * 复用与 `handleFor()` **同一套**摘要索引（`keyByDigest`），
+     * 不另算一遍摘要、不引第二真源。
+     */
+    const byDigest = this.keyByDigest?.get(freebuffLegacyModelDigest(k))
+    if (byDigest) return byDigest
+    // ③ 已是目录 key：自反
+    if (this.handles?.has(k)) return k
+    return null
   }
 
   /**

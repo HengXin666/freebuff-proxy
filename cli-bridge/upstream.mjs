@@ -249,21 +249,142 @@ function devicePayload({ method, path, timestampMs, bodySha256, fetchId }) {
 }
 
 /**
- * 官方工具集 + 客户端工具，按 function.name 去重（官方优先）。
- * 客户端没声明工具时不追加（没要工具就别背 37 个的 token）。
+ * 客户端工具名 → 官方工具名的**映射表**（下行方向）。
+ *
+ * ⚠️ 为什么必须映射而不是直接追加（2026-10-04 定性）：
+ * 上游的官方工具集是**固定 37 个**（`docs/reverse/captures/official-tools.json`），
+ * 里面**没有** `bash` / `edit` / `read` / `write` / `skill` 这些下游 harness 的
+ * 常用名。实测（远程 15:02）把 55 个第三方工具**原样追加**后，上游回
+ * `503 {"message":"The model is temporarily unavailable."}` —— 而同会话、
+ * 同模型、不带工具时是 200。唯一变量就是工具集。
+ *
+ * 所以：**能映射的映射到官方等价物**（模型看到的是官方名字，调用的也是官方
+ * 语义），映射不了的**丢弃**（宁可让该工具在此链路不可用，也不能让整条链路
+ * 因一个陌生工具名被拒）。
+ *
+ * 反向映射（上行）见 `UNMAP_TOOLS` —— 上游回 `tool_calls` 时把官方名还原成
+ * 下游认识的名字，这样两边的模型/客户端都看到自己那套名字。
  */
-function mergeOfficialTools(official, clientTools) {
+const MAP_TOOLS = Object.freeze({
+  bash: 'run_terminal_command',
+  shell: 'run_terminal_command',
+  sh: 'run_terminal_command',
+  run_command: 'run_terminal_command',
+  execute_command: 'run_terminal_command',
+  terminal: 'run_terminal_command',
+  edit: 'str_replace',
+  apply_patch: 'str_replace',
+  str_replace: 'str_replace',
+  write: 'write_file',
+  create_file: 'write_file',
+  write_file: 'write_file',
+  read: 'read_files',
+  cat: 'read_files',
+  read_file: 'read_files',
+  read_files: 'read_files',
+  grep: 'code_search',
+  code_search: 'code_search',
+  find: 'code_search',
+  glob: 'glob',
+  ls: 'list_directory',
+  list_dir: 'list_directory',
+  list_directory: 'list_directory',
+  web_fetch: 'read_url',
+  fetch: 'read_url',
+  curl: 'read_url',
+  read_url: 'read_url',
+  web_search: 'web_search',
+  search: 'web_search',
+  todo_write: 'write_todos',
+  write_todos: 'write_todos',
+  ask_user_question: 'ask_questions',
+  ask_questions: 'ask_questions',
+  browser_check: 'browser_check',
+})
+
+/**
+ * 官方工具名 → 客户端熟悉的名字（**上行**方向，用于还原 `tool_calls`）。
+ *
+ * 只对"我们做过下行映射"的名字建立反向关系 —— 官方原生名（如 `preview_click`）
+ * 没有下游对应物，保持原名返回，下游按原样收到即可。
+ */
+const UNMAP_TOOLS = Object.freeze(
+  Object.entries(MAP_TOOLS).reduce((acc, [client, official]) => {
+    // 一个官方名可能对应多个客户端名：取**第一个**（表内顺序即优先级），
+    // 保证还原是确定的（不能随对象键序漂移）。
+    if (!acc[official]) acc[official] = client
+    return acc
+  }, {}),
+)
+
+/**
+ * 官方工具集 + **映射后**的客户端工具，按 function.name 去重（官方优先）。
+ *
+ * 与旧版（直接追加）的区别（这是本次修复的核心）：
+ *   - 客户端工具先经 `MAP_TOOLS` 换成官方等价名 → 上游只看到官方名字；
+ *   - 映射不到的**丢弃**（旧版直接追加 → 上游看到陌生名 → 503）；
+ *   - 去重仍在（客户端声明了官方已有的名字时以官方定义为准）。
+ *
+ * @param {any[]} official 官方工具定义
+ * @param {any[]} clientTools 下游声明的工具
+ * @param {Record<string,string>} [dropped] 出参：被丢弃的客户端工具名（供日志）
+ */
+function mergeOfficialTools(official, clientTools, dropped = {}) {
   const list = Array.isArray(official) ? [...official] : [];
   if (!Array.isArray(clientTools) || clientTools.length === 0) return list;
   const seen = new Set(list.map((t) => t?.function?.name).filter(Boolean));
   for (const t of clientTools) {
     const n = t?.function?.name;
-    if (n && !seen.has(n)) {
-      seen.add(n);
-      list.push(t);
+    if (!n) continue;
+    const mapped = MAP_TOOLS[n] || null;
+    if (!mapped) {
+      // 官方没有等价物 → 丢弃（附理由给调用方记日志），绝不原样发出
+      dropped[n] = 'no-official-equivalent';
+      continue;
     }
+    if (seen.has(mapped)) continue; // 官方优先，重复不追加
+    seen.add(mapped);
+    list.push({
+      ...t,
+      function: { ...t.function, name: mapped },
+    });
   }
   return list;
+}
+
+/**
+ * 把上游 `tool_calls` 里的官方工具名**还原**成下游认识的名字。
+ *
+ * 与 `mergeOfficialTools`（下行映射）配对：下行把 `bash`→`run_terminal_command`，
+ * 上行就把 `run_terminal_command`→`bash`，这样下游拿到的工具名与它自己声明的
+ * 一致，可以直接派发。
+ *
+ * 官方原生名（下游从没声明过）原样返回 —— 不猜、不丢。
+ *
+ * @param {any} body 上游 chat 响应体（含 choices[].message.tool_calls）
+ * @param {Record<string,string>} [unmappedNames] 本次请求用过的下行映射（客户端名→官方名）
+ */
+function unmapToolCalls(body, unmappedNames = {}) {
+  if (!body || typeof body !== 'object') return body
+  const choices = Array.isArray(body.choices) ? body.choices : []
+  // 本次请求里**客户端实际声明过**的官方名 → 还原回客户端名。
+  // 优先用调用方给的精确表（同一官方名可能被多个客户端名映射到，
+  // 只有本次声明过的那个才是正确的还原目标）。
+  const back = {}
+  for (const [client, official] of Object.entries(unmappedNames || {})) {
+    if (!back[official]) back[official] = client
+  }
+  for (const ch of choices) {
+    const tc = ch?.message?.tool_calls
+    if (!Array.isArray(tc)) continue
+    for (const call of tc) {
+      const officialName = call?.function?.name
+      if (!officialName) continue
+      const clientName = back[officialName] || UNMAP_TOOLS[officialName]
+      if (clientName) call.function.name = clientName
+    }
+  }
+  return body
 }
 
 class Bridge {
@@ -695,11 +816,31 @@ class Bridge {
     //
     // 直接替换会让客户端声明的自定义工具**静默消失** —— 上游 37 工具里
     // 没有 run_code / get_weather 这类名字，用户以为声明了能调，实际发不出去。
+    /**
+     * ⚠️ **下行**：客户端工具必须经 `MAP_TOOLS` 换成官方等价名，映射不到的丢弃。
+     *
+     * 旧版直接把客户端工具**原样追加** —— 实测（远程 15:02）55 个第三方工具
+     * 原样发出后，上游回 503；同会话同模型不带工具则是 200。唯一变量就是工具集。
+     * 官方工具集是固定 37 个，里面没有 `bash`/`edit`/`read`/`write`/`skill`。
+     */
+    const droppedTools = {};
+    const clientToolNames = {};
+    for (const t of Array.isArray(tools) ? tools : []) {
+      const n = t?.function?.name;
+      if (n && MAP_TOOLS[n]) clientToolNames[n] = MAP_TOOLS[n];
+    }
     let outTools = tools || [];
     if (layer === 'manager' && OFFICIAL_DECIDE?.length) {
-      outTools = mergeOfficialTools(OFFICIAL_DECIDE, tools);
+      outTools = mergeOfficialTools(OFFICIAL_DECIDE, tools, droppedTools);
     } else if (layer === 'worker' && OFFICIAL_TOOLS.length > 0) {
-      outTools = mergeOfficialTools(OFFICIAL_TOOLS, tools);
+      outTools = mergeOfficialTools(OFFICIAL_TOOLS, tools, droppedTools);
+    }
+    const droppedNames = Object.keys(droppedTools);
+    if (droppedNames.length) {
+      console.error(
+        '[tool-map] dropped client tools with no official equivalent:',
+        droppedNames.join(', '),
+      );
     }
     const sysTpl = OFFICIAL_SYS?.[layer] || OFFICIAL_SYS?.worker;
 
@@ -775,6 +916,9 @@ class Bridge {
     await dumpReq(`chat-${layer}`, 'POST', url, hdrs, body);
     // noSend：只 dump 不发送（离线对比用，零额度消耗）
     if (noSend) return { status: 0, text: '(dry-run, not sent)' };
+    // 逐字节 dump chat 请求体（FREEBUFF_DUMP_DIR 设置时启用）——
+    // 这是"上游到底看到了什么"的唯一可靠证据（工具集/头/字段全在里面）。
+    await dumpReq('chat', 'POST', url, hdrs, body);
     const res = await fetch(url, { method: 'POST', headers: hdrs, body });
     const text = await res.text();
     // 从流式响应里取 chatcmpl-* id —— FINISH 上报需要它（官方 line 32/65/74）

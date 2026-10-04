@@ -506,6 +506,26 @@ export class AccountRuntimes {
   }
 
   /**
+   * 目录 key / 上游 legacy id / 可读名 → **人类可读显示名**。
+   *
+   * 这是**展示侧的公开入口**（web 层要显示模型名时用它，不要自己遍历
+   * runtime 的 catalog —— 那是重复实现，曾出现过两份口径不一致）。
+   *
+   * 上游回执侧（session.model / rateLimitsByModel / prices）用的全是目录 key，
+   * 而会话清单（desktopPurchases[].model）用的是**上游 legacy id**，
+   * 两种形式都要能显示成人能认的名字 —— 所以内部先做归一（`keyForName`
+   * 已支持三种形式），再查 displayName。
+   *
+   * 取不到就返回 null（调用方回落原值，绝不因为取不到名字就让整行渲染失败）。
+   * @param {string} key
+   * @returns {string | null}
+   */
+  displayNameFor(key) {
+    if (typeof key !== 'string' || !key) return null
+    return this._modelDisplayName(this.resolveModelAlias(key))
+  }
+
+  /**
    * 目录 key（m-00032eaeec）→ 人类可读显示名（MiMo 2.6 Flash）。
    *
    * 上游回执侧（session.model / rateLimitsByModel / prices）用的全是目录 key，
@@ -962,6 +982,18 @@ export class AccountRuntimes {
       logContext: { account: user.email || accountKey, key: accountKey },
       // 句柄变更落盘（track/clear/orphan）——见 SessionHandleStore。
       onSessionChange: (ev) => this.handleStore.handleEvent(ev),
+      /**
+       * 模型标识归一（目录 key / 上游 id / 可读名 → 目录 key）。
+       *
+       * 上游会话清单里的 `model` 是**上游 id**（`deepseek/deepseek-v4-flash`），
+       * 而调度内部用**目录 key**（`m-096e75164d`）—— 两侧标识不同，严格相等
+       * 永远匹配不上，于是"面板能显示那条已付费会话、调度却看不见它"，
+       * 白白去别处买新的（用户当场指出：展示了却不复用 = 白花钱）。
+       *
+       * 复用仓库**既有的唯一映射真源** `resolveModelAlias()`，绝不另写第二套。
+       * 绑定 `this` 是因为它要读本 AppContext 的目录表。
+       */
+      resolveModelAlias: (m) => this.resolveModelAlias(m),
       // 账号账目落盘（freebucks/quota/lastProbe）——见 AccountStateStore。
       onStateChange: (snap) => this._persistAccountState(accountKey, snap),
       getSessionSettings: this._getSessionSettings,
@@ -1543,6 +1575,73 @@ export class AccountRuntimes {
       }
 
       const reusable = rt.sessions.isUsableForModel(model)
+      /**
+       * ★ **「上游有没有一条我能接管的已付费会话」——惰性查询**（2026-10-04 铁律）。
+       *
+       * 一次 admit 买断一小时，这一小时内继续发请求**边际成本为 0**；
+       * 而 `balance: 0` 只说明"再买一条买不起"，**不代表已付费的会话不能用**。
+       * 所以额度闸门只该约束"新买一条"，绝不能把一条**已付过钱**的会话挡在外面。
+       *
+       * ⚠️ **必须是惰性的**（只在额度闸门即将拒绝时才查）：
+       * 首版把它放在热路径上无条件执行，结果每个请求都多发一次
+       * `GET /session`，而且那个 GET 在官方建会话路径上会**建出会话** ——
+       * 凭空造出一条 `model=A` 的会话，紧接着请求模型 B 就撞
+       * `paid_window_model_mismatch`（实测把既有测试打红）。
+       *
+       * 清单可能过期（**另一个部署**刚买的），所以只有在本地上次快照没命中时
+       * 才补一次只读探测；探测天然被"额度即将拒绝"这个罕见状态限制频率。
+       */
+      let paidUpstream = false
+      const checkPaidUpstream = async () => {
+        if (paidUpstream) return true
+        if (rt.sessions.holderFor(model)) {
+          paidUpstream = true
+        } else if (rt.sessions.hasInventorySnapshot?.()) {
+          /**
+           * ⚠️ **只在已有清单快照时才补探测**（不能凭空发起第一次）。
+           *
+           * 原因：`refresh()` 走 `GET /session`，而官方建会话路径上这个 GET
+           * **会建出会话**（`_apply` 直接吃 active 回执）。若在"额度不足"时
+           * 凭空探测，就会为一个**还没决定要买**的请求造出一条会话，
+           * 接着污染后续调度（实测：把既有"5xx 换号"用例打红，因为凭空多出
+           * 一条绑在别的模型上的会话 → `paid_window_model_mismatch`）。
+           *
+           * 有快照才补：说明本次进程此前已经和上游对过账（admit/refresh 过），
+           * 此时的探测只是"刷新一份已知存在的表"，不会凭空造会话。
+           */
+          await rt.sessions.refresh().catch(() => {})
+          paidUpstream = !!rt.sessions.holderFor(model)
+        }
+        if (paidUpstream) {
+          logger.info(
+            'reusing a paid session held upstream (skip quota gates, no re-buy)',
+            {
+              key,
+              email: emailByKey.get(key),
+              model,
+              holderInstanceId: rt.sessions.holderFor(model),
+              balance: rt.sessions.freebucksFor?.(model)?.balance ?? null,
+            },
+          )
+        }
+        return paidUpstream
+      }
+      /**
+       * 额度闸门（units / freebucks / 新会话预算）**只约束"新买一条"**。
+       * 只有在**真的要新买**时才去问上游"有没有可接管的已付费会话"
+       * （惰性 —— 热路径与可用账号路径零开销），有则跳过闸门直接复用。
+       */
+      /**
+       * ⚠️ 只在**额度真的不够**时才去问上游"有没有可接管的已付费会话"。
+       *
+       * 不能写成 `reusable || await checkPaidUpstream()` —— 那样对**额度充足**的
+       * 普通请求也会多发一次 `GET /session`，而那个 GET 在官方建会话路径上会
+       * **建出会话**（`mockMode='get_claim_admit'` 的 GET 直接回 active），
+       * 于是凭空多出一条会话去撞 `paid_window_model_mismatch`（实测把既有测试打红）。
+       *
+       * 正确触发条件：本账号**买不起**（两道额度闸门任一命中）。那时才值得多一次
+       * 只读探测 —— 因为它可能揭示"钱虽花完、但那一小时还在"。
+       */
       if (!reusable) {
         // 上游对"余额不够"的判定就两条——额度跑完 / 本次请求所需 Freebucks
         // 高于剩余额度——命中任一条就可能直接封号，所以**只在真的要新买一条
@@ -1553,6 +1652,21 @@ export class AccountRuntimes {
         //    所以 units 不够时同样不该去买——上游会用 rate_limited 拒掉，
         //    白白一次 admit 往返。⚠️ recentCount 是小数，比较用 >=。
         const units = rt.sessions.sessionUnitsFor?.(model)
+        const fbGate = rt.sessions.freebucksFor?.(model)
+        /**
+         * ★ **两道额度闸门任一即将拒绝时，先问上游"有没有可接管的已付费会话"**
+         * （2026-10-04 铁律：`balance: 0` 只说明"再买一条买不起"，
+         * **不代表已付费的那一小时不能用**；面板都能显示它，调度就必须能用它）。
+         *
+         * 放在这里（而不是函数开头）是刻意的：只有**真的要新买一条**时才付这次
+         * 只读探测的成本。额度充足的普通请求零开销。
+         */
+        const quotaLooksBlocked =
+          (units?.known && units.exhausted) ||
+          (fbGate?.known && fbGate.affordable === false)
+        if (quotaLooksBlocked && (await checkPaidUpstream())) {
+          return rt
+        }
         if (units?.known && units.exhausted) {
           failures.push({
             key,

@@ -136,6 +136,93 @@ export const OFFICIAL_ZERO_PARAM_TOOL_DESCRIPTIONS = Object.freeze({
   task_completed: "Use this tool to signal that the task is complete.\n\n- When to use:\n  * The user's request is completely fulfilled and you have nothing more to do\n  * You need clarification from the user before continuing\n  * You need help from the user to continue (e.g., missing information, unclear requirements)\n  * You've encountered a blocker that requires user intervention\n\n- Before calling:\n  * Ensure all pending work is finished\n  * Resolve all tool results\n  * Provide any outputs or summaries the user needs\n\n- Effect: Signals completion of the current task and returns control to the user\n\n*EXAMPLE USAGE*:\n\nAll changes have been implemented and tested successfully!\n\n<task_completed_params_example>\n{}\n</task_completed_params_example>\n\nOR\n\nI need more information to proceed. Which database schema should I use for this migration?\n\n<task_completed_params_example>\n{}\n</task_completed_params_example>\n\nOR\n\nI can't get the tests to pass after several different attempts. I need help from the user to proceed.\n\n<task_completed_params_example>\n{}\n</task_completed_params_example>",
 })
 
+/**
+ * 客户端工具名 → 官方工具名的**下行映射表**。
+ *
+ * 与 `cli-bridge/upstream.mjs` 的 `MAP_TOOLS` **必须保持一致**（同一张表两处用：
+ * bun 侧做下行映射发请求，Node 侧据它做上行还原）。
+ * 两侧一致性由 `test/verify-tool-name-mapping.mjs` 扫描校验。
+ *
+ * 为什么需要：上游官方工具集是**固定 37 个**，里面没有 `bash`/`edit`/`read`/
+ * `write`/`skill` 这些下游 harness 的常用名。实测把第三方工具原样追加后，
+ * 上游回 `503`（同会话同模型不带工具则是 200）。
+ */
+export const CLIENT_TO_OFFICIAL_TOOL = Object.freeze({
+  bash: 'run_terminal_command',
+  shell: 'run_terminal_command',
+  sh: 'run_terminal_command',
+  run_command: 'run_terminal_command',
+  execute_command: 'run_terminal_command',
+  terminal: 'run_terminal_command',
+  edit: 'str_replace',
+  apply_patch: 'str_replace',
+  str_replace: 'str_replace',
+  write: 'write_file',
+  create_file: 'write_file',
+  write_file: 'write_file',
+  read: 'read_files',
+  cat: 'read_files',
+  read_file: 'read_files',
+  read_files: 'read_files',
+  grep: 'code_search',
+  code_search: 'code_search',
+  find: 'code_search',
+  glob: 'glob',
+  ls: 'list_directory',
+  list_dir: 'list_directory',
+  list_directory: 'list_directory',
+  web_fetch: 'read_url',
+  fetch: 'read_url',
+  curl: 'read_url',
+  read_url: 'read_url',
+  web_search: 'web_search',
+  search: 'web_search',
+  todo_write: 'write_todos',
+  write_todos: 'write_todos',
+  ask_user_question: 'ask_questions',
+  ask_questions: 'ask_questions',
+  browser_check: 'browser_check',
+})
+
+/**
+ * 把上游返回的 `tool_calls` 里的**官方工具名还原成下游认识的名字**（上行方向）。
+ *
+ * 与下行映射配对：下行把 `bash`→`run_terminal_command`，上行就还原回 `bash`，
+ * 使下游拿到的工具名与它自己声明的完全一致，可直接派发。
+ *
+ * 官方原生名（下游没声明过）**原样保留** —— 不猜、不丢。
+ *
+ * @param {any} body 上游响应体（chat.completion，含 choices[].message.tool_calls）
+ * @returns {any} 原地修改后的 body（同时返回，便于链式使用）
+ */
+export function unmapToolCallsInBody(body) {
+  if (!body || typeof body !== 'object') return body
+  const back = {}
+  for (const [client, official] of Object.entries(CLIENT_TO_OFFICIAL_TOOL)) {
+    if (!back[official]) back[official] = client // 取第一个 = 表内优先级
+  }
+  const choices = Array.isArray(body.choices) ? body.choices : []
+  for (const ch of choices) {
+    /**
+     * ⚠️ 必须同时处理**两种形态**（实测踩到）：
+     *   - 非流式：`choices[].message.tool_calls[].function.name`
+     *   - **SSE 流式**：`choices[].delta.tool_calls[].function.name`
+     *     （首片给 name、后续片只给 arguments）
+     * 只处理 message 会让流式响应**一条都不还原**（实测 changed:false），
+     * 下游拿到官方名 `write_file` 而不是它声明的 `write`。
+     */
+    for (const holder of [ch?.message, ch?.delta]) {
+      const tc = holder?.tool_calls
+      if (!Array.isArray(tc)) continue
+      for (const call of tc) {
+        const name = call?.function?.name
+        if (name && back[name]) call.function.name = back[name]
+      }
+    }
+  }
+  return body
+}
+
 /** 官方全部工具名（上游 toolNames，含 composio 元工具）。 */
 export const OFFICIAL_TOOL_NAMES = Object.freeze(Object.keys(OFFICIAL_TOOL_PARAMETER_KEYS))
 
