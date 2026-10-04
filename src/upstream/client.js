@@ -24,7 +24,7 @@ export {
 export class UpstreamError extends Error {
   /**
    * @param {string} message
-   * @param {{ status?: number, code?: string, body?: any, retryAfterMs?: number, fatal?: boolean, cause?: string }} [extra]
+   * @param {{ status?: number, code?: string, body?: any, retryAfterMs?: number, fatal?: boolean, cause?: string, terminalExhausted?: boolean }} [extra]
    */
   constructor(message, extra = {}) {
     super(message)
@@ -45,6 +45,19 @@ export class UpstreamError extends Error {
     // 换号只会把每个账号的额度依次买断却拿不到答案。
     // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
     this.fatal = extra.fatal === true
+    /**
+     * **全池额度耗尽**的终态标记（与 `fatal` 区分）。
+     *
+     * `fatal` = 出口属性（地理封锁），换号无用。
+     * `terminalExhausted` = **池内每个账号都被额度闸门拒过**（遍历完才得出的
+     * 聚合结论），所以换号/同号重试都不可能有不同结果 —— 外层据此一次收场，
+     * 不再轮 maxAttempts 轮（每轮都要重新遍历账号并刷一屏日志）。
+     *
+     * 为什么需要它：旧行为抛的是单账号级 `freebucks_exhausted`，而 429 被
+     * `shouldSwitchAccountOnError` 判成"该换号" → 白轮 maxAttempts 轮
+     * （实测远程 13 个请求各白轮 3 次，日志被冲爆）。
+     */
+    this.terminalExhausted = extra.terminalExhausted === true
   }
 }
 

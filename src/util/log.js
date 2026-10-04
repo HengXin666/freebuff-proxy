@@ -11,12 +11,13 @@ let settings = { level: 'info' }
  * 为什么。控制台要能直接读到完整字段才能排障。
  *
  * 有界是硬要求：不带上限会让长期运行的实例被日志吃光内存。超容量丢最旧的
- * （**及时清理**：默认 500 条，可由 config.log.ringCap 调整；0 = 不保留）。
+ * （**及时清理**：默认 5000 条，由 `logging.ring_cap` 配置 —— 见 src/config.js
+ * 的说明；`configureLogger()` 在 serve.js 启动时接线；0 = 不保留）。
  * @type {Array<Record<string, any>>}
  */
 const ring = []
 /** @type {number} */
-let ringCap = 500
+let ringCap = 5000
 
 /**
  * 日志上下文：一次下游请求的全链路标识。

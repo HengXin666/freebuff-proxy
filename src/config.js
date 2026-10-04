@@ -13,7 +13,7 @@ import { sanitizeProxyList } from './util/json-store.js'
  * @property {{defaultAdminUsername: string, defaultAdminPassword: string | null}} users
  * @property {{releaseOnShutdown: boolean, reAdmitOnExpire: boolean, reAdmitLeadSec: number, freeModelReAdmitLeadSec: number, pollIntervalSec: number, admitTimeoutMs: number, idleReleaseSec: number}} session
  * @property {{maxConcurrentRequests: number, slotWaitMs: number, bodyReadTimeoutMs: number, accountMaxConcurrency: number, upstreamTimeoutSec: number, streamIdleTimeoutSec: number, accountChatWaitMs: number, maxAutoRetryOnSessionError: number, stallCooldownSec: number, maxNewSessionsPerRequest: number, requestJitterMs: number}} limits
- * @property {{level: 'debug' | 'info' | 'warn' | 'error'}} logging
+ * @property {{level: 'debug' | 'info' | 'warn' | 'error', ringCap: number}} logging
  */
 
 /**
@@ -167,6 +167,18 @@ const DEFAULTS = {
   },
   logging: {
     level: 'info',
+    /**
+     * 进程内日志环形缓冲的条数上限（控制台「日志」页读的就是它）。
+     *
+     * ⚠️ 默认从 **500 提到 5000**（2026-10-04 真实事故）：一次故障能在十几秒内
+     * 刷出几百条，500 条瞬间被冲爆 —— 用户事后想查**更早的排障记录**时，
+     * 缓冲里只剩最近十几分钟，无法取证。日志不落盘（纯内存），所以这个上限
+     * 就是能回溯的全部深度。
+     *
+     * 代价：每条日志约几百字节，5000 条约几 MB 内存 —— 对容器可忽略。
+     * 0 = 不保留（关闭缓冲）。
+     */
+    ringCap: 5000,
   },
 }
 
@@ -200,6 +212,7 @@ const KEY_MAP = {
   max_new_sessions_per_request: 'maxNewSessionsPerRequest',
   request_jitter_ms: 'requestJitterMs',
   idle_release_sec: 'idleReleaseSec',
+  ring_cap: 'ringCap',
 }
 
 function isPlainObject(value) {

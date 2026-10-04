@@ -1874,12 +1874,35 @@ export class AccountRuntimes {
       // 认这个码）；只有全是 units 用尽时才报 units_exhausted。
       const onlyUnits = failures.every((f) => f.code === 'units_exhausted')
       const code = onlyUnits ? 'units_exhausted' : 'freebucks_exhausted'
+      /**
+       * ★ **全池额度耗尽 = 终态，必须一次就收场**（2026-10-04 真实事故）。
+       *
+       * 旧行为：这里抛单账号级的 `freebucks_exhausted`，而外层
+       * `shouldSwitchAccountOnError(429, …)` 把 429 判成"该换号" →
+       * **再轮一遍全部账号** → 全部买不起 → 再抛同样的错 → 循环到 maxAttempts。
+       * 实测（远程日志 14:01:47-14:02:00）：13 个客户端请求，每个都白轮 3 次，
+       * 每次都要遍历所有账号查额度 —— 而这些日志本身把日志缓冲冲爆了，
+       * 导致用户事后**查不到更早的排障记录**（这是我加日志缓冲太小之外的连带伤害）。
+       *
+       * 现在：这是**聚合结论**（遍历完所有账号才得出），不是某个账号的瞬时故障 ——
+       * 换号不可能改变它（池子里每一个都被检查过了）。所以：
+       *   1) 附上 `no_available_account` 这个**终态语义**（外层 isTerminal 直接返回）；
+       *   2) 带上 `resetAt`，让下游知道**何时**能恢复，而不是盲目重试。
+       *
+       * 注意保留 `code`（freebucks_exhausted / units_exhausted）以兼容既有消费方，
+       * 只在消息与 body 里补终态信息 —— 判据由 `terminalExhausted` 标记表达。
+       */
       throw new UpstreamError(
         `No Freebuff account can afford model ${model} (${onlyUnits ? 'session units' : 'Freebucks'} exhausted). ${failures.length} account(s) tried (${summary}).` +
           ` Retry after ${new Date(Date.now() + this.earliestCooldownMs()).toISOString()}.`,
         {
           status: 429,
           code,
+          /**
+           * 终态标记：**池内每个账号都因额度被拒**，重试（换号/同号）都不会成功。
+           * 外层 proxy.js 据此直接返回，不再轮 maxAttempts 轮。
+           */
+          terminalExhausted: true,
           body: {
             model,
             failures: sanitizeFailuresForClient(failures),

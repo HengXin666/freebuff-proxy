@@ -1324,7 +1324,14 @@ export function createProxyHandler(ctx) {
               // 出口级故障（地理封锁）：换号无用（所有账号共享同一出口），
               // 重试只会再买断一次一整小时的 Freebucks。立即收场。
               // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
-              err.fatal === true
+              err.fatal === true ||
+              /**
+               * 全池额度耗尽：**遍历完所有账号**才得出的聚合结论 ——
+               * 换号/同号重试不可能有不同结果。立即收场，不白轮 maxAttempts 轮。
+               * （实测：每个客户端请求白轮 3 次 × 每次遍历全部账号，
+               *   13 个请求就把 500 条日志缓冲冲爆，用户事后查不到更早记录。）
+               */
+              err.terminalExhausted === true
             if (isTerminal) {
               if (err.code !== 'client_gone') mapAndSendError(res, err)
               return

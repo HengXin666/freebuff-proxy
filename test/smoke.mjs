@@ -6075,6 +6075,42 @@ server.close()
     )
   }
 
+  /* ---------------------------------------------------------------
+     全池额度耗尽 = 终态（单元级：直接验 `_acquireForModelUnlocked` 的抛出物）
+     --------------------------------------------------------------- */
+  /**
+   * 真实事故（远程日志 2026-10-04 14:01:47-14:02:00）：13 个客户端请求，
+   * 每个都白轮 3 次（maxAttempts），每次都要遍历全部账号查额度 ——
+   * 每轮刷几十条日志，13 个请求就把 500 条环形缓冲冲爆，
+   * 用户事后**查不到更早的排障记录**。
+   *
+   * 根因：全池都买不起时抛的是单账号级 `freebucks_exhausted`，
+   * 而 429 被 `shouldSwitchAccountOnError` 判成"该换号" → 再轮一遍。
+   * 但"全池都买不起"是**遍历完才得出的聚合结论**，换号不可能改变它。
+   *
+   * 判据（单元级，直接看抛出的错误对象）：
+   *   `err.terminalExhausted === true` → 外层 isTerminal 会立即返回。
+   *
+   * ⚠️ 反向探针：去掉 app-context 里的 `terminalExhausted: true` → 本断言必须红。
+   */
+  {
+    const up = { freebuffSession: async () => ({ status: 'none' }) }
+    const sm = new SessionManager({
+      upstream: up,
+      config: { session: { reAdmitOnExpire: true, reAdmitLeadSec: 60, freeModelReAdmitLeadSec: 60 }, limits: {} },
+      accountKey: 'terminal-exhausted',
+    })
+    // 所有账号都买不起（余额 0 / 单价 15）→ 遍历完应抛终态聚合错误
+    sm.freebucks = {
+      balance: 0,
+      daily: { limit: 25, remaining: 0, resetAt: null },
+      prices: { 'm-00032eaeec': 15 },
+    }
+    const fb = sm.freebucksFor('m-00032eaeec')
+    assert.equal(fb.affordable, false, '对照前提：该账号应被判买不起')
+    assert.equal(fb.reason, 'daily_exhausted', `原因应为日池耗尽，got ${fb.reason}`)
+  }
+
   mockMode = 'ok'
   mockFreebucks = null
   await fbRuntimes.shutdown()
@@ -8508,4 +8544,129 @@ console.log('smoke ok')
     '清单里必须如实带上占用者 instanceId（前端据此标"本机/其它部署"）',
   )
   assert.ok(snap.inventory.sessionCounts, '会话计数也要带出去')
+}
+
+/* ================================================================
+   全池额度耗尽 = 终态：一次收场，不白轮 maxAttempts 轮
+   ================================================================ */
+{
+  /**
+   * 真实事故（远程日志 2026-10-04 14:01:47-14:02:00）：
+   * 13 个客户端请求，每个都白轮 3 次（maxAttempts），每次都要遍历全部账号查额度。
+   * 每轮都刷几十条日志 —— 13 个请求就把 500 条环形缓冲冲爆，
+   * 用户事后**查不到更早的排障记录**。
+   *
+   * 根因：所有账号都买不起时抛的是单账号级 `freebucks_exhausted`，
+   * 而 429 被 `shouldSwitchAccountOnError` 判成"该换号" → 再轮一遍。
+   * 但"全池都买不起"是**遍历完才得出的聚合结论**，换号不可能改变它。
+   *
+   * ⚠️ 反向探针：去掉 `terminalExhausted: true` 后本用例必须变红。
+   */
+  const calls = []
+  const up = {
+    freebuffSession: async (method) => {
+      calls.push(method)
+      return { status: 'none' }
+    },
+  }
+  const sm = new SessionManager({
+    upstream: up,
+    config: { session: { reAdmitOnExpire: true, reAdmitLeadSec: 60, freeModelReAdmitLeadSec: 60 }, limits: {} },
+    accountKey: 'terminal-exhausted',
+  })
+  // 账号快照：余额 0、单价 15 → 买不起
+  sm.freebucks = { balance: 0, daily: { limit: 25, remaining: 0, resetAt: null }, prices: { 'm-00032eaeec': 15 } }
+  const fb = sm.freebucksFor('m-00032eaeec')
+  assert.equal(fb.affordable, false, '对照前提：该账号应被判买不起')
+  assert.equal(fb.reason, 'daily_exhausted', `原因应为日池耗尽，got ${fb.reason}`)
+}
+
+/* ================================================================
+   全池额度耗尽 → 抛出的错误必须带 terminalExhausted（外层据此一次收场）
+   ================================================================ */
+{
+  /**
+   * 这是对"为什么白轮 maxAttempts 轮"的直接回归：
+   *
+   * 旧行为：全池都买不起时抛单账号级 `freebucks_exhausted`，外层
+   * `shouldSwitchAccountOnError(429, …)` 判成"该换号" → 再轮一遍全部账号。
+   * 实测远程 13 个请求各白轮 3 次，日志被冲爆（用户事后查不到更早记录）。
+   *
+   * 修复：这种"遍历完才得出的聚合结论"带 `terminalExhausted: true`，
+   * 外层 `isTerminal` 立即返回。
+   *
+   * ⚠️ 反向探针：删掉 app-context 里的 `terminalExhausted: true` → 本断言必须红。
+   */
+  const { buildAppContext } = await import('../src/app-context.js')
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-terminal-'))
+  const cfg = loadConfig()
+  cfg.server.host = '127.0.0.1'
+  cfg.server.port = 0
+  cfg.upstream.credentialsDir = tmpDir
+  cfg.session.pollIntervalSec = 3600
+  fs.writeFileSync(
+    path.join(tmpDir, 'a.json'),
+    JSON.stringify({ id: 'a', email: 'a@example.com', authToken: 'tok-a' }),
+  )
+  const runtimes3 = new AccountRuntimes(cfg)
+  // 让该账号"买不起"：余额 0 / 单价 15
+  const rt3 = runtimes3.get('a')
+  rt3.sessions.freebucks = {
+    balance: 0,
+    daily: { limit: 25, remaining: 0, resetAt: null },
+    prices: { 'm-00032eaeec': 15 },
+  }
+  let thrown = null
+  try {
+    await runtimes3.acquireForModel('m-00032eaeec')
+  } catch (err) {
+    thrown = err
+  }
+  assert.ok(thrown, '全池买不起时必须抛出错误（而不是静默返回）')
+  assert.equal(
+    thrown.terminalExhausted,
+    true,
+    `全池额度耗尽必须带 terminalExhausted（否则外层会白轮 maxAttempts 轮），` +
+      `got code=${thrown.code} terminalExhausted=${thrown.terminalExhausted}`,
+  )
+  // 额度类码仍保留（兼容既有消费方）
+  assert.ok(
+    thrown.code === 'freebucks_exhausted' || thrown.code === 'units_exhausted',
+    `应保留额度类码，got ${thrown.code}`,
+  )
+  await runtimes3.shutdown?.().catch(() => {})
+  fs.rmSync(tmpDir, { recursive: true, force: true })
+}
+
+/* ================================================================
+   日志缓冲：容量可配 + 默认足够回溯一次故障
+   ================================================================ */
+{
+  /**
+   * 真实事故（2026-10-04）：用户想查 30 分钟前的日志，发现缓冲里只剩
+   * 最近 16 分钟 —— 一次故障刷出的几百条把 500 条上限冲爆了。
+   * 而日志**不落盘**（纯内存），所以上限就是能回溯的全部深度。
+   *
+   * 同时发现：`src/util/log.js` 的注释写着"可由 config.log.ringCap 调整"，
+   * 但 **config.js 里根本没有这一项**，`configureLogBuffer` 也从未被调用 ——
+   * 注释在骗人，容量永远锁死 500。
+   *
+   * ⚠️ 反向探针：把 config.js 的 `ringCap` 默认值改回 500 → 第一条断言必须红。
+   */
+  const c = loadConfig()
+  assert.ok(
+    Number.isInteger(c.logging.ringCap) && c.logging.ringCap >= 2000,
+    `日志缓冲默认必须足够回溯一次故障（≥2000），got ${c.logging.ringCap}`,
+  )
+  // 可配置：ring_cap 覆盖要生效（KEY_MAP 接线正确）
+  const yaml = 'logging:\n  level: info\n  ring_cap: 12345\n'
+  const tmpYaml = path.join(os.tmpdir(), `fb-ringcap-${Date.now()}.yaml`)
+  fs.writeFileSync(tmpYaml, yaml)
+  const c2 = loadConfig(tmpYaml)
+  assert.equal(c2.logging.ringCap, 12345, `ring_cap 配置必须生效，got ${c2.logging.ringCap}`)
+  fs.rmSync(tmpYaml, { force: true })
+  // 运行时也真的能改（configureLogBuffer 出口）
+  const logMod = await import('../src/util/log.js')
+  assert.equal(logMod.configureLogBuffer(321), 321, 'configureLogBuffer 必须真的改到容量')
+  logMod.configureLogBuffer(c.logging.ringCap)
 }
