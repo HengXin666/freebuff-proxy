@@ -900,6 +900,11 @@ export function createUpstreamClient(config, token, opts = {}) {
           instanceId: opts.instanceId,
           compact: opts.compact,
           walletSpendLimit: opts.walletSpendLimit,
+          /**
+           * 槽位被占时显式接管（官方 `x-freebuff-takeover-instance-id`）。
+           * 见 session-manager 里"槽位被占 → takeover 重试"的说明。
+           */
+          takeoverInstanceId: opts.takeoverInstanceId || null,
         }),
         // 既有行为保留：本项目 token 由**网页登录签发**，auth-store 记录
         // 「只带 Bearer 会 401」。测试也把它钉住了（smoke: 删它有打死全部

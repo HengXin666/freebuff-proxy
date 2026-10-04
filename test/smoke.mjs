@@ -8320,3 +8320,141 @@ console.log('smoke ok')
   )
   assert.equal(sm._releasePending, false, '结清后 _releasePending 必须复位')
 }
+
+/* ================================================================
+   槽位被占 → 用 takeover 显式接管（官方 orchestrator.js:208152-208155）
+   ================================================================ */
+{
+  /**
+   * 官方：admission 回 purchase_capacity / purchase_in_use / premium_slot_taken
+   * 且回执带 currentInstanceId 时，**带 `x-freebuff-takeover-instance-id` 重发一次**，
+   * 把剩余时长移过来（官方文案："move the remaining time here without another charge"）。
+   *
+   * 缺这一步的后果（实测 2026-10-04）：账号上游 status:none、balance 15，
+   * 但每个请求都 purchase_capacity（回执 currentInstanceId 指向别人），
+   * 用户看到「明明有额度却永远说槽位被占」。
+   *
+   * ⚠️ 反向探针：删掉 admit 里的 takeover 分支后本用例必须变红。
+   */
+  const calls = []
+  let sawTakeover = false
+  const up = {
+    freebuffSession: async (method, opts = {}) => {
+      calls.push({ method, ...opts })
+      if (method === 'DELETE') return { status: 'ended' }
+      if (method === 'POST') {
+        /**
+         * ⚠️ **只认带 takeoverInstanceId 的请求**。
+         *
+         * 早先用 `sawTakeover` 标志做"第二次就放行"，结果**探针测不出实现损坏**：
+         * 即便实现没发 takeover，第二次 POST 仍被放行 → 断言全绿（假绿）。
+         * 现在 mock 严格镜像上游语义：不带 takeover 的一律回 purchase_capacity。
+         */
+        if (!opts.takeoverInstanceId) {
+          return {
+            status: 'purchase_capacity',
+            currentInstanceId: 'holder-inst',
+            slotLimit: 1,
+            concurrency: 'slot-bound',
+          }
+        }
+        // 带 takeover 重发 → 上游把槽位移交过来
+        sawTakeover = true
+        return {
+          status: 'active',
+          instanceId: opts.instanceId || 'ours',
+          model: 'm-00032eaeec',
+          admittedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+          remainingMs: 3600_000,
+          accessTier: 'limited',
+        }
+      }
+      return { status: 'none' }
+    },
+  }
+  const sm = new SessionManager({
+    upstream: up,
+    config: {
+      session: { reAdmitOnExpire: true, reAdmitLeadSec: 60, freeModelReAdmitLeadSec: 60 },
+      limits: {},
+    },
+    accountKey: 'takeover-case',
+  })
+  const s = await sm.ensureSession('m-00032eaeec')
+  assert.equal(s?.status, 'active', '接管后必须拿到 active 会话')
+  const tk = calls.find((c) => c.takeoverInstanceId)
+  assert.ok(
+    tk,
+    `槽位被占时必须带 takeoverInstanceId 重发，got ${JSON.stringify(calls.map((c) => c.method))}`,
+  )
+  assert.equal(
+    tk.takeoverInstanceId,
+    'holder-inst',
+    'takeoverInstanceId 必须是回执给出的 currentInstanceId（占用者）',
+  )
+}
+
+/* ================================================================
+   会话清单（desktopPurchases）解析 + 发请求前先用 knownHolder 接管
+   ================================================================ */
+{
+  /**
+   * 上游 `GET /session` 回执里带**会话清单**（实测字段）：
+   *   "desktopPurchases": [{"model":"mimo/mimo-v2.5",
+   *                         "expiresAt":"...","holderInstanceId":"6c5b0c7e-…"}]
+   * 官方据此实现 `knownHolder(model)`（orchestrator.js:208639），
+   * 在**发请求之前**就知道槽位被谁占着 —— 而这是**跨部署可见**的：
+   * 真值在上游，本地/远程各建过会话时上游回执会把全部持有者列出来。
+   *
+   * ⚠️ 反向探针：删掉 `_apply` 里的 desktopPurchases 解析后本用例必须变红。
+   */
+  const calls = []
+  const HOLDER = 'other-deployment-inst'
+  const up = {
+    freebuffSession: async (method, opts = {}) => {
+      calls.push({ method, ...opts })
+      if (method === 'DELETE') return { status: 'ended' }
+      if (method === 'GET') {
+        // GET 回执带"别人占着槽位"的清单
+        return {
+          status: 'none',
+          desktopSessionCounts: { premium: 1, unlimited: 0, nextExpiryAt: null },
+          desktopPurchases: [
+            { model: 'm-00032eaeec', expiresAt: new Date(Date.now() + 3600_000).toISOString(), holderInstanceId: HOLDER },
+          ],
+        }
+      }
+      if (method === 'POST') {
+        // 只有带正确 takeover 头才放行（镜像上游语义）
+        if (opts.takeoverInstanceId !== HOLDER) {
+          return { status: 'purchase_capacity', currentInstanceId: HOLDER, slotLimit: 1 }
+        }
+        return {
+          status: 'active',
+          instanceId: opts.instanceId,
+          model: 'm-00032eaeec',
+          admittedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+          remainingMs: 3600_000,
+          accessTier: 'limited',
+        }
+      }
+      return { status: 'none' }
+    },
+  }
+  const sm = new SessionManager({
+    upstream: up,
+    config: { session: { reAdmitOnExpire: true, reAdmitLeadSec: 60, freeModelReAdmitLeadSec: 60 }, limits: {} },
+    accountKey: 'inventory-case',
+  })
+  const s = await sm.ensureSession('m-00032eaeec')
+  assert.equal(s?.status, 'active', '从清单读到占用者后应能直接接管成功')
+  assert.equal(sm.holderFor('m-00032eaeec'), HOLDER, 'holderFor 必须能从清单读出占用者（跨部署可见）')
+  const firstPost = calls.find((c) => c.method === 'POST')
+  assert.equal(
+    firstPost?.takeoverInstanceId,
+    HOLDER,
+    `**首次** POST 就该带 takeover（官方 knownHolder 的用法），got ${JSON.stringify(calls.map((c) => c.method + (c.takeoverInstanceId ? '+tk' : '')))}`,
+  )
+}

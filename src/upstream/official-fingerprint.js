@@ -217,6 +217,10 @@ export function officialSessionHeaders(method, token, opts = {}) {
   if (method === 'POST') {
     if (opts.model) headers[HEADER_MODEL] = opts.model
     headers[HEADER_WALLET_SPEND_LIMIT] = String(opts.walletSpendLimit ?? 0)
+    // 显式接管：只在调用方拿到 currentInstanceId 时带（否则不带，保持官方默认形态）
+    if (opts.takeoverInstanceId) {
+      headers[HEADER_TAKEOVER_INSTANCE_ID] = String(opts.takeoverInstanceId)
+    }
   }
   return headers
 }
@@ -306,6 +310,18 @@ export const CLI_CLAIM_PREFIX = 'cli:'
 /** 官方 multi-session 协议头（instanceId 带 cli: 前缀时才发）。 */
 export const HEADER_MULTI_SESSION = 'x-freebuff-multi-session'
 export const HEADER_PURCHASE_CONTINUITY = 'x-freebuff-purchase-continuity'
+/**
+ * 槽位被别的 instance 占着时，**显式接管**那一个槽位。
+ *
+ * 官方常量原文（`orchestrator.js:112553`）：
+ *   FREEBUFF_TAKEOVER_INSTANCE_HEADER = "x-freebuff-takeover-instance-id"
+ * 用法（`orchestrator.js:208152-208155`）：admission 回 `purchase_capacity` /
+ * `purchase_in_use` / `premium_slot_taken` 且回执给了 `currentInstanceId` 时，
+ * 带着它重发一次 —— 上游会把剩余时长移交过来（官方文案：
+ * "Use that tab or choose 'Use it here' to move the remaining time here
+ *  without another charge"）。
+ */
+export const HEADER_TAKEOVER_INSTANCE_ID = 'x-freebuff-takeover-instance-id'
 /**
  * Desktop 专用头，但**CLI 在多会话协议下也发**。
  *

@@ -57,6 +57,16 @@ export class SessionManager {
      * cli-bridge 改成裸 UUID 复用后实测：admission 200 且未产生退款条目。
      */
     this.instanceId = newRawInstanceId()
+    /**
+     * 上游的**会话清单快照**（每次 `_apply` 从回执刷新）：
+     * 谁占着哪个模型的槽位、何时到期。见 `_apply` 里的说明。
+     * @type {Array<{model?: string, expiresAt?: string, holderInstanceId?: string}>}
+     */
+    this.desktopPurchases = []
+    /** 上游的活跃会话计数（premium / unlimited / nextExpiryAt）。 */
+    this.desktopSessionCounts = null
+    /** 上游的退款记录（对账用）。 */
+    this.desktopRefunds = []
     /** 账号标识（sessions.json 里的 owner key）。 */
     this.accountKey = accountKey
     /**
@@ -868,6 +878,15 @@ export class SessionManager {
     let body = null
     try {
       body = await this.upstream.freebuffSession('GET', { instanceId: claimId })
+      /**
+       * ⚠️ **GET 回执也要吸清单**（不只在拿到 active 时）。
+       *
+       * `status: none` 的回执**同样带** `desktopPurchases` / `desktopSessionCounts`
+       * —— 而"谁占着槽位"恰恰只在没有自己会话时才重要（有自己会话就直接复用了）。
+       * 此前只在 `_apply`（仅 active 路径）里解析，于是 `holderFor()` 永远读不到，
+       * "发请求前先接管"这条路等于没接上（测试抓到了）。
+       */
+      this._absorbInventory(body)
     } catch (err) {
       logger.warn('GET-claim admit failed; falling back to POST admission', {
         code: err?.code,
@@ -893,14 +912,30 @@ export class SessionManager {
       //   → 200 active
       // 所以我们此前 POST admission 的**方向是对的**，错的是 model 传了名字
       // 而不是句柄（已在 client.js 里修正）。这里直接走 POST。
+      /**
+       * ★ 已知占用者时**首次 POST 就带 takeover**（官方 `knownHolder` 的用法）。
+       *
+       * 官方在发请求**之前**就从 `desktopPurchases` 读出持有者，直接带
+       * `x-freebuff-takeover-instance-id` 接管；而不是先撞一次
+       * `purchase_capacity` 再从错误回执里捡 id。
+       *
+       * 好处：少一次必然失败的请求；且**跨部署可见** —— 上游回执会列出
+       * **全部**持有者（含别的部署建的会话），所以本地/远程之间不再互相"看不见"。
+       */
+      const knownHolder = this.holderFor(model)
       logger.info('GET returned none; POSTing admission with claim', {
         model,
         claimId,
+        knownHolder: knownHolder || null,
       })
       try {
         body = await this.upstream.freebuffSession('POST', {
           model,
           instanceId: claimId,
+          // 只在与自己不同时才接管（自己占着就正常 admission）
+          ...(knownHolder && knownHolder !== claimId
+            ? { takeoverInstanceId: knownHolder }
+            : {}),
         })
       } catch (err) {
         logger.warn('POST admission failed', {
@@ -1007,6 +1042,78 @@ export class SessionManager {
         return this.session
       }
       throw this._terminalSessionError(again, model)
+    }
+
+    /**
+     * ★ **槽位被占时用 `x-freebuff-takeover-instance-id` 接管重试**（官方行为）。
+     *
+     * 官方 `orchestrator.js:208152-208155`：
+     *
+     *   if (response = await post(named),
+     *       options.takeover &&
+     *       (response.status === "premium_slot_taken" ||
+     *        response.status === "purchase_in_use" ||
+     *        response.status === "purchase_capacity") &&
+     *       response.currentInstanceId &&
+     *       response.currentInstanceId !== instanceId)
+     *     response = await post(response.currentInstanceId);   // ← 带占用者 id 重发
+     *
+     * 即：上游回执会告诉我们**谁占着槽位**（`currentInstanceId`），
+     * 官方据此显式"接管"（带 `x-freebuff-takeover-instance-id` 重发一次）。
+     *
+     * 我们此前**完全没有这一步** —— takeover 逻辑只存在于 cli-bridge 的
+     * `admit()`，而主服务的 admission 走的是另一条路（Node/`freebuffSession`），
+     * 从不带该头。后果（实测 2026-10-04）：账号直连上游 `status: none`、
+     * `balance 15`，但每个请求都回 `purchase_capacity`（回执
+     * `currentInstanceId=3fb8894c-…` 指向另一个 instance），
+     * 用户看到「明明有额度却永远说槽位被占」。
+     *
+     * 只重试**一次**（与官方一致），避免与占用者互相抢夺。
+     */
+    if (
+      body &&
+      (body.status === 'purchase_capacity' ||
+        body.status === 'purchase_in_use' ||
+        body.status === 'premium_slot_taken') &&
+      typeof body.currentInstanceId === 'string' &&
+      body.currentInstanceId &&
+      body.currentInstanceId !== claimId
+    ) {
+      logger.warn('session slot held by another instance; attempting takeover', {
+        model,
+        holderInstanceId: body.currentInstanceId,
+        ourInstanceId: claimId,
+        slotStatus: body.status,
+      })
+      try {
+        const took = await this.upstream.freebuffSession('POST', {
+          model,
+          instanceId: claimId,
+          takeoverInstanceId: body.currentInstanceId,
+        })
+        if (took?.status === 'active' && took.instanceId) {
+          this.admitCount += 1
+          this._apply(took)
+          this._armPoll()
+          logger.info('took over the held slot', {
+            model,
+            instanceId: took.instanceId,
+            expiresAt: took.expiresAt,
+          })
+          this._sendHoldHeartbeat(took.instanceId)
+          return this.session
+        }
+        logger.warn('takeover did not produce an active session', {
+          model,
+          status: took?.status ?? null,
+        })
+        body = took || body
+      } catch (err) {
+        logger.warn('takeover attempt failed', {
+          model,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
     }
 
     /**
@@ -1146,6 +1253,30 @@ export class SessionManager {
     if (quota) this.quota = quota
     const freebucks = extractFreebucks(body)
     if (freebucks) this.freebucks = freebucks
+    /**
+     * ★ **解析上游的「会话清单」**（官方 `desktopPurchases` / `desktopSessionCounts`）。
+     *
+     * 为什么这是必需的（2026-10-04，用户提议 + 官方源码 + 实测三重印证）：
+     * 上游一次 admit = 买断一小时，槽位 `slotLimit: 1`。**谁占着槽位只在上游那里**——
+     * 本地账本（`sessions.json`）只记自己创建的会话，**分布式部署下彼此看不见**：
+     * 我在本地建了一条会话，远程读不到 → 远程拿同一账号请求就撞
+     * `purchase_capacity`，而本地面板显示 `status: none`，两边各说各话。
+     *
+     * 上游其实把答案直接给了我们（`GET /session` 回执，实测字段）：
+     *   "desktopSessionCounts": {"premium":1,"unlimited":0,
+     *                            "nextExpiryAt":"2026-10-04T14:01:37.143Z"}
+     *   "desktopPurchases": [{"model":"mimo/mimo-v2.5",
+     *                         "expiresAt":"2026-10-04T13:31:37.143Z",
+     *                         "holderInstanceId":"6c5b0c7e-…"}]
+     *
+     * 官方据此实现 `knownHolder(model)`（`orchestrator.js:208639`）——
+     * **从回执里读出占用者 instanceId**，然后带 `x-freebuff-takeover-instance-id`
+     * 接管（`208152-208155`）。我们此前完全没解析这几个字段，
+     * 于是 takeover 只能靠"撞到 purchase_capacity 后从错误回执里捡"，慢一拍。
+     *
+     * 现在解析并保留：`holderFor(model)` 可在**发请求之前**就知道谁占着槽位。
+     */
+    this._absorbInventory(body)
     if (quota || freebucks) this._notifyStateChange()
     // admit 可能发生在没有任何在途请求时（选号阶段就 admit、随后才拿 chat
     // 锁）：这里兜底起空闲计时，否则会话会一直挂到过期。
@@ -1757,6 +1888,70 @@ export class SessionManager {
    * 失败只记日志，绝不影响调用方（可用性优先）。
    * @param {string} instanceId
    */
+  /**
+   * 吸收上游回执里的**会话清单**（官方 `absorbRefunds` / `desktopPurchases` 同源）。
+   *
+   * 上游 `GET /session`（**任何 status**，包括 `none`）都会带：
+   *   desktopPurchases     — 谁占着哪个模型的槽位（含 holderInstanceId / expiresAt）
+   *   desktopSessionCounts — 活跃会话计数（premium / unlimited / nextExpiryAt）
+   *   desktopRefunds       — 退款记录（对账用）
+   *
+   * 这是**跨部署可见的唯一真源**：本地账本各记各的，而这份清单列出**全部**
+   * 持有者（含别的部署建的会话）—— 于是"我在本地建的会话，远程也能看到"。
+   * @param {any} body
+   */
+  _absorbInventory(body) {
+    if (!body || typeof body !== 'object') return
+    const purchases = Array.isArray(body.desktopPurchases)
+      ? body.desktopPurchases.filter(
+          (p) =>
+            p &&
+            typeof p === 'object' &&
+            typeof p.holderInstanceId === 'string' &&
+            p.holderInstanceId,
+        )
+      : null
+    if (purchases) this.desktopPurchases = purchases
+    if (body.desktopSessionCounts && typeof body.desktopSessionCounts === 'object') {
+      this.desktopSessionCounts = body.desktopSessionCounts
+    }
+    if (Array.isArray(body.desktopRefunds)) this.desktopRefunds = body.desktopRefunds
+  }
+
+  /**
+   * 上游此刻**谁占着这个模型的槽位**（官方 `knownHolder`，orchestrator.js:208639）。
+   *
+   * 官方原文：
+   *   knownHolder: (model) => this.desktopPurchases
+   *     .find(p => p.model === model && p.holderInstanceId
+   *                && Date.parse(p.expiresAt) > Date.now())
+   *     ?.holderInstanceId
+   *
+   * 用途：**发请求之前**就知道槽位被谁占着，可以直接带
+   * `x-freebuff-takeover-instance-id` 接管 —— 不必等撞上 `purchase_capacity`
+   * 再从错误回执里捡那个 id（慢一拍，且多一次失败请求）。
+   *
+   * 这也是**跨部署可见**的来源：本地/远程各建过会话时，上游回执里的
+   * `desktopPurchases` 会把**全部持有者**都列出来（含别的部署建的），
+   * 因为真值在上游、不在任何一方的本地账本里。
+   *
+   * @param {string} model 目录 key（m-xxx）
+   * @returns {string | null} 占用者 instanceId；无人占用返回 null
+   */
+  holderFor(model) {
+    if (!model || !Array.isArray(this.desktopPurchases)) return null
+    const now = Date.now()
+    const hit = this.desktopPurchases.find(
+      (p) =>
+        p &&
+        p.model === model &&
+        typeof p.holderInstanceId === 'string' &&
+        p.holderInstanceId &&
+        (!p.expiresAt || Date.parse(p.expiresAt) > now),
+    )
+    return hit?.holderInstanceId || null
+  }
+
   _sendHoldHeartbeat(instanceId) {
     if (!instanceId) return
     Promise.resolve()
