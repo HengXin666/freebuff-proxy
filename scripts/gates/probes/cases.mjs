@@ -250,7 +250,12 @@ export const probes = [
     reason: '语法坏掉时 check-types 的报错数会骤降，棘轮会把它录成"水位下降"',
     expectIn: ['语法不可解析'],
     run: () => {
-      const dir = fixture({ 'src/bad.js': 'export function broken( {\n' })
+      // 夹具必须超过 syntax 门禁的 MIN_FILES 下界（20），否则报出来的是
+      // "扫描面太小"而不是"语法不可解析" —— 那是下界在起作用，不是本探针
+      // 要测的判据。CI 实测被这条卡红过。
+      const files = { 'src/bad.js': 'export function broken( {\n' }
+      for (let i = 0; i < 25; i++) files[`src/ok${i}.js`] = 'export function ok() {\n  return 1\n}\n'
+      const dir = fixture(files)
       return { ...runGate('scripts/gates/checks/code/syntax.mjs', dir), dir }
     },
   },

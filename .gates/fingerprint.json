@@ -722,7 +722,7 @@
       "scripts/gates/meta/fix-ts-params.mjs": 41,
       "scripts/gates/meta/gen-response-contract.mjs": 17,
       "scripts/gates/probe-gates.mjs": 2,
-      "scripts/gates/probes/cases.mjs": 2,
+      "scripts/gates/probes/cases.mjs": 10,
       "scripts/gates/rules.mjs": 10,
       "scripts/gates/run.mjs": 4,
       "scripts/gates/undeclared-allow.txt": 7,
@@ -824,5 +824,5 @@
     ],
     "checkpoints": "CHECKPOINTS = { 'pre-commit': [ 'syntax', 'sizes', 'dirs', 'functions', 'format', 'style', 'md-in-comment', 'notes', 'route-table', 'declared', 'lanes', 'fingerprint', ], 'pre-push': [ 'syntax', 'sizes', 'dirs', 'functions', 'notes', 'format', 'route-table', 'declared', 'types', 'lanes', 'fingerprint', 'contract', 'response-contract', 'docs', 'i18n', ], ci: 'all', }"
   },
-  "fingerprint": "cd84026ef5cfc7def741bcca6b6b1352f17e333cc33045f8f68609b797bed43f"
+  "fingerprint": "6dae2bc1a47bc87f58f10e29d617dd67f765f66cf999defd9da3fa9e34a9b9f2"
 }
