@@ -143,9 +143,20 @@ export function unmapToolCalls(body, unmappedNames = {}) {
   // 本次请求里客户端实际声明过的官方名 → 还原回客户端名.
   // 优先用调用方给的精确表(同一官方名可能被多个客户端名映射到,
   // 只有本次声明过的那个才是正确的还原目标).
+  //
+  // unmappedNames 既可以是"客户端名→官方名"的映射(旧签名),也可以是
+  // 本次声明的客户端名集合(Set / 数组)---- 后者用于按[本次声明]过滤:
+  // 下游没声明过的官方名不做任何改写,避免造出它不认识的别名.
+  const declared = toDeclaredSet(unmappedNames)
   const back = {}
-  for (const [client, official] of Object.entries(unmappedNames || {})) {
+  for (const [client, official] of Object.entries(MAP_TOOLS)) {
+    if (declared && !declared.has(client)) continue
     if (!back[official]) back[official] = client
+  }
+  // 调用方给了精确映射表时,它以"本次实际用过"为准,覆盖上面的推演.
+  for (const [client, official] of Object.entries(unmappedNames || {})) {
+    if (typeof official !== 'string') continue
+    back[official] = client
   }
   for (const ch of choices) {
     const tc = ch?.message?.tool_calls
@@ -153,9 +164,26 @@ export function unmapToolCalls(body, unmappedNames = {}) {
     for (const call of tc) {
       const officialName = call?.function?.name
       if (!officialName) continue
-      const clientName = back[officialName] || UNMAP_TOOLS[officialName]
+      const clientName = back[officialName] || (!declared ? UNMAP_TOOLS[officialName] : undefined)
       if (clientName) call.function.name = clientName
     }
   }
   return body
+}
+
+/**
+ * 把调用方给的"本次声明"归一成名字集合.
+ *
+ * @param {any} value Set / 字符串数组 / 映射对象 / 空
+ * @returns {Set<string>|null} 名字集合;调用方没给声明信息时返回 null
+ */
+function toDeclaredSet(value) {
+  if (!value) return null
+  if (value instanceof Set) return value
+  if (Array.isArray(value)) return new Set(value.filter((v) => typeof v === 'string' && v))
+  if (typeof value === 'object' && typeof value.has === 'function') return value
+  // 旧签名(客户端名→官方名的映射对象):取键作声明集.
+  const keys = Object.keys(value)
+  if (keys.length === 0) return null
+  return new Set(keys)
 }

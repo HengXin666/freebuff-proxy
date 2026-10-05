@@ -12,6 +12,9 @@
  - 逐用例比对 detectForeignClient 的 signal 与 evidence,并比常量集与参数名表.
  */
 
+import { translateParamsForDownstream } from './signals/param-map.ts'
+import { toNameSet } from './signals/declared-names.ts'
+
 /** 判据源码 sha256:上游改动后这里必须一起更新. */
 export const FOREIGN_CLIENT_SIGNALS_SOURCE_SHA256 =
   '505f9b42af1758b5403233737251b231a9369a312dbe4dcde6ceeed538589da9'
@@ -202,15 +205,32 @@ export const CLIENT_TO_OFFICIAL_TOOL = Object.freeze({
  - 与下行映射配对:下行把 bash→run_terminal_command,上行就还原回 bash,
  - 使下游拿到的工具名与它自己声明的完全一致,可直接派发.
  *
+ - [本次声明]过滤:只还原成下游这次请求里真的声明过的名字.
+ - 旧实现用全表反查,于是模型只要调了官方原生工具(list_directory),回程就
+ - 被改名成 ls -- 而下游可能根本没声明 ls,派发时报 unknown tool "ls".
+ - 同一官方名有多个下游别名时,报哪个也是猜的(read_files 还原成 read,
+ - 即使下游声明的是 cat).现在声明集里没有的一律保持官方原名 ---- 下游收到
+ - 不认识的名字会明确报错,好过收到一个它不认识的别名.
+ *
  - 官方原生名(下游没声明过)原样保留.
  *
  - @param {any} body 上游响应体(chat.completion,含 choices[].message.tool_calls)
+ - @param {Iterable<string>|any[]} [declaredNames] 本次下游声明的工具名集合
+ - @param {Record<string, any>} [declaredSchemas] 本次下游声明的工具 schema(名字 -> parameters),按它裁剪翻译后的字段
  - @returns {any} 原地修改后的 body(同时返回,便于链式使用)
  */
-export function unmapToolCallsInBody(body: any) {
+export function unmapToolCallsInBody(
+  body: any,
+  declaredNames?: Iterable<string>,
+  declaredSchemas?: any,
+) {
   if (!body || typeof body !== 'object') return body
-  const back: any = {}
+  const declared = toNameSet(declaredNames)
+  const back: Record<string, string> = {}
   for (const [client, official] of Object.entries(CLIENT_TO_OFFICIAL_TOOL)) {
+    // [本次声明]过滤:只还原成下游这次真的声明过的名字.
+    // 声明集为空(调用方没传)时退化为全表,保持旧行为不变.
+    if (declared.size > 0 && !declared.has(client)) continue
     if (!back[official]) back[official] = client // 取第一个 = 表内优先级
   }
   const choices = Array.isArray(body.choices) ? body.choices : []
@@ -227,7 +247,28 @@ export function unmapToolCallsInBody(body: any) {
       if (!Array.isArray(tc)) continue
       for (const call of tc) {
         const name = call?.function?.name
-        if (name && back[name]) call.function.name = back[name]
+        if (!name) continue
+        const clientName = back[name] || name
+        if (back[name]) call.function.name = clientName
+        /**
+         - 参数形态同步翻译.
+         -
+         - 两种情况都要走这里:
+         -   1. 改过名(back[name] 命中): 只改名字会让下游收到自己的名字配官方的
+         -      参数(线上实测: name=read, arguments={"paths":[...]}).
+         -   2. 未改名但下游本次声明了这个官方名(如 web_search / glob): 官方与
+         -      下游完全同名, 形态却可能不同(下游 web_search 要 queries, 官方是
+         -      query). 旧实现只在改名分支里翻译, 这一类会被整体漏掉.
+         -
+         - 无规则时原样保留参数.
+         */
+        if (!declared.has(clientName) && !back[name]) continue
+        const translated = translateParamsForDownstream(
+          clientName,
+          call.function.arguments,
+          declaredSchemas?.[clientName],
+        )
+        if (translated != null) call.function.arguments = translated
       }
     }
   }

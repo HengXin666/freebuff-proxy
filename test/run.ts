@@ -27,6 +27,7 @@ const SUITES = [
   ['catalog-models', 'suites/entries/verify/catalog-models.ts'],
   ['model-mapping-truth', 'suites/entries/verify/model-mapping-truth.ts'],
   ['tool-name-mapping', 'suites/entries/verify/tool-name-mapping.ts'],
+  ['tool-restore-declared', 'suites/entries/verify/tool/restore-declared.ts'],
   ['chat-payload-contract', 'suites/entries/verify/chat-payload-contract.ts'],
   ['responses-bridge', 'suites/entries/verify/protocol/responses-bridge.ts'],
 ]

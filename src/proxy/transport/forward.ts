@@ -66,6 +66,14 @@ export async function forwardCompletions(
   schedulingDeadline,
   /** 上游模型 id(仅用于日志;forwardBody.model 即它,但显式传更清楚). */
   upstreamModel,
+  /**
+   - 本次下游请求声明的原始工具名集合.
+   - 回程还原只把官方名改回[下游这次真的声明过]的那个客户端名:声明集里没有的
+   - 保持官方原名,避免造出下游不认识的别名(实测症状:unknown tool "ls").
+   */
+  declaredToolNames,
+  /** 本次下游声明的工具 schema(名字 -> parameters), 参数翻译用. */
+  declaredToolSchemas,
 }: any) {
   const headers = {
     ...filterRequestHeaders(req.headers),
@@ -115,7 +123,7 @@ export async function forwardCompletions(
   {
     const rpc = await tryOfficialChannel(ctx, {
       upstream, instanceId, forwardBody, schedulingDeadline, upstreamModel, requestBody,
-      carrierPlan: plan,
+      carrierPlan: plan, declaredToolNames, declaredToolSchemas,
     })
     upstreamRes = rpc.upstreamRes
     upstreamErrText = rpc.upstreamErrText
@@ -215,7 +223,7 @@ export async function forwardCompletions(
   const rewritten = await rewriteUpstreamResponse(upstreamRes, {
     stream,
     hermesDelegateAlias,
-    plan,
+    plan, declaredToolNames, declaredToolSchemas,
   })
   if (rewritten.handled) {
     res.writeHead(status, respHeaders)

@@ -20,16 +20,40 @@ interface ActionCtx {
 type ActionFn = (ctx: ActionCtx) => Promise<void>
 
 /**
- * 按 modelKey 在 catalog 里挑一行(支持 key / handle; 都匹配不上时回落首行).
+ * 按 modelKey 在 catalog 里挑一行:优先目录 key, 次选本次抓取的 handle.
+ *
+ * 绝不回落首行. 旧实现是 "|| rows[0]", 它把一个定位失败伪装成定位成功:
+ * 会话是按 A 模型的 handle 绑定的, 回落首行就会拿 B 模型的 handle 去 chat,
+ * 上游回 409 session_model_mismatch, 而本地日志只会显示
+ * rpc result ... model=<别的模型> ---- 排障时看不见真实原因.
+ *
+ * 实测(2026-10-05, 远程 reqId ea7b362d):主服务持有的 handle 与 bun 现场抓到的
+ * handle 不同(handle 每次抓取全量轮换, 只有 key 稳定; 见 docs/reverse/19 第 19.3 节),
+ * 于是 find(handle) 落空 -> 回落 catalog 首行(当时是 MiMo 2.6 Flash) -> 用一个
+ * 与会话不符的模型标识发 chat -> 409.
+ *
  * @param {BridgeLike} bridge 桥接实例(catalog 已在 runAction 里抓过)
  * @param {any} input 原始输入
- * @returns {any} 选中的 catalog 行
+ * @returns {any} 命中的 catalog 行;定位失败返回 null(调用方必须显式报错)
  */
 function pickRow(bridge: BridgeLike, input: any): any {
-  const rows = bridge.catalog.rows
+  const rows = bridge.catalog?.rows
+  if (!Array.isArray(rows) || rows.length === 0) return null
   return rows.find((r) => r.key === input.modelKey)
     || rows.find((r) => r.handle === input.modelKey)
-    || rows[0]
+    || null
+}
+
+/**
+ * pickRow 失败时统一的显式失败出口:写 out.error 并置 ok=false.
+ *
+ * @param {any} out 输出对象
+ * @param {any} modelKey 未命中的模型标识
+ * @returns {void} 无返回值
+ */
+function failUnknownModel(out: any, modelKey: any): void {
+  out.error = `model not found in catalog: ${modelKey}`
+  out.ok = false
 }
 
 /** 抓目录并放进 out.catalog. */
@@ -60,6 +84,7 @@ async function actRelease({ bridge, input, out }: ActionCtx): Promise<void> {
 /** 买断一个模型的会话(admission). */
 async function actAdmit({ bridge, input, out }: ActionCtx): Promise<void> {
   const row = pickRow(bridge, input)
+  if (!row) return failUnknownModel(out, input.modelKey)
   out.model = { key: row.key, name: row.displayName }
   out.result = await bridge.admit(row)
 }
@@ -72,6 +97,7 @@ async function actStartRun({ bridge, input, out }: ActionCtx): Promise<void> {
 /** 发一次 chat(需要调用方已持有 instanceId / runId). */
 async function actChat({ bridge, input, out }: ActionCtx): Promise<void> {
   const row = pickRow(bridge, input)
+  if (!row) return failUnknownModel(out, input.modelKey)
   out.model = { key: row.key, name: row.displayName }
   out.result = await bridge.chat({
     row,
@@ -86,6 +112,7 @@ async function actChat({ bridge, input, out }: ActionCtx): Promise<void> {
 /** 复用已有会话:只做 startRun + chat,绝不 admission. */
 async function actReuse({ bridge, input, out }: ActionCtx): Promise<void> {
   const row = pickRow(bridge, input)
+  if (!row) return failUnknownModel(out, input.modelKey)
   out.model = { key: row.key, name: row.displayName }
   const run = await bridge.startRun(input.agentId, { layer: input.layer || 'worker' })
   out.startRun = { status: run.status, runId: run.runId }
@@ -106,6 +133,7 @@ async function actReuse({ bridge, input, out }: ActionCtx): Promise<void> {
  */
 async function actDryrun({ bridge, input, out }: ActionCtx): Promise<void> {
   const row = pickRow(bridge, input)
+  if (!row) return failUnknownModel(out, input.modelKey)
   const fakeInst = 'cli:dryrun-' + crypto.randomUUID()
   const fakeRun = 'dryrun-' + crypto.randomUUID()
   await bridge.chat({
@@ -128,6 +156,7 @@ async function actDryrun({ bridge, input, out }: ActionCtx): Promise<void> {
  */
 async function actFull({ bridge, input, out }: ActionCtx): Promise<void> {
   const row = pickRow(bridge, input)
+  if (!row) return failUnknownModel(out, input.modelKey)
   out.model = { key: row.key, name: row.displayName }
   const ad = await bridge.admit(row)
   out.admit = { status: ad.status, state: ad.body?.status, error: ad.body?.error }

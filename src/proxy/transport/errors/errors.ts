@@ -67,16 +67,20 @@ export function upstreamBodyEmbeddedError(text: string): string | null {
  * 任何解析失败都原样返回该行/原文: 还原失败不破坏响应.
  *
  * @param {string} text
+ * @param {Iterable<string>|any[]} [declaredNames] 本次下游声明的工具名集合
+ * @param {Record<string, any>} [declaredSchemas] 本次下游声明的工具 schema(名字 -> parameters)
  * @returns {string}
  */
 export function unmapToolCallsInSse(
   text: string | null | undefined,
+  declaredNames?: Iterable<string> | any[],
+  declaredSchemas?: any,
 ): string | null | undefined {
   if (!text || typeof text !== 'string') return text
   const looksSse = text.includes('data: ')
   if (!looksSse) {
     try {
-      return JSON.stringify(unmapToolCallsInBody(JSON.parse(text)))
+      return JSON.stringify(unmapToolCallsInBody(JSON.parse(text), declaredNames, declaredSchemas))
     } catch {
       return text
     }
@@ -102,7 +106,7 @@ export function unmapToolCallsInSse(
             )
           : false
         if (!hasCalls) return line
-        return 'data: ' + JSON.stringify(unmapToolCallsInBody(obj))
+        return 'data: ' + JSON.stringify(unmapToolCallsInBody(obj, declaredNames, declaredSchemas))
       } catch {
         return line
       }

@@ -17,6 +17,7 @@
 import { createHermesDelegateSseTransform, restoreHermesDelegateInResponse } from '../../../tool-alias.ts'
 import { EMPTY_CARRIER_PLAN, createCarrierSseTransform, unpackCarrierToolCalls } from '../tool-carrier.ts'
 import { unmapToolCallsInSse } from '../errors/errors.ts'
+import { mergeAndTranslateSseToolCalls } from './sse-tool-merge.ts'
 
 /**
  * 回程改写相关的响应头与观测头.
@@ -63,7 +64,7 @@ export function prepareRewriteHeaders(res: any, respHeaders: any, opts: any) {
  * @returns {Promise<{ handled: boolean, text?: string, body?: any }>} 非流式返回文本, 流式返回改写后的体
  */
 export async function rewriteUpstreamResponse(upstreamRes: any, opts: any) {
-  const { stream, hermesDelegateAlias, plan } = opts
+  const { stream, hermesDelegateAlias, plan, declaredToolNames, declaredToolSchemas } = opts
   const needUnpack = Boolean(plan?.active)
   /**
    - 整体 JSON 分支的前置: 上游回的必须是有限 JSON, 不能是一个不结束的流.
@@ -109,13 +110,18 @@ export async function rewriteUpstreamResponse(upstreamRes: any, opts: any) {
  *
  * @param {any} rpc rpcReuse 的回执(含 status 与 text)
  * @param {any} carrierPlan 本次请求的工具载体映射(可缺省)
+ * @param {Iterable<string>|any[]} [declaredNames] 本次下游声明的工具名集合
+ * @param {Record<string, any>} [declaredSchemas] 本次下游声明的工具 schema(名字 -> parameters)
  * @returns {any} 下游响应对象(status 与上游一致)
  */
-export function buildUpstreamResponseFromRpc(rpc: any, carrierPlan: any) {
+export function buildUpstreamResponseFromRpc(rpc: any, carrierPlan: any, declaredNames?: any, declaredSchemas?: any) {
   const rawText = rpc.text || ''
   const plan = carrierPlan ?? EMPTY_CARRIER_PLAN
   const carrierUnpacked = plan.active ? unpackCarrierInRpcText(rawText, plan) : rawText
-  return new Response(unmapToolCallsInSse(carrierUnpacked), {
+  // 顺序要紧: 先按[本次声明]还原名字并翻译参数(需要完整文本才能跨分片合并),
+  // 再交给逐行的通用还原兜底.
+  const merged = mergeAndTranslateSseToolCalls(carrierUnpacked, declaredNames, declaredSchemas)
+  return new Response(unmapToolCallsInSse(merged, declaredNames, declaredSchemas), {
     status: rpc.status,
     headers: { 'content-type': 'application/json' },
   })

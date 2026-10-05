@@ -57,6 +57,12 @@ export async function runUpstreamTurn(st: any, res: any) {
     instanceId: snap.instanceId,
     schedulingDeadline: st.schedulingDeadline,
     upstreamModel: st.upstreamModel,
+    // 本次下游声明的工具名:回程只把官方名还原成这里真的出现过的客户端名,
+    // 不造下游不认识的别名(见 unmapToolCallsInBody 的[本次声明]过滤).
+    declaredToolNames: declaredToolNames(st.body?.tools),
+    // 本次下游声明的工具 schema:名字还原后参数要按下游形态翻译
+    // (官方 read_files 的 paths -> 下游 read 的 file_path).
+    declaredToolSchemas: declaredToolSchemas(st.body?.tools),
   })
 
   // Best-effort close the run registry row
@@ -68,6 +74,44 @@ export async function runUpstreamTurn(st: any, res: any) {
     })
   }
   return result
+}
+
+/**
+ * 取本次下游请求声明的工具名集合.
+ *
+ * 给回程还原用:只有这里出现过的客户端名才允许被还原出来,否则会造出
+ * 下游不认识的别名(实测 unknown tool "ls").
+ *
+ * @param {any} tools 下游声明的工具数组(OpenAI 形态)
+ * @returns {Set<string>} 工具名集合;无工具时为空集
+ */
+function declaredToolNames(tools: any): Set<string> {
+  const names = new Set<string>()
+  if (!Array.isArray(tools)) return names
+  for (const tool of tools) {
+    const name = tool?.function?.name
+    if (typeof name === 'string' && name) names.add(name)
+  }
+  return names
+}
+
+/**
+ * 取本次下游声明的工具 schema(名字 -> parameters).
+ *
+ * 给回程参数翻译用:按下游自己的 schema 裁剪字段, 避免多一个键就被
+ * additionalProperties: false 整条拒掉.
+ *
+ * @param {any} tools 下游声明的工具数组(OpenAI 形态)
+ * @returns {Record<string, any>} 名字到 parameters 的表;无工具时为空对象
+ */
+function declaredToolSchemas(tools: any): Record<string, any> {
+  const out: Record<string, any> = {}
+  if (!Array.isArray(tools)) return out
+  for (const tool of tools) {
+    const fn = tool?.function
+    if (fn && typeof fn.name === 'string' && fn.name) out[fn.name] = fn.parameters
+  }
+  return out
 }
 
 /**

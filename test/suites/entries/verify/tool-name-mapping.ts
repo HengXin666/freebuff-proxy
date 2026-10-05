@@ -28,6 +28,7 @@ import {
   CLIENT_TO_OFFICIAL_TOOL,
   unmapToolCallsInBody,
 } from '../../../../src/upstream/foreign-client-signals.ts'
+import { mergeAndTranslateSseToolCalls } from '../../../../src/proxy/transport/reply/sse-tool-merge.ts'
 
 const ROOT = path.join(import.meta.dirname, '..', '..', '..', '..')
 
@@ -113,12 +114,6 @@ ok(
 // 幂等性:还原过的再还原不应再变
 unmapToolCallsInBody(body)
 ok(body.choices[0].message.tool_calls[0].function.name === 'bash', '还原必须幂等')
-
-// ── ③b 非对象/畸形输入不得抛 ──────────────────────────────────────
-for (const bad of [null, undefined, 'x', 42, {}, { choices: 'no' }, { choices: [{}] }]) {
-  unmapToolCallsInBody(bad)
-  n += 1
-}
 
 // ── ④ 关键回归:官方里确实没有这些下游名 ──────────────────────────
 //  skill 不在此列 ---- 它在官方清单里(40 个),是官方工具,

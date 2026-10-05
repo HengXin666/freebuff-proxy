@@ -36,7 +36,17 @@ import { logger } from '../../util/log.ts'
  * @returns {Promise<{ upstreamRes: object|null, upstreamErrText: string|null, rpcResponse: boolean }>} RPC 结果
  */
 export async function tryOfficialChannel(ctx: any, args: any) {
-  const { upstream, instanceId, forwardBody, schedulingDeadline, upstreamModel, requestBody, carrierPlan } = args
+  const {
+    upstream,
+    instanceId,
+    forwardBody,
+    schedulingDeadline,
+    upstreamModel,
+    requestBody,
+    carrierPlan,
+    declaredToolNames,
+    declaredToolSchemas,
+  } = args
   let upstreamRes = null
   let upstreamErrText = null
   /** RPC 是否拿到了响应(拿到则调用方跳过 raw 重试循环). */
@@ -89,7 +99,7 @@ export async function tryOfficialChannel(ctx: any, args: any) {
         })
         if (rpc.status) {
           rpcResponse = true
-          upstreamRes = buildUpstreamResponseFromRpc(rpc, carrierPlan)
+          upstreamRes = buildUpstreamResponseFromRpc(rpc, carrierPlan, declaredToolNames, declaredToolSchemas)
           upstreamErrText = rpc.ok ? null : (rpc.text || '')
         }
       }
