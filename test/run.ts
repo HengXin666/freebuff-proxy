@@ -27,6 +27,7 @@ const SUITES = [
   ['catalog-models', 'suites/entries/verify/catalog-models.ts'],
   ['model-mapping-truth', 'suites/entries/verify/model-mapping-truth.ts'],
   ['tool-name-mapping', 'suites/entries/verify/tool-name-mapping.ts'],
+  ['chat-payload-contract', 'suites/entries/verify/chat-payload-contract.ts'],
 ]
 
 let failed = 0

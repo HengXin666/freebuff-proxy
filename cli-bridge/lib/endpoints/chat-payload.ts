@@ -124,6 +124,7 @@ const body = JSON.stringify({
   tool_choice: 'auto',
   stream,
 });
+  return body;
 }
 
 /**
