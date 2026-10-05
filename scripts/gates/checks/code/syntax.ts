@@ -61,8 +61,20 @@ const files = sourceFiles()
 const tsFiles = files.filter((f) => TS_EXT.some((e) => f.endsWith(e)))
 
 if (tsFiles.length > 0) {
-  const tsc = path.join(ROOT, 'node_modules/typescript/bin/tsc')
-  if (!fs.existsSync(tsc)) {
+  /**
+   * tsc 的取值顺序: 先 CHECK_ROOT 下(真实仓库), 再回落到本门禁自己的仓库.
+   *
+   * 回落是负向探针需要的: 探针把夹具建在临时目录(CHECK_ROOT 指过去),
+   * 那里没有 node_modules; 但"能否解析"这件事与 root 在哪无关,
+   * 用本仓的 tsc 解析夹具完全等价. 不回落会让语法探针因为"找不到 tsc"
+   * 而永久失败(正是本轮 CI 红的原因).
+   */
+  const ownRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../..')
+  const tsc = [
+    path.join(ROOT, 'node_modules/typescript/bin/tsc'),
+    path.join(ownRoot, 'node_modules/typescript/bin/tsc'),
+  ].find((p) => fs.existsSync(p))
+  if (!tsc) {
     report.add('node_modules/typescript', 0, '存在 .ts 文件但找不到 typescript（先 npm ci）', 'npm ci')
   } else {
     // --noCheck:只解析不做类型检查,正是本门禁想要的粒度.

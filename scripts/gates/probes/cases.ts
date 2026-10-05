@@ -46,7 +46,7 @@ export const probes = [
     expectIn: ['6 个文件 > 上限 5'],
     run: () => {
       const files = {}
-      for (let i = 0; i < 6; i++) files[`src/a/f${i}.js`] = 'export const x = 1\n'
+      for (let i = 0; i < 6; i++) files[`src/a/f${i}.ts`] = 'export const x = 1\n'
       const dir = fixture(files)
       return { ...runGate('scripts/gates/checks/size/dirs.ts', dir), dir }
     },
@@ -58,7 +58,7 @@ export const probes = [
     reason: '防止边界被误判',
     run: () => {
       const files = {}
-      for (let i = 0; i < 5; i++) files[`src/a/f${i}.js`] = 'export const x = 1\n'
+      for (let i = 0; i < 5; i++) files[`src/a/f${i}.ts`] = 'export const x = 1\n'
       const dir = fixture(files)
       return { ...runGate('scripts/gates/checks/size/dirs.ts', dir), dir }
     },
@@ -250,7 +250,7 @@ export const probes = [
     expectIn: ['语法不可解析'],
     run: () => {
       const files = { 'src/bad.ts': 'const a = {;\n' }
-      for (let i = 0; i < 25; i++) files[`src/ok${i}.js`] = 'export function ok() {\n  return 1\n}\n'
+      for (let i = 0; i < 25; i++) files[`src/ok${i}.ts`] = 'export function ok() {\n  return 1\n}\n'
       const dir = fixture(files)
       return { ...runGate('scripts/gates/checks/code/syntax.ts', dir), dir }
     },
@@ -262,7 +262,7 @@ export const probes = [
     reason: '防误报（门禁对任何输入都报红时，会被整条关掉）',
     run: () => {
       const files = {}
-      for (let i = 0; i < 25; i++) files[`src/ok${i}.js`] = 'export function ok() {\n  return 1\n}\n'
+      for (let i = 0; i < 25; i++) files[`src/ok${i}.ts`] = 'export function ok() {\n  return 1\n}\n'
       const dir = fixture(files)
       return { ...runGate('scripts/gates/checks/code/syntax.ts', dir), dir }
     },

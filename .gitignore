@@ -5,7 +5,8 @@ dashboard/dist/
 dashboard/version.json
 
 # 本地运行数据（Docker 挂载 /data 到宿主机时同样忽略）
-data/
+# 前导 / 锚定仓库根: 不锚定会连测试目录里的同名目录一起忽略.
+/data/
 *.log
 *.pid
 
@@ -53,7 +54,7 @@ Thumbs.db
 .ruff_cache/
 
 # 本地 e2e 测试实例数据（fb-test 容器挂载）
-data-test/
+/data-test/
 
 # bun 运行时（79MB，由 tools/fetch-bun.sh 从官方客户端获取）
 cli-bridge/bun
