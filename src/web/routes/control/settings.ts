@@ -6,6 +6,8 @@
  * 保存后刷新一次设置就变回旧值 ---- 用户看到的现象是"设置保存不了".
  */
 import { sendJson } from '../../../util/http.ts'
+import { TUNABLES } from '../../../config/tunable/specs.ts'
+import { snapshotTunables, specOf, validateValue } from '../../../config/tunable/store.ts'
 import { logger } from '../../../util/log.ts'
 import { envProxyOrNull } from '../lib/helpers.ts'
 import { denyUnlessAdmin } from '../lib/http-codes.ts'
@@ -40,6 +42,19 @@ function readSettings(config: any, settingsStore: any) {
     // 上游请求形态通道('legacy' 默认 / 'official' 照抄官方抓包).
     // 见 src/upstream/official-shape.js
     upstreamChannel: s.upstreamChannel === 'official' ? 'official' : 'legacy',
+    /**
+     * 可调项(24 项, 除 server.host/port 外的全部).
+     *
+     * 与上面 11 个实时字段是两套东西, 不要混:
+     *   - 实时字段: 保存即生效(走 getter);
+     *   - 可调项:   保存后需重启才生效(启动时合并进 config).
+     * 前端必须把这两类分开渲染并分别提示, 否则用户会以为可调项"保存了没反应".
+     *
+     * 值来自 config 现值(已含启动时合并进的可调项), 所以这里回显的就是"当前生效值".
+     */
+    tunables: snapshotTunables(config),
+    /** 可调项的声明(前端据此渲染控件类型/范围/分组), 与后端校验同一真源. */
+    tunableSpecs: TUNABLES,
   }
 }
 
@@ -120,6 +135,35 @@ function buildPatch(body: any, res: ServerResponse) {
 }
 
 /**
+ * 从请求体挑出"可调项"(点分路径)并按声明校验.
+ *
+ * 与实时字段的关系: 两类写入同一个 settings.json, 但生效方式不同 ----
+ * 实时字段存入即生效(走 getter), 可调项要等下次启动合并进 config.
+ * 因此响应里必须分别回报, 前端才能给出准确提示(哪些已生效/哪些要重启).
+ * @param {any} body 请求体
+ * @param {import('node:http').ServerResponse} res
+ * @returns {Record<string, any> | null} 合法可调项; 有非法值时为 null(已写 400)
+ */
+function buildTunablePatch(body: any, res: ServerResponse) {
+  const patch: Record<string, any> = {}
+  for (const [k, v] of Object.entries(body || {})) {
+    if (!k.includes('.')) continue
+    const spec = specOf(k)
+    if (!spec) {
+      sendJson(res, 400, { error: `未知配置项: ${k}` })
+      return null
+    }
+    const err = validateValue(spec, v)
+    if (err) {
+      sendJson(res, 400, { error: err })
+      return null
+    }
+    patch[k] = v
+  }
+  return patch
+}
+
+/**
  * settings / config 端点.
  *
  * @param {string} method HTTP 方法
@@ -159,15 +203,30 @@ export async function handle(
       sendJson(res, 400, { error: '无效的 JSON' })
       return true
     }
+    // 可调项(点分路径)按声明校验; 有非法值即已写出 400 并返回 null.
+    const tunablePatch = buildTunablePatch(body, res)
+    if (!tunablePatch) return true
     const patch = buildPatch(body, res)
     if (!patch) return true
-    if (!Object.keys(patch).length) {
+    if (!Object.keys(patch).length && !Object.keys(tunablePatch).length) {
       sendJson(res, 400, { error: '没有可保存的设置项' })
       return true
     }
-    const settings = settingsStore.save(patch)
-    logger.info('runtime settings updated via web', settings)
-    sendJson(res, 200, { ok: true, ...settings })
+    const settings = Object.keys(patch).length ? settingsStore.save(patch) : settingsStore.get()
+    const savedTunables = Object.keys(tunablePatch).length
+      ? settingsStore.saveTunables(tunablePatch)
+      : settingsStore.savedTunables()
+    logger.info('runtime settings updated via web', {
+      live: Object.keys(patch),
+      tunables: Object.keys(tunablePatch),
+    })
+    sendJson(res, 200, {
+      ok: true,
+      ...settings,
+      tunables: savedTunables,
+      // 显式告诉前端: 可调项是否要重启 ---- 前端据此弹提示, 而不是自己猜.
+      restartRequired: Object.keys(tunablePatch).length > 0,
+    })
     return true
   }
 

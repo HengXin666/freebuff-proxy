@@ -9,6 +9,8 @@
  */
 import path from 'node:path'
 
+import { applySavedSettings } from '../../../src/config/tunable/store.ts'
+
 import { logger } from '../../../src/util/log.ts'
 import { UserStore } from '../../../src/web/store/session/user-store.ts'
 import { WebSessionStore } from '../../../src/web/store/session/session-store.ts'
@@ -40,6 +42,26 @@ export function openConsoleStores(dataDir: string, config: any) {
   // 前端[代理设置]管理的全局代理池(优先于 config.yaml 的 upstream.proxies)
   const proxyStore = new ProxyStore(path.join(dataDir, 'proxies.json'))
   const settingsStore = new SettingsStore(path.join(dataDir, 'settings.json'))
+  /**
+   * 把控制台已保存的可调项合并进 config.
+   *
+   * 用户裁决(2026-10-05): config.yaml 只留 server.host/port, 其余全部在前端
+   * 设置页可调, 生效方式 = 保存后重启. 所以"生效"就发生在这一刻 ---- 合并之后,
+   * 全仓 config.limits.* / config.session.* 的读取点一行都不用改.
+   *
+   * 合并必须在 buildAppContext 之前(它读 config 建各 store), 也必须在本函数内
+   * (settingsStore 刚构造完, 值已从盘上读回). 拒绝项要报出来: 静默回落会让
+   * 用户"设置了但没生效"却毫无线索.
+   */
+  const applied = applySavedSettings(config, settingsStore.savedTunables())
+  if (applied.rejected.length) {
+    logger.warn('部分可调项取值非法, 已回落到 config 默认值', {
+      rejected: applied.rejected,
+    })
+  }
+  if (applied.applied.length) {
+    logger.info('已应用控制台保存的可调项', { count: applied.applied.length })
+  }
   // 前端[模型管理]管理的自定义模型列表(覆盖/扩展内置目录)
   const modelStore = new ModelStore(path.join(dataDir, 'custom-models.json'))
   if (proxyStore.list().length) {

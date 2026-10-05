@@ -183,4 +183,25 @@ export default {
     en: 'Idle release disabled (sessions live until they expire) · at most {max} new sessions per request',
   },
 
+  // ---- 系统设置：全部可调项（config.yaml 里除 host/port 外的项）----
+  'tunables.title': { 'zh-CN': '全部配置项', en: 'All configuration' },
+  'tunables.hint': {
+    'zh-CN': '除监听地址与端口外的全部配置项都在这里调整，保存在 /data/settings.json',
+    en: 'Every setting except the listen address/port lives here, saved to /data/settings.json',
+  },
+  'tunables.restartNote': {
+    'zh-CN': '⚠️ 本区改动需重启服务后生效（保存不会立即应用）',
+    en: '⚠️ Changes in this section take effect after a restart (saving does not apply them immediately)',
+  },
+  'tunables.savedNeedRestart': {
+    'zh-CN': '已保存；重启服务后生效',
+    en: 'Saved; takes effect after restarting the service',
+  },
+  'tunables.groupUpstream': { 'zh-CN': '上游', en: 'Upstream' },
+  'tunables.groupSession': { 'zh-CN': '会话', en: 'Session' },
+  'tunables.groupLimits': { 'zh-CN': '限额', en: 'Limits' },
+  'tunables.groupLogging': { 'zh-CN': '日志', en: 'Logging' },
+  'tunables.groupWeb': { 'zh-CN': '控制台', en: 'Console' },
+  'tunables.groupUsers': { 'zh-CN': '用户', en: 'Users' },
+  'tunables.groupServer': { 'zh-CN': '服务', en: 'Server' },
 }

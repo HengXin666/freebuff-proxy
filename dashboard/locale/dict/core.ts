@@ -14,6 +14,7 @@ export default {
   'hooks.notFunction': { 'zh-CN': 'registerHooks: {name} 不是函数(传进来的是 {type})', en: 'registerHooks: {name} is not a function (got {type})' },
   'hooks.notRegistered': { 'zh-CN': '跨视图回调未注册: {name}(检查装配层的 registerHooks)', en: 'Cross-view callback not registered: {name} (check registerHooks wiring)' },
   'common.save': { 'zh-CN': '保存', en: 'Save' },
+  'common.saved': { 'zh-CN': '已保存', en: 'Saved' },
   'common.delete': { 'zh-CN': '删除', en: 'Delete' },
   'common.refresh': { 'zh-CN': '刷新', en: 'Refresh' },
   'common.loading': { 'zh-CN': '加载中…', en: 'Loading…' },

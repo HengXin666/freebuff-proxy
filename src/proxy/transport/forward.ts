@@ -85,11 +85,11 @@ export async function forwardCompletions(
       // 其余 12 个是传输层).我们此前没传 → 少一个指纹面.
       userId: upstream.accountId || undefined,
     }),
-    //  **不要带** x-freebuff-instance-id。
+    //  不要带 x-freebuff-instance-id。
     //
     // 2026-10-03 抓包复核（docs/reverse/15-protocol-review.md）证明：
     // 官方 chat 头部恒为 8 项，8 个样本逐个校验 diff 为空集，
-    // **没有** x-freebuff-instance-id / -client / -model /
+    // 没有 x-freebuff-instance-id / -client / -model /
     // -catalog-protocol / -install-id —— 那些是 admission 用的。
     // 实例标识只走 codebuff_metadata.freebuff_instance_id（已在）。
     //

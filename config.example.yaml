@@ -1,101 +1,14 @@
-# freebuff-proxy — 配置文件（Docker 部署时位于 /data/config.yaml）
+# freebuff-proxy — 配置文件示例(Docker 部署时复制为 /data/config.yaml)
+#
+# 这里**只有**监听地址与端口. 其余全部配置项都在控制台[系统设置]页可调
+# (保存后重启生效), 落盘在 <data_dir>/settings.json ---- 因此**不需要**在这里
+# 维护一份"可调项清单": 清单的真源是 src/config/tunables.ts, 页面按它渲染.
+#
+# 为什么只留这两项(用户裁决 2026-10-05):
+#   host/port 决定了"控制台在哪里", 是启动前就必须知道的东西 ---- 先有它
+#   才能打开页面去调别的. 其余项若也留在这里, 就会出现"同一个值两个入口"
+#   (改文件 vs 改页面), 而谁能赢取决于加载顺序.
 server:
-  # Docker 部署请用 0.0.0.0（compose 已通过 FREEBUFF_PROXY_HOST 注入）
+  # Docker 部署请用 0.0.0.0(compose 已通过 FREEBUFF_PROXY_HOST 注入)
   host: 127.0.0.1
   port: 8787
-  # 超级 API Key（可多个）。下游 Agent 也可用 Web 用户自己的 Key。
-  # 留空 + 非 loopback 绑定时会要求至少存在一个 Web 用户，否则拒绝启动。
-  api_keys: ["sk-proxy-local"]
-  # 所有持久化数据（凭据/用户/会话/登录流程）——Docker 里固定 /data
-  data_dir: ./data
-
-upstream:
-  # ⚠️ api_base 已**硬编码**在代码里（src/config.ts 的 UPSTREAM_API_BASE），
-  # 不再从配置读取 —— 配置文件里即便写了也一律忽略。
-  # 原因：本文件此前写的是 https://codebuff.com（少 www），全新容器复制它后
-  # 所有上游请求 401、控制台误报「凭证失效」，而凭证本身完全有效。
-  # 上游地址不是可调项，写进配置只会给出错的机会。
-  login_base: https://freebuff.com
-  # 默认 <data_dir>/credentials（<email>.json / 每账号一个）
-  # credentials_dir: ./credentials
-  # 显式上游代理，如 http://user:pass@127.0.0.1:7890；不配则读 HTTP(S)_PROXY/NO_PROXY 环境变量
-  # proxy: http://127.0.0.1:7890
-  # 全局代理池（多代理）：账号按稳定哈希分配到池内某个代理，保持 session IP 稳定；
-  # 连接失败自动回落到池内下一个。优先级：账号显式 proxy > 本池 > 上面单代理 > 环境变量
-  # proxies:
-  #   - http://user:pass@127.0.0.1:7890
-  #   - socks5://127.0.0.1:1080
-
-web:
-  # 通过 HTTPS 反向代理访问时设为 true
-  cookie_secure: false
-  # Web 登录会话有效期（小时）
-  session_ttl_hours: 168
-
-users:
-  # 首次启动自动创建的管理员（也可用 ADMIN_USERNAME/ADMIN_PASSWORD 环境变量）
-  default_admin_username: admin
-  # 留空则随机生成密码，仅在首次启动日志中打印一次
-  default_admin_password: null
-
-session:
-  release_on_shutdown: true
-  re_admit_on_expire: true
-  # 会话剩余时间低于该值（秒）时不再承接新请求，提前 re-admit 换新会话，
-  # 避免请求发到马上过期的会话上、中途卡住（切换流量更平滑）。
-  # 付费模型（premium）适用：付费会话每次 admit 都计费，尽量用到接近过期
-  re_admit_lead_sec: 60
-  # 免费模型（pool 非 premium）的提前切换阈值（秒）：会话剩余不足该值时
-  # 不再调度到该会话上，提前 re-admit 换全新会话（默认 60s = 1 分钟）。
-  # 2026-09 计费：admit 一次 = **买断一小时**（整小时单价当场预扣，回执带 expiresAt）。
-  # 所以尽量少换、能复用就复用（见 docs/design/account-scheduling-and-refund.md §3）。
-  free_model_re_admit_lead_sec: 60
-  poll_interval_sec: 30
-  admit_timeout_ms: 30000
-  # 空闲自动释放（秒，控制台「额度保护」可调，保存立即生效）：
-  # ⚠️ **已付费时段内不释放**（2026-09-14 一手实测后改）：
-  #   admit 买断整小时 → 这一小时内继续用**边际成本为 0**；
-  #   而 DELETE 之后那一小时就作废，重开 = 重新买一整小时。
-  #   实测早退只回 freebucksRefundPending，2 分钟内未到账；而 units 那本账是当场退的。
-  #   又因为实测 24 个「账号 × 模型」组合里 22 个是 Freebucks 先见底，
-  #   早退等于拿稀缺的账去省不稀缺的账（见 docs/design/freebucks-strategy.html）。
-  # 因此本项是**付费时段结束之后**的空闲释放时长：过期后尽快腾槽位给别的模型。
-  # 默认 60s（控制台可调 5s..24h）；0 = 关闭（会话留到自然过期，代价是换模型要等）
-  idle_release_sec: 60
-
-limits:
-  max_concurrent_requests: 32
-  # 每个账号同一时间最多转发的 SSE 响应流数（账号并发，默认 2）。
-  # 粘性调度下它是"溢出"阈值：并发请求先挤同一账号（换号 = 多买一条 Freebucks
-  # 计费会话），达到上限后才溢出到下一个账号（已用过的账号优先，未用过的排最后）。
-  # 建议在控制台「账号调度」里调整，保存立即生效、无需重启
-  account_max_concurrency: 2
-  upstream_timeout_sec: 600
-  # 上游流式响应 body idle 超时（秒）：上游发了响应头后长时间不再吐数据
-  # （幽灵连接）→ 主动掐断/换号，避免连接永远挂着。默认 60s——网络不稳定
-  # 的上游 1 分钟不吐数据就该切换；慢思考模型思考期可能 >30s 才出首包，别设太小。
-  stream_idle_timeout_sec: 60
-  # 账号级串行化：一个账号同一时间只处理一个 chat；超过该等待时长(ms)后换号
-  account_chat_wait_ms: 120000
-  max_auto_retry_on_session_error: 1
-  # 流被掐断（幽灵连接 idle 超时）后账号的短暂冷却（秒）：刚被掐断的账号
-  # 说明上游/网络对它不稳定，短期内让新请求优先去别的账号。0 = 不冷却。
-  stall_cooldown_sec: 30
-  # 一个下游请求最多新建几个上游会话（Freebucks 计费单位，控制台「额度保护」可调）：
-  # 上游按整小时单价预扣、早退按实际占用退还，旧行为报错时把「账号数+1」个账号
-  # 挨个 admit 一遍——一次故障就买断好几条整小时（issue #7）。复用热 session 不消耗预算。
-  # 默认 2 = 首个账号 + 一次换号兜底；0 = 不限制（调试用）
-  max_new_sessions_per_request: 2
-  # 上游 chat 调用前的随机抖动上限（毫秒）：每次请求前等 [0, N) 随机时长，
-  # 打散机器式等间隔节奏（上游风控按请求节奏指纹自动化；参考项目 SAFE_MODE
-  # 默认 200ms）。0 = 关闭（最低延迟）
-  request_jitter_ms: 200
-
-logging:
-  level: info
-  # 进程内日志环形缓冲的条数上限（控制台「日志」页读的就是它）。
-  # ⚠️ 日志**不落盘**（纯内存），所以这个上限就是能回溯的全部深度。
-  # 2026-10-04 教训：默认 500 太小 —— 一次故障十几秒就刷出几百条把它冲爆，
-  # 用户事后想查更早的记录时已无从取证。现在是 5000（约几 MB 内存）。
-  # 0 = 不保留缓冲。
-  ring_cap: 5000

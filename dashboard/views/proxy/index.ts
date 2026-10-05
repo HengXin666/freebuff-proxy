@@ -8,6 +8,7 @@ import {
   buildFreeToolSignatureCard, buildLoadBalanceCard, buildProxyPoolCard,
   buildQuotaProtectionCard, buildStripToolsCard, buildUpstreamChannelCard,
 } from './cards.ts'
+import { buildTunablesCard } from './tunables.ts'
 
 /* ---------------- proxy settings ---------------- */
 export async function renderProxySettings(view: any) {
@@ -34,7 +35,7 @@ export async function renderProxySettings(view: any) {
   }
 
   const signatureEnabled = settings.freeToolSignatureEnabled !== false
-  const toggleAttrs = {
+  const toggleAttrs: Record<string, any> = {
     id: 'free-tool-signature',
     type: 'checkbox',
     class: 'switch-input',
@@ -67,6 +68,9 @@ export async function renderProxySettings(view: any) {
   view.append(buildLoadBalanceCard(schedMode, concurrency, overflowWaitMs))
   view.append(buildQuotaProtectionCard(advice, idleReleaseSec, lowBalanceThreshold, maxNewSessions))
   view.append(buildProxyPoolCard(data))
+  // 可调项卡片(除 server.host/port 外的全部配置项): 与上面各卡不同, 它保存后
+  // 需要重启才生效 ---- 提示由卡片自己渲染, 见 ./tunables.ts 的文档注释.
+  view.append(buildTunablesCard(settings.tunableSpecs, settings.tunables))
 }
 
 

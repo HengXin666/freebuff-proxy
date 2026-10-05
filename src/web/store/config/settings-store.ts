@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { readJsonFileState, noteDataFile } from '../../../util/json-store.ts'
+import { readTunables, writeTunables } from './tunables-store.ts'
+import { LIVE_FIELDS } from './settings-fields.ts'
 
 /** 运行设置字段表; 语义逐项见 DEFAULT_SETTINGS 的注释. */
 interface Settings {
@@ -67,7 +69,7 @@ const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   // 展示,不影响调度(这些号照常参与选号,低额度不等于不能用).默认 15 FB,
   // 0 = 关闭该分组.用户要的是[一眼看到快跑完的号],所以阈值可调.
   lowBalanceThreshold: 15,
-  // 注意：额度保护两项（idleReleaseSec / maxNewSessionsPerRequest）**不写死默认值**
+  // 注意：额度保护两项（idleReleaseSec / maxNewSessionsPerRequest）不写死默认值
   // ——只有用户在控制台保存过才进 settings.json，否则回落 config.yaml
   // （session.idle_release_sec / limits.max_new_sessions_per_request），
   // 这样"config.yaml 只作兜底默认值"的约定才成立。
@@ -149,103 +151,50 @@ export class SettingsStore {
     return { ...this.settings }
   }
 
-  /** @param {{ freeToolSignatureEnabled?: boolean, accountMaxConcurrency?: number }} next */
+  /**
+   * 盘上保存过的可调项原始键值(点分路径 -> 值).
+   *
+   * 与 get() 的区别是刻意的: get() 是运行设置的强类型快照(11 个实时字段,
+   * 有默认值); 本方法是 settings.json 里原样存下的可调项(24 项, 无默认值,
+   * 没保存过就不该覆盖 config.yaml 的兜底). 实现见 ./tunables-store.ts
+   * (为什么分开写在那里).
+   * @returns {Record<string, any>} 已保存的可调项(未保存过则为空对象)
+   */
+  savedTunables() {
+    return readTunables(this.file)
+  }
+
+  /**
+   * 保存可调项补丁(原样存盘, 与实时字段共存于同一文件).
+   * @param {Record<string, any>} patch 点分路径 -> 值
+   * @returns {Record<string, any>} 写盘后的可调项
+   */
+  saveTunables(patch: Record<string, any>) {
+    return writeTunables(this.file, patch)
+  }
+
+  /**
+   * 保存实时字段(只写传了的键 ---- 未传的保持原值).
+   *
+   * 判据/范围来自 ./settings-fields.ts 的声明表: 新增字段只加一行声明,
+   * 不会出现"只改了两处判据、漏掉第三处"的形态(那会变成"没传的字段被清零").
+   * @param {Partial<Settings>} next 待保存字段(未传的键不动)
+   * @returns {Settings} 保存后的全量设置
+   */
   save(next: Partial<Settings>) {
-    if (next?.freeToolSignatureEnabled !== undefined) {
-      if (typeof next.freeToolSignatureEnabled !== 'boolean') {
-        throw new TypeError('freeToolSignatureEnabled must be a boolean')
-      }
-      this.settings.freeToolSignatureEnabled = next.freeToolSignatureEnabled
-    }
-    if (next?.stripToolsOnSchemaRejection !== undefined) {
-      if (typeof next.stripToolsOnSchemaRejection !== 'boolean') {
-        throw new TypeError('stripToolsOnSchemaRejection must be a boolean')
-      }
-      this.settings.stripToolsOnSchemaRejection =
-        next.stripToolsOnSchemaRejection
-    }
-    if (next?.accountMaxConcurrency !== undefined) {
-      if (
-        !Number.isInteger(next.accountMaxConcurrency) ||
-        next.accountMaxConcurrency < 1
-      ) {
-        throw new TypeError('accountMaxConcurrency must be an integer >= 1')
-      }
-      this.settings.accountMaxConcurrency = clampConcurrency(
-        next.accountMaxConcurrency,
-      )
-    }
-    if (next?.upstreamChannel !== undefined) {
-      if (next.upstreamChannel !== 'official' && next.upstreamChannel !== 'legacy') {
-        throw new TypeError("upstreamChannel must be 'legacy' or 'official'")
-      }
-      this.settings.upstreamChannel = next.upstreamChannel
-    }
-    if (next?.accountSchedulingMode !== undefined) {
-      if (
-        next.accountSchedulingMode !== 'sticky' &&
-        next.accountSchedulingMode !== 'spread'
-      ) {
-        throw new TypeError("accountSchedulingMode must be 'sticky' or 'spread'")
-      }
-      this.settings.accountSchedulingMode = next.accountSchedulingMode
-    }
-    if (next?.accountOverflowWaitMs !== undefined) {
-      if (!Number.isInteger(next.accountOverflowWaitMs)) {
-        throw new TypeError('accountOverflowWaitMs must be an integer')
-      }
-      this.settings.accountOverflowWaitMs = clampOverflowWait(
-        next.accountOverflowWaitMs,
-      )
-    }
-    if (next?.blockPremiumModels !== undefined) {
-      if (typeof next.blockPremiumModels !== 'boolean') {
-        throw new TypeError('blockPremiumModels must be a boolean')
-      }
-      this.settings.blockPremiumModels = next.blockPremiumModels
-    }
-    if (next?.cliTelemetryEnabled !== undefined) {
-      if (typeof next.cliTelemetryEnabled !== 'boolean') {
-        throw new TypeError('cliTelemetryEnabled must be a boolean')
-      }
-      this.settings.cliTelemetryEnabled = next.cliTelemetryEnabled
-    }
-    if (next?.lowBalanceThreshold !== undefined) {
-      if (
-        !Number.isInteger(next.lowBalanceThreshold) ||
-        next.lowBalanceThreshold < 0
-      ) {
-        throw new TypeError('lowBalanceThreshold must be an integer >= 0')
-      }
-      this.settings.lowBalanceThreshold = clampLowBalance(
-        next.lowBalanceThreshold,
-      )
-    }
-    if (next?.idleReleaseSec !== undefined) {
-      if (!Number.isInteger(next.idleReleaseSec) || next.idleReleaseSec < 0) {
-        throw new TypeError('idleReleaseSec must be an integer >= 0')
-      }
-      this.settings.idleReleaseSec = clampIdleReleaseSec(next.idleReleaseSec)
-    }
-    if (next?.maxNewSessionsPerRequest !== undefined) {
-      if (
-        !Number.isInteger(next.maxNewSessionsPerRequest) ||
-        next.maxNewSessionsPerRequest < 0
-      ) {
-        throw new TypeError('maxNewSessionsPerRequest must be an integer >= 0')
-      }
-      this.settings.maxNewSessionsPerRequest = clampNewSessions(
-        next.maxNewSessionsPerRequest,
-      )
+    for (const [key, value] of Object.entries(next || {})) {
+      if (value === undefined) continue
+      const spec = LIVE_FIELDS[key]
+      // 未知键一律拒绝而不是静默忽略: 拼错字段名却"保存成功"是最难查的一类.
+      if (!spec) throw new TypeError(`未知的运行设置字段: ${key}`)
+      const r = spec.normalize(value)
+      if (!r.ok) throw new TypeError(`${key} ${r.message}`)
+      ;(this.settings as any)[key] = r.value
     }
     const settings = { ...this.settings }
     fs.mkdirSync(path.dirname(this.file), { recursive: true })
     const tmp = `${this.file}.tmp`
-    fs.writeFileSync(
-      tmp,
-      JSON.stringify({ version: 1, ...settings }, null, 2),
-      { mode: 0o600 },
-    )
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, ...settings }, null, 2), { mode: 0o600 })
     fs.renameSync(tmp, this.file)
     this.settings = settings
     return this.get()

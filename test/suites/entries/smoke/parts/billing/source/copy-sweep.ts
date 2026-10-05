@@ -30,10 +30,6 @@ import { fileURLToPath } from 'node:url'
     new URL('../../../../../../../src/config/defaults.ts', import.meta.url),
     'utf8',
   )
-  const yamlSrc = fs.readFileSync(
-    new URL('../../../../../../../config.example.yaml', import.meta.url),
-    'utf8',
-  )
   // 控制台样式已按加载阶段拆成 dashboard/css/*.css(见
   // .agents/notes/implemented/architecture/2026-10-05-dashboard-split-locale-and-css.md).
   // 这里读整个目录并拼接, 而不是钉死单文件: 断言要检查的是"某条样式规则
@@ -108,16 +104,39 @@ import { fileURLToPath } from 'node:url'
         `见 docs/design/account-scheduling-and-refund.md §3)`,
     )
   }
-  // idleReleaseSec 现在是付费时段结束之后的空闲释放时长(付费时段内一律不释放,
-  // 见 session-manager._armIdleRelease).保持 60s:过期后尽快腾槽位给别的模型.
-  assert.ok(
-    /idleReleaseSec:\s*60/.test(cfgSrc),
-    'config.js 的 idleReleaseSec 默认应为 60s(付费时段结束后的空闲释放)',
+  /**
+   * idleReleaseSec 的默认值必须是 60s(付费时段结束后的空闲释放).
+   *
+   * 判据的真源已随配置重构改变(2026-10-05): config.yaml 只留 server.host/port,
+   * 其余项的默认值真源 = src/config/defaults.ts 的 DEFAULTS. 所以这里不能再读
+   * yaml 文本(那个键已不在 yaml 里), 而要读 DEFAULTS 的实际值 ----
+   * 不变式(默认 60s)没变, 变的是它存放在哪.
+   *
+   * 为什么读真值而不是 grep 源码文本: grep 只证明"某处写着 60", 而读 DEFAULTS
+   * 证明"运行时真的会得到 60"(默认值被改成别的数字立刻变红).
+   */
+  const { DEFAULTS } = await import('../../../../../../../src/config/defaults.ts')
+  assert.equal(
+    DEFAULTS.session.idleReleaseSec,
+    60,
+    'DEFAULTS.session.idleReleaseSec 默认应为 60s(付费时段结束后的空闲释放)',
   )
-  assert.ok(
-    /idle_release_sec:\s*60/.test(yamlSrc),
-    'config.example.yaml 的 idle_release_sec 默认应为 60s',
+  /**
+   * 并且它必须前端可调 ---- 否则"除 host/port 外全部前端可调"这条约定就被破了.
+   *
+   * 注意它走的是实时通道而不是可调项表: 这一项保存在 settings.json 的裸名键
+   * idleReleaseSec 上, 由 /api/settings 的实时字段直接读写, 保存即生效
+   * (比可调项的"保存后重启"体验更好). 因此判据要查的是"两个通道里有任一个管它",
+   * 而不是"必须出现在可调项表里" ---- 那会把更好的那条通道判成违规.
+   */
+  const { TUNABLES } = await import('../../../../../../../src/config/tunable/specs.ts')
+  const { LIVE_FIELDS } = await import(
+    '../../../../../../../src/web/store/config/settings-fields.ts'
   )
+  const covered =
+    TUNABLES.some((t: any) => t.path === 'session.idleReleaseSec') ||
+    Object.prototype.hasOwnProperty.call(LIVE_FIELDS, 'idleReleaseSec')
+  assert.ok(covered, 'session.idleReleaseSec 必须前端可调(实时字段或可调项二者其一)')
   // 退款追问仍是常驻行为:pending 期间要靠重放 DELETE 取回执.实测确认
   // pending 在本小时内不落地(所以不能把它当成"钱会回来"来决策释放时机),
   // 但句柄不能丢--丢了连追问的机会都没有.

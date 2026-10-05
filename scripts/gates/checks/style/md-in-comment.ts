@@ -107,7 +107,7 @@ for (const rel of list) {
     // 判据 3:星号组必须成对.
     //
     // 必须先把"路径写法里的 **"剔掉再数,否则会误报:本仓注释大量出现
-    // .agents/skills/**  src/web/**  dashboard/**(表示"该目录下全部"),
+    // .agents/skills/  src/web/  dashboard/**(表示"该目录下全部"),
     // 那是路径不是加粗标记.误报比漏报更能杀掉一条门禁 ---- 实测这四处把
     // 5 个正确的注释判成了违规.
     const body = c.text
