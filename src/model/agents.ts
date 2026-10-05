@@ -2,7 +2,7 @@
  * agent 推导与模型标识助手(纯函数 + agent 索引).
  *
  * 依赖方向:本文件只依赖 catalog-store,不反向依赖对外清单/过滤器 --
- * 否则会形成 available <-> agents 的循环 import.见 dependency-graph 文档.
+ * 否则会形成 available <-> agents 的循环 import(依赖方向靠本注释约束, 无独立文档).
  *
  * 从 src/model.ts 拆出(原 758 行单文件).
  */

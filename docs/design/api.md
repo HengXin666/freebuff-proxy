@@ -1,6 +1,6 @@
 # 下游 Agent 接入与开放 API
 
-> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 最后核对: 2026-10-05 · 对应代码: 94902a4
 > 真源: api
 > 本文是 [freebuff-proxy](../README.md) 的详细文档之一。chat/completions 行为、全部路由表、开放 API 批量导入/删除账号。
 > 快速上手 / 一键部署请看 [主页 README](../README.md)。

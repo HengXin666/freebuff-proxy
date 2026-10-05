@@ -1,6 +1,6 @@
 # 退款复测原始日志（2026-09-13）
 
-这一目录是**实证留档**，用来支撑/证伪 `docs/account-scheduling-and-refund.md` §3 关于
+这一目录是**实证留档**，用来支撑/证伪 `docs/design/account-scheduling-and-refund.md` §3 关于
 「早退 DELETE 是否退还 Freebucks」的结论。**不要删**——这个结论已经反复三次，
 下一次想改这个结论的人必须能读到当时的原始数据。
 

@@ -1,6 +1,6 @@
 # 截图生成器（README 用）
 
-> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 最后核对: 2026-10-05 · 对应代码: 94902a4
 > 真源: screenshots
 > 本文是 [freebuff-proxy](../README.md) 的详细文档之一。
 > 说明 `docs/images/*.webp` 这四张 README 截图是怎么生成、怎么复现的。
@@ -41,7 +41,7 @@ mkdir -p /tmp/fb-shots/shots /tmp/fb-shots/data/credentials
 node scripts/capture/screenshot-mock-upstream.ts 18999 &
 
 # 2. 写演示配置 + 占位凭据（authToken 用 tok-alice/tok-bob/tok-carol，与 mock 对应）
-#     上游主机**不可配**（config.yaml 的 api_base 会被硬编码真源覆盖，见 docs/configuration.md）。
+#     上游主机**不可配**（config.yaml 的 api_base 会被硬编码真源覆盖，见 docs/guide/configuration.md）。
 #    指向 mock 上游的唯一口是环境变量 FREEBUFF_UPSTREAM_API_BASE（src/config.ts:381）。
 cat > /tmp/fb-shots/config.yaml <<'YAML'
 server:
@@ -123,4 +123,4 @@ mock 上游按 `x-codebuff-api-key` 头部识别账号，返回对应处境：
 ## 相关
 
 - 控制台整体说明见 **[Web 控制台](web-console.md)**
-- 账号池调度与额度口径见 **[多账号池与调度](scheduling.md)**
+- 账号池调度与额度口径见 **[多账号池与调度](../design/scheduling.md)**

@@ -78,7 +78,7 @@ function armVersionSweeper(settingsStore: any): void {
 /**
  * 会话句柄扫尾:把上次进程遗留的句柄 DELETE 掉(进程退出后 instanceId 就没了,
  * 不扫就是"无法寻址的计费孤儿",一直占着上游槽位;见
- * docs/account-scheduling-and-refund.md §3).
+ * docs/design/account-scheduling-and-refund.md §3).
  * @param {any} ctx 应用上下文
  * @returns {void} 只登记异步任务, 不等待
  */
@@ -101,7 +101,7 @@ function sweepOrphanSessions(ctx: any): void {
  * 退款追问:待结算的挂起退款必须持续追,不能只等下次重启.
  *
  * 上游要求用同一个 instanceId 重放 DELETE 才给终态回执,且结算窗口可能跨
- * 分钟级;只扫一次 = 进程活着就永远问不到那笔钱(见 docs/account-scheduling-and-refund.md §3).
+ * 分钟级;只扫一次 = 进程活着就永远问不到那笔钱(见 docs/design/account-scheduling-and-refund.md §3).
  * 低频(5 分钟),有界(30s 预算),unref(不挡进程退出).
  * @param {any} ctx 应用上下文
  * @returns {void} 只登记定时器, 不等待

@@ -139,7 +139,7 @@ export class AccountRuntimes {
    *  必须周期性调用,不能只在启动时调一次. 上游对"提前结束"的会话会回
    * freebucksRefundPending: true----它的语义是"最终用量还没算完,用同一个 instance
    * 再问一次回执",不是"不退"(这层误解曾让我们得出错误结论并发版,见
-   * docs/account-scheduling-and-refund.md §3 的纠错).官方客户端在 pending 期间
+   * docs/design/account-scheduling-and-refund.md §3 的纠错).官方客户端在 pending 期间
    * 每 3 秒重放直到拿到终态;只在启动时扫一次 = 进程不重启就再也没人问过,
    * 那笔已经预扣的 Freebucks 会一直挂在 pending 里.
    * @param {{budgetMs?: number}} [opts] 本次扫尾的总预算(启动路径必须传,

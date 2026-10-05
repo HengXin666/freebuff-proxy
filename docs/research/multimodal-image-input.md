@@ -1,6 +1,6 @@
 # Freebuff 多模态（图片输入）支持调研
 
-> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 最后核对: 2026-10-05 · 对应代码: 94902a4
 > 真源: multimodal-research
 > **状态：建议未采纳（截至 2026-10-05）。本文是"可行性调研 + 未执行建议书"，不是已实现说明。**
 > §四 的三条建议经复核**均未实施**：`src/catalog/parser.ts:116` 仍写死 `multimodal: false`；
@@ -23,7 +23,7 @@
    （`cli/src/components/freebuff-model-selector.tsx:1345-1350`）。
 3. **本代理（freebuff-proxy）在数据面上已经是通的**：`messages[].content` 是原样透传的，
    OpenAI 的 `image_url`（含 `data:image/png;base64,...`）会完整转发上游；
-   `free-mode.js` 只重写 **system 消息**，不碰 user/assistant 的 content part。
+   `src/free-mode/system.ts` 只重写 **system 消息**，不碰 user/assistant 的 content part。
    → **下游 Agent 现在就可以发图片请求**。
 4. **三个真实缺口**（本次调研实测出来的，均未修复）：
    - **catalog 同步三元组不一致**：运行时同步从 `CodebuffAI/freebuff` 拉源码，而本地

@@ -5,7 +5,7 @@ Status: implemented
 ## Problem
 
 控制台[额度保护]把[单请求新会话上限]的 `0` 显示成 **不限**(`dashboard/app.ts` 的
-`maxNewSessions \|\| '不限'`),`docs/configuration.md` 写[0 = 不限],API 校验也放行 `0`
+`maxNewSessions \|\| '不限'`),`docs/guide/configuration.md` 写[0 = 不限],API 校验也放行 `0`
 (`src/web/api.ts`:`0..16` 的整数,`0 = 不限制`).
 
 但 `src/proxy.ts` 在构造请求级预算时无条件 `Math.max(0, ...)`,把 `0` 存成了

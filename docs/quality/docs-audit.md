@@ -1,6 +1,6 @@
 # 文档审计：盘点、真矛盾、淘汰与规范（2026-10-05）
 
-> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 最后核对: 2026-10-05 · 对应代码: 94902a4
 > 本文件是 **WS-E 一轮文档整理的取证与决策留档**。它是审计报告（会故意引用错误说法作反例），
 > 因此被 `scripts/gates/checks/doc/check-docs.ts` **排除在判据之外**。
 >
@@ -21,19 +21,19 @@
 |---|---|---|---|---|---|---|
 | `README.md` | 快速上手 + 能力总览 |  1 处 | 路由表与 `api.md` 部分重叠（可接受） | — | **就地修** | L107 退款口径错（见 §2.2） |
 | `docs/README.md` | **索引与真源声明** |  本轮新建 | — | — | **保留（本轮新增）** | 之前没有"哪个主题看哪个文件"的真源 |
-| `docs/api.md` | 下游接入 + 本仓路由 |  | 与 README 路由表重叠（README 是摘要） | — | 保留 + 加真源声明 | 端点与 `proxy.js` 逐条对得上（§3 验证） |
-| `docs/configuration.md` | 配置项总表 |  1 处 | — | — | **就地修** | `upstream.api_base` 声称可配（见 §2.3） |
-| `docs/scheduling.md` | 调度 / 额度 / 额度保护 |  **自相矛盾** | 与 `account-scheduling-and-refund.md` 重叠 | — | **就地修** | 同文件 L14 vs L82 互斥（见 §2.1，**最危险**） |
-| `docs/account-scheduling-and-refund.md` | 调度调研与纠错史 |  混合（§3 含已推翻版本） | — | — | **就地修 + 加"读法"头** | §3.5/§3.7 落旧结论（见 §2.6） |
-| `docs/connection-health.md` | 连接治理 |  | — | — | 保留 | 阈值与 `config.js` 一致 |
-| `docs/deployment.md` | 数据持久化 / 镜像 |  1 处 | — | — | **就地修** | `/data` 树漏 3 项，与自身表格打架（见 §2.9） |
-| `docs/development.md` | 命令 / 发版 |  | — | — | 保留 | |
-| `docs/proxy.md` | 代理池 |  | — | — | 保留 | 优先级与 `client.js:108,236` 一致 |
-| `docs/web-console.md` | 控制台 |  | — | — | 保留 | |
-| `docs/screenshots.md` | 截图复现 |  1 处 | — | — | **就地修** | 配方用 `api_base` 指 mock，实测不生效（见 §2.4） |
-| `docs/multimodal-image-input.md` | 图片输入调研 | （**准确**） | — | — | **保留 + 加状态头** | 三条建议实测**确未执行**（见 §2.11） |
-| `docs/freebucks-strategy.html` | 计费策略图解 |  | 结论与 `scheduling.md` 一致 | — | 保留 | 开篇即"不要早退"（正确方向） |
-| `docs/code-quality-landscape.md` | 代码质量全景 |  | — | — | 保留 | 已登记进新索引，未另起重复 |
+| `docs/design/api.md` | 下游接入 + 本仓路由 |  | 与 README 路由表重叠（README 是摘要） | — | 保留 + 加真源声明 | 端点与 `proxy.js` 逐条对得上（§3 验证） |
+| `docs/guide/configuration.md` | 配置项总表 |  1 处 | — | — | **就地修** | `upstream.api_base` 声称可配（见 §2.3） |
+| `docs/design/scheduling.md` | 调度 / 额度 / 额度保护 |  **自相矛盾** | 与 `account-scheduling-and-refund.md` 重叠 | — | **就地修** | 同文件 L14 vs L82 互斥（见 §2.1，**最危险**） |
+| `docs/design/account-scheduling-and-refund.md` | 调度调研与纠错史 |  混合（§3 含已推翻版本） | — | — | **就地修 + 加"读法"头** | §3.5/§3.7 落旧结论（见 §2.6） |
+| `docs/guide/connection-health.md` | 连接治理 |  | — | — | 保留 | 阈值与 `config.js` 一致 |
+| `docs/guide/deployment.md` | 数据持久化 / 镜像 |  1 处 | — | — | **就地修** | `/data` 树漏 3 项，与自身表格打架（见 §2.9） |
+| `docs/guide/development.md` | 命令 / 发版 |  | — | — | 保留 | |
+| `docs/guide/proxy.md` | 代理池 |  | — | — | 保留 | 优先级与 `client.js:108,236` 一致 |
+| `docs/guide/web-console.md` | 控制台 |  | — | — | 保留 | |
+| `docs/guide/screenshots.md` | 截图复现 |  1 处 | — | — | **就地修** | 配方用 `api_base` 指 mock，实测不生效（见 §2.4） |
+| `docs/research/multimodal-image-input.md` | 图片输入调研 | （**准确**） | — | — | **保留 + 加状态头** | 三条建议实测**确未执行**（见 §2.11） |
+| `docs/design/freebucks-strategy.html` | 计费策略图解 |  | 结论与 `scheduling.md` 一致 | — | 保留 | 开篇即"不要早退"（正确方向） |
+| `docs/quality/code-quality-landscape.md` | 代码质量全景 |  | — | — | 保留 | 已登记进新索引，未另起重复 |
 | `docs/protocol-implementation-status.md` | 协议实现状态 |  **整份过期** | 被 `reverse/02` 取代 |  | **删除** | 声称的文件不存在 + 待办全已实现（见 §2.6 证据） |
 | `docs/freebuff-desktop-protocol-reverse.md` | Desktop 协议逆向 |  **整份过期** | 被 `reverse/02` 取代 |  | **删除** | "缺失"整节已不成立（见 §2.7） |
 | `REVERSE_ENGINEERING_SUMMARY.md`（根） | 逆向总结 |  3 处硬错 | 被 `reverse/*` 取代 |  | **删除** | 见 §2.8（已被 `.gitignore` 声明不该入库） |
@@ -47,7 +47,7 @@
 
 ## 2. 真矛盾清单（每条：原文 + 证据）
 
-### 2.1  `docs/scheduling.md` 同文件自相矛盾（**最危险**）
+### 2.1  `docs/design/scheduling.md` 同文件自相矛盾（**最危险**）
 
 ```
 L14-15: 「提前 DELETE 会按**实际占用时长退还**未用部分（2026-09-13 结论反转…）」
@@ -87,7 +87,7 @@ node -e "...STALE_COPY.test(readFileSync('README.md','utf8'))"   # => false（�
 
 → 这是**门禁漏洞**，属 `test/`（WS-D 范围），已转交。文档侧已改对。
 
-### 2.3 `docs/configuration.md:14` 声称 `upstream.api_base` 可配
+### 2.3 `docs/guide/configuration.md:14` 声称 `upstream.api_base` 可配
 
 ```
 原文：「| 上游 API / 登录 URL | `upstream.api_base` / `login_base` |」
@@ -104,7 +104,7 @@ node -e "写入 upstream.api_base=http://127.0.0.1:18999 后 loadConfig()"
 （`merged.upstream.apiBase = stripTrailingSlash(process.env.FREEBUFF_UPSTREAM_API_BASE || UPSTREAM_API_BASE)`
 —— **无条件覆盖**）。裁决（Lead，2026-10-05）：**保持硬编码**，文档侧写清真相。
 
-### 2.4 `docs/screenshots.md:48` 的演示配置**跑不通**
+### 2.4 `docs/guide/screenshots.md:48` 的演示配置**跑不通**
 
 ```
 原文（修改前）：upstream:\n  api_base: http://127.0.0.1:18999
@@ -172,7 +172,7 @@ L96-101「缺失（导致被识别为第三方客户端）」
 只剩"已废弃删除"的说明句 → 再 `git rm --cached REVERSE_ENGINEERING_SUMMARY.md && rm -f`。
 若先删文件，note 门禁（`verify-backlinks`）会因悬空引用变红。
 
-### 2.9 `docs/deployment.md` 的 `/data` 树漏 3 项，与自身表格打架
+### 2.9 `docs/guide/deployment.md` 的 `/data` 树漏 3 项，与自身表格打架
 
 ```
 L9-20 的目录树列了：config / credentials / users / web-sessions / login-flows / catalog-cache
@@ -200,7 +200,7 @@ legacy 通道在 `src/config.ts` 的 `resolveUpstreamChannel()` 里**强制回�
 处置：**保留**（它开头已自标"2026-10-03 的历史盘点快照，判断当前请以 21 为准"，
 且它记录了当时的实测过程），但已在 `docs/README.md` 里把 `21` 标为对照唯一真源。
 
-### 2.11 `docs/multimodal-image-input.md` §4「未执行」**是准确的**（判保留）
+### 2.11 `docs/research/multimodal-image-input.md` §4「未执行」**是准确的**（判保留）
 
 三条建议经复核**确未实施**：
 
@@ -221,7 +221,7 @@ deepseek/deepseek-v4-flash multimodal= false  # 仍是 false
 四条判据（详见脚本头 JSDoc）：
 
 1. **端点双向对账** —— 文档里的 `` `METHOD /path` `` 必须在代码注册；反向，代码注册的对外端点
-   必须在 `docs/api.md` 登记。
+   必须在 `docs/design/api.md` 登记。
 2. **本仓路径存在性** —— 文档里反引号包裹的 `src/` `docs/` `scripts/` 等路径必须真实存在。
    （这条自动拦住了 §2.6 那类"整份过期"文档 —— 它正是靠 `client-headers.js` 不存在被发现的。）
 3. **真源唯一性** —— 扫描 `> 真源: <key>` 标记行，同一 key 不得由两份文档声明。
@@ -241,7 +241,7 @@ deepseek/deepseek-v4-flash multimodal= false  # 仍是 false
 
 ```bash
 $ node scripts/gates/checks/doc/check-docs.ts ; echo "exit=$?"
-  · 端点：对外 8 条 · 控制台 24 条 · docs/api.md 声明 7 条（扫 src/ 全域）
+  · 端点：对外 8 条 · 控制台 24 条 · docs/design/api.md 声明 7 条（扫 src/ 全域）
   · 文件引用：核对 58 处本仓路径（豁免 2 条构建产物）
   · 真源声明：12 个主题（scheduling-research / api / code-quality-landscape / configuration /
     connection-health / deployment / development / multimodal-research / proxy / scheduling /
@@ -255,12 +255,12 @@ exit=0
 **① 改坏一个端点 → 必须红（且双向都报）**
 
 ```bash
-$ sed -i 's|`GET /v1/freebuff/status`|`GET /v1/freebuff/status-v2`|' docs/api.md
+$ sed -i 's|`GET /v1/freebuff/status`|`GET /v1/freebuff/status-v2`|' docs/design/api.md
 $ node scripts/gates/checks/doc/check-docs.ts ; echo "exit=$?"
-  FAIL docs/api.md:41
+  FAIL docs/design/api.md:41
        文档写到的端点 `GET /v1/freebuff/status-v2` 在代码里没有注册
-  FAIL docs/api.md
-       代码注册了对外端点 /v1/freebuff/status，但 docs/api.md 未登记
+  FAIL docs/design/api.md
+       代码注册了对外端点 /v1/freebuff/status，但 docs/design/api.md 未登记
 OVER docs: 2 条违规
 exit=1
 ```
@@ -270,7 +270,7 @@ exit=1
 **② 还原 → 必须绿**
 
 ```bash
-$ cp /tmp/api.final.bak docs/api.md
+$ cp /tmp/api.final.bak docs/design/api.md
 $ node scripts/gates/checks/doc/check-docs.ts ; echo "exit=$?"
   · 索引：登记 39 个链接 / 覆盖 14 份文档
   · 扫描 15 份文档
@@ -288,7 +288,7 @@ $ node scripts/gates/checks/doc/check-docs.ts ; echo "exit=$?"
   FAIL docs/README.md
        README.md 存在但索引未登记（读者找不到它）
   FAIL docs/README.md
-       docs/account-scheduling-and-refund.md 存在但索引未登记（读者找不到它）
+       docs/design/account-scheduling-and-refund.md 存在但索引未登记（读者找不到它）
   …（另 11 条同型）
 OVER docs: 15 条违规
 exit=1
@@ -321,11 +321,11 @@ exit=0
 ```bash
 $ grep -n '复现方式' README.md
 47:截图用 mock 上游 + 无头 Chromium 生成,账号与 API Key 均为占位值并已打码(复现方式).
-#                          ↑ 原文是 `[复现方式](docs/screenshots.md)`，链接语法被整段吃掉
-$ for f in README.md docs/README.md docs/scheduling.md; do grep -c '](' $f; done
+#                          ↑ 原文是 `[复现方式](docs/screenshots.md)`（当时的路径），链接语法被整段吃掉
+$ for f in README.md docs/README.md docs/design/scheduling.md; do grep -c '](' $f; done
 1        # README.md        （原 15）
 0        # docs/README.md   （原 29）
-0        # docs/scheduling.md（原 6）
+0        # docs/design/scheduling.md（原 6）
 $ node scripts/gates/checks/doc/check-docs.ts ; echo "exit=$?"
 ok  docs        ←  报警器在最该响的时候变绿灯
 exit=0
@@ -451,7 +451,7 @@ HEAD 上首节不是 `## Problem` 的 note 数: 4 / 84
   `proxy.js`、`session-manager.js`、`web/settings-store.js`、`app-context.js`）——
   **实现是对的**（`session-manager._armIdleRelease()` 在 `inPaid` 时清计时器），
   只有注释旧。属 `src/`（WS-B），已转报 Lead，本文档侧不越界修改。
-- `docs/freebucks-strategy.html` 第 111 行图例写"方案 A —— **现在的默认**：空闲 60 秒就 DELETE"，
+- `docs/design/freebucks-strategy.html` 第 111 行图例写"方案 A —— **现在的默认**：空闲 60 秒就 DELETE"，
   与现行"付费时段内不释放"相反。**已就地改为"已作废的旧默认"**（见 §2 表格第 4 行口径）。
 - `docs/reverse/15`（P0 清单已被 `16`/`21` 推翻）与 `docs/reverse/17`：
   因 `docs/reverse/**` 在门禁判据之外，**没有机器拦得住它们被当现状引用**。
@@ -461,7 +461,7 @@ HEAD 上首节不是 `## Problem` 的 note 数: 4 / 84
 
 **盲审纠正的两处"我说的数字"**（我复核后确认盲审对）：
 
-- 盲审二报 `docs/account-scheduling-and-refund.md:90` 写"每日池 **100**" —— 实测确认，
+- 盲审二报 `docs/design/account-scheduling-and-refund.md:90` 写"每日池 **100**" —— 实测确认，
   真值 **25**（`captures/2026-10-03-e2/session-official.json` 的 `"daily":{"limit":25}`）。**已改**。
 - 盲审一报 `docs/reverse/21` 的"总次数合计 82" —— 我实测**盲审自己也算错了**：
   该表 15 行数字之和 = **165**（不是 82）。已按实测改写为"165 = 文件行数 / 83 = 去重 / 15 = 路径类型"三种口径并列。

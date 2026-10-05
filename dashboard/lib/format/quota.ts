@@ -29,7 +29,7 @@ export function quotaBadgeClass(m: any) {
  - 口径 = 买断一小时:admit 时按[模型单价(Freebucks/小时)]预扣整小时,
  - 这一小时内可无限复用.提前 DELETE 只回 freebucksRefundPending,实测 2 分钟
  - 内未到账;而 session_units 那本账是当场按比例退的.所以释放时机按[付费时段内
- - 不释放]处理(见 docs/freebucks-strategy.html).
+ - 不释放]处理(见 docs/design/freebucks-strategy.html).
  - 这里不再说"今天用了几次会话",而是直接回答[这个号还能用多久]:
  - 余额 N FB . 单价 N/h . ≈可用 M 分钟 . 今日 剩余/上限
  - 金额单位是 Freebucks,时长单位是分钟(<1 分钟显示秒).

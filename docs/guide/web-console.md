@@ -1,6 +1,6 @@
 # Web 控制台
 
-> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 最后核对: 2026-10-05 · 对应代码: 94902a4
 > 真源: web-console
 > 本文是 [freebuff-proxy](../README.md) 的详细文档之一。登录/找回密码、添加 Freebuff 账号的浏览器回调流程、用户管理。
 > 快速上手 / 一键部署请看 [主页 README](../README.md)。
@@ -53,7 +53,7 @@
 **封禁时间**（`bannedAt`），来自持久化账本 `/data/account-state.json`——重启后依然在，
 所以分区不会因为重启就把老号误判成"从未使用"。账号的**退款流水**（实退 / 应付 / 占用时长）
 也在账号卡片里可见，用于回答"退款到底成没成功、金额对不对"（详见
-[调度文档](scheduling.md#账号状态账本dataaccount-statejson)）。
+[调度文档](../design/scheduling.md#账号状态账本dataaccount-statejson)）。
 
 ### 用户管理（管理员）
 

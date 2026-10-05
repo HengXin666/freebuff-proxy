@@ -85,7 +85,7 @@ export const DEFAULTS: Record<string, any> = {
     reAdmitLeadSec: 60,
     // 免费模型(pool 非 premium)的提前切换阈值(秒):会话剩余不足该值时
     // 不再调度到该会话上,提前 re-admit 换全新会话(默认 60s = 1 分钟).
-    // Freebucks 计费(2026-09,见 docs/account-scheduling-and-refund.md §3):
+    // Freebucks 计费(2026-09,见 docs/design/account-scheduling-and-refund.md §3):
     // 每条 session 按整小时单价预扣,提前 DELETE 会按实际占用时长退还
     // 未用部分(freebucksRefund 回执, pending = 结算未完成,需用同一 instance
     // 重放 DELETE 取回执,不是"不退").所以提前 re-admit 只把当前这条换成新
@@ -103,7 +103,7 @@ export const DEFAULTS: Record<string, any> = {
     // 不对称才关键:实测 24 个[账号 × 模型]组合里 22 个是 Freebucks 先见底,
     // 所以早退等于拿稀缺的账去省不稀缺的账 -- 已付费的这一小时内继续用边际成本为 0.
     // 因此 idleReleaseSec 现在是付费时段结束之后的空闲释放时长;付费时段内
-    // 一律不因空闲释放(见 session-manager._armIdleRelease 与 docs/freebucks-strategy.html).
+    // 一律不因空闲释放(见 session-manager._armIdleRelease 与 docs/design/freebucks-strategy.html).
     // 0 = 关闭释放(会话留到自然过期;代价是换模型要等).
     // 控制台[额度保护]可调(5s..24h).
     idleReleaseSec: 60,
@@ -149,7 +149,7 @@ export const DEFAULTS: Record<string, any> = {
     requestJitterMs: 200,
     // 一个下游请求最多新建几个上游会话(Freebucks 计费单位).
     // 上游按整小时单价预扣:admit 一次就扣整小时单价,但早退 DELETE 会按实际
-    // 占用把未用部分退回来(见 docs/account-scheduling-and-refund.md §3).
+    // 占用把未用部分退回来(见 docs/design/account-scheduling-and-refund.md §3).
     // 旧行为在报错时把[账号数 +1]个账号挨个 admit 一遍 -- 一次故障就同时占用
     // 好几条整小时额度(issue #7).默认 2:首个账号 + 一次换号兜底;复用已有
     // 热 session 不消耗预算.0 = 不限制(仅保留给调试).

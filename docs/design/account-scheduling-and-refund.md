@@ -1,6 +1,6 @@
 # 账号并发 / 调度最优解 / 归还点数 —— 调研与结论
 
-> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 最后核对: 2026-10-05 · 对应代码: 94902a4
 > 真源: scheduling-research
 >  **本文是纠错史 + 现行结论混合体**：§3 含三个已被推翻的中间版本。只看结论请读
 > 「§3 开头读法」与 §3.7；现行真值 = **Freebucks 早退不退，付费时段内不为空闲释放**。
@@ -12,7 +12,7 @@
 >
 > - **官方客户端开源源码** `github.com/CodebuffAI/freebuff`（公开快照；`npm i -g codebuff`
 >   装的 CLI 与 `npm i freebuff` 同源）——但**源码注释描述的是 `session_units` 那本账**，
-> - **本仓库代码**（`src/`、`bin/`）与 **`test/repro-*.mjs`** 复现脚本；
+> - **本仓库代码**（`src/`、`bin/`）与 **`test/tools/repro-*.ts`** 复现脚本；
 > - **线上服务只读探测**：`GET /v1/freebuff/status`（管理员 key，不做任何写操作）；
 > - **rotator 独立账本**：`freebuff-rotator/rotator/LEDGER.md` + `state/ledger.json`。
 >
@@ -42,7 +42,7 @@
 项目里**曾经有过**，后来被撤掉了（见 §2.4）。实测复现：
 
 ```bash
-node test/repro-concurrency.mjs sticky 3 2 16   # 3 个账号、每账号上限 2、16 个并发请求
+node test/tools/repro-concurrency.ts sticky 3 2 16   # 3 个账号、每账号上限 2、16 个并发请求
 ```
 ```
 账号分配: { 'acc-a@example.com': 16 }      ← 16 个请求全在 A 账号
@@ -431,7 +431,7 @@ Amount`` 三态 + 「A zero receipt is a real receipt」**——与我们当年�
 
 **护栏（防回归）**：`test/suites/entries/smoke/smoke.ts` 断言 `idleReleaseSec` 默认 **60s**，
 且 `REFUND-COPY` 全仓扫描**「早退能退 Freebucks / 挂着空闲才花钱」这类已被证伪的说法**；
-同时断言 `sweepPendingRefunds` 与 `serve.js` 的周期调用必须存在（少了它就等于放弃那笔预扣）。
+同时断言 `sweepPendingRefunds` 与 `bin/serve.ts` 的周期调用必须存在（少了它就等于放弃那笔预扣）。
 
 >  该守卫当前**只覆盖一种词序**（`按实际占用退还 Freebucks`）。`README.md` 里的
 > 「按实际占用**时长**退回」曾长期逃过它 —— 2026-10-05 已就地改正，并把该句补进扫描词表。
@@ -440,7 +440,7 @@ Amount`` 三态 + 「A zero receipt is a real receipt」**——与我们当年�
 
 ## 4. 首字节耗时剖析（"首次耗时有点久"到底是哪一段）
 
-复现脚本：`node test/repro-firstbyte.mjs 580 sticky`（580ms = 实测到 `codebuff.com` 的单次 RTT：
+复现脚本：`node test/tools/repro-firstbyte.ts 580 sticky`（580ms = 实测到 `codebuff.com` 的单次 RTT：
 `curl` 实测 connect 0.18s / TLS 0.35s / TTFB **0.578s**）。
 
 **优化前**（每格是"首字节前调用了几次上游"）：
@@ -490,7 +490,7 @@ Amount`` 三态 + 「A zero receipt is a real receipt」**——与我们当年�
 ### 4.2 顺带纠正一个观察误区
 
 mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
-（`proxy.js` 里是 `void finishAgentRun(...)`，**best-effort、不阻塞首字节**），
+（`src/proxy/chat/run/turn.ts` 里是 `void finishAgentRun(...)`，**best-effort、不阻塞首字节**），
 不是重复 START。统计首字节耗时时必须把它排除，否则会误判。
 
 ---
@@ -537,7 +537,7 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 
 | # | 文件 | 改动 |
 | --- | --- | --- |
-| 1 | `docs/scheduling.md` | 修正"并发上限"措辞（它是**溢出阈值**）+ 指向本文 |
+| 1 | `docs/design/scheduling.md` | 修正"并发上限"措辞（它是**溢出阈值**）+ 指向本文 |
 | 2 | `src/web/store/config/settings-store.ts` | 新增 `accountSchedulingMode`（默认 `sticky`）、`accountOverflowWaitMs` |
 | 3 | `src/app-context.ts` | `candidateKeys` 支持 spread 排序；`list()` 暴露新时间字段；`importedAt` 校正 |
 | 4 | `src/session-manager.ts` | 调度时长统计（`schedulingSince` / `scheduledMs`） |
@@ -561,13 +561,13 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 | 1 | `src/config.ts` / `src/web/store/config/settings-store.ts` / `config.example.yaml` | `session.idle_release_sec` 默认值 **600 → 60** |  |
 | 2 | `dashboard/app.ts` | 文案改为「早退按实际占用退还未用时长」，并给出 pending 的准确含义 |  |
 | 3 | `dashboard/app.ts` | `idleReleaseAdvice` 推荐值**反向重算**（60 / 120 / 300s） |  |
-| 4 | `src/*.js` + `docs/*.md` + `config.example.yaml` + `README.md` + `bin/pricing.ts` | 清掉「早退不退 / 整小时买断」的旧口径 |  |
+| 4 | `src/*.ts` + `docs/*.md` + `config.example.yaml` + `README.md` + `bin/pricing.ts` | 清掉「早退不退 / 整小时买断」的旧口径 |  |
 | 5 | `test/suites/entries/smoke/smoke.ts` | `idleReleaseSec` 断言改回 **60s** |  |
 | 6 | `test/suites/entries/smoke/smoke.ts` | `REFUND-COPY` **反向**：现在钉死「早退不退」这类旧说法 |  |
 | 7 | `src/session-handles.ts` | **持久化待结算退款队列** + `sweepPendingRefunds()` |  |
 | 8 | `src/session-manager.ts` | `_replayPendingRefund()` + 30s 追问定时器（1 小时窗口，pending 时入队） |  |
 | 9 | `bin/serve.ts` | 5 分钟一次的常驻扫尾（有界 30s 预算、unref） |  |
-| 10 | `test/suites/entries/smoke/smoke.ts` | 回归：断言 `sweepPendingRefunds` 与 serve.js 的周期调用存在 |  |
+| 10 | `test/suites/entries/smoke/smoke.ts` | 回归：断言 `sweepPendingRefunds` 与 `bin/serve.ts` 的周期调用存在 |  |
 | 11 | `test/tools/repro-refund.ts` | 头部标注：默认参数（3 分钟占用）**不足以区分竞争假设**，需 55 分钟级占用 |  |
 
 #### 推荐值算法（本次已反向重算）

@@ -89,7 +89,7 @@ its receipt"*,即**结算未完成**)读成[不退],就得出了错误的[已结
 ## Testing
 
 - `test/smoke.mjs` (REFUND-COPY):全仓扫描[早退不退 / 不退 Freebucks / 买断整小时]这类旧说法,
-  出现即失败(`docs/account-scheduling-and-refund.md`,`test/smoke.mjs`,`.agents/notes/` 因需要
+  出现即失败(`docs/design/account-scheduling-and-refund.md`,`test/smoke.mjs`,`.agents/notes/` 因需要
   引用旧说法而豁免);并断言 `sweepPendingRefunds`,`serve.js` 周期调用,`idleReleaseSec: 60` 存在.
 - `test/smoke.mjs`:`/api/settings` 未保存过时 `idleReleaseSec === 60`,且落在 5..300 区间.
 - `npm run typecheck`,`npm test` 全过.

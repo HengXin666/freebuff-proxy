@@ -8,6 +8,6 @@
  * 历史上这里是一个 1847 行的单体(createWebApi 1657 行,内部 handle
  * 1366 行),职责是登录/用户/账号/模型/代理/设置/日志/生命周期的全部路由.
  * 拆分只做搬移与去重,不改任何对外行为;路由对账见
- * docs/code-quality/web-api-dependency-graph.md.
+ * 路由按域拆在 ./routes/ 下(每个域一个文件).
  */
 export { createWebApi } from './routes/index.ts'

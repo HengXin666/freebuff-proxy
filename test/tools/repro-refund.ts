@@ -1,7 +1,7 @@
 /**
  - 退款决定性实验:同时测两套账(session units vs Freebucks).
  *
- - 结论(2026-09-13,当天内经历一次反转,见 docs/account-scheduling-and-refund.md §3):
+ - 结论(2026-09-13,当天内经历一次反转,见 docs/design/account-scheduling-and-refund.md §3):
  - 早退 DELETE 会按实际占用比例退还 session units(rateLimitsByModel.recentCount),
  - 并且同样退还 Freebucks 的未用部分----回执 freebucksRefund 是终态金额,
  - freebucksRefundPending 表示结算未完成(要用同一个 instanceId 重放 DELETE 取回执),

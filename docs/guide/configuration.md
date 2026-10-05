@@ -2,11 +2,11 @@
 
 > 本文是 [freebuff-proxy](../README.md) 的详细文档之一。每一项配置的唯一来源总表（Docker 下配置在 /data/config.yaml）。
 > 快速上手 / 一键部署请看 [主页 README](../README.md)。
-> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 最后核对: 2026-10-05 · 对应代码: 94902a4
 > 真源: configuration
 ## 配置参考
 
-Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，完整示例见 [config.example.yaml](../config.example.yaml)）。
+Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，完整示例见 [config.example.yaml](../../config.example.yaml)）。
 
 | 项 | 唯一来源 |
 |----|----------|

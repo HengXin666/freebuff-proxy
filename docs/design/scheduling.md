@@ -2,7 +2,7 @@
 
 > 本文是 [freebuff-proxy](../README.md) 的详细文档之一。粘性优先（drain, not rotate）调度、Freebucks 额度口径、额度保护、工具签名兼容。
 > 快速上手 / 一键部署请看 [主页 README](../README.md)。
-> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 最后核对: 2026-10-05 · 对应代码: 94902a4
 > 真源: scheduling
 ## 多账号池与热 session 优先调度
 
@@ -108,7 +108,7 @@ Freebuff 免费会话是**无状态**的：上游每次请求都会收到**全�
   预占 1.0，提前释放后按**实际占用时长**重算（如 1.1 → 0.2，当场兑现）。
 - **Freebucks 不是当场退还**：提前 DELETE 的回执只带 `freebucksRefundPending`，实测 25s 早退后
   重放 DELETE ×2、观察 2 分钟**仍未到账**。两本账**不对称**——所以空闲早退**只**换回 units 与槽位，
-  **不能**指望拿回 Freebucks（一手实测见 docs/freebucks-strategy.html）。
+  **不能**指望拿回 Freebucks（一手实测见 docs/design/freebucks-strategy.html）。
 - 同样可通过 `GET /v1/freebuff/status` 或 `GET /v1/freebuff/accounts` 拿到每个账号的
   `quota` 与 `freebucks`。
 

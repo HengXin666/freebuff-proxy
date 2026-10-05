@@ -3,7 +3,7 @@
  *
  * 从 device-signing.ts 按职责切出(该方法 58 行, 含完整 HTTP 重试与回执解析).
  * 依赖由调用方以参数注入, 因此不持有 DeviceSigner 实例 ----
- * 这样注册流程可以单独读、单独测, 而不必构造整个签名器.
+ * 这样注册流程可以单独读,单独测, 而不必构造整个签名器.
  */
 import { logger } from '../../util/log.ts'
 import { DEVICE_KEYS_PATH, REGISTER_RETRY_MS, REGISTER_TIMEOUT_MS } from './signing.ts'

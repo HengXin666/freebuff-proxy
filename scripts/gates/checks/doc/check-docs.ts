@@ -3,7 +3,7 @@
  *
  * 每条判据都对应一种真实发生过的文档事故:
  *   1. 文档声称的本仓端点必须在代码里真实注册;反向也查:代码注册的对外端点
- *      必须在 docs/api.md 里有登记(不许有"代码有,文档没有"的暗端点).
+ *      必须在 docs/design/api.md 里有登记(不许有"代码有,文档没有"的暗端点).
  *   2. 文档里引用的本仓文件路径必须存在.事故原型:protocol-implementation-status.md
  *      声称 src/upstream/client-headers.js[已创建],而该文件从未存在(该文档已因此被淘汰).
  *   3. 同一主题不得有两份文档同时声称自己是真源(扫 > 真源: <key> 标记行).
@@ -15,7 +15,8 @@
  * 而误报会把门禁逼成"大家都去加豁免".以下三类刻意不扫,各有理由:
  *   - docs/reverse/:描述的是 Freebuff 上游的端点与文件.那里的 GET /session,
  *     common/src/... 都不是本仓注册/存在的对象,参与判据必然全是误报([命名空间铁律]).
- *   - docs/code-quality/:审计报告会故意引用错误端点与已删文件作反例,参与判据会自噬.
+ *   - docs/quality/docs-audit.md:审计报告会故意引用错误端点与已删文件作反例,参与判据会自噬
+ *     (2026-10-05 文档分类后它在 docs/quality/ 里与全景同处,故排除粒度收窄到该文件).
  *   - .agents/notes/** 与 AGENTS.md:决策记录与最高优先级开发约定,各有自己的门禁
  *     (hx-agent-notes 的 verify-all,pre-commit backlinks),且 note 的路径写法是
  *     相对 note/skill 根(如 scripts/notes-lib.ts),与仓库根相对路径不同源.
@@ -35,8 +36,14 @@ const report = new Report('docs')
 /** 参与判据的文档前缀(白名单;见文件头). */
 const DOC_INCLUDE = ['docs/', 'README.md']
 
-/** 白名单内部再排除的两个目录(见文件头[刻意不扫]). */
-const DOC_EXCLUDE = ['docs/reverse/', 'docs/code-quality/']
+/**
+ * 白名单内部再排除的路径(见文件头[刻意不扫]).
+ *
+ * 2026-10-05 文档分类后,审计报告与工程质量全景同处 docs/quality/,但两者命运不同:
+ * 全景描述现状,该参与全部判据;审计报告会故意引用错误端点与已删文件作反例,
+ * 参与判据必然自噬.所以排除粒度从"docs/code-quality/ 目录"收窄到审计报告本身.
+ */
+const DOC_EXCLUDE = ['docs/reverse/', 'docs/quality/docs-audit']
 
 /**
  * 允许"引用却不存在"的路径 ---- 只登记构建产物/外部资产,每条都要有理由.
@@ -128,22 +135,25 @@ function checkEndpoints() {
           if (!hasRoute(known, p)) {
             report.add(f, i + 1, `文档写到的端点 \`${m[1]} ${m[2]}\` 在代码里没有注册`, '核对 src/ 里的路由注册，或改正文档')
           }
-          if (f === 'docs/api.md' && !p.startsWith('/api/')) inApiDoc.add(p)
+          if (f === 'docs/design/api.md' && !p.startsWith('/api/')) inApiDoc.add(p)
         }
       })
   }
 
-  // 反向:代码注册的对外端点必须在 docs/api.md 登记(/health 是 /healthz 的别名,一并认).
+  // 反向:代码注册的对外端点必须在 docs/design/api.md 登记(/health 是 /healthz 的别名,一并认).
   const alias = { '/health': '/healthz' }
   for (const p of proxyRoutes) {
     if (!p.startsWith('/v1/') && !p.startsWith('/health')) continue
     if (isTemplate(p) || p === '/v1/') continue
     const bare = p.endsWith(':p') ? p.slice(0, -2) : p
     if (!inApiDoc.has(bare) && !inApiDoc.has(alias[bare])) {
-      report.add('docs/api.md', 0, `代码注册了对外端点 ${p}，但 docs/api.md 未登记`, `在路由表里补一行 ${p}`)
+      report.add('docs/design/api.md', 0, `代码注册了对外端点 ${p}，但 docs/design/api.md 未登记`, `在路由表里补一行 ${p}`)
     }
   }
-  report.note(`端点：对外 ${proxyRoutes.size} 条 · 控制台 ${apiRoutes.size} 条 · docs/api.md 声明 ${inApiDoc.size} 条（扫 src/ 全域）`)
+  report.note(
+    `端点：对外 ${proxyRoutes.size} 条 · 控制台 ${apiRoutes.size} 条 · ` +
+      `docs/design/api.md 声明 ${inApiDoc.size} 条（扫 src/ 全域）`,
+  )
 }
 
 /** 判据 2:文档引用的本仓路径必须存在. */

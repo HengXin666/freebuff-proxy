@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url'
 //     内未到账;而 24 个[账号 × 模型]组合里 22 个是 Freebucks 先见底
 // 所以"早退会退还 Freebucks / 挂着空闲会话才花钱"是已被证伪的说法,必须
 // 钉死:用户会照着它去调 idle_release_sec,方向正好是反的.
-// 详见 docs/freebucks-strategy.html 与 docs/account-scheduling-and-refund.md §3.
+// 详见 docs/design/freebucks-strategy.html 与 docs/design/account-scheduling-and-refund.md §3.
 {
   const dashSrc = readDashboardSource()
   // DEFAULTS 已随 config.js 拆分搬进 config/defaults.ts(config.js 只剩薄门面
@@ -50,7 +50,7 @@ import { fileURLToPath } from 'node:url'
     'utf8',
   )
   // 覆盖整个仓库:一开始只扫了 3 个文件,结果 README / bin/pricing.ts /
-  // docs/deployment.md / proxy.js 等 10+ 处漏网--其中 README 与 CLI 输出
+  // docs/guide/deployment.md / proxy.js 等 10+ 处漏网--其中 README 与 CLI 输出
   // 直接给用户看,错了最误导.改为遍历全仓(排除第三方与运行时数据).
   // 2026-09-13 的说法已被 09-14 一手实测推翻:早退 DELETE 不退 Freebucks
   // (只回 freebuffRefundPending;文档 §3.7)
@@ -80,17 +80,17 @@ import { fileURLToPath } from 'node:url'
     const rel = path.relative(root, abs)
     // 本文档(§3/§7)需要引用这些旧说法来解释纠错过程,豁免;
     // smoke 自身含正则字面量,也豁免(它就是这个守卫).
-    if (rel === 'docs/account-scheduling-and-refund.md') continue
+    if (rel === 'docs/design/account-scheduling-and-refund.md') continue
     // 按本文件自己的路径自我豁免, 而不是写死一个字符串:
     // 写死时搬走文件(本轮 test/smoke.mjs -> test/suites/entries/smoke/smoke.ts)
     // 会让豁免失效, 守卫开始扫自己注释里"钉死了哪些说法"的说明 -> 自我命中.
     if (abs === fileURLToPath(import.meta.url)) continue
     // Agent Notes 记录的是历史决策与它的错在哪(本次反转正需要引用旧说法),豁免.
     if (rel.startsWith('.agents/notes/')) continue
-    // docs/code-quality/ 是审计与评审产物,它们的写法就是"把错误说法原样引出来
+    // docs/quality/docs-audit.md 是审计产物,它的写法就是"把错误说法原样引出来
     // 再说明它错在哪"(实测:docs-audit.md 写 错误方向是"早退能省钱").
-    // 与 check-docs.mjs 不扫该目录同源理由:参与判据会自噬.
-    if (rel.startsWith('docs/code-quality/')) continue
+    // 与 check-docs.ts 不扫该目录同源理由:参与判据会自噬.
+    if (rel.startsWith('docs/quality/docs-audit')) continue
     // AGENTS.md 是最高优先级约定,必须一起扫:它一旦写着旧口径,后来的人会直接照着做.
     // CLAUDE.md 只是指向它的符号链接,跳过以免同一内容报两次.
     if (rel === 'CLAUDE.md') continue
@@ -105,7 +105,7 @@ import { fileURLToPath } from 'node:url'
       !hit,
       `${rel} 出现了已被证伪的说法「${hit && hit[0]}」` +
         `(早退 DELETE **会**按实际占用退还 Freebucks；pending = 结算未完成，` +
-        `见 docs/account-scheduling-and-refund.md §3)`,
+        `见 docs/design/account-scheduling-and-refund.md §3)`,
     )
   }
   // idleReleaseSec 现在是付费时段结束之后的空闲释放时长(付费时段内一律不释放,

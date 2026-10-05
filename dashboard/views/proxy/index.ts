@@ -186,7 +186,7 @@ function updateSwitchLabel(input: any) {
 /**
  - [空闲自动释放]推荐值:按当前账号池的真实模型分布算,而不是拍脑袋给个数.
  *
- - 为什么这个值需要权衡(2026-09-14 一手实测后改口径,见 docs/freebucks-strategy.html):
+ - 为什么这个值需要权衡(2026-09-14 一手实测后改口径,见 docs/design/freebucks-strategy.html):
  - - 一次 admit = 买断一小时(当场扣满整小时单价).所以付费时段内闲置不花钱,
  - 释放反而是把已买的钱丢掉----钱这个维度不再支持"越早越好";
  - - 但一个账号同时只能有一条 session,且 session 绑定模型.释放之后再来的请求

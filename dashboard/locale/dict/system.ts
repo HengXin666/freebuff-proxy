@@ -121,8 +121,8 @@ export default {
     en: ', so an early exit trades a scarce ledger for a plentiful one.',
   },
   'system.refundSources': {
-    'zh-CN': '依据：docs/freebucks-strategy.html、docs/account-scheduling-and-refund.md §3（2026-09-14 结论）、docs/evidence/ledger-session-units-vs-freebucks.json',
-    en: 'Sources: docs/freebucks-strategy.html, docs/account-scheduling-and-refund.md §3 (2026-09-14 findings), docs/evidence/ledger-session-units-vs-freebucks.json',
+    'zh-CN': '依据：docs/design/freebucks-strategy.html、docs/design/account-scheduling-and-refund.md §3（2026-09-14 结论）、docs/evidence/ledger-session-units-vs-freebucks.json',
+    en: 'Sources: docs/design/freebucks-strategy.html, docs/design/account-scheduling-and-refund.md §3 (2026-09-14 findings), docs/evidence/ledger-session-units-vs-freebucks.json',
   },
   'system.idleRelease': { 'zh-CN': '空闲自动释放（秒，0 = 关闭；最小 5）', en: 'Idle auto-release (sec, 0 = off; min 5)' },
   'system.lowBalanceThreshold': { 'zh-CN': '低额度分组阈值（FB，0 = 关闭）', en: 'Low-balance group threshold (FB, 0 = off)' },

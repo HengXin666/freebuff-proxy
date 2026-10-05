@@ -13,7 +13,7 @@ import { cleanupOrphans, sweepRefunds } from './session/handles/sweeps.ts'
  * 上游会话句柄的持久化索引(/data/sessions.json).
  *
  * 为什么必须有它:Freebuff 的 session 按整小时单价预扣.现行真值(一手实测,
- * 见 docs/account-scheduling-and-refund.md §3.7):
+ * 见 docs/design/account-scheduling-and-refund.md §3.7):
  *   session_units 当场按实际占用比例退;Freebucks 不退.
  *   回执里的 freebucksRefundPending 表示"结算未完成",不等于"会退钱";
  *   重开同一模型会吃 rate_limited + freebucksShortfall.

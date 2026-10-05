@@ -260,7 +260,7 @@ function clampConcurrency(n: number): number {
 /**
  * 空闲释放:0(关闭)或 5s..24h.
  * 上游按整小时单价预扣,早退 DELETE 会按实际占用把未用部分退回来
- * (2026-09-13 结论反转,见 docs/account-scheduling-and-refund.md §3).所以挂着的
+ * (2026-09-13 结论反转,见 docs/design/account-scheduling-and-refund.md §3).所以挂着的
  * 空闲会话是在花钱,默认值应为[短空闲即释放]的 60s.
  * 下限保留 5s:低于 ~5s 等于把每个回合都切成一条新会话,admit 往返次数暴涨.
  */

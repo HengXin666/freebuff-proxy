@@ -77,5 +77,5 @@ Web Crypto API 的 `exportKey("raw", ...)` 对于 Ed25519 密钥返回 32 字节
 ## Related
 
 - 上游设备签名协议文档:`docs/reverse/02-device-signing.md`(唯一真源,逐字常量 + 载荷 + 两处易错点 + 本机实测值)
-  —— 旧的 `REVERSE_ENGINEERING_SUMMARY.md` 已废弃删除(该摘要里签名字段名与载荷字段数都是错的,见 `docs/code-quality/docs-audit.md`).
+  —— 旧的 `REVERSE_ENGINEERING_SUMMARY.md` 已废弃删除(该摘要里签名字段名与载荷字段数都是错的,见 `docs/quality/docs-audit.md`).
 - 设备密钥存储格式:`data/device-keys/{accountId}.json`

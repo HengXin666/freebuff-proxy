@@ -31,7 +31,7 @@
  - 破坏方式(实测过,见 Agent Note / 交付报告):
  - 把 catalog-protocol.js 的 keyForName() 里
  - const byDigest = this.keyByDigest?.get(freebuffLegacyModelDigest(k))
- - 这一行注释掉,重跑本文件 —— [上游 id → 目录 key]的断言必须变红.
+ - 这一行注释掉,重跑本文件 ---- [上游 id → 目录 key]的断言必须变红.
  - 注意 handleFor() 那条路径用的是另一张表(legacyIndex),所以句柄断言
  - 不该红;红在哪几条本身就是"这条映射挂在哪个索引上"的证据.
  *

@@ -6,7 +6,7 @@
  - 拆模块时如果把 state 拆散到各视图,跨视图读就会退化成"抛事件再同步",
  - 那是把一个普通对象换成一堆时序 bug.
  *
- - 状态归属与读写方向见 docs/code-quality/frontend-dependency-graph.md.
+
  */
 /**
  - 控制台状态对象的类型.

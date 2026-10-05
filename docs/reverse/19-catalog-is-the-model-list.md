@@ -195,8 +195,8 @@ rateLimitsByModel:
 
 ### 次生根因 2:探测只看一个账号
 
-`/v1/models`(`proxy.js handleModels`)与 `/api/models/upstream`
-(`api.js`)都走 `runtimes.getAny()` —— **只探测一个账号**.
+`/v1/models`(`src/proxy/routes/catalog.ts` 的 `handleModels`)与 `/api/models/upstream`
+(`src/web/routes/inventory/models/list.ts`)都走 `runtimes.getAny()` —— **只探测一个账号**.
 而仓库里**已有** `probeAllAccountsSession()` 做逐账号并集(注释里明确写了
 [只看一个号会漏]),就是没被这两个入口用上.
 
@@ -233,7 +233,7 @@ curl -H "Authorization: Bearer <token>" \
 2. `CatalogHolder` 保存**目录行全量**(`displayName` / `premium` / `access` /
    `efforts` / `contextWindow` / `multimodal` / `tagline` / `sortOrder`),
    新增 `rows()` 出口.
-3. 新增 `buildCatalogDrivenModelsResponse()`(model.js):**以目录行为清单**,
+3. 新增 `buildCatalogDrivenModelsResponse()`(`src/catalog-models.ts`):**以目录行为清单**,
    `id` = `displayName`(可读),`freebuff_key` 透出 `m-xxx`,额度/单价挂上去.
 4. `/v1/models`,`/api/models`,`/api/models/upstream` 三个入口全部改目录驱动;
    多账号探测改用 `probeAllAccountsSession()` 并集.

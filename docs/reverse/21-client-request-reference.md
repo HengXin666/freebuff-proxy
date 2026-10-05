@@ -294,7 +294,7 @@ node tools/cdp-ui.ts send  '.composer-input' '<文本>'
 
 判断"是否一致"**必须抓真实报文**。做法：起一个本地镜像，
 用环境变量 `FREEBUFF_UPSTREAM_API_BASE` 把上游主机指向它（**不是** `config.yaml` 的
-`api_base` —— 那个已被硬编码真源覆盖、写了无效，见 `docs/configuration.md` 与 `src/config.ts:381`），
+`api_base` —— 那个已被硬编码真源覆盖、写了无效，见 `docs/guide/configuration.md` 与 `src/config.ts:381`），
 打印收到的原始头。
 
 ```bash

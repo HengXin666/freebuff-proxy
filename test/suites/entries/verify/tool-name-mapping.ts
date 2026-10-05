@@ -53,7 +53,7 @@ const ok = (cond, msg) => {
 
 // ── ① 两侧映射表一致 ──────────────────────────────────────────────
 //  MAP_TOOLS / UNMAP_TOOLS 的实现已随 cli-bridge 拆分搬进
-// cli-bridge/lib/tool-map.ts(upstream.mjs 只剩 import 与委派)——
+// cli-bridge/lib/tool-map.ts(upstream.mjs 只剩 import 与委派)----
 // 判据必须指向真正持有那张表的那一层, 否则读到的文件里没有它, 正则不匹配.
 const bunSrc = fs.readFileSync(path.join(ROOT, 'cli-bridge/lib/tool-map.ts'), 'utf8')
 const m = bunSrc.match(/const MAP_TOOLS = Object\.freeze\(\{([\s\S]*?)\}\)/m)

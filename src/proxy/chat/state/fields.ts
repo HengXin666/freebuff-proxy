@@ -44,7 +44,7 @@ function coreChatFields(ctx: any, req: any, parsed: any) {
     schedulingDeadline: Date.now() + schedulingBudgetMs(ctx),
     /**
      - 本次下游请求允许新建的上游会话数(Freebucks 计费单位).
-     - 上游按整小时单价预扣,早退按实际占用退还(见 docs/account-scheduling-and-refund.md §3),
+     - 上游按整小时单价预扣,早退按实际占用退还(见 docs/design/account-scheduling-and-refund.md §3),
      - 旧行为在报错时把[账号数+1]个账号挨个 admit 一遍,一次故障就买断好几条整小时
      - (issue #7).复用已有热 session 不消耗预算.
      *

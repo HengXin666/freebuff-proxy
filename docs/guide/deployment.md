@@ -1,6 +1,6 @@
 # 部署与运维
 
-> 最后核对: 2026-10-05 · 对应代码: 3a8aebb
+> 最后核对: 2026-10-05 · 对应代码: 94902a4
 > 真源: deployment
 > 本文是 [freebuff-proxy](../README.md) 的详细文档之一。数据持久化（/data 里都有什么）与 GitHub Actions 自动构建镜像的细节。
 > 快速上手 / 一键部署请看 [主页 README](../README.md)。
