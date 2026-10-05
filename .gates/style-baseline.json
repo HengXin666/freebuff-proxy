@@ -73,6 +73,7 @@
     ".agents/notes/implemented/bug-fix/2026-10-04-terminal-exhausted-and-log-ring-cap.md": 22,
     ".agents/notes/implemented/bug-fix/2026-10-04-tool-name-bidirectional-mapping.md": 30,
     ".agents/notes/implemented/bug-fix/2026-10-04-upstream-apibase-hardcoded.md": 16,
+    ".agents/notes/implemented/bug-fix/2026-10-05-ci-checkout-and-probe-fixtures.md": 117,
     ".agents/notes/implemented/feature/2026-09-13-console-system-tab.md": 7,
     ".agents/notes/implemented/feature/2026-09-15-console-readonly-refresh.md": 15,
     ".agents/notes/implemented/feature/2026-09-30-console-log-viewer.md": 17,
