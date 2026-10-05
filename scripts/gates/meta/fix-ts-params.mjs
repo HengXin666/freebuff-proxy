@@ -1,26 +1,26 @@
 /**
- * 给"从 .js 改名而来的 .ts"的参数补内联类型标注（只处理 TS7006）。
+ * 给"从 .js 改名而来的 .ts"的参数补内联类型标注(只处理 TS7006).
  *
  * ## 为什么只做这一件事
  *
- * 前车之鉴：本仓曾写过一个同时补"类字段声明"的版本，它把 JSDoc 里
- * @type {Array<{...}>} 的结尾 }> 当成类型结尾截断，产出的字段声明
- * 语法不合法（models: Array<{ ... note?: string），反而把 273 条错误变成
- * 更多。补参数类型不会碰任何声明结构，因此风险低一个量级。
+ * 前车之鉴:本仓曾写过一个同时补"类字段声明"的版本,它把 JSDoc 里
+ * @type {Array<{...}>} 的结尾 }> 当成类型结尾截断,产出的字段声明
+ * 语法不合法(models: Array<{ ... note?: string),反而把 273 条错误变成
+ * 更多.补参数类型不会碰任何声明结构,因此风险低一个量级.
  *
- * 类型来源只取已知映射表（res/req 是 HTTP 对象、route/method 是
- * 字符串等）。映射表里没有的一律不猜 —— 猜错会引入新的类型错误，比 any
- * 更难查。剩下的一律用 any 显式标注（显式 any 是诚实的：它表示"接受
- * 这里没有类型信息"，而不是"假装类型是对的"）。
+ * 类型来源只取已知映射表(res/req 是 HTTP 对象,route/method 是
+ * 字符串等).映射表里没有的一律不猜 ---- 猜错会引入新的类型错误,比 any
+ * 更难查.剩下的一律用 any 显式标注(显式 any 是诚实的:它表示"接受
+ * 这里没有类型信息",而不是"假装类型是对的").
  *
  * ## 做法
  *
- * 用 TypeScript 编译器 API 定位参数节点（不是正则），只在这些节点的
- * 名字后插入 : Type。
+ * 用 TypeScript 编译器 API 定位参数节点(不是正则),只在这些节点的
+ * 名字后插入 : Type.
  *
- * 用法：node scripts/gates/meta/fix-ts-params.mjs <file.ts> [...]
+ * 用法:node scripts/gates/meta/fix-ts-params.mjs <file.ts> [...]
  *       node scripts/gates/meta/fix-ts-params.mjs --dry-run <file.ts> [...]
- * 退出码：0 = 已处理；2 = 用法错。
+ * 退出码:0 = 已处理;2 = 用法错.
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -40,7 +40,7 @@ if (files.length === 0) {
 }
 
 /**
- * 已知的参数类型映射。只放有明确对应物的，其余走 any。
+ * 已知的参数类型映射.只放有明确对应物的,其余走 any.
  * @type {Record<string, string>}
  */
 const KNOWN = {
@@ -52,7 +52,7 @@ const KNOWN = {
 }
 
 /**
- * 取全仓 TS7006 报错的位置（文件 + 行 + 列 + 参数名）。
+ * 取全仓 TS7006 报错的位置(文件 + 行 + 列 + 参数名).
  * @returns {Map<string, Array<{line: number, col: number, name: string}>>} 文件 → 参数位置
  */
 function collect() {
@@ -87,7 +87,7 @@ for (const rel of files) {
   const src = fs.readFileSync(full, 'utf8')
   const sf = ts.createSourceFile(rel, src, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS)
 
-  // 收集要改的参数名节点（按位置去重）
+  // 收集要改的参数名节点(按位置去重)
   const targets = new Map()
   const visit = (node) => {
     if (ts.isParameter(node) && ts.isIdentifier(node.name) && !node.type) {

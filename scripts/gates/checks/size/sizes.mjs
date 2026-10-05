@@ -1,9 +1,9 @@
 /**
- - check-sizes —— 一文件一行数的硬上限(后端 300 / 前端 500).
+ - check-sizes ---- 一文件一行数的硬上限(后端 300 / 前端 500).
  *
  - 拦什么:单文件行数超过所在档位的上限.
  *
- - 判据真源:rules.mjs 的 LIMITS —— 用户指定的硬标准,不是本仓统计分位数,
+ - 判据真源:rules.mjs 的 LIMITS ---- 用户指定的硬标准,不是本仓统计分位数,
  - 因此不按 p90 调整.存量用逐文件棘轮(.gates/sizes-baseline.json)过渡:
  - 已超限的文件以当前行数为上限,只拦继续增长;拆完后跑 --update 把水位降下来.
  *
@@ -38,7 +38,7 @@ for (const [rel, n] of Object.entries(lines)) {
     over[rel] = n
     tierCounts[tierOf(rel)]++
   }
-  // 带了豁免却把登记上限突破了 —— 直接红(豁免不是空白支票).
+  // 带了豁免却把登记上限突破了 ---- 直接红(豁免不是空白支票).
   if (waiver !== null && n > waiver) {
     report.add(rel, 1, `豁免上限 ${waiver} 行已被突破（当前 ${n} 行）`, '继续拆分，或与用户确认后调高 |N')
   }

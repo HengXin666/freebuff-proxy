@@ -17,7 +17,7 @@
  *
  - 处置(用户裁决"硬编码吧,不可能有人会去改"):
  - - 真源 = src/config.js 的 UPSTREAM_API_BASE,loadConfig 无条件以它为准;
- - - 配置模板不再暴露 api_base —— 不给写错的机会;
+ - - 配置模板不再暴露 api_base ---- 不给写错的机会;
  - - 本脚本钉住"配置模板里不得再有 api_base",防止它悄悄回来.
  *
  - 用法:node scripts/check-config-consistency.mjs

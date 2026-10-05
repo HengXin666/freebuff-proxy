@@ -1,4 +1,4 @@
-import { t } from '../../i18n.js'
+import { t } from '../../locale/index.js'
 import { el } from '../dom.js'
 import { state } from '../state.js'
 
@@ -24,7 +24,7 @@ export function fmtDurationMs(ms) {
   return t('dur.hoursMinutesShort', { h, m: m % 60 })
 }
 
-/** 时间戳 → 短格式(月-日 时:分),无值时 '—'. */
+/** 时间戳 → 短格式(月-日 时:分),无值时 '--'. */
 export function fmtTime(iso) {
   if (!iso) return '—'
   const t = Date.parse(iso)
@@ -122,7 +122,7 @@ export function firstResetTz(byModel) {
  - 重置时刻展示:
  - - 主显示:浏览器本地时区的具体时刻(用户最直观)
  - - 附注:上游 resetTimeZone 的对应时刻 + 倒计时(明确"还有多久")
- - resetAt 是绝对 UTC 时刻,本地/LA 只是不同视角,绝无"不准"——差异来自时区换算.
+ - resetAt 是绝对 UTC 时刻,本地/LA 只是不同视角,绝无"不准"----差异来自时区换算.
  */
 export function fmtReset(iso, timeZone) {
   if (!iso) return '—'

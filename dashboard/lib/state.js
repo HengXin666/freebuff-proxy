@@ -1,5 +1,5 @@
 /**
- - 控制台共享状态 —— 唯一的可变状态容器,被所有视图模块读写.
+ - 控制台共享状态 ---- 唯一的可变状态容器,被所有视图模块读写.
  *
  - 为什么集中放这里而不是各视图自带:这份状态的生命周期是"整个 SPA 会话",
  - 视图之间会互相读(总览写账号,模型管理写模型名映射,测试对话读上游模型).
@@ -32,13 +32,13 @@ export const state = {
    *
    - 账号表的 session 列与[额度]chip 的数据源都是上游回执,键全是不透明
    - 目录 key;后端把这一屏用到的映射随 /api/overview 一起下发,前端只管查表.
-   - 查不到就回落原 key —— 绝不因为取不到名字让整行渲染失败.
+   - 查不到就回落原 key ---- 绝不因为取不到名字让整行渲染失败.
    */
   modelNames: {},
   /**
    - 上游此刻给了额度的模型的[可读三件套]:{key, displayName, catalogId}.
    - /api/models 的 id 是可读名(口径 = displayName || key,与后端
-   - catalogDisplayName() 同源),而 upstreamModelIds 是目录 key ——
+   - catalogDisplayName() 同源),而 upstreamModelIds 是目录 key ----
    - 标注  时必须用这张表换算,否则永远对不上.
    */
   upstreamModels: [],

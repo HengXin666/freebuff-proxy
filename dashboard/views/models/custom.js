@@ -1,4 +1,4 @@
-import { t } from '../../i18n.js'
+import { t } from '../../locale/index.js'
 import { api } from '../../lib/api.js'
 import { $, el, icon } from '../../lib/dom.js'
 import { need } from '../../lib/hooks.js'
@@ -10,7 +10,7 @@ import { toast } from '../../lib/ui.js'
  * 自定义模型的可视化编辑(增 / 删 / 恢复 / 行内自动保存).
  *
  * 与 cards.js 的分界:cards.js 只画节点,本文件负责[改数据] -- 提交自定义模型
- * 数组、隐藏/恢复模型、防抖自动保存.两者都不读 /api/models/upstream,
+ * 数组,隐藏/恢复模型,防抖自动保存.两者都不读 /api/models/upstream,
  * 那是 sync.js 的职责(同步上游目录是独立动作,不是每次渲染都要做的事).
  */
 
@@ -66,7 +66,7 @@ export async function restoreCustomModel(id) {
       body: JSON.stringify({ id }),
     })
     toast(t('model.restored', { id }))
-    // 立即重建模型表卡(无需等重拉上游——本地已知恢复)
+    // 立即重建模型表卡(无需等重拉上游----本地已知恢复)
     need('refreshModelSettingsCard')()
   } catch (err) {
     toast(err.message, true)

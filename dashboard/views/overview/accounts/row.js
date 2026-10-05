@@ -1,4 +1,4 @@
-import { t } from '../../../i18n.js'
+import { t } from '../../../locale/index.js'
 import { el, icon } from '../../../lib/dom.js'
 import { need } from '../../../lib/hooks.js'
 import { modelLabel, modelNameFor } from '../../../lib/format/models.js'
@@ -7,11 +7,11 @@ import { accountTimeCell, fmtMs, fmtTime } from '../../../lib/format/time.js'
 import { state } from '../../../lib/state.js'
 
 /**
- - 渲染上游的会话清单(session.inventory)—— 跨部署可见的那份.
+ - 渲染上游的会话清单(session.inventory)---- 跨部署可见的那份.
  *
  - 数据源:上游 GET /session 回执的 desktopPurchases(每次 admit / 一键刷新
  - 随回执刷新).槽位 slotLimit:1,被别处占着时请求会撞 purchase_capacity,
- - 而本地账本会说"没有会话" —— 这行就是用来消除那个困惑的.
+ - 而本地账本会说"没有会话" ---- 这行就是用来消除那个困惑的.
  *
  - 标注[本机]:把每个占用者的 holderInstanceId 与本地会话的 instanceId 比,
  - 相同即本机建的(这样用户一眼看出"占着槽位的是不是我自己").
@@ -58,7 +58,7 @@ export function renderUpstreamInventory(a) {
 export function buildAccountRow(a, i) {
   const cd = a.cooldownUntil ? new Date(a.cooldownUntil).toLocaleString() : null
   // Session 列同时回答两件事:(1) 这条会话还能白用多久;(2) 这个号
-  // 到现在为止买过几条 / 复用了几次——后者是"我们在省钱"的直接证据,
+  // 到现在为止买过几条 / 复用了几次----后者是"我们在省钱"的直接证据,
   // 因为复用发生在已买断的一小时内,边际成本为 0.
   const admits = Number(a.admitCount) || 0
   const reuses = Number(a.reuseCount) || 0
@@ -71,7 +71,7 @@ export function buildAccountRow(a, i) {
   /**
    - [这一小时已买给模型 X]必须显示出来(issue #24).
    *
-   - 此前这条会话显示成 MiMo 2.6 Flash . 50 分钟——看着完全正常,但它
+   - 此前这条会话显示成 MiMo 2.6 Flash . 50 分钟----看着完全正常,但它
    - 只服务这一个模型:此时请求任何别的模型都会被上游拒(实测
    - purchase_claim_released,且 DELETE 之后接不回来),而面板仍写 status=ok.
    - 用户对着"正常"去查一个根本没坏的账号,排障只能翻日志.
@@ -107,11 +107,11 @@ export function buildAccountRow(a, i) {
      - 上游的会话清单(跨部署可见).
      *
      - 用户诉求:[即便分布式部署,你在本地建的会话,我在远程也能读到].
-     - 数据来自上游 GET /session 回执的 desktopPurchases——每次 admit/一键刷新
+     - 数据来自上游 GET /session 回执的 desktopPurchases----每次 admit/一键刷新
      - 都会随回执更新,所以刷新即可看到别的部署建的会话.
      *
      - 为什么要显示:槽位 slotLimit:1,被别处占着时请求会撞
-     - purchase_capacity,而本地账本显示"没有会话" —— 用户完全无从判断.
+     - purchase_capacity,而本地账本显示"没有会话" ---- 用户完全无从判断.
      - 这里如实列出占用者与到期时间,并标出是不是本机建的.
      */
     ...renderUpstreamInventory(a),
@@ -175,7 +175,7 @@ export function buildAccountRow(a, i) {
     el('td', {}, fmtQuota(a.quota, a.freebucks)),
     // a.session.model 是目录 key(m-00032eaeec);可读名由后端解析并放在
     // session.modelDisplayName(AccountRuntimes.list() 统一带上).
-    //  之前写成 a.modelDisplayName(顶层)—— 字段不在顶层,永远取不到,
+    //  之前写成 a.modelDisplayName(顶层)---- 字段不在顶层,永远取不到,
     // 于是这一列一直回落成裸 key.拿到不到就回落到 key,绝不显示空.
     el('td', {}, fmtFreebucks(
       a.freebucks,
@@ -212,7 +212,7 @@ export function probeReason(code, message) {
    - 401 单独判,且只认真正的鉴权失败.
    *
    - 此前写成 c.includes('unauthorized') || c.includes('invalid') || c.includes('401')
-   - —— 宽匹配把任何含这些子串的 code 都判成[凭证无效],而[凭证无效]
+   - ---- 宽匹配把任何含这些子串的 code 都判成[凭证无效],而[凭证无效]
    - 在控制台上的含义是"这个号要重新登录",处置成本最高(要用户去浏览器重登
    - 再导入).真因若是别的,用户就照着错的提示白折腾一遍.
    *

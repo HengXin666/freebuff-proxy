@@ -1,21 +1,21 @@
 /**
- * check-syntax —— 语法可解析性（所有门禁的前置）。
+ * check-syntax ---- 语法可解析性(所有门禁的前置).
  *
- * 拦什么：任何受控源文件语法不可解析。
+ * 拦什么:任何受控源文件语法不可解析.
  *
- * 为什么必须单独有一条（2026-10-05 实测踩到）：一个未闭合的 { 会让 tsc
- * 在该文件处早退，于是 check-types 报出来的错误数骤降 —— 看起来像
- * "后端很干净"，实际是压根没扫。也就是说：没有这条门禁时，语法错误会伪装成
- * 类型债的减少，而棘轮会欣然地把它录成新基线（水位越低越"好"）。
+ * 为什么必须单独有一条(2026-10-05 实测踩到):一个未闭合的 { 会让 tsc
+ * 在该文件处早退,于是 check-types 报出来的错误数骤降 ---- 看起来像
+ * "后端很干净",实际是压根没扫.也就是说:没有这条门禁时,语法错误会伪装成
+ * 类型债的减少,而棘轮会欣然地把它录成新基线(水位越低越"好").
  *
- * ## 两种后缀走两条路（TS 迁移期）
+ * ## 两种后缀走两条路(TS 迁移期)
  *
- * - .js / .mjs / .cjs：node --check（它不认 TS 语法）。
- * - .ts / .tsx：tsc 的语法级检查（--noCheck --noEmit）。
- *   不用 node --check：它对 TS 会报 Unexpected token 'interface'。
- *   也不用完整 tsc：那是 check-types 的职责，本门禁只要"能不能解析"。
+ * - .js / .mjs / .cjs:node --check(它不认 TS 语法).
+ * - .ts / .tsx:tsc 的语法级检查(--noCheck --noEmit).
+ *   不用 node --check:它对 TS 会报 Unexpected token 'interface'.
+ *   也不用完整 tsc:那是 check-types 的职责,本门禁只要"能不能解析".
  *
- * 扫描根：CHECK_ROOT。退出码：0 PASS / 1 FAIL / 2 用法错。
+ * 扫描根:CHECK_ROOT.退出码:0 PASS / 1 FAIL / 2 用法错.
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -27,24 +27,24 @@ import { Report } from '../../lib/text/report.mjs'
 
 const report = new Report('syntax')
 
-/** 用 node --check 验证的文件后缀。 */
+/** 用 node --check 验证的文件后缀. */
 const NODE_EXT = ['.js', '.mjs', '.cjs']
 
-/** 用 tsc --noCheck 验证的文件后缀。 */
+/** 用 tsc --noCheck 验证的文件后缀. */
 const TS_EXT = ['.ts', '.tsx']
 
-/** 豁免：.agents/ 下的 skill 脚本不属于本仓产品代码。 */
+/** 豁免:.agents/ 下的 skill 脚本不属于本仓产品代码. */
 const EXEMPT = ['.agents/']
 
-/** 扫描面下限：防止根路径/扩展名写错时"零违规"与"什么都没扫"无法区分。 */
+/** 扫描面下限:防止根路径/扩展名写错时"零违规"与"什么都没扫"无法区分. */
 const MIN_FILES = 20
 
 /**
- * 取受控源文件。
+ * 取受控源文件.
  *
- * 必须过滤"索引里有、磁盘上没有"的路径：git rm 之后索引与磁盘会不同步，
- * 并行重构期间被删掉的文件会在 git ls-files 里滞留，让门禁报出一个
- * 语法不可解析的假阳性（真凶是文件已被删除）。告警理由错比不告警更耗时。
+ * 必须过滤"索引里有,磁盘上没有"的路径:git rm 之后索引与磁盘会不同步,
+ * 并行重构期间被删掉的文件会在 git ls-files 里滞留,让门禁报出一个
+ * 语法不可解析的假阳性(真凶是文件已被删除).告警理由错比不告警更耗时.
  *
  * @returns {string[]} 相对路径
  */
@@ -55,7 +55,7 @@ function sourceFiles() {
     .filter((f) => fs.existsSync(path.join(ROOT, f)))
 }
 
-/** 取错误输出的前两行（去掉调用栈）。 */
+/** 取错误输出的前两行(去掉调用栈). */
 function firstLines(stderr) {
   return `${stderr ?? ''}`
     .split('\n')
@@ -81,7 +81,7 @@ if (tsFiles.length > 0) {
   if (!fs.existsSync(tsc)) {
     report.add('node_modules/typescript', 0, '存在 .ts 文件但找不到 typescript（先 npm ci）', 'npm ci')
   } else {
-    // --noCheck：只解析不做类型检查，正是本门禁想要的粒度。
+    // --noCheck:只解析不做类型检查,正是本门禁想要的粒度.
     const args = ['--noEmit', '--noCheck', '--pretty', 'false', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext']
     let out = ''
     try {

@@ -375,7 +375,7 @@ Amount`` 三态 + 「A zero receipt is a real receipt」**——与我们当年�
 | `src/session-handles.js` | 新增**持久化待结算退款队列**（`pendingRefunds`）+ `sweepPendingRefunds()`：周期追问，拿到终态（含 0）才出队 |
 | `src/session-manager.js` | 进程内 `_replayPendingRefund()` + 30s 追问定时器（1 小时窗口），pending 时把句柄登记进队列 |
 | `bin/serve.js` | 5 分钟一次的常驻扫尾（有界 30s 预算、unref） |
-| `test/smoke.mjs` | `REFUND-COPY` **反向**：现在钉死「早退不退」这类旧说法；并断言扫尾必须存在 |
+| `test/suites/entries/smoke/smoke.mjs` | `REFUND-COPY` **反向**：现在钉死「早退不退」这类旧说法；并断言扫尾必须存在 |
 
 **3. 省钱的完整图景**（旧版只承认一条路）：
 
@@ -429,7 +429,7 @@ Amount`` 三态 + 「A zero receipt is a real receipt」**——与我们当年�
 | 活跃模型数 ÷ 账号数 **≤ 0.5** | **300s** | 模型集中、热会话复用充分，可容忍稍长的空闲 |
 | 其余 | **120s** | 平衡点 |
 
-**护栏（防回归）**：`test/smoke.mjs` 断言 `idleReleaseSec` 默认 **60s**，
+**护栏（防回归）**：`test/suites/entries/smoke/smoke.mjs` 断言 `idleReleaseSec` 默认 **60s**，
 且 `REFUND-COPY` 全仓扫描**「早退能退 Freebucks / 挂着空闲才花钱」这类已被证伪的说法**；
 同时断言 `sweepPendingRefunds` 与 `serve.js` 的周期调用必须存在（少了它就等于放弃那笔预扣）。
 
@@ -544,10 +544,10 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 | 5 | `src/web/api.js` | `GET/POST /api/settings` 支持新字段；导入时记 `credentialUpdatedAt` |
 | 6 | `src/proxy.js` | 开放 API 导入路径同样记 `credentialUpdatedAt` |
 | 7 | `dashboard/app.js` | 账号表新增「时间」列 + 调度模式切换控件 |
-| 8 | `test/smoke.mjs` | spread 模式回归（满员换号）+ 时间字段持久化断言 |
+| 8 | `test/suites/entries/smoke/smoke.mjs` | spread 模式回归（满员换号）+ 时间字段持久化断言 |
 | 9 | `src/session-manager.js` | 去掉 admit 前多余的 `session:GET`（§4，首字节 −580ms） |
 | 10 | `src/proxy.js` | 模型白名单改为"先本地判定、未知才探测"（§4，首字节再 −580ms） |
-| 11 | `test/repro-firstbyte.mjs` | 首字节耗时剖析脚本（可复现 §4 的表） |
+| 11 | `test/tools/repro-firstbyte.mjs` | 首字节耗时剖析脚本（可复现 §4 的表） |
 | 12 | `package.json` | `npm version minor` → **v1.13.0 本次发布** |
 
 ## 7. 退款结论反转后的落地清单（2026-09-13 第二次反转）
@@ -562,13 +562,13 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 | 2 | `dashboard/app.js` | 文案改为「早退按实际占用退还未用时长」，并给出 pending 的准确含义 |  |
 | 3 | `dashboard/app.js` | `idleReleaseAdvice` 推荐值**反向重算**（60 / 120 / 300s） |  |
 | 4 | `src/*.js` + `docs/*.md` + `config.example.yaml` + `README.md` + `bin/pricing.js` | 清掉「早退不退 / 整小时买断」的旧口径 |  |
-| 5 | `test/smoke.mjs` | `idleReleaseSec` 断言改回 **60s** |  |
-| 6 | `test/smoke.mjs` | `REFUND-COPY` **反向**：现在钉死「早退不退」这类旧说法 |  |
+| 5 | `test/suites/entries/smoke/smoke.mjs` | `idleReleaseSec` 断言改回 **60s** |  |
+| 6 | `test/suites/entries/smoke/smoke.mjs` | `REFUND-COPY` **反向**：现在钉死「早退不退」这类旧说法 |  |
 | 7 | `src/session-handles.js` | **持久化待结算退款队列** + `sweepPendingRefunds()` |  |
 | 8 | `src/session-manager.js` | `_replayPendingRefund()` + 30s 追问定时器（1 小时窗口，pending 时入队） |  |
 | 9 | `bin/serve.js` | 5 分钟一次的常驻扫尾（有界 30s 预算、unref） |  |
-| 10 | `test/smoke.mjs` | 回归：断言 `sweepPendingRefunds` 与 serve.js 的周期调用存在 |  |
-| 11 | `test/repro-refund.mjs` | 头部标注：默认参数（3 分钟占用）**不足以区分竞争假设**，需 55 分钟级占用 |  |
+| 10 | `test/suites/entries/smoke/smoke.mjs` | 回归：断言 `sweepPendingRefunds` 与 serve.js 的周期调用存在 |  |
+| 11 | `test/tools/repro-refund.mjs` | 头部标注：默认参数（3 分钟占用）**不足以区分竞争假设**，需 55 分钟级占用 |  |
 
 #### 推荐值算法（本次已反向重算）
 

@@ -1,7 +1,7 @@
 /**
  - 官方 CLI 的遥测上报(POST https://www.codebuff.com/api/logs).
  *
- - 为什么需要:官方 CLI 运行时主动上报生命周期事件,我们从不上报 ——
+ - 为什么需要:官方 CLI 运行时主动上报生命周期事件,我们从不上报 ----
  - 从服务端看就是一个[只发 chat,没有任何客户端生命迹象]的连接.
  - 而且 cli.fingerprint_generated 带 success: true,那是自证[我是真 CLI].
  *
@@ -14,7 +14,7 @@
  - "data":{"fingerprintType":"enhanced_cli","success":true}}
  - ]}
  *
- - posthog(us.i.posthog.com)不实现 —— 那是第三方 SaaS,
+ - posthog(us.i.posthog.com)不实现 ---- 那是第三方 SaaS,
  - 与[是不是真 CLI]的判定无关,且会把数据交给第三方.
  *
  - 事件名真源(官方二进制提取,26 个)见
@@ -28,7 +28,7 @@ export const TELEMETRY_ENDPOINT = 'https://www.codebuff.com/api/logs'
 
 /**
  - 一次进程生命周期共用的客户端会话 id.官方形态:anon_<uuid>.
- - 所有事件共用它 —— 服务端据此把事件串成一个客户端的行为轨迹.
+ - 所有事件共用它 ---- 服务端据此把事件串成一个客户端的行为轨迹.
  */
 let clientSessionId = null
 
@@ -45,7 +45,7 @@ export function resetTelemetrySession() {
 }
 
 /**
- - 官方 CLI 的遥测事件名(二进制提取全集).只实现我们确实会发生的那些 ——
+ - 官方 CLI 的遥测事件名(二进制提取全集).只实现我们确实会发生的那些 ----
  - 编造依赖真实交互的事件(terminal_command_completed 等)就是自相矛盾的噪声.
  */
 export const CLI_EVENTS = {
@@ -127,7 +127,7 @@ export async function flushTelemetry(fetchImpl, opts = {}) {
 
 /**
  - 上报[启动]这一组事件(官方 CLI 进程起来就会发的两条).
- - 必须在 fingerprint 生成之后调用 —— data.success 如实反映结果.
+ - 必须在 fingerprint 生成之后调用 ---- data.success 如实反映结果.
  - @param {{ fingerprintSuccess?: boolean, fetchImpl?: any }} [opts]
  */
 export function reportCliLaunch(opts = {}) {

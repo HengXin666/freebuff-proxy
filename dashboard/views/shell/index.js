@@ -1,4 +1,4 @@
-import { LOCALES, LOCALE_LABELS, getLocale, setLocale, t } from '../../i18n.js'
+import { LOCALES, LOCALE_LABELS, getLocale, setLocale, t } from '../../locale/index.js'
 import { api } from '../../lib/api.js'
 import { $, el, icon } from '../../lib/dom.js'
 import { state } from '../../lib/state.js'
@@ -104,7 +104,7 @@ function renderHeader() {
   }
   buttons.push(el('button', { onclick: logout }, [icon('logout', 14), t('nav.logout')]))
   // 语言切换:改语种后整页重渲染(文案散布在各处,逐个区块刷新容易漏).
-  // 只重画 DOM,不重新拉数据 —— 不打断在途请求,不释放已购会话.
+  // 只重画 DOM,不重新拉数据 ---- 不打断在途请求,不释放已购会话.
   buttons.push(buildLocaleSwitcher())
   return el('header', {}, [
     el('h1', {}, [icon('bolt', 18), 'Freebuff Proxy', versionBadge()]),
@@ -123,13 +123,13 @@ function renderHeader() {
  - 顶栏语言切换器:下拉菜单(select),显式限宽以免撑开顶栏.
  *
  - 为什么必须限宽:原生 select 未显式设 width 时会按最长 option 撑开
- - ("简体中文" 远比 "EN" 宽),实测能把顶栏顶出一条 780px 的宽条 ——
+ - ("简体中文" 远比 "EN" 宽),实测能把顶栏顶出一条 780px 的宽条 ----
  - 与相邻 56px 的按钮完全不协调(用户反馈过"选项栏变得非常宽").
  - 这里用 .locale-select { width: 72px } 钉死.
  *
  - 切换后 render({ force: true }) 连 header/nav 一起重建:只更新内容区的话
  - 顶栏与导航会留着切换前的语言(表现为"内容变了,顶栏没变",只能手动刷新).
- - 重渲染只重画 DOM,不重新拉数据 —— 不打断在途请求,不释放已买断的会话.
+ - 重渲染只重画 DOM,不重新拉数据 ---- 不打断在途请求,不释放已买断的会话.
  - @returns {HTMLElement}
  */
 function buildLocaleSwitcher() {
@@ -208,7 +208,7 @@ function renderNav() {
   const items = [['overview', t('nav.overview'), 'gauge'], ['playground', t('nav.playground'), 'chat']]
   if (state.me.role === 'admin') {
     items.push(['users', t('nav.usersManagement'), 'users'])
-    // 数据文件自检是排障工具,不是日常操作——从总览页搬出来,admin 专属独立页.
+    // 数据文件自检是排障工具,不是日常操作----从总览页搬出来,admin 专属独立页.
     items.push(['system', t('nav.system'), 'cpu'])
     // 日志页:上游故障判据(如 countryBlockReason)只写进 stdout,用户以往
     // 只能看到一串 503 却不知为何.这里让完整字段在页面上可读,可筛选,可展开.

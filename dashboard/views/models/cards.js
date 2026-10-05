@@ -1,4 +1,4 @@
-import { t } from '../../i18n.js'
+import { t } from '../../locale/index.js'
 import { el, icon } from '../../lib/dom.js'
 import { need } from '../../lib/hooks.js'
 import { modelNameFor, poolBadgeClass, poolLabel } from '../../lib/format/models.js'
@@ -57,7 +57,7 @@ export function buildModelsReconcileBar(upstream, staleCount, isAdmin) {
      - 对账条:先说清"表里哪些其实调不了",再说别的.
      *
      - 旧界面把 15 条内置 + 53 条自定义与上游 13 条平铺在同一张表里,
-     - 没有任何一处告诉用户"这 55 个你的账号用不了"——
+     - 没有任何一处告诉用户"这 55 个你的账号用不了"----
      - 用户只能一个个试,试到失败才知道.这里在表头上直接给总数与处置入口.
      */
     upstream.models?.length
@@ -102,7 +102,7 @@ export function buildModelsTable(rows, isLiveUpstream, isAdmin) {
           style: isLiveUpstream(m) ? null : 'opacity:.45',
         }, [
           // 首列是对外模型名(口径 displayName || key,与 /v1/models 的 id 同源);
-          // 目录 key(m-00032eaeec)退到 title 里 —— 排障时仍要能对上上游日志,
+          // 目录 key(m-00032eaeec)退到 title 里 ---- 排障时仍要能对上上游日志,
           // 但不该再出现在页面上(用户要求).见
           // .agents/notes/implemented/bug-fix/2026-10-03-readable-model-id-unification.md
           el('td', {

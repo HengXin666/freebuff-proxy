@@ -1,4 +1,4 @@
-import { t } from '../../i18n.js'
+import { t } from '../../locale/index.js'
 import { el, icon } from '../../lib/dom.js'
 import { state } from '../../lib/state.js'
 import { toast } from '../../lib/ui.js'

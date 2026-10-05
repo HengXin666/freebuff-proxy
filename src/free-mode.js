@@ -42,8 +42,8 @@ Follow the user's instructions in subsequent messages.
  - src/upstream/foreign-client-signals.js 的 FREEBUFF_SIGNATURE_TOOL_DEFINITIONS).
  *
  - 两条并挂,任一通过即可(上游是 some()):
- - - lookup_agent_info:官方设计划工具,参数表 { agentId } —— 走真实 schema 子集判定.
- - - decide:官方自定义工具(无 schema 可比)—— 走自定义名放行判定.
+ - - lookup_agent_info:官方设计划工具,参数表 { agentId } ---- 走真实 schema 子集判定.
+ - - decide:官方自定义工具(无 schema 可比)---- 走自定义名放行判定.
  - 留两条是因为两条规则各自独立:任一条被上游收紧,另一条仍然成立.
  *
  - 判据,对照实验与取舍见
@@ -59,7 +59,7 @@ export const FREEBUFF_SIGNATURE_TOOL_NAMES = Object.freeze(
  - 为什么不再用 end_turn:上游 2026-09-17 起要求签名工具[名字 + 真实参数 schema]
  - 双真,零参数工具永远不算签名(复制的名字加 {} 与真货逐字节相同,没有结构
  - 可验证).上游还把[往 tools 末尾补空心 end_turn]这种形态逐字收进测试夹具
- - (PROXY_HOLLOW_END_TURN)并在注释里点名 freebuff-proxy —— 即本代理.
+ - (PROXY_HOLLOW_END_TURN)并在注释里点名 freebuff-proxy ---- 即本代理.
  */
 export const FREEBUFF_SIGNATURE_TOOL_NAME = 'lookup_agent_info'
 
@@ -94,7 +94,7 @@ export function ensureFreebuffToolSignature(tools, enabled = true) {
 }
 
 /**
- - 客户端是否声明了工具.只看 OpenAI 新式 tools 数组——旧式 functions
+ - 客户端是否声明了工具.只看 OpenAI 新式 tools 数组----旧式 functions
  - 字段不触发上游的 tool-schema 检查(见 stripClientTools 的说明).
  *
  - @param {Record<string, any>} body
@@ -112,12 +112,12 @@ export function hasClientTools(body) {
 /**
  - 剥离客户端的工具声明,返回新对象(不改原对象).
  *
- - 为什么需要:上游对 tools 做 tool-schema 指纹比对 —— 它把"工具集与
+ - 为什么需要:上游对 tools 做 tool-schema 指纹比对 ---- 它把"工具集与
  - 官方 CLI 是否一致"当作第三方客户端判据(freebuff 源码 freebuff-models.ts
  - 注释原话:"the tool-schema check (docs/freebuff-abuse-detection.md), which
  - downgrades third-party clients").任何非官方 schema(bash / run_code /
  - 自定义工具)都会让 /api/v1/chat/completions 直接返回 404
- - No endpoints found for <model> —— 注意它报的是"模型不存在",与工具毫无
+ - No endpoints found for <model> ---- 注意它报的是"模型不存在",与工具毫无
  - 字面关联,极难从错误本身归因.
  *
  - 实测(2026-09-18,直连线上 freebuff-proxy):无 tools → 200;带任意 tools
@@ -126,7 +126,7 @@ export function hasClientTools(body) {
  - 因此当上游以该错误拒绝工具请求时,代理只能去掉工具再发一次:模型不调用
  - 工具,但至少给出文本回答,而不是把一个 404 甩给下游(下游 Responses 桥接层
  - 会把它崩成 Cloudflare 纯文本 502,客户端 SDK 解析成
- - "502 status code (no body)" —— 就是"所有模型都空响应"的现场).
+ - "502 status code (no body)" ---- 就是"所有模型都空响应"的现场).
  *
  - functions(OpenAI 旧式)不删:它不触发该检查(实测 200).
  *
@@ -264,7 +264,7 @@ export function stripFreebuffConversationState(body) {
  - Freebuff/OpenAI reject requests that carry BOTH reasoning_effort and
  - reasoning.effort (especially with different values). Freebuff also injects
  - a default reasoning.effort for catalog models when it thinks the caller
- - omitted reasoning — so a bare reasoning_effort: "max" collides with the
+ - omitted reasoning -- so a bare reasoning_effort: "max" collides with the
  - server default high.
  *
  - Collapse to a single reasoning: { effort } field. Map max → high

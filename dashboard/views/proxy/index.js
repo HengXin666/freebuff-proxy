@@ -1,4 +1,4 @@
-import { t } from '../../i18n.js'
+import { t } from '../../locale/index.js'
 import { api } from '../../lib/api.js'
 import { $, el, icon } from '../../lib/dom.js'
 import { need } from '../../lib/hooks.js'
@@ -188,7 +188,7 @@ function updateSwitchLabel(input) {
  *
  - 为什么这个值需要权衡(2026-09-14 一手实测后改口径,见 docs/freebucks-strategy.html):
  - - 一次 admit = 买断一小时(当场扣满整小时单价).所以付费时段内闲置不花钱,
- - 释放反而是把已买的钱丢掉——钱这个维度不再支持"越早越好";
+ - 释放反而是把已买的钱丢掉----钱这个维度不再支持"越早越好";
  - - 但一个账号同时只能有一条 session,且 session 绑定模型.释放之后再来的请求
  - 要重新 admit(又买一小时).所以真正的权衡只剩槽位:什么时候把这个
  - 账号让给别的模型;

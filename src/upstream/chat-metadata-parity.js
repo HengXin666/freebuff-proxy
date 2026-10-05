@@ -1,5 +1,5 @@
 /**
- * 输入画像(freebuff_input_profile)—— 官方 chat metadata 的一个字段.
+ * 输入画像(freebuff_input_profile)---- 官方 chat metadata 的一个字段.
  *
  * 官方把用户怎么敲出这条 prompt的计数发上去(只发计数与耗时,从不发文本):
  *
@@ -14,12 +14,12 @@
  *
  *
  * 编码:v1;tc=6;ke=6;mc=0;pc=0;pe=0;ms=1001;cps=6
- * (null 的字段整项省略 —— 官方 encodeInputProfile 用 flatMap 过滤 null.)
+ * (null 的字段整项省略 ---- 官方 encodeInputProfile 用 flatMap 过滤 null.)
  *
  * 语义与官方 common/src/constants/freebuff-client-descriptor.ts +
  * cli/src/utils/input-profile.ts 逐字对齐.
  *
- *  本代理是服务端,没有真实键盘/粘贴事件.所以不伪造输入画像 ——
+ *  本代理是服务端,没有真实键盘/粘贴事件.所以不伪造输入画像 ----
  * 见下方 describeProxyInput 的取舍说明.
  * 见 .agents/notes/implemented/feature/2026-10-01-chat-metadata-parity.md
  */
@@ -60,7 +60,7 @@ export function encodeInputProfile(p) {
  * 从客户端请求体推断输入画像.
  *
  * 取舍:官方用真实的键盘/粘贴事件计数;本代理是服务端,拿不到这些事件.
- * 但我们能拿到下游请求本身的等价信息 —— 用户发来的 prompt 文本长度,
+ * 但我们能拿到下游请求本身的等价信息 ---- 用户发来的 prompt 文本长度,
  * 消息条数,从请求开始到上游调用的耗时.用这些构造一份与官方同格式且语义
  * 诚实的画像(tc = 用户消息总字符数按"一次插入"计,ke 记 1 次,
  * ms 用真实的下游→上游耗时),而不是编造键盘行为.

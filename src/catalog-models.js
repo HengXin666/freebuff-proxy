@@ -1,5 +1,5 @@
 /**
- * 目录驱动的模型表 —— 薄门面, 实现见 src/catalog-models.ts.
+ * 目录驱动的模型表 ---- 薄门面, 实现见 src/catalog-models.ts.
  *
  * 为什么保留这个 .js 路径(而不是把消费者都改成 .ts):
  *

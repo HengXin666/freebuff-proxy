@@ -7,11 +7,11 @@ let settings = { level: 'info' }
  * 进程内环形缓冲:最近 N 条日志留一份在内存,供控制台[日志]页查看.
  *
  * 为什么需要:上游的故障判据(例如 countryBlockReason)以往只写进 stdout,
- * 用户在容器里看不到,也不想 docker logs —— 于是只能看到一串 503 却不知道
+ * 用户在容器里看不到,也不想 docker logs ---- 于是只能看到一串 503 却不知道
  * 为什么.控制台要能直接读到完整字段才能排障.
  *
  * 有界是硬要求:不带上限会让长期运行的实例被日志吃光内存.超容量丢最旧的
- * (及时清理:默认 5000 条,由 logging.ring_cap 配置 —— 见 src/config.js
+ * (及时清理:默认 5000 条,由 logging.ring_cap 配置 ---- 见 src/config.js
  * 的说明;configureLogger() 在 serve.js 启动时接线;0 = 不保留).
  * @type {Array<Record<string, any>>}
  */
@@ -23,7 +23,7 @@ let ringCap = 5000
  * 日志上下文:一次下游请求的全链路标识.
  *
  * 为什么需要:此前每条日志只有 ts/level/msg/fields,
- * 看不出是哪个账号的哪一次请求 —— 多账号池并发时日志完全交织,
+ * 看不出是哪个账号的哪一次请求 ---- 多账号池并发时日志完全交织,
  * 排障只能靠猜.现在用 AsyncLocalStorage 把上下文透传进所有下游调用,
  * logger 自动带上 reqId / account / model,前端再按 reqId 聚合.
  */
@@ -74,12 +74,12 @@ export function log(level: string, msg: string, fields: any = undefined): void {
    * #84441506e 这种奇怪东西,能不能显示邮箱]).
    *
    * 根因:account 只从日志上下文(als)取,而很多日志点是手写
-   * email: ... 字段 —— 两者不互通.于是选号阶段(还没 patchLogContext)
+   * email: ... 字段 ---- 两者不互通.于是选号阶段(还没 patchLogContext)
    * 与跳过账号那几行只有 email,没有 account,前端 line.account
    * 读到 undefined,那一行就只剩 #reqId(用户看到的"奇怪东西").
    *
    * 实测:60 条日志里 7 条缺 account,集中在
-   * selected account for model(4)与 skip account: ...(3)——
+   * selected account for model(4)与 skip account: ...(3)----
    * 恰恰是最需要知道"哪个号"的行.
    *
    * 这里统一兜底:只要 fields 里有 email 而上下文没给 account,就用 email.
@@ -107,7 +107,7 @@ export function log(level: string, msg: string, fields: any = undefined): void {
   else console.log(text)
 }
 
-/** 设置/读取缓冲容量(0 = 不缓冲)—— 及时清理,避免长期运行吃内存. */
+/** 设置/读取缓冲容量(0 = 不缓冲)---- 及时清理,避免长期运行吃内存. */
 export function configureLogBuffer(cap: number): number {
   if (Number.isFinite(cap)) ringCap = Math.max(0, Math.floor(cap))
   if (ring.length > ringCap) ring.splice(0, ring.length - ringCap)

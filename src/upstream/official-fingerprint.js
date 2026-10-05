@@ -1,5 +1,5 @@
 /**
- * 官方 Freebuff/Codebuff CLI 的请求指纹常量 —— 单一真源.
+ * 官方 Freebuff/Codebuff CLI 的请求指纹常量 ---- 单一真源.
  *
  * 为什么需要这个文件:上游把[请求形态是否来自官方 CLI]当作客户端判据,并据此
  * 降级或拒绝第三方(freebuff 源码 freebuff-models.ts 引用了
@@ -30,7 +30,7 @@
 export const KNOWN_CLI_VERSION = '0.0.178'
 
 /**
- * 官方 chat/completions 的 UA —— 两段式,逐字对齐真机抓包.
+ * 官方 chat/completions 的 UA ---- 两段式,逐字对齐真机抓包.
  *
  * 实测(mitmproxy 抓官方 CLI 0.2.6):
  *
@@ -48,7 +48,7 @@ export const KNOWN_CLI_VERSION = '0.0.178'
  *
  * 1. 版本是 0.0.0-test,不是真实 CLI 版本号. 二进制原文:
  *    Qo=typeof __PACKAGE_VERSION__<"u"?__PACKAGE_VERSION__:"0.0.0-test"
- *    —— 官方发布构建里该变量未注入,于是回退到字面量 0.0.0-test.
+ *    ---- 官方发布构建里该变量未注入,于是回退到字面量 0.0.0-test.
  *    我们此前发 0.0.178(包版本),反而与官方不一致.
  * 2. 后面还有第二段(ai-sdk 的 provider-utils 与 runtime 标记),我们整段漏了.
  *
@@ -66,7 +66,7 @@ export const OFFICIAL_CHAT_UA_VERSION = '0.0.0-test'
 //   User-Agent: ai-sdk/openai-compatible/0.0.0-test/codebuff
 //               ai-sdk/provider-utils/3.0.25 runtime/bun/1.4.2
 // 官方 orchestrator 就是 bun 跑的,所以 runtime 段是 bun 而非 browser.
-// 此前写成 browser 是按 CLI 侧抓包填的 —— 与 desktop 路线不符.
+// 此前写成 browser 是按 CLI 侧抓包填的 ---- 与 desktop 路线不符.
 // 见 docs/reverse/14-captured-diff.md
 export const OFFICIAL_CHAT_UA_SUFFIX =
   'ai-sdk/provider-utils/3.0.25 runtime/bun/1.4.2'
@@ -98,7 +98,7 @@ export const BUN_USER_AGENT = 'Bun/1.3.14'
  *   NAA="/api/v1/freebuff/session/admission"
  *   function PN$(H){return ${base}${H==="POST"?NAA:"/api/v1/freebuff/session"}}
  * GET / DELETE 用 /api/v1/freebuff/session,POST 用 .../admission.
- * 旧实现三种方法都打 session —— POST 打错端点.
+ * 旧实现三种方法都打 session ---- POST 打错端点.
  */
 export const SESSION_ADMISSION_ENDPOINT = '/api/v1/freebuff/session/admission'
 export const SESSION_ENDPOINT = '/api/v1/freebuff/session'
@@ -233,7 +233,7 @@ export function officialSessionHeaders(method, token, opts = {}) {
  *     ...openrouterKey?{[x-openrouter-api-key]:openrouterKey}:{}})
  *
  * 注意:只有这两个(+可选 acting-user-id).官方 chat 不带
- * x-codebuff-api-key —— 那个头只出现在其它端点(agent-runs / session 等,见二进制
+ * x-codebuff-api-key ---- 那个头只出现在其它端点(agent-runs / session 等,见二进制
  * 里 wtH 的 headers).多发这一个头就是纯多余的指纹面.
  *
  * @param {string} token
@@ -254,7 +254,7 @@ export function officialChatHeaders(token, opts = {}) {
  * 其它上游端点(session / agent-runs / me 等)的头部.二进制原文(wtH):
  *   headers:{"Content-Type":"application/json", Authorization:Bearer ${E},
  *     "x-codebuff-api-key":E}
- * —— 这些端点确实带 x-codebuff-api-key.
+ * ---- 这些端点确实带 x-codebuff-api-key.
  *
  * @param {string} token
  * @returns {Record<string, string>}
@@ -263,7 +263,7 @@ export function officialChatHeaders(token, opts = {}) {
  *  officialApiKeyHeaders() 已删除.
  *
  * 它发的 x-codebuff-api-key 在客户端 165 条抓包里出现 0 次
- * (docs/reverse/20 §20.4).上游鉴权只发 Bearer —— 需要鉴权头用
+ * (docs/reverse/20 §20.4).上游鉴权只发 Bearer ---- 需要鉴权头用
  * freebuffAuthHeaders()(src/auth-store.js).
  * 保留此函数等于给回潮留一个入口,故连定义一起删.
  */
@@ -282,7 +282,7 @@ export function officialChatHeaders(token, opts = {}) {
  * 官方注释里的样例:
  *   v1;in=1;out=1;tp=iterm;term=1;ct=1;sz=120x40;ci=0;ssh=0;l=1;p=shell;g=terminal;osc=1
  *
- * 只放存在性标志,尺寸与固定桶名 —— 绝不放路径,进程名,环境变量原文
+ * 只放存在性标志,尺寸与固定桶名 ---- 绝不放路径,进程名,环境变量原文
  * (官方明确约束:never a raw environment value, path, or process name).
  */
 /**  x-freebuff-env 常量已删除:desktop 客户端 0 次,见 RETIRED_HEADERS. */
@@ -317,7 +317,7 @@ export const HEADER_PURCHASE_CONTINUITY = 'x-freebuff-purchase-continuity'
  *   FREEBUFF_TAKEOVER_INSTANCE_HEADER = "x-freebuff-takeover-instance-id"
  * 用法(orchestrator.js:208152-208155):admission 回 purchase_capacity /
  * purchase_in_use / premium_slot_taken 且回执给了 currentInstanceId 时,
- * 带着它重发一次 —— 上游会把剩余时长移交过来(官方文案:
+ * 带着它重发一次 ---- 上游会把剩余时长移交过来(官方文案:
  * "Use that tab or choose 'Use it here' to move the remaining time here
  *  without another charge").
  */
@@ -328,7 +328,7 @@ export const HEADER_TAKEOVER_INSTANCE_ID = 'x-freebuff-takeover-instance-id'
  * 真机抓包(2026-10-01,从零建会话):官方 POST /session/admission 带
  *   x-freebuff-desktop-attempt-id: b4e28cef-827c-4584-a9b7-caf2d0062f09
  * 而同一请求的 x-freebuff-instance-id 是 cli:b4e28cef-827c-4584-a9b7-caf2d0062f09
- * —— 即 claim 去掉 cli: 前缀(对齐官方 freebuffCliAttemptId()).
+ * ---- 即 claim 去掉 cli: 前缀(对齐官方 freebuffCliAttemptId()).
  */
 export const HEADER_DESKTOP_ATTEMPT_ID = 'x-freebuff-desktop-attempt-id'
 
@@ -377,7 +377,7 @@ function fallbackUuid() {
  * (official-fingerprint 里另一条证据显示 CLI 抓包为 cli:b4e28cef-...).
  *
  * 本仓库走 desktop 路线,故用裸 UUID.且调用方应复用同一个值,
- * 不要每次 admission 新建 —— 那会让每次购买被全额退款作废.
+ * 不要每次 admission 新建 ---- 那会让每次购买被全额退款作废.
  *
  * @returns {string}
  */
@@ -426,7 +426,7 @@ const flag = (v) => (v ? '1' : '0')
 
 /**
  * 代理桶(对齐官方 cli/src/utils/client-environment.ts proxyBucketOf).
- * 只看 6 个代理环境变量,取值 none / loopback / remote —— 不上报真实地址.
+ * 只看 6 个代理环境变量,取值 none / loopback / remote ---- 不上报真实地址.
  */
 function proxyBucketOf(env) {
   const one = (value) => {
@@ -465,7 +465,7 @@ function clampDimension(value) {
  *
  * 本代理跑在容器/服务里,没有真实终端,所以按官方对"非交互环境"的
  * 取值填:in/out = 0(非 TTY),tp = none,l = 0,p/g = na(未查询),
- * osc = na.这是自洽的取值 —— 官方自己也有 na 桶表示"未查询/不适用",
+ * osc = na.这是自洽的取值 ---- 官方自己也有 na 桶表示"未查询/不适用",
  * 伪造成一个真实终端反而与运行环境矛盾.
  *
  * @param {{ env?: Record<string, string|undefined>, columns?: number, rows?: number }} [opts]
@@ -540,7 +540,7 @@ export function setCliVersion(version) {
  * 从 npm registry 对齐官方 CLI 的最新版本号(best-effort).
  *
  * 为什么值得做:UA 里的版本号是上游判断[这是不是官方客户端]的一部分指纹,写死一个
- * 过时值(旧实现是 1.0.0)长期看本身就是破绽.拿不到就保留现值 —— 绝不因为一次
+ * 过时值(旧实现是 1.0.0)长期看本身就是破绽.拿不到就保留现值 ---- 绝不因为一次
  * 网络失败影响代理可用性.
  *
  * @param {{ fetchImpl?: typeof fetch, timeoutMs?: number }} [opts]

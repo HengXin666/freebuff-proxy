@@ -1,4 +1,4 @@
-import { t } from '../../i18n.js'
+import { t } from '../../locale/index.js'
 import { $, el, icon } from '../../lib/dom.js'
 import { need } from '../../lib/hooks.js'
 import { state } from '../../lib/state.js'
@@ -8,7 +8,7 @@ import { state } from '../../lib/state.js'
  *
  * 为什么单独成文件:这六张卡合计 240 行节点树,与[保存/校验/读设置]的控制逻辑
  * 挤在同一文件会双双超过 500 行硬标准.这里只保留[给数据 -> 出节点],所有事件
- * 回调仍然直接引用同目录 index.js 的保存函数 —— 那是模块内的正常引用,不存在
+ * 回调仍然直接引用同目录 index.js 的保存函数 ---- 那是模块内的正常引用,不存在
  * 循环依赖(index.js 只引用本文件的构建函数,本文件不引用它).
  *
  * 本文件所有函数都只做 DOM 构造:不发请求,不写 state,不弹提示.

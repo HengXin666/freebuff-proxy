@@ -1,5 +1,5 @@
 /**
- - 运行时 catalog 自动同步 — 对齐 trefeon/freebuff-proxy 的 Registry.Refresh.
+ - 运行时 catalog 自动同步 -- 对齐 trefeon/freebuff-proxy 的 Registry.Refresh.
  *
  - 行为(与 trefeon internal/registry/registry.go 对齐):
  - - 从上游源码拉取三份常量文件(free-agents.ts / freebuff-models.ts /
@@ -7,7 +7,7 @@
  - - 解析出 model → agent(base2 + base3 fallback)后原子写
  - <dataDir>/catalog-cache.json;启动时 model.js 优先读它(存在则用之);
  - - 任何拉取/解析失败保留旧缓存(缓存不存在则回落内置 catalog),
- - 并把错误透给调用方记录日志——绝不因同步失败影响代理可用性;
+ - 并把错误透给调用方记录日志----绝不因同步失败影响代理可用性;
  - - 周期:启动立即一次 + 默认每 6h(trefeon REGISTRY_REFRESH 默认值).
  *
  - 零新运行时依赖:用项目已有的 undici fetch.
@@ -152,7 +152,7 @@ export function startCatalogSync(cachePath, opts = {}) {
         const wrote = writeCatalogCache(cachePath, catalog)
         if (!wrote.ok) {
           // 拉到新 catalog 但落盘失败:内存态已是新的,缓存保留旧值.
-          // 必须与"拉取失败"分开报——否则用户看到 refresh failed 会去查网络,
+          // 必须与"拉取失败"分开报----否则用户看到 refresh failed 会去查网络,
           // 实际是目录权限(issue #9).
           log(`catalog cache not writable, using in-memory catalog: ${wrote.error}`)
           return { ok: false, error: `cache write failed: ${wrote.error}`, models: catalog.models.length }

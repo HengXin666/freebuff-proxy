@@ -34,7 +34,7 @@
 | 项 | 证据 | 保留理由 |
 |---|---|---|
 | `typecheck`（tsc --noEmit） | package.json | 已接线 CI |
-| `test:smoke`（mock 上游） | test/smoke.mjs 7815 行 | 覆盖调度/冷却/换号/代理 |
+| `test:smoke`（mock 上游） | test/suites/entries/smoke/smoke.mjs 7815 行 | 覆盖调度/冷却/换号/代理 |
 | i18n 红线 | `.github/workflows/docker-image.yml` 的 `i18n` job + `scripts/check-i18n.mjs` | 三条判据钉死多语言退化 |
 | 镜像启动门禁 | `image-boot` job + `scripts/ci/pipeline-image-test.mjs` | 真实起容器 + 打坏 data 验证 |
 | 发版版本号门禁 | `check-version` job | tag 与 package.json 必须一致 |
@@ -100,7 +100,7 @@
 ## 五、体量热点（取证，尚未设限）
 
 ```
-7815  test/smoke.mjs            ← 同时是 churn 第一（95 次）
+7815  test/suites/entries/smoke/smoke.mjs            ← 同时是 churn 第一（95 次）
 3548  dashboard/app.js          ← churn 第三（59 次）
 2643  src/proxy.js              ← churn 第二（69 次）
 2276  src/app-context.js

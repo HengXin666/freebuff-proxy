@@ -10,7 +10,7 @@ import http from 'node:http'
 import { freebuffLegacyModelDigest } from '../../src/upstream/catalog-protocol.js'
 
 /**
- - 目录 rows —— 与真实上游同构(key / handle / displayName / legacyDigests).
+ - 目录 rows ---- 与真实上游同构(key / handle / displayName / legacyDigests).
  - 有了它,总览的额度列才能把 m-xxx 显示成模型名(否则渲染成裸 key).
  */
 const CATALOG_ROWS = [
@@ -51,7 +51,7 @@ function nextPacificMidnight() {
 }
 const RESET_AT = nextPacificMidnight()
 
-/** 单价(FB/小时)——与上游 freebucks.prices 同口径. */
+/** 单价(FB/小时)----与上游 freebucks.prices 同口径. */
 const PRICES = {
   'deepseek/deepseek-v4-flash': 25,
   'mimo/mimo-v2.5': 10,
@@ -134,7 +134,7 @@ function sessionPayload(acct) {
       resetTimeZone: 'America/Los_Angeles',
       prices: PRICES,
     },
-    //  用目录 key(m-demo000x)而不是可读 id —— 真实上游回执就是这个口径.
+    //  用目录 key(m-demo000x)而不是可读 id ---- 真实上游回执就是这个口径.
     // 控制台必须靠目录把它换算成模型名,否则渲染成裸 key(这正是要展示的修复点).
     rateLimitsByModel: {
       'm-demo0001': rateLimitFor('deepseek/deepseek-v4-flash'),

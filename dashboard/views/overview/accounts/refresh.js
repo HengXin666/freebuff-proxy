@@ -1,4 +1,4 @@
-import { t } from '../../../i18n.js'
+import { t } from '../../../locale/index.js'
 import { api } from '../../../lib/api.js'
 import { $, el } from '../../../lib/dom.js'
 import { need } from '../../../lib/hooks.js'
@@ -91,7 +91,7 @@ export async function probeAccount(a, btn) {
   try {
     const r = await api(`/api/accounts/${encodeURIComponent(a.key)}/probe`, { method: 'POST' })
     // 先并入模型名映射:下面那行 toast 会打印每个模型的已用/上限,
-    // 而它的键是目录 key —— 不先并表就又会把 m-00032eaeec 弹给用户.
+    // 而它的键是目录 key ---- 不先并表就又会把 m-00032eaeec 弹给用户.
     applyModelNames(r)
     const sess = r.session || {}
     const limits = sess.rateLimitsByModel || {}
@@ -120,7 +120,7 @@ export async function probeAccount(a, btn) {
  - 不受影响(后端 /api/accounts/refresh 里逐条注释了这条硬约束).
  *
  - 全程局部更新:账号表分区外壳与展开状态,代理卡片,模型卡片都原地更新,
- - 不整页重建 —— 刷新前后用户视线所在的滚动位置和折叠状态都不变.
+ - 不整页重建 ---- 刷新前后用户视线所在的滚动位置和折叠状态都不变.
  */
 export async function oneClickRefresh(btn) {
   const restore = withButtonLoading(btn, t('common.refreshing'))

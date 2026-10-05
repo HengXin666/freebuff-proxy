@@ -10,62 +10,62 @@ interface Settings {
   blockPremiumModels: boolean; idleReleaseSec?: number; maxNewSessionsPerRequest?: number
 }
 const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
-  // 转发上游时是否补齐官方真签名工具（名字 + 真实参数 schema），让上游不把请求
-  // 判作第三方客户端并降级。上游 2026-09-17 起要求签名工具「名字 + 真实参数 schema」
-  // 双真 —— 旧实现补的空心 end_turn 正是它点名封堵的形态。关掉 = 接受被判外来并降级。
+  // 转发上游时是否补齐官方真签名工具(名字 + 真实参数 schema),让上游不把请求
+  // 判作第三方客户端并降级.上游 2026-09-17 起要求签名工具[名字 + 真实参数 schema]
+  // 双真 ---- 旧实现补的空心 end_turn 正是它点名封堵的形态.关掉 = 接受被判外来并降级.
   // 判据与对照实验见
   // .agents/notes/implemented/bug-fix/2026-09-19-genuine-tool-signature.md
   freeToolSignatureEnabled: true,
-  // 是否上报官方 CLI 形态的遥测（POST codebuff.com/api/logs）。
+  // 是否上报官方 CLI 形态的遥测(POST codebuff.com/api/logs).
   // 官方 CLI 运行时会发 app_launched / fingerprint_generated / login_started
-  // 等生命周期事件；我们从不上报 = 服务端眼里一个"只发 chat、没有任何客户端
-  // 生命迹象"的连接。默认关闭：上报等于主动暴露，且端到端尚未验证。
+  // 等生命周期事件;我们从不上报 = 服务端眼里一个"只发 chat,没有任何客户端
+  // 生命迹象"的连接.默认关闭:上报等于主动暴露,且端到端尚未验证.
   // 见 .agents/notes/proposed/architecture/2026-09-30-cli-telemetry-reports.md
   cliTelemetryEnabled: false,
-  // 上游以 404 "No endpoints found" 拒掉带工具的请求时，是否去掉 tools 重发一次。
-  // 默认保留工具语义：上游拒绝就返回错误，不把 agent 请求伪装成成功的纯文本回答。
-  // 明确开启时仍可回退到纯文本。见
+  // 上游以 404 "No endpoints found" 拒掉带工具的请求时,是否去掉 tools 重发一次.
+  // 默认保留工具语义:上游拒绝就返回错误,不把 agent 请求伪装成成功的纯文本回答.
+  // 明确开启时仍可回退到纯文本.见
   // .agents/notes/implemented/bug-fix/2026-10-02-tool-request-fail-closed.md
   stripToolsOnSchemaRejection: false,
-  // 上游请求形态通道（2026-10-03 新增）：
-  //   'legacy'（默认）—— 沿用现有自拼形态（ensureFreebuffSystemMessages +
-  //       ensureFreebuffToolSignature + CLI 世代 agent）。来源为早期第三方项目
-  //       + 多年补丁，已无法与官方逐字段核对，但行为稳定、测试覆盖完整。
-  //   'official' —— 照抄官方客户端抓包真值：官方 37 工具（worker）/ 官方
-  //       decide（manager）、官方 system 模板、desktop 世代 agent、分层 provider。
-  //       见 src/upstream/official-shape.js 与 docs/reverse/14/15/17。
-  //       2026-10-03 在 cli-bridge 实测：200 + write_file 工具调用。
-  // 默认 official：与官方客户端抓包逐字段一致，身份/世代不再错配。
-  // 回退：控制台「设置 → 上游请求链路」切回 legacy 即可，无需重启。
+  // 上游请求形态通道(2026-10-03 新增):
+  //   'legacy'(默认)---- 沿用现有自拼形态(ensureFreebuffSystemMessages +
+  //       ensureFreebuffToolSignature + CLI 世代 agent).来源为早期第三方项目
+  //       + 多年补丁,已无法与官方逐字段核对,但行为稳定,测试覆盖完整.
+  //   'official' ---- 照抄官方客户端抓包真值:官方 37 工具(worker)/ 官方
+  //       decide(manager),官方 system 模板,desktop 世代 agent,分层 provider.
+  //       见 src/upstream/official-shape.js 与 docs/reverse/14/15/17.
+  //       2026-10-03 在 cli-bridge 实测:200 + write_file 工具调用.
+  // 默认 official:与官方客户端抓包逐字段一致,身份/世代不再错配.
+  // 回退:控制台[设置 → 上游请求链路]切回 legacy 即可,无需重启.
   upstreamChannel: 'official',
-  // 每个账号同一时间可并发的 SSE 响应流数（账号内并发），默认 2。
-  // 账号调度是"粘性优先"（drain, not rotate）：并发请求先挤同一账号，超过该值
-  // 才溢出到下一个账号；从不主动平摊到新账号（上游把轮换健康账号当农场特征，
-  // 且 Freebucks 按会话占用时长计费，换号 = 新买一条计费行）。
+  // 每个账号同一时间可并发的 SSE 响应流数(账号内并发),默认 2.
+  // 账号调度是"粘性优先"(drain, not rotate):并发请求先挤同一账号,超过该值
+  // 才溢出到下一个账号;从不主动平摊到新账号(上游把轮换健康账号当农场特征,
+  // 且 Freebucks 按会话占用时长计费,换号 = 新买一条计费行).
   accountMaxConcurrency: 2,
-  // 账号调度模式（2026-09 新增，默认保持旧行为）：
-  //   'sticky' = 粘性优先（drain, not rotate）：并发上限是溢出阈值——
-  //              满员先在该账号上有界排队，排队超时才溢出到下一个账号。
-  //              最少换号 = 最少新建计费会话（换号就是新买一条 Freebucks 行）。
-  //   'spread' = 并发优先：排序时优先有空闲槽位的账号，只在所有账号都
-  //              满员时才排队；已用账号仍优先于从未用过的账号，但"已用账号
-  //              全满 + 还有未用账号"时允许启用一个未用账号（= 申请新号）。
-  //              代价是可能多预占（N 路并发铺到 M 个账号 = 最多 M 条计费会话），
-  //              换来的是不再为并发让请求干等（低提交延迟）。
-  // 用户场景：并发满了就该开新号（批量/绘图）；默认关闭以保持升级不改变行为。
+  // 账号调度模式(2026-09 新增,默认保持旧行为):
+  //   'sticky' = 粘性优先(drain, not rotate):并发上限是溢出阈值----
+  //              满员先在该账号上有界排队,排队超时才溢出到下一个账号.
+  //              最少换号 = 最少新建计费会话(换号就是新买一条 Freebucks 行).
+  //   'spread' = 并发优先:排序时优先有空闲槽位的账号,只在所有账号都
+  //              满员时才排队;已用账号仍优先于从未用过的账号,但"已用账号
+  //              全满 + 还有未用账号"时允许启用一个未用账号(= 申请新号).
+  //              代价是可能多预占(N 路并发铺到 M 个账号 = 最多 M 条计费会话),
+  //              换来的是不再为并发让请求干等(低提交延迟).
+  // 用户场景:并发满了就该开新号(批量/绘图);默认关闭以保持升级不改变行为.
   accountSchedulingMode: 'sticky',
-  // 溢出前的最长排队时长（毫秒）。sticky 下热会话/冷账号各有自己的等待
-  // （见 proxy.chatWaitMs），本值只在 spread 模式生效：账号满员时最多等这么久
-  // 就换号，绝不把并发钉死在一个账号上。
+  // 溢出前的最长排队时长(毫秒).sticky 下热会话/冷账号各有自己的等待
+  // (见 proxy.chatWaitMs),本值只在 spread 模式生效:账号满员时最多等这么久
+  // 就换号,绝不把并发钉死在一个账号上.
   accountOverflowWaitMs: 15_000,
-  // 一键屏蔽收费模型（pool=premium，如 gpt-5.6-luna / kimi-k3-eco / 各 -max）。
-  // 免费反代用户用不了收费模型，放着在列表里既占位又容易误触风控——开/关由
-  // 前端「模型管理」一键切换：开启则从 /v1/models 列表和调度（白名单）彻底排除。
-  // 默认关闭以保持升级不改变现有行为；免费反代场景建议开启。
+  // 一键屏蔽收费模型(pool=premium,如 gpt-5.6-luna / kimi-k3-eco / 各 -max).
+  // 免费反代用户用不了收费模型,放着在列表里既占位又容易误触风控----开/关由
+  // 前端[模型管理]一键切换:开启则从 /v1/models 列表和调度(白名单)彻底排除.
+  // 默认关闭以保持升级不改变现有行为;免费反代场景建议开启.
   blockPremiumModels: false,
-  // 「低额度」分组阈值（FB）：余额低于它就在控制台归到「低额度」分组——只是分组
-  // 展示，不影响调度（这些号照常参与选号，低额度不等于不能用）。默认 15 FB，
-  // 0 = 关闭该分组。用户要的是「一眼看到快跑完的号」，所以阈值可调。
+  // [低额度]分组阈值(FB):余额低于它就在控制台归到[低额度]分组----只是分组
+  // 展示,不影响调度(这些号照常参与选号,低额度不等于不能用).默认 15 FB,
+  // 0 = 关闭该分组.用户要的是[一眼看到快跑完的号],所以阈值可调.
   lowBalanceThreshold: 15,
   // 注意：额度保护两项（idleReleaseSec / maxNewSessionsPerRequest）**不写死默认值**
   // ——只有用户在控制台保存过才进 settings.json，否则回落 config.yaml
@@ -82,8 +82,8 @@ export class SettingsStore {
   constructor(file: string) {
     this.file = file
     this.settings = { ...DEFAULT_SETTINGS }
-    /** 装载结果（'ok' | 'missing' | 'invalid'）：损坏时是回落默认值，必须在
-     * 启动横幅/自检里说清楚，否则用户配的额度保护会悄悄消失。 */
+    /** 装载结果('ok' | 'missing' | 'invalid'):损坏时是回落默认值,必须在
+     * 启动横幅/自检里说清楚,否则用户配的额度保护会悄悄消失. */
     this.loadStatus = 'missing'
     this.loadReason = null
     this.load()
@@ -95,7 +95,7 @@ export class SettingsStore {
     this.loadStatus = st.status
     this.loadReason = st.status === 'invalid' ? st.reason : null
     if (st.status === 'invalid') {
-      // 结构也一并判：能解析但不是对象（如被写成数组/字符串）同样按损坏处理。
+      // 结构也一并判:能解析但不是对象(如被写成数组/字符串)同样按损坏处理.
       this.loadReason = st.reason
     }
     if (st.status === 'ok') {
@@ -106,16 +106,16 @@ export class SettingsStore {
       if (typeof raw?.stripToolsOnSchemaRejection === 'boolean') {
         this.settings.stripToolsOnSchemaRejection = raw.stripToolsOnSchemaRejection
       }
-      //  这个布尔开关必须在这里读回：它能经 save() 写进 settings.json，
-      // 但漏读的话重启后一律回落到 DEFAULT_SETTINGS 的 false —— 表现为
-      // 「控制台打开了开关、重启就自己关了」，症状与"开关没用"无法区分。
+      //  这个布尔开关必须在这里读回:它能经 save() 写进 settings.json,
+      // 但漏读的话重启后一律回落到 DEFAULT_SETTINGS 的 false ---- 表现为
+      // [控制台打开了开关,重启就自己关了],症状与"开关没用"无法区分.
       if (typeof raw?.cliTelemetryEnabled === 'boolean') {
         this.settings.cliTelemetryEnabled = raw.cliTelemetryEnabled
       }
       if (Number.isInteger(raw?.accountMaxConcurrency)) {
         this.settings.accountMaxConcurrency = clampConcurrency(raw.accountMaxConcurrency)
       }
-      // 只接受两个已知通道，非法值一律回落到 legacy（不静默接受拼写错误）
+      // 只接受两个已知通道,非法值一律回落到 legacy(不静默接受拼写错误)
       if (raw?.upstreamChannel === 'official' || raw?.upstreamChannel === 'legacy') {
         this.settings.upstreamChannel = raw.upstreamChannel
       }
@@ -252,21 +252,21 @@ export class SettingsStore {
   }
 }
 
-/** 并发上限：1..16，防止误配造成上游顶号。 */
+/** 并发上限:1..16,防止误配造成上游顶号. */
 function clampConcurrency(n: number): number {
   return Math.min(16, Math.max(1, n))
 }
 
 /**
- * 空闲释放：0（关闭）或 5s..24h。
- * 上游按整小时单价预扣，早退 DELETE 会按实际占用把未用部分退回来
- * （2026-09-13 结论反转，见 docs/account-scheduling-and-refund.md §3）。所以挂着的
- * 空闲会话是在花钱，默认值应为「短空闲即释放」的 60s。
- * 下限保留 5s：低于 ~5s 等于把每个回合都切成一条新会话，admit 往返次数暴涨。
+ * 空闲释放:0(关闭)或 5s..24h.
+ * 上游按整小时单价预扣,早退 DELETE 会按实际占用把未用部分退回来
+ * (2026-09-13 结论反转,见 docs/account-scheduling-and-refund.md §3).所以挂着的
+ * 空闲会话是在花钱,默认值应为[短空闲即释放]的 60s.
+ * 下限保留 5s:低于 ~5s 等于把每个回合都切成一条新会话,admit 往返次数暴涨.
  */
 /**
- * 低额度分组阈值：0（关闭）或 1..10000 FB。上限给足空间（个别模型单价很高），
- * 但别到「所有号都在低额度组里」那种失去意义的地步。
+ * 低额度分组阈值:0(关闭)或 1..10000 FB.上限给足空间(个别模型单价很高),
+ * 但别到[所有号都在低额度组里]那种失去意义的地步.
  */
 function clampLowBalance(n: number): number {
   if (n <= 0) return 0
@@ -279,16 +279,16 @@ function clampIdleReleaseSec(n: number): number {
 }
 
 /**
- * 溢出前排队上限：0（不等待，槽位满立即换号）或 1s..10min。
- * 上限压到 10 分钟：调度总预算（schedulingBudgetMs 默认 45s）另有约束，
- * 这里再大也不会真的等那么久，只是给了「宁可排队也不换号」一个上限。
+ * 溢出前排队上限:0(不等待,槽位满立即换号)或 1s..10min.
+ * 上限压到 10 分钟:调度总预算(schedulingBudgetMs 默认 45s)另有约束,
+ * 这里再大也不会真的等那么久,只是给了[宁可排队也不换号]一个上限.
  */
 function clampOverflowWait(n: number): number {
   if (n <= 0) return 0
   return Math.min(600_000, Math.max(1_000, n))
 }
 
-/** 单请求新会话预算：0（不限制）或 1..16。 */
+/** 单请求新会话预算:0(不限制)或 1..16. */
 function clampNewSessions(n: number): number {
   if (n <= 0) return 0
   return Math.min(16, Math.max(1, n))

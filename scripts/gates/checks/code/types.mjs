@@ -1,15 +1,15 @@
 /**
- - check-types —— 类型标注红线(用本仓已有的 tsc,不引入新工具).
+ - check-types ---- 类型标注红线(用本仓已有的 tsc,不引入新工具).
  *
  - 拦什么:checkJs 类型错误数比基线涨了.
  *
  - 两份 project 分别跑,合并计数(后端 tsconfig.json / 前端
  - tsconfig.dashboard.json):后端要纯 ES2022,前端要 DOM lib.
- - 合成一份 project 会让前端满屏 "document is not defined" —— 那是环境声明
+ - 合成一份 project 会让前端满屏 "document is not defined" ---- 那是环境声明
  - 缺失而不是类型问题,混进基线只会把数字灌成噪音.
  *
  - 为什么用棘轮而不是"全绿":tsconfig.json 此前是 checkJs: false,
- - 等于解析 JS 但不检查 —— "配置已存在但从不执行"是最常见的伪红线形态
+ - 等于解析 JS 但不检查 ---- "配置已存在但从不执行"是最常见的伪红线形态
  - (不是"没有配置",因此更难发现).存量近千条 implicit any,全仓清零是
  - 一个巨大的独立工程,会淹没真正的重构;棘轮让"新增即红"今天就生效.
  *
@@ -80,7 +80,7 @@ const { entries } = readBaseline(BASELINE)
 // 前端并行拆分期间,dashboard/views/system/index.js 的 10 条被当成新债.
 //
 // 总数棘轮正好守住要守的那条线:不许新增类型错误."修掉 A 的 10 条,在 B
-// 新增 10 条"确实能保持总数不变,但那不是绕过 —— 净债务没变,且位置移动本身
+// 新增 10 条"确实能保持总数不变,但那不是绕过 ---- 净债务没变,且位置移动本身
 // 在 diff 里可见.
 const observedTotal = Object.values(observed).reduce((s, n) => s + n, 0)
 const baselineTotal = entries.__total__ ?? 0

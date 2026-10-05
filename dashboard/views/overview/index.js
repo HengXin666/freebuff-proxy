@@ -1,4 +1,4 @@
-import { t } from '../../i18n.js'
+import { t } from '../../locale/index.js'
 import { api } from '../../lib/api.js'
 import { el, icon } from '../../lib/dom.js'
 import { applyModelNames } from '../../lib/format/models.js'
@@ -16,7 +16,7 @@ export async function renderOverview(view) {
   try {
     // 低额度分组阈值必须先于账号表拿到:账号表在 renderProxySettings 之前渲染,
     // 而阈值是在那里才读 /api/settings 的.若不在这里先取一次,首屏会恒定
-    // 用默认 15 分组(用户改过阈值却看不到效果)——与推荐值那次是同一类数据依赖坑.
+    // 用默认 15 分组(用户改过阈值却看不到效果)----与推荐值那次是同一类数据依赖坑.
     try {
       const s = await api('/api/settings')
       if (Number.isInteger(s.lowBalanceThreshold)) {

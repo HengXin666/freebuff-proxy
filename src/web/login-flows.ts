@@ -73,22 +73,22 @@ export class LoginFlowManager {
     this.credentialsDir = credentialsDir
     this.config = config
     /**
-     * 凭证落盘后的回调（记「凭证更新时间」到账号账本）。
-     * 用回调而不是直接持有 AccountRuntimes：登录流程只关心登录，账本是上层的事。
+     * 凭证落盘后的回调(记[凭证更新时间]到账号账本).
+     * 用回调而不是直接持有 AccountRuntimes:登录流程只关心登录,账本是上层的事.
      */
     this._onCredentialSaved =
       typeof onCredentialSaved === 'function' ? onCredentialSaved : null
     /** @type {Map<string, any>} */
     this.flows = new Map()
-    /** 装载结果（'ok' | 'missing' | 'invalid'）：损坏 = 等待中的登录流程全丢
-     * （重新发起即可，不致命），但要在自检里看得见。 */
+    /** 装载结果('ok' | 'missing' | 'invalid'):损坏 = 等待中的登录流程全丢
+     * (重新发起即可,不致命),但要在自检里看得见. */
     this.loadStatus = 'missing'
     this.loadReason = null
-    /** 被丢弃的非法条目数 + 留证文件（flows 里曾有 null/无 id 的条目）。 */
+    /** 被丢弃的非法条目数 + 留证文件(flows 里曾有 null/无 id 的条目). */
     this.droppedEntries = 0
     this.droppedBackup = null
     this.load()
-    /** 上一轮 pollAll 是否还在跑（上游慢/挂起时防止每 4s 再堆一轮并发轮询）。 */
+    /** 上一轮 pollAll 是否还在跑(上游慢/挂起时防止每 4s 再堆一轮并发轮询). */
     this._polling = false
     this._poller = setInterval(() => {
       if (this._polling) return
@@ -112,8 +112,8 @@ export class LoginFlowManager {
     if (st.status === 'ok' && st.data?.flows !== undefined && !Array.isArray(st.data.flows)) {
       st = invalidShape('flows 不是数组')
     }
-    // 逐条校验：数组里混进 null 时原先 f.id 直接 TypeError（启动期抛，
-    // 进程还没监听端口就退出）。这里改为丢弃坏条目 + 留证，绝不整数组信任。
+    // 逐条校验:数组里混进 null 时原先 f.id 直接 TypeError(启动期抛,
+    // 进程还没监听端口就退出).这里改为丢弃坏条目 + 留证,绝不整数组信任.
     if (st.status === 'ok') {
       const raw = Array.isArray(st.data?.flows) ? st.data.flows : []
       const checked = ensureObjectEntries(
@@ -253,7 +253,7 @@ export class LoginFlowManager {
         })
         if (st?.user?.authToken) {
           const saved = saveAccountUser(this.credentialsDir, st.user)
-          // 记「凭证更新时间」：浏览器登录回调也是写凭据的入口之一。
+          // 记[凭证更新时间]:浏览器登录回调也是写凭据的入口之一.
           try {
             this._onCredentialSaved?.(saved.key)
           } catch {

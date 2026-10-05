@@ -100,7 +100,7 @@ docker logs --tail 60 freebuff-proxy
 把 `node:path` 模块遮蔽了，于是该接口内部的 `path.basename(...)` 抛
 `path.basename is not a function` → 一路 500（v1.12.0 引入，v1.13.2 修复）。
 另一处同类：路由变量改名只改一半，残留的 `${path}` 让 404 分支抛 `ReferenceError`。
-这两处都补了**源码级防回归断言**（`test/smoke.mjs` 的 SRC-GUARD 段）。
+这两处都补了**源码级防回归断言**（`test/suites/entries/smoke/smoke.mjs` 的 SRC-GUARD 段）。
 遇到"只有某个接口 500"，先看容器日志里的堆栈行号，那才是真凶。
 
 > **为什么"旧数据 + 新镜像"曾经会起不来（v1.13.0 修复）**：早先三个 store 直接信任

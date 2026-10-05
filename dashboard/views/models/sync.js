@@ -1,4 +1,4 @@
-import { t } from '../../i18n.js'
+import { t } from '../../locale/index.js'
 import { api } from '../../lib/api.js'
 import { $, el } from '../../lib/dom.js'
 import { need } from '../../lib/hooks.js'
@@ -38,7 +38,7 @@ export async function syncUpstreamModels() {
    - [上游暂无可用模型]的触发条件必须是目录抓取失败,不是列表为空.
    *
    - 此前判的是 models.length === 0,而列表来自会话回执的 rateLimitsByModel
-   - (今日给了额度的子集,实测只有 6 个键)—— 额度耗尽/当日额度为 0 时它天然
+   - (今日给了额度的子集,实测只有 6 个键)---- 额度耗尽/当日额度为 0 时它天然
    - 为空,于是[同步]永远弹这一句,实际模型一个都没少.
    - 后端现在在目录抓取失败时会带 catalogError: true.
    */
@@ -72,7 +72,7 @@ export async function syncUpstreamModels() {
       //  后端现在给的 um.id 已经是可读模型名(目录行 displayName,
       // 如 "DeepSeek V4.1 Flash"),不再是目录 key.
       // catalogId 只是 legacy 反查的兼容字段,上游新增模型没有 legacyDigests
-      // (实测 Ling 3.1 Flash / Laguna S 2.1 都没有),此时它为空 ——
+      // (实测 Ling 3.1 Flash / Laguna S 2.1 都没有),此时它为空 ----
       // 绝不能因为 catalogId 为空就丢掉整行,否则新模型永远同步不进来.
       // 取值顺序反过来:优先 um.id(目录真值),catalogId 仅作兜底.
       const id = um.id || um.catalogId || um.key
@@ -92,12 +92,12 @@ export async function syncUpstreamModels() {
       method: 'POST',
       body: JSON.stringify({ models: merged }),
     })
-    // save() 会把写回的自定义条目自动解除 hidden——被隐藏的内置模型同步后自然拉回
+    // save() 会把写回的自定义条目自动解除 hidden----被隐藏的内置模型同步后自然拉回
     /**
      - 同步结果必须是对齐报告,不能只报"写了几条自定义".
      *
      - 用户原话:点刷新应当是[同步上游],而列表里那些账号用不了的
-     - (内置/手动添加,上游目录里根本不存在的)留着就是误导 ——
+     - (内置/手动添加,上游目录里根本不存在的)留着就是误导 ----
      - 旧文案只说[自定义 {n} 条],数字越大用户越以为同步成功,
      - 实际那 53 条里绝大部分上游压根没有,调用必然失败.
      *
@@ -129,7 +129,7 @@ export async function syncUpstreamModels() {
  - 为什么不用 toast:toast 一闪而过,而[哪些模型其实调不了]是用户必须
  - 能看清,能据此操作的结论(旧实现把它塞进一行 toast,用户根本来不及读).
  - 这里用模态,把三向对账的数字与处置动作一起给全:
- - 只有 stale > 0 时才显示[清理不可用模型]按钮 —— 没有脏数据时
+ - 只有 stale > 0 时才显示[清理不可用模型]按钮 ---- 没有脏数据时
  - 多一个按钮就是噪音.
  */
 export function showSyncReport({ aligned, added, stale, total }) {

@@ -1,28 +1,28 @@
 /**
- * check-declared —— 未声明标识符与"能编译但不能运行"的回归（TS2304）。
+ * check-declared ---- 未声明标识符与"能编译但不能运行"的回归(TS2304).
  *
- * 拦什么：Cannot find name 'X'（TS2304）的出现。
+ * 拦什么:Cannot find name 'X'(TS2304)的出现.
  *
- *  为什么必须单独有一条（两次真实事故，形状完全相同）：
+ *  为什么必须单独有一条(两次真实事故,形状完全相同):
  *
- *   1. 2026-10-04：mergeOfficialTools 里 mapped 未声明。node --check 只查语法、
- *      tsc 当时 checkJs:false，两关都抓不到。它进了远程镜像，55 个工具一
- *      进来就抛 ReferenceError → 官方通道整轮失败。
- *   2. 2026-10-05（本次重构）：把 shouldSwitchAccountOnError 搬进子模块后，原文件
- *      只留了 export { ... } from './x.js' —— 而 re-export 不会把名字带进本模块
- *      作用域。函数体里两处调用点仍在直接调用它，于是每次走"账号侧故障换号"
- *      分支都抛 ReferenceError，被 catch 成 500 回给客户端（npm test 实测复现：
- *      AssertionError: 500 !== 404）。
+ *   1. 2026-10-04:mergeOfficialTools 里 mapped 未声明.node --check 只查语法,
+ *      tsc 当时 checkJs:false,两关都抓不到.它进了远程镜像,55 个工具一
+ *      进来就抛 ReferenceError → 官方通道整轮失败.
+ *   2. 2026-10-05(本次重构):把 shouldSwitchAccountOnError 搬进子模块后,原文件
+ *      只留了 export { ... } from './x.js' ---- 而 re-export 不会把名字带进本模块
+ *      作用域.函数体里两处调用点仍在直接调用它,于是每次走"账号侧故障换号"
+ *      分支都抛 ReferenceError,被 catch 成 500 回给客户端(npm test 实测复现:
+ *      AssertionError: 500 !== 404).
  *
- * 这类错误的特点是只在特定分支运行时触发，静态语法检查与冒烟用例都可能漏过，
- * 而后果是"请求失败 + 已付费的一小时被浪费"。所以它必须有自己的门禁，
- * 不能混在 check-types 的总数棘轮里（新增 5 条 TS2304 会被存量错误淹没）。
+ * 这类错误的特点是只在特定分支运行时触发,静态语法检查与冒烟用例都可能漏过,
+ * 而后果是"请求失败 + 已付费的一小时被浪费".所以它必须有自己的门禁,
+ * 不能混在 check-types 的总数棘轮里(新增 5 条 TS2304 会被存量错误淹没).
  *
- * 判据：零容忍，不设棘轮 —— 未声明标识符没有任何"存量合理性"。
- * 确属误报（例如全局注入的符号）必须写进 scripts/gates/undeclared-allow.txt，
- * 每条带一句理由。
+ * 判据:零容忍,不设棘轮 ---- 未声明标识符没有任何"存量合理性".
+ * 确属误报(例如全局注入的符号)必须写进 scripts/gates/undeclared-allow.txt,
+ * 每条带一句理由.
  *
- * 扫描根：CHECK_ROOT。退出码：0 PASS / 1 FAIL / 2 用法错。
+ * 扫描根:CHECK_ROOT.退出码:0 PASS / 1 FAIL / 2 用法错.
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -36,7 +36,7 @@ const PROJECTS = ['tsconfig.checkjs.json', 'tsconfig.dashboard.json']
 const report = new Report('declared')
 
 /**
- * 读豁免名单（<名字>  # 理由）。
+ * 读豁免名单(<名字>  # 理由).
  * @returns {Map<string, string>} 名字 → 理由
  */
 function readAllow() {
@@ -85,7 +85,7 @@ for (const project of PROJECTS) {
   }
 }
 
-// 陈旧豁免：白名单里登记了却已不再出现的名字 = 该删的条目（双向校验）。
+// 陈旧豁免:白名单里登记了却已不再出现的名字 = 该删的条目(双向校验).
 for (const [name, why] of allow) {
   const stillThere = saw > 0
   void stillThere

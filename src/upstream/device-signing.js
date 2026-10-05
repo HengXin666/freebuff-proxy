@@ -208,7 +208,7 @@ function signPayload(privateKeyPem, payload) {
  - 生成一份新的设备密钥记录(Ed25519).
  *
  - 独立导出而非只作为 DeviceSigner 的方法:bun 通道装配 cfg 时
- - (official-rpc.js buildRpcCfg)也需要在密钥文件缺失时就地生成——
+ - (official-rpc.js buildRpcCfg)也需要在密钥文件缺失时就地生成----
  - Docker 全新卷上该文件从来没有过,而生成它的 DeviceSigner 只在 Node
  - 路径被调用,session 走 bun 时压根不经过它(死锁).
  - 同一份生成逻辑,两处复用,避免私钥格式漂移.
@@ -363,7 +363,7 @@ export class DeviceSigner {
         body: JSON.stringify({
           publicKey: key.publicKey,
           //  官方抓包 body 是 client: "desktop"(二进制
-          // orchestrator.js:216629 同源).此前写 'freebuff-proxy' —— 那是
+          // orchestrator.js:216629 同源).此前写 'freebuff-proxy' ---- 那是
           // 自报家门的第三方特征.
           client: 'desktop',
         }),

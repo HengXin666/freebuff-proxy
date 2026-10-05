@@ -11,7 +11,7 @@ function round2(n) {
 /**
  - 账号运行状态的持久化账本(/data/account-state.json).
  *
- - 为什么必须有它:账号的"人生履历"原本全在内存里,一次重启就全丢——
+ - 为什么必须有它:账号的"人生履历"原本全在内存里,一次重启就全丢----
  - - 什么时候进来的(firstSeenAt),什么时候被封的(bannedAt)
  - - 发过多少请求(requests),最近一次使用(lastUsedAt)
  - - 冷却(cooldowns),Freebucks 余额/单价,每日额度,最近一次探测结果
@@ -101,7 +101,7 @@ export class AccountStateStore {
    - 取(必要时创建)某账号的记录;新账号在此盖上"加入时间".
    - @param {string} key
    - @param {string} [importedAtHint] 已知的加入时间(通常取凭据文件的创建时间)
-   - ——比"账本第一次见到它"更准:老账号升级到本账本时不该被记成今天刚加入.
+   - ----比"账本第一次见到它"更准:老账号升级到本账本时不该被记成今天刚加入.
    */
   account(key, importedAtHint = null) {
     if (!key) return null
@@ -144,7 +144,7 @@ export class AccountStateStore {
   /**
    - 累加一次"调度时长"(毫秒).会话在途归零时调用.
    - 与 requests 的区别:requests 是"被选中几次",scheduledMs 是"真正占用了
-   - 多久"——长对话 1 次可能顶短批量几百次,两个指标都要看.
+   - 多久"----长对话 1 次可能顶短批量几百次,两个指标都要看.
    - @param {string} key
    - @param {number} ms
    */
@@ -244,7 +244,7 @@ export class AccountStateStore {
    - 记一笔"凭证被写入"(网页导入 / 浏览器登录回调 / 开放 API 导入).
    *
    - 与导入时间的区别:importedAt 是"这个号什么时候进来的"(第一次),
-   - credentialUpdatedAt 是"token 最后一次被换掉是什么时候"——同一个号可能被
+   - credentialUpdatedAt 是"token 最后一次被换掉是什么时候"----同一个号可能被
    - 反复重新登录/更新凭证,前者不该被覆盖.
    - @param {string} key
    - @param {string} [at] ISO 时间(缺省 = 现在)

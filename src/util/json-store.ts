@@ -6,7 +6,7 @@ import path from 'node:path'
  *
  - 为什么必须有它:这些文件(users / settings / proxies / custom-models /
  - catalog-cache / sessions / account-state / web-sessions / login-flows)原先
- - 各自 try/catch —— 文件坏了只打一行日志,然后当空数据继续跑:
+ - 各自 try/catch ---- 文件坏了只打一行日志,然后当空数据继续跑:
  - - users.json 损坏 → 控制台账号全没了,非 loopback 绑定还会直接拒绝启动;
  - - settings.json 损坏 → 用户配的额度保护被静默回退成默认值;
  - - account-state.json 损坏 → "买不起就别 admit" 的闸门失效.
@@ -61,7 +61,7 @@ export function readJsonFileState(file: string): JsonFileState {
 
 /**
  - 装载审计登记表:每个 store 在 load() 时登记一次自己的文件状态.
- - 启动横幅与控制台[数据文件自检]都读它——不再有"坏了但没人知道"的文件.
+ - 启动横幅与控制台[数据文件自检]都读它----不再有"坏了但没人知道"的文件.
  - key 用绝对路径,重复装载覆盖旧值(同进程内多次 loadConfig 不会留幽灵记录).
  - @type {Map<string, { file: string, status: 'ok' | 'missing' | 'invalid', reason: string | null }>}
  */
@@ -86,7 +86,7 @@ export function noteDataFile(file: string, state: JsonFileState): void {
   const abs = path.resolve(String(file))
   const prev = audit.get(abs)
   // "因损坏而被挪走"不能再记成 missing:派生缓存修好后原地重建,第二次读到的
-  // 是 ENOENT,但它确实坏过——控制台自检要说的是这件事,而不是"尚未生成".
+  // 是 ENOENT,但它确实坏过----控制台自检要说的是这件事,而不是"尚未生成".
   if (prev?.status === 'invalid' && state.status === 'missing') return
   audit.set(abs, {
     // 保留条目级信息(noteDroppedEntries 可能先于/晚于本函数调用).
@@ -125,7 +125,7 @@ export function noteDroppedEntries(file: string, count: number, reason: string, 
  - 登记"这个文件里还有几条上游会话句柄没结算"(sessions.json 的 sessions + orphans).
  *
  - 为什么单独记:sessions.json 里挂着句柄不是损坏(服务照常启动,由启动扫尾
- - 与释放流程慢慢清),但它确实是需要人知道的状态——每一条都占着上游会话槽位.
+ - 与释放流程慢慢清),但它确实是需要人知道的状态----每一条都占着上游会话槽位.
  - 控制台[系统 → 数据文件自检]用它显示"N 条会话待结算",让"到底清干净了没有"
  - 一眼可见,而不是只能去翻启动日志.
  - @param {string} file

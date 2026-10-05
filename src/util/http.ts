@@ -14,7 +14,7 @@ export function readBearer(req: any): string | null {
  - 网络中断,连接半开)时,for await (const chunk of req) 会永远不返回.
  - 这个 await 发生在全局请求闸门已经占住槽位之后,于是每来这样一个请求就
  - 永久吃掉一个并发名额;攒满 maxConcurrentRequests 个之后,整个服务不再接单,
- - 而进程 CPU/日志/控制台完全正常——只有重启才恢复.超时即放弃该请求(408),
+ - 而进程 CPU/日志/控制台完全正常----只有重启才恢复.超时即放弃该请求(408),
  - 让槽位归还.
  - @param {import('node:http').IncomingMessage} req
  - @param {number} [limitBytes]
@@ -56,7 +56,7 @@ export async function readRequestBody(
       throw e
     }
     // 客户端在读 body 期间断开(SDK 取消/超时自杀):不是服务端故障,
-    // 标记成 400 让上层安静收场——不要当成 unhandled error 打 error 级日志.
+    // 标记成 400 让上层安静收场----不要当成 unhandled error 打 error 级日志.
     if (
       err &&
       (err.code === 'ECONNRESET' ||
@@ -91,7 +91,7 @@ export function sendJson(res: any, status: number, body: any, extraHeaders: Reco
  *
  - 风控关键:上游 cf-worker-signals.ts 的 looksLikeProxyClientId 会把
  - sess:/run: 前缀,wf-<8hex> 等自定义形态指纹为代理客户端.
- - 绝不能带 freebuff-proxy 等自有前缀——必须长得像官方 SDK 随机 id.
+ - 绝不能带 freebuff-proxy 等自有前缀----必须长得像官方 SDK 随机 id.
  - @returns {string} 13 位 base36
  */
 export function generateClientId(): string {

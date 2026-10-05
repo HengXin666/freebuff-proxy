@@ -1,8 +1,6 @@
 #!/usr/bin/env node
-import fs from 'node:fs'
 import process from 'node:process'
 import path from 'node:path'
-import net from 'node:net'
 import { spawn } from 'node:child_process'
 import { loadConfig } from '../src/config.js'
 import { buildAppContext } from '../src/app-context.js'
@@ -19,172 +17,248 @@ import { LoginFlowManager } from '../src/web/login-flows.js'
 import { ProxyStore } from '../src/web/proxy-store.js'
 import { SettingsStore } from '../src/web/settings-store.js'
 import { ModelStore } from '../src/web/model-store.js'
-import { listAccounts } from '../src/auth-store.js'
 import {
   dataFileAudit,
   invalidDataFiles,
   dirtyDataFiles,
 } from '../src/util/json-store.js'
+import { parseConfigPath, waitForPortFree } from './serve/cli-args.ts'
+import { reportStartupFailure } from './serve/startup-report.ts'
 
+/**
+ - @param {unknown} host 监听地址
+ - @returns {boolean} 是否回环地址
+ */
 function isLoopbackHost(host) {
   return ['127.0.0.1', 'localhost', '::1'].includes(String(host || ''))
 }
 
-function parseConfigPath(argv) {
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--config' || argv[i] === '-c') return argv[i + 1]
-  }
-  return undefined
-}
-
 /**
- - 自重启子进程的端口等待:旧进程退出需要一点时间,轮询直到端口可绑定,
- - 避免子进程启动时撞上 EADDRINUSE(裸机/非 Docker 场景).
+ - 数据文件定点自检(启动横幅):把 data/ 下每个 JSON 的装载结果打印一行.
+ - 起因是真实故障--镜像升级后服务起不来,而日志里只有一行 warn,用户只能
+ - 靠"删掉几个 json 就好了"这种试错.现在启动时明确说清楚:哪些文件正常,
+ - 哪些缺失(首次启动),哪些损坏以及怎么处置.
  */
-function waitForPortFree(host, port, timeoutMs) {
-  const target =
-    !host || host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host
-  const deadline = Date.now() + timeoutMs
-  return new Promise((resolve) => {
-    const tryOnce = () => {
-      const socket = net.connect({ host: target, port })
-      const done = () => {
-        socket.destroy()
-        if (Date.now() < deadline) setTimeout(tryOnce, 250)
-        else resolve()
-      }
-      socket.once('connect', done)
-      socket.once('error', () => resolve()) // 端口已释放 → 可以接管
-    }
-    tryOnce()
-  })
-}
-
-/**
- - 启动失败兜底:把"为什么起不来"直接写在日志最后一段.
- *
- - 起因是真实故障——镜像升级后容器起不来,用户只能靠"删几个 json 试试"恢复.
- - 根因是几个 store 在构造期直接抛(数据文件数组里混进 null 条目),那时
- - logDataFileAudit() 还没轮到执行,日志里既没有文件名字也没有处置办法.
- - 现在无论哪个阶段抛,都保证输出:错误本身 + 已登记的数据文件状态 +
- - 残留的写盘中间文件 + 可直接照做的处置命令.
- - @param {unknown} err
- */
-function reportStartupFailure(err) {
-  const detail = err instanceof Error ? err.stack || err.message : String(err)
-  const lines = [
-    '',
-    '[freebuff-proxy]  启动失败（服务未能进入监听状态）',
-    `  错误: ${err instanceof Error ? err.message : String(err)}`,
-  ]
-
+function logDataFileAudit() {
+  const files = dataFileAudit()
+  if (!files.length) return
   const bad = invalidDataFiles()
   const dirty = dirtyDataFiles()
-  if (bad.length) {
-    lines.push('  数据文件损坏:')
-    for (const f of bad) {
-      lines.push(`    - ${f.file}`)
-      lines.push(`      原因: ${f.reason}`)
-      lines.push(`      处置: 停服后 mv ${f.file} ${f.file}.broken 再启动（程序会按默认值重建）`)
-    }
-  }
-  if (dirty.length) {
-    lines.push('  数据文件含非法条目（已自动丢弃，原文留证）:')
-    for (const f of dirty) {
-      lines.push(
-        `    - ${f.file} — ${f.droppedReason}（丢弃 ${f.droppedEntries} 条）` +
-          (f.droppedBackup ? `，留证: ${f.droppedBackup}` : ''),
-      )
-    }
-  }
-
-  // 写盘被中断的残留:*.tmp 是原子写的中间态,正常完成后不会留在盘上.
-  try {
-    const dataDir = loadConfig(parseConfigPath(process.argv.slice(2))).server.dataDir
-    const tmps = fs.readdirSync(dataDir).filter((f) => f.endsWith('.tmp'))
-    if (tmps.length) {
-      lines.push('  残留的写盘中间文件（上次写盘被中断，可安全删除）:')
-      for (const t of tmps) lines.push(`    - ${path.join(dataDir, t)}`)
-    }
-  } catch {
-    // 数据目录读不了不影响诊断输出
-  }
-
-  // 配置 / 凭据这两类问题的堆栈一眼看不出处置办法,单独点名.
-  if (/YAMLParseError|YAML/i.test(detail)) {
-    lines.push(
-      '  看起来是 config.yaml 解析失败（多为手工编辑出错）。',
-      `      处置: 备份后移走它（mv <dataDir>/config.yaml <dataDir>/config.yaml.broken），` +
-        '程序会用内置默认值启动，再重新编辑。',
+  logger.info('data files checked', {
+    total: files.length,
+    ok: files.filter((f) => f.status === 'ok').length,
+    missing: files.filter((f) => f.status === 'missing').length,
+    invalid: bad.length,
+    // 条目级问题(文件合法但丢过脏条目):与"文件损坏"分开计数,处置办法也不同
+    droppedEntries: dirty.reduce((n, f) => n + (f.droppedEntries || 0), 0),
+  })
+  for (const f of bad) {
+    console.error(
+      `[freebuff-proxy]  数据文件损坏: ${f.file}\n` +
+        `  原因: ${f.reason}\n` +
+        `  处置: 停服后把该文件移走（mv ${f.file} ${f.file}.broken）再启动即可，\n` +
+        `        程序会按默认值重建；要保留历史就先备份。控制台「系统 → 数据文件自检」也会列出。\n`,
     )
   }
-  if (/Invalid account key/i.test(detail)) {
-    lines.push(
-      '  看起来是某个账号凭据文件里的 id/email 不能当文件名用（空 / . / .. 等）。',
-      '      处置: 检查 credentials/ 下的 *.json，修好或移走有问题的那一个；本版本起会跳过它并点名。',
+  for (const f of dirty) {
+    console.error(
+      `[freebuff-proxy]  数据文件含非法条目: ${f.file}\n` +
+        `  原因: ${f.droppedReason}（丢弃 ${f.droppedEntries} 条）\n` +
+        (f.droppedBackup ? `  原文留证: ${f.droppedBackup}\n` : '') +
+        `  处置: 无需人工干预——坏条目已被丢弃，服务照常运行；\n` +
+        `        想核对丢了什么就打开上面的留证文件。控制台「系统 → 数据文件自检」也会列出。\n`,
     )
   }
-  if (!bad.length && !dirty.length) {
-    lines.push(
-      '  未发现明显的数据文件问题。请把上面的完整堆栈发给维护者；' +
-        '临时处置：把 data/ 下的状态 JSON 逐个移走（保留 credentials/）以定位是哪一个。',
-    )
+  if (bad.length || dirty.length) {
+    logger.warn('data file problems detected (service continues in degraded mode)', {
+      files: bad.map((f) => f.file),
+      dirtyFiles: dirty.map((f) => f.file),
+    })
   }
-  lines.push(
-    '  提示: 控制台「系统 → 数据文件自检」(/api/system/data-status) 也列出同样的信息。',
-    '',
-  )
-  console.error(lines.join('\n'))
-  console.error(detail)
 }
 
+/**
+ - 首次启动的管理员引导(或 env 驱动的密码轮换).
+ - 单独成函数的原因:这段有 34 行的分支与文案,占满了 main 的阅读窗口,
+ - 而它与启动流程的其它部分零耦合.
+ - @param {import('../src/web/user-store.js').UserStore} userStore 用户库
+ - @param {any} config 配置
+ - @param {string} dataDir 数据目录
+ - @returns {void} 无返回值
+ */
+function bootstrapAdmin(userStore, config, dataDir) {
+  const admin = userStore.ensureDefaultAdmin(
+    config.users.defaultAdminUsername,
+    config.users.defaultAdminPassword || null,
+  )
+  // 密码来源:env(ADMIN_PASSWORD) / users.default_admin_password(config.yaml) /
+  // generated(随机,仅首次启动打印一次).issue #9:旧日志只说
+  // "password from env",用户既不知道密码是什么,也分不清是不是 env 生效,
+  // 只能干瞪眼看不出"管理员无法登录"的原因--这里必须把来源和找回方式写清楚.
+  const adminPasswordSource = process.env.ADMIN_PASSWORD
+    ? 'env'
+    : config.users.defaultAdminPassword
+      ? 'config'
+      : 'generated'
+  if (admin.created) {
+    if (admin.password) {
+      logger.info(
+        'default admin created — credentials shown once in logs below',
+        { username: admin.username, passwordSource: adminPasswordSource },
+      )
+      // Visible in docker compose logs for one-click onboarding
+      console.log(
+        `\n[freebuff-proxy] 首次启动：已创建管理员账号\n` +
+          `  登录地址: http://<host>:${config.server.port}/\n` +
+          `  用户名:   ${admin.username}\n` +
+          `  密码:     ${admin.password}\n` +
+          (adminPasswordSource === 'generated'
+            ? `  （ADMIN_PASSWORD 未设置或为空 → 已随机生成，只在首次启动时打印这一次）\n` +
+              `  请立即登录并修改密码，并把 ADMIN_PASSWORD 写进 .env 以免下次重装丢失。\n`
+            : `  （密码来自 ADMIN_PASSWORD 环境变量）\n`),
+      )
+    } else {
+      logger.info('default admin ensured (password from env)', {
+        username: admin.username,
+        passwordSource: adminPasswordSource,
+      })
+    }
+  } else if (admin.rotated) {
+    logger.info('default admin password rotated from env/config', {
+      username: admin.username,
+      passwordSource: adminPasswordSource,
+    })
+  } else if (admin.error) {
+    logger.warn('ADMIN_PASSWORD/default_admin_password rejected — admin password unchanged', {
+      username: admin.username,
+      error: admin.error,
+    })
+  }
+  // 已存在管理员且没给密码:把"怎么找回/重置"写进日志,避免重复开 issue.
+  if (!admin.created && !admin.password && adminPasswordSource === 'generated') {
+    logger.warn(
+      'admin password is not printed again — reset by setting ADMIN_PASSWORD or editing users.default_admin_password',
+      { username: admin.username, users: path.join(dataDir, 'users.json') },
+    )
+  }
+}
+
+/**
+ - 上游相关的启动工作(一律不 await).
+ *
+ - 为什么:这些动作全都依赖"上游此刻可达",而对服务本身能不能用毫无影响
+ - --控制台,账号/额度查看,代理设置都不需要它们成功.把它们放在监听之前等待,
+ - 等于让一个不可达的上游决定"服务起不起来":实测(真实数据 + 黑洞上游)v1.13.3
+ - 要 54s 才监听,期间 Docker HEALTHCHECK 一直失败,restart 策略就会把还在启动
+ - 中的容器反复杀掉重来--用户看到的就是"反复重启".
+ *
+ - @param {{ ctx: any, settingsStore: any }} deps 上下文与控制台设置
+ - @returns {void} 只登记异步任务,不等待
+ */
+function startUpstreamWarmup({ ctx, settingsStore }) {
+  /**
+   - 启动时的 npm 版本拉取已停用(零自动探测,
+   - docs/reverse/20 §20.3):它会在每次启动自动打
+   - registry.npmjs.org,属于"我们不请自来的外部请求".
+   *
+   - CLI 版本号改用仓库内的已知值(getCliVersion() 的默认值,
+   - 抓包实测 0.2.12);要跟进官方发版由维护者显式触发,或打开
+   - 设置里的开关(见下).功能保留,默认不动.
+   */
+  const cliVersionAuto = settingsStore?.get?.().cliVersionAutoRefresh === true
+  if (!cliVersionAuto) {
+    logger.info('cli fingerprint version kept (auto-refresh disabled)', {
+      version: getCliVersion(),
+    })
+    return
+  }
+  void refreshCliVersion()
+    .then((version) => {
+      logger.info('cli fingerprint version aligned', { version })
+      // 遥测上报(可选):官方 CLI 起进程就会发 app_launched +
+      // fingerprint_generated.我们从不上报 = 服务端眼里一个"只发 chat,
+      // 没有任何客户端生命迹象"的连接.这里按真实时序补上.
+      // 判据与取舍见
+      // .agents/notes/proposed/architecture/2026-09-30-cli-telemetry-reports.md
+      if (settingsStore?.get?.().cliTelemetryEnabled === true) {
+        void reportCliLaunch({ fingerprintSuccess: true })
+          .then((n) => {
+            if (n > 0) logger.debug('cli telemetry reported', { records: n })
+          })
+          .catch(() => {})
+      }
+      // 周期对齐:CLI 版本随官方发版变化,写死一个过时值本身是可用指纹.
+      // 每 6h 拉一次 npm latest;版本变了就 warn(一眼看出该跟进官方).
+      // unref:定时器绝不挡进程退出.
+      const versionSweeper = setInterval(() => {
+        if (settingsStore?.get?.().cliVersionAutoRefresh !== true) return
+        const before = getCliVersion()
+        void refreshCliVersion()
+          .then((next) => {
+            if (next && next !== before) {
+              logger.warn('cli fingerprint version changed upstream; realigned', {
+                from: before,
+                to: next,
+              })
+            }
+          })
+          .catch(() => {})
+      }, 6 * 60 * 60 * 1000)
+      if (versionSweeper.unref) versionSweeper.unref()
+    })
+    .catch(() => {})
+
+  // 会话句柄扫尾:把上次进程遗留的句柄 DELETE 掉(进程退出后 instanceId 就没了,
+  // 不扫就是"无法寻址的计费孤儿",一直占着上游槽位;见
+  // docs/account-scheduling-and-refund.md §3).
+  void ctx.runtimes
+    .cleanupOrphanSessions({ budgetMs: 15_000 })
+    .then((sweep) => {
+      if (sweep.cleaned || sweep.failed || sweep.skipped || sweep.deferred) {
+        logger.info('leftover session sweep on startup', sweep)
+      }
+    })
+    .catch((err) => {
+      logger.warn('leftover session sweep failed (continuing)', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
+
+  // 退款追问:待结算的挂起退款必须持续追,不能只等下次重启.
+  // 上游要求用同一个 instanceId 重放 DELETE 才给终态回执,且结算窗口可能跨
+  // 分钟级;只扫一次 = 进程活着就永远问不到那笔钱(见 docs/account-scheduling-and-refund.md §3).
+  // 低频(5 分钟),有界(30s 预算),unref(不挡进程退出).
+  const refundSweeper = setInterval(() => {
+    void ctx.runtimes
+      .sweepPendingRefunds({ budgetMs: 30_000 })
+      .catch((err) => {
+        logger.warn('pending refund sweep failed (continuing)', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+  }, 5 * 60_000)
+  if (refundSweeper.unref) refundSweeper.unref()
+
+  if (ctx.authEmail) {
+    //  启动路径不发任何上游请求(用户裁决,见
+    // docs/reverse/20-upstream-endpoint-whitelist.md §20.3).
+    // 以前的 /api/v1/me 自检已删除:客户端 165 条抓包里它出现 0 次,
+    // 是我们凭空多出来的流量,本身就是"非客户端"信号.
+    logger.info('upstream auth ready (no upstream request on startup)', {
+      account: ctx.authEmail,
+      accounts: ctx.runtimes.list().map((a) => a.email),
+    })
+  } else {
+    logger.info('no Freebuff accounts yet — add one from the web console', {
+      credentialsDir: ctx.runtimes.dir,
+    })
+  }
+}
+
+/** 启动编排:装配数据 / 引导管理员 / 监听端口 / 注册信号. */
 async function main() {
   const config = loadConfig(parseConfigPath(process.argv.slice(2)))
   configureLogger(config.logging)
-
-  /**
-   - 数据文件定点自检(启动横幅):把 data/ 下每个 JSON 的装载结果打印一行.
-   - 起因是真实故障——镜像升级后服务起不来,而日志里只有一行 warn,用户只能
-   - 靠"删掉几个 json 就好了"这种试错.现在启动时明确说清楚:哪些文件正常,
-   - 哪些缺失(首次启动),哪些损坏以及怎么处置.
-   */
-  function logDataFileAudit() {
-    const files = dataFileAudit()
-    if (!files.length) return
-    const bad = invalidDataFiles()
-    const dirty = dirtyDataFiles()
-    logger.info('data files checked', {
-      total: files.length,
-      ok: files.filter((f) => f.status === 'ok').length,
-      missing: files.filter((f) => f.status === 'missing').length,
-      invalid: bad.length,
-      // 条目级问题(文件合法但丢过脏条目):与"文件损坏"分开计数,处置办法也不同
-      droppedEntries: dirty.reduce((n, f) => n + (f.droppedEntries || 0), 0),
-    })
-    for (const f of bad) {
-      console.error(
-        `[freebuff-proxy]  数据文件损坏: ${f.file}\n` +
-          `  原因: ${f.reason}\n` +
-          `  处置: 停服后把该文件移走（mv ${f.file} ${f.file}.broken）再启动即可，\n` +
-          `        程序会按默认值重建；要保留历史就先备份。控制台「系统 → 数据文件自检」也会列出。\n`,
-      )
-    }
-    for (const f of dirty) {
-      console.error(
-        `[freebuff-proxy]  数据文件含非法条目: ${f.file}\n` +
-          `  原因: ${f.droppedReason}（丢弃 ${f.droppedEntries} 条）\n` +
-          (f.droppedBackup ? `  原文留证: ${f.droppedBackup}\n` : '') +
-          `  处置: 无需人工干预——坏条目已被丢弃，服务照常运行；\n` +
-          `        想核对丢了什么就打开上面的留证文件。控制台「系统 → 数据文件自检」也会列出。\n`,
-      )
-    }
-    if (bad.length || dirty.length) {
-      logger.warn('data file problems detected (service continues in degraded mode)', {
-        files: bad.map((f) => f.file),
-        dirtyFiles: dirty.map((f) => f.file),
-      })
-    }
-  }
 
   // 自重启子进程:等旧进程释放端口后再走正常启动流程
   if (process.env.FREEBUFF_PROXY_RESTART_CHILD === '1') {
@@ -233,60 +307,7 @@ async function main() {
   }
 
   // First-run admin bootstrap (or env-driven rotation)
-  const admin = userStore.ensureDefaultAdmin(
-    config.users.defaultAdminUsername,
-    config.users.defaultAdminPassword || null,
-  )
-  // 密码来源:env(ADMIN_PASSWORD) / users.default_admin_password(config.yaml) /
-  // generated(随机,仅首次启动打印一次).issue #9:旧日志只说
-  // "password from env",用户既不知道密码是什么,也分不清是不是 env 生效,
-  // 只能干瞪眼看不出"管理员无法登录"的原因——这里必须把来源和找回方式写清楚.
-  const adminPasswordSource = process.env.ADMIN_PASSWORD
-    ? 'env'
-    : config.users.defaultAdminPassword
-      ? 'config'
-      : 'generated'
-  if (admin.created) {
-    if (admin.password) {
-      logger.info(
-        'default admin created — credentials shown once in logs below',
-        { username: admin.username, passwordSource: adminPasswordSource },
-      )
-      // Visible in docker compose logs for one-click onboarding
-      console.log(
-        `\n[freebuff-proxy] 首次启动：已创建管理员账号\n` +
-          `  登录地址: http://<host>:${config.server.port}/\n` +
-          `  用户名:   ${admin.username}\n` +
-          `  密码:     ${admin.password}\n` +
-          (adminPasswordSource === 'generated'
-            ? `  （ADMIN_PASSWORD 未设置或为空 → 已随机生成，只在首次启动时打印这一次）\n` +
-              `  请立即登录并修改密码，并把 ADMIN_PASSWORD 写进 .env 以免下次重装丢失。\n`
-            : `  （密码来自 ADMIN_PASSWORD 环境变量）\n`),
-      )
-    } else {
-      logger.info('default admin ensured (password from env)', {
-        username: admin.username,
-        passwordSource: adminPasswordSource,
-      })
-    }
-  } else if (admin.rotated) {
-    logger.info('default admin password rotated from env/config', {
-      username: admin.username,
-      passwordSource: adminPasswordSource,
-    })
-  } else if (admin.error) {
-    logger.warn('ADMIN_PASSWORD/default_admin_password rejected — admin password unchanged', {
-      username: admin.username,
-      error: admin.error,
-    })
-  }
-  // 已存在管理员且没给密码:把"怎么找回/重置"写进日志,避免重复开 issue.
-  if (!admin.created && !admin.password && adminPasswordSource === 'generated') {
-    logger.warn(
-      'admin password is not printed again — reset by setting ADMIN_PASSWORD or editing users.default_admin_password',
-      { username: admin.username, users: path.join(dataDir, 'users.json') },
-    )
-  }
+  bootstrapAdmin(userStore, config, dataDir)
 
   if (
     (config.server.apiKeys || []).length === 0 &&
@@ -311,118 +332,6 @@ async function main() {
     // 自定义模型列表(前端[模型管理],覆盖内置目录),实时生效
     getCustomModels: () => modelStore.list(),
   })
-  /**
-   - 上游相关的启动工作(一律不 await).
-   *
-   - 为什么:这些动作全都依赖"上游此刻可达",而对服务本身能不能用毫无影响
-   - ——控制台,账号/额度查看,代理设置都不需要它们成功.把它们放在监听之前等待,
-   - 等于让一个不可达的上游决定"服务起不起来":实测(真实数据 + 黑洞上游)v1.13.3
-   - 要 54s 才监听,期间 Docker HEALTHCHECK 一直失败,restart 策略就会把还在启动
-   - 中的容器反复杀掉重来——用户看到的就是"反复重启".
-   *
-   - 所以顺序固定为:先把端口监听起来,上游的活再异步做.
-   - 扫尾本身仍有硬预算(SessionHandleStore:总预算 + 单次超时 + 本地竞速),
-   - 不会带着一个卡死的上游在后台无限堆积.
-   */
-  function startUpstreamWarmup() {
-    /**
-     - 启动时的 npm 版本拉取已停用(零自动探测,
-     - docs/reverse/20 §20.3):它会在每次启动自动打
-     - registry.npmjs.org,属于"我们不请自来的外部请求".
-     *
-     - CLI 版本号改用仓库内的已知值(getCliVersion() 的默认值,
-     - 抓包实测 0.2.12);要跟进官方发版由维护者显式触发,或打开
-     - 设置里的开关(见下).功能保留,默认不动.
-     */
-    const cliVersionAuto = settingsStore?.get?.().cliVersionAutoRefresh === true
-    if (!cliVersionAuto) {
-      logger.info('cli fingerprint version kept (auto-refresh disabled)', {
-        version: getCliVersion(),
-      })
-      return
-    }
-    void refreshCliVersion()
-      .then((version) => {
-        logger.info('cli fingerprint version aligned', { version })
-        // 遥测上报(可选):官方 CLI 起进程就会发 app_launched +
-        // fingerprint_generated.我们从不上报 = 服务端眼里一个"只发 chat,
-        // 没有任何客户端生命迹象"的连接.这里按真实时序补上.
-        // 判据与取舍见
-        // .agents/notes/proposed/architecture/2026-09-30-cli-telemetry-reports.md
-        if (settingsStore?.get?.().cliTelemetryEnabled === true) {
-          void reportCliLaunch({ fingerprintSuccess: true })
-            .then((n) => {
-              if (n > 0) logger.debug('cli telemetry reported', { records: n })
-            })
-            .catch(() => {})
-        }
-        // 周期对齐:CLI 版本随官方发版变化,写死一个过时值本身是可用指纹.
-        // 每 6h 拉一次 npm latest;版本变了就 warn(一眼看出该跟进官方).
-        // unref:定时器绝不挡进程退出.
-        const versionSweeper = setInterval(() => {
-          if (settingsStore?.get?.().cliVersionAutoRefresh !== true) return
-          const before = getCliVersion()
-          void refreshCliVersion()
-            .then((next) => {
-              if (next && next !== before) {
-                logger.warn('cli fingerprint version changed upstream; realigned', {
-                  from: before,
-                  to: next,
-                })
-              }
-            })
-            .catch(() => {})
-        }, 6 * 60 * 60 * 1000)
-        if (versionSweeper.unref) versionSweeper.unref()
-      })
-      .catch(() => {})
-
-    // 会话句柄扫尾:把上次进程遗留的句柄 DELETE 掉(进程退出后 instanceId 就没了,
-    // 不扫就是"无法寻址的计费孤儿",一直占着上游槽位;见
-    // docs/account-scheduling-and-refund.md §3).
-    void ctx.runtimes
-      .cleanupOrphanSessions({ budgetMs: 15_000 })
-      .then((sweep) => {
-        if (sweep.cleaned || sweep.failed || sweep.skipped || sweep.deferred) {
-          logger.info('leftover session sweep on startup', sweep)
-        }
-      })
-      .catch((err) => {
-        logger.warn('leftover session sweep failed (continuing)', {
-          error: err instanceof Error ? err.message : String(err),
-        })
-      })
-
-    // 退款追问:待结算的挂起退款必须持续追,不能只等下次重启.
-    // 上游要求用同一个 instanceId 重放 DELETE 才给终态回执,且结算窗口可能跨
-    // 分钟级;只扫一次 = 进程活着就永远问不到那笔钱(见 docs/account-scheduling-and-refund.md §3).
-    // 低频(5 分钟),有界(30s 预算),unref(不挡进程退出).
-    const refundSweeper = setInterval(() => {
-      void ctx.runtimes
-        .sweepPendingRefunds({ budgetMs: 30_000 })
-        .catch((err) => {
-          logger.warn('pending refund sweep failed (continuing)', {
-            error: err instanceof Error ? err.message : String(err),
-          })
-        })
-    }, 5 * 60_000)
-    if (refundSweeper.unref) refundSweeper.unref()
-
-    if (ctx.authEmail) {
-      //  启动路径不发任何上游请求(用户裁决,见
-      // docs/reverse/20-upstream-endpoint-whitelist.md §20.3).
-      // 以前的 /api/v1/me 自检已删除:客户端 165 条抓包里它出现 0 次,
-      // 是我们凭空多出来的流量,本身就是"非客户端"信号.
-      logger.info('upstream auth ready (no upstream request on startup)', {
-        account: ctx.authEmail,
-        accounts: ctx.runtimes.list().map((a) => a.email),
-      })
-    } else {
-      logger.info('no Freebuff accounts yet — add one from the web console', {
-        credentialsDir: ctx.runtimes.dir,
-      })
-    }
-  }
 
   const loginFlows = new LoginFlowManager({
     file: path.join(dataDir, 'login-flows.json'),
@@ -517,9 +426,9 @@ async function main() {
     restart: scheduleRestart,
   })
 
-  // 端口已经在监听了 —— 现在才去碰上游(扫尾 + 身份自检).
+  // 端口已经在监听了 -- 现在才去碰上游(扫尾 + 身份自检).
   // 顺序是刻意的:上游可达与否绝不能决定"服务起不起来".
-  startUpstreamWarmup()
+  startUpstreamWarmup({ ctx, settingsStore })
 
   process.on('SIGINT', () => shutdown('SIGINT'))
   process.on('SIGTERM', () => shutdown('SIGTERM'))

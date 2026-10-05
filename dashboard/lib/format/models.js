@@ -1,4 +1,4 @@
-import { t } from '../../i18n.js'
+import { t } from '../../locale/index.js'
 import { api } from '../api.js'
 import { state } from '../state.js'
 
@@ -36,7 +36,7 @@ export function applyModelNames(payload) {
 }
 
 /**
- - 上游给了额度的模型 —— 换算成 /v1/models 里实际会出现的 id.
+ - 上游给了额度的模型 ---- 换算成 /v1/models 里实际会出现的 id.
  *
  - 注释里别写  + /v1/...: 紧邻斜杠会提前闭合块注释(这正是
  - 刚才写这行时踩到的语法错误).
@@ -58,7 +58,7 @@ export function upstreamReadableIds() {
      *
      - 此前这里写的是 catalogId || displayName,而后端 /api/models/upstream
      - 的 id 用的是 displayName(catalogId 只是 legacy 反查的并列字段,
-     - 值其实是另一个东西 —— 实测 id='MiMo 2.6 Flash' 而 catalogId='mimo/mimo-v2.5').
+     - 值其实是另一个东西 ---- 实测 id='MiMo 2.6 Flash' 而 catalogId='mimo/mimo-v2.5').
      - 两边算出不同的 id → 测试对话下拉的  一个也标不出来.
      *
      - 与 src/model.js 的 catalogDisplayName() 同源:displayName 优先,
@@ -68,7 +68,7 @@ export function upstreamReadableIds() {
   }
   /**
    - 目录驱动口径:后端 /api/models 的每条自带 rate_limit(有额度的才有),
-   - 直接按它补充  集合 —— 不必依赖 upstreamModelIds 那张单独的表.
+   - 直接按它补充  集合 ---- 不必依赖 upstreamModelIds 那张单独的表.
    - (该表以前来自 session 回执的 rateLimitsByModel,只有 6 个键,用它标注
    - 会大面积漏标;清单现在以目录行为准.)
    */
@@ -84,7 +84,7 @@ export function upstreamReadableIds() {
  - 上游回执(rateLimitsByModel / freebucks.prices / session.model)给的全是
  - 目录 key(m-00032eaeec),直接渲染出来用户根本认不出是哪个模型.
  - 取值顺序:后端随总览下发的映射 > 模型列表里的 display_name > 去掉 provider
- - 前缀的可读 id > 原值.绝不返回空——取不到名字就显示原 key,不隐藏信息.
+ - 前缀的可读 id > 原值.绝不返回空----取不到名字就显示原 key,不隐藏信息.
  - @param {string} model
  - @returns {string}
  */
@@ -104,7 +104,7 @@ export function modelNameFor(model) {
  - 其次把目录 key(m-00032eaeec)换成显示名,最后才回落到原值.
  *
  - 上游回执侧(session.model / rateLimitsByModel / prices)用的全是
- - 目录 key,直接显示就是 m-00032eaeec —— 用户看不出是哪个模型.
+ - 目录 key,直接显示就是 m-00032eaeec ---- 用户看不出是哪个模型.
  - 涉及请求/寻址的地方绝不能用这个函数(那里要的是 key 本身).
  - 桥接依据见
  - .agents/notes/implemented/bug-fix/2026-10-02-catalog-key-display-name-bridge.md
@@ -116,7 +116,7 @@ export function modelLabel(a) {
   const key = sess?.model
   if (!key) return '—'
   // 后端已解析的可读名优先(session.modelDisplayName),再用本地映射兜底,
-  // 最后才落到短 key —— 与额度 chip 走同一个解析函数,避免两处口径分叉.
+  // 最后才落到短 key ---- 与额度 chip 走同一个解析函数,避免两处口径分叉.
   return sess?.modelDisplayName || modelNameFor(key)
 }
 

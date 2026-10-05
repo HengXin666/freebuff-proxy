@@ -43,7 +43,7 @@ function collectJsonlFiles(dir) {
 const norm = (h) => String(h).toLowerCase()
 
 /**
- - 客户端 bun 裸 fetch 的固定四件套 —— 不算"业务头",
+ - 客户端 bun 裸 fetch 的固定四件套 ---- 不算"业务头",
  - 从契约里剔掉,避免上游加个传输层头就误报.
  */
 const TRANSPORT_HEADERS = new Set([

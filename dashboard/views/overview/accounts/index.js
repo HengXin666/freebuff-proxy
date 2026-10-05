@@ -1,4 +1,4 @@
-import { t } from '../../../i18n.js'
+import { t } from '../../../locale/index.js'
 import { el, icon } from '../../../lib/dom.js'
 import { need } from '../../../lib/hooks.js'
 import { state } from '../../../lib/state.js'
@@ -53,7 +53,7 @@ export async function renderAccountsCard(data) {
   // 账号分区容器必须自带 id:局部刷新要按它整体替换.
   // 早先这里直接 append 一个没 id 的 div,刷新时用 $('.table-wrap') 选到的却是
   // 第一个分区里的表,把它替换成"整张新表",于是新表被塞进第一个 <details>
-  // 里,旧分区原样留着——用户看到的就是[多出一条栏目,旧的没被删掉].
+  // 里,旧分区原样留着----用户看到的就是[多出一条栏目,旧的没被删掉].
   card.append(el('div', { id: 'accounts-sections' }, buildAccountsTable(data.accounts)))
   return card
 }

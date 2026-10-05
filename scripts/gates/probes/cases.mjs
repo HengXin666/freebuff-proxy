@@ -251,10 +251,10 @@ export const probes = [
     expectIn: ['语法不可解析'],
     run: () => {
       // 夹具必须超过 syntax 门禁的 MIN_FILES 下界(20),否则报出来的是
-      // "扫描面太小"而不是"语法不可解析" —— 那是下界在起作用,不是本探针
+      // "扫描面太小"而不是"语法不可解析" ---- 那是下界在起作用,不是本探针
       // 要测的判据.CI 实测被这条卡红过.
       // 坏样本必须跨 Node 版本都判错.实测:'export function broken( {'
-      // 在 node 22(CI)被判为可解析,在 node 26(本机)判为语法错 ——
+      // 在 node 22(CI)被判为可解析,在 node 26(本机)判为语法错 ----
       // 于是本地绿,CI 红.'const a = {;' 两个版本都判错.
       const files = { 'src/bad.js': 'const a = {;\n' }
       for (let i = 0; i < 25; i++) files[`src/ok${i}.js`] = 'export function ok() {\n  return 1\n}\n'
@@ -268,7 +268,7 @@ export const probes = [
     expect: 0,
     reason: '防误报（门禁对任何输入都报红时，会被整条关掉）',
     run: () => {
-      // 夹具必须超过门禁的 MIN_FILES 下界(20),否则会被"扫描面太小"拦下 ——
+      // 夹具必须超过门禁的 MIN_FILES 下界(20),否则会被"扫描面太小"拦下 ----
       // 那是下界断言在起作用,不是本控制组要测的东西.
       const files = {}
       for (let i = 0; i < 25; i++) files[`src/ok${i}.js`] = 'export function ok() {\n  return 1\n}\n'

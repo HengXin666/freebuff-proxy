@@ -1,0 +1,54 @@
+/* ============================================================
+ * 加载态样式
+ *
+ * spinner / 骨架屏 / 顶部进度条 / 按钮内加载态.
+ * 口径: 纯切分, 选择器与声明逐字节不变. 由 dashboard/index.html 依次加载
+ * (base -> loading -> views; 后者依赖前者的主题变量与基础类).
+ * ============================================================ */
+
+/* ---------- spinner / loading ---------- */
+.spinner {
+  display: inline-block;
+  width: 16px; height: 16px;
+  border: 2px solid var(--border2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  vertical-align: -3px;
+  flex: 0 0 auto;
+}
+.spinner.lg { width: 26px; height: 26px; border-width: 3px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 骨架屏 */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg3);
+  border-radius: 6px;
+  min-height: 14px;
+}
+.skeleton::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .06), transparent);
+  animation: shimmer 1.4s infinite;
+}
+@keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+/* 加载进度条（顶部） */
+.progress-bar {
+  position: fixed;
+  top: 0; left: 0;
+  height: 3px;
+  width: 0;
+  background: linear-gradient(90deg, var(--accent), var(--accent2), var(--accent3));
+  z-index: 100;
+  box-shadow: 0 0 12px rgba(91, 140, 255, .6);
+  transition: width .25s var(--ease), opacity .4s;
+}
+.progress-bar.done { opacity: 0; }
+
+/* 按钮内加载态 */
+.btn-loading { pointer-events: none; opacity: .7; }
+.btn-loading .spinner { border-color: rgba(255,255,255,.35); border-top-color: #fff; }

@@ -1,9 +1,9 @@
 /**
- - check-notes —— 注释规范(JSDoc 必须与签名一致).
+ - check-notes ---- 注释规范(JSDoc 必须与签名一致).
  *
  - 拦什么(四条,只针对跨模块可见的契约):
- - 1. 导出函数/类缺 JSDoc —— 对外契约没有文字,下游只能读实现猜;
- - 2. JSDoc 里的 @param 声明了签名里不存在的参数 —— 这种注释比没有注释更
+ - 1. 导出函数/类缺 JSDoc ---- 对外契约没有文字,下游只能读实现猜;
+ - 2. JSDoc 里的 @param 声明了签名里不存在的参数 ---- 这种注释比没有注释更
  - 危险,它会让人按错的名字去调用;
  - 3. 真实参数没有被 @param 覆盖;
  - 4. 导出函数有值返回却没有 @returns.
@@ -65,14 +65,25 @@ function problemsOf(item) {
   const params = item.isClass ? [] : paramNamesOf(item.sf, item.node)
   const declared = tags.filter((t) => t.tag === 'param').map((t) => paramTagName(t.rest))
   for (const d of declared) {
-    if (d && !params.some((real) => real === d || real.includes(d))) {
+    // 解构参数的文档写法是 @param {type} opts.key, 而 paramNamesOf 给的是键名
+    // (key). 比对时把文档标签按 . 取末段, 两种写法都能对上.
+    const dLeaf = d.includes('.') ? d.slice(d.lastIndexOf('.') + 1) : d
+    // 三向都能对上: 完整名(d) / 末段(dLeaf) / 或者 d 是解构容器名(有参数以 d. 开头)
+    const hit =
+      !d ||
+      params.some((real) => real === d || real.includes(d) || real === dLeaf) ||
+      // d 是解构容器名(如 opts)时, 文档里会有 opts.key 这样的同级标签, 也算覆盖.
+      declared.some((other) => other.startsWith(`${d}.`))
+    if (!hit) {
       out.push(`@param ${d} 在签名里不存在（真实参数: ${params.join(', ') || '无'}）`)
     }
   }
   if (!item.isClass) {
     for (const p of params) {
       const simple = p.replace(/^\.\.\./, '')
-      if (!declared.includes(simple)) out.push(`参数 ${p} 缺 @param`)
+      // 反向: 真实参数是解构键名时, 文档可能写 opts.key, 按末段比对.
+      const covered = declared.some((d) => d === simple || d.endsWith(`.${simple}`))
+      if (!covered) out.push(`参数 ${p} 缺 @param`)
     }
     if (hasValueReturn(item.node) && !tags.some((t) => t.tag === 'returns' || t.tag === 'return')) {
       out.push('有返回值但缺 @returns')

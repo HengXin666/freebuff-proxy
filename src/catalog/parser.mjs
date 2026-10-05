@@ -1,5 +1,5 @@
 /**
- - Freebuff catalog parser — 共享解析逻辑.
+ - Freebuff catalog parser -- 共享解析逻辑.
  *
  - 从 Codebuff/Freebuff 开源常量源码(TS 文本)解析模型目录:
  - - common/src/constants/freebuff-model-ids.ts → 模型 id 常量(字符串字面量)
@@ -32,7 +32,7 @@ export function collectModelIdConstants(...sources) {
 
 /**
  - 解析 export const MAP: Record<string, string> = { [CONST]: 'x', 'id': 'y' }.
- - 返回 { key: value },key 可能是常量名或字面 id——调用方用 modelIdConsts 解引用.
+ - 返回 { key: value },key 可能是常量名或字面 id----调用方用 modelIdConsts 解引用.
  - @param {string} src
  - @param {string} pattern
  - @returns {Record<string, string>}
@@ -63,7 +63,7 @@ export function parseStringConstMap(src, pattern) {
 export function buildCatalogFromSources(modelIdsTs, modelsTs, agentsTs) {
   const modelIdConsts = collectModelIdConstants(modelIdsTs, modelsTs)
   // mimoModels.mimoV25 是间接引用(model-config.ts 里 'mimo/mimo-v2.5'),
-  // 常量收集抓不到字符串字面量——这里手动补上.
+  // 常量收集抓不到字符串字面量----这里手动补上.
   modelIdConsts.FREEBUFF_MIMO_V25_MODEL_ID = 'mimo/mimo-v2.5'
   const idOf = (k) => modelIdConsts[k] || k
 

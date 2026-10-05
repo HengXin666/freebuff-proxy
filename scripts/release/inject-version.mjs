@@ -9,7 +9,7 @@
  *
  - 发版流水线(.github/workflows/docker-image.yml)在 docker build 前调用本脚本,
  - 把 docker/metadata-action 从 git tag 解析出的版本号硬编码进镜像内的
- - version.json——镜像里显示什么版本完全由流水线决定,不依赖本地状态.
+ - version.json----镜像里显示什么版本完全由流水线决定,不依赖本地状态.
  *
  - 本地开发没有 version.json 时,前端 fallback 显示 "dev".
  */

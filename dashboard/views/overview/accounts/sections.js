@@ -1,4 +1,4 @@
-import { t } from '../../../i18n.js'
+import { t } from '../../../locale/index.js'
 import { $, el } from '../../../lib/dom.js'
 import { state } from '../../../lib/state.js'
 import { buildAccountRow } from './row.js'
@@ -6,7 +6,7 @@ import { buildAccountRow } from './row.js'
 
 /**
  - 账号分区(用户口径):按"这个号现在处于什么处境"分组,默认只展开"正在调度",
- - 其余折叠——避免一屏全是已经被打废的号,把真正在干活的号淹掉.
+ - 其余折叠----避免一屏全是已经被打废的号,把真正在干活的号淹掉.
  *
  - 顺序即优先级:封禁 > 额度不足 > 警告 > 正在调度 > 从未使用.判定按"最坏优先",
  - 一个号只出现在一个分区里(否则"已封禁"还会同时出现在"额度不足"里,看着像有救).
@@ -38,7 +38,7 @@ export const ACCOUNT_SECTIONS = [
 /**
  - [低额度]判定:余额低于阈值(可调,默认 15 FB),但还买得起当前模型.
  - 阈值来源:/api/settings 的 lowBalanceThreshold(0 = 关闭该分组).
- - 用户要这个分组的原因是[一眼看到快跑完的号]——所以它不影响调度,
+ - 用户要这个分组的原因是[一眼看到快跑完的号]----所以它不影响调度,
  - 归到这里的号照常参与选号(这点和[额度不足]完全不同).
  */
 export function lowBalanceHit(a) {
@@ -68,7 +68,7 @@ export function classifyAccount(a) {
   // 1) 封禁:探测明确 banned,账本记过 bannedAt,或后端已判 banned.
   //    注意 CDN 兜底:country_blocked 是出口风控,不是账号封禁,刻意不归这里.
   if (a.banned === true || a.bannedAt || code.includes('banned')) return 'banned'
-  // 2) 额度不足:与后端的两道闸门严格对齐——
+  // 2) 额度不足:与后端的两道闸门严格对齐----
   //    ① Freebucks:今日池跑完(daily.remaining <= 0,且 limit > 0 才算真有池子)
   //       或余额买不起当前模型(balance < 单价);
   //    ② session_units:该模型时长额度用尽(recentCount >= limit,小数).
@@ -103,7 +103,7 @@ export function classifyAccount(a) {
     }
   }
   // 2.5) 低额度:余额低于用户设的阈值(默认 15 FB ≈ deepseek-v4-flash 单价),
-  //      但还买得起当前模型——所以这不是故障,是[快见底了]的提前预警.
+  //      但还买得起当前模型----所以这不是故障,是[快见底了]的提前预警.
   //      注意必须排在[额度不足]之后:真买不起的号属于 exhausted,不该混进来.
   if (lowBalanceHit(a)) return 'lowbalance'
   // 3) 警告:探测失败(风控/限流/凭证)或正在冷却
@@ -126,7 +126,7 @@ export function groupAccounts(accounts) {
 
 /**
  - 分区的展开状态:用户的显式操作优先,其次才是章节默认值.
- - 读 state 而不是读 DOM —— 分区可能因为这一轮没有任何账号而整个消失,
+ - 读 state 而不是读 DOM ---- 分区可能因为这一轮没有任何账号而整个消失,
  - 消失期间也必须记住用户摊开过它.
  */
 export function sectionOpen(section) {
@@ -187,7 +187,7 @@ export function buildAccountsTable(accounts) {
  - 账号分区定点更新(局部刷新的唯一入口).
  *
  - 为什么不能像以前那样 wrap.innerHTML = '' 再整块重建:那等于把整个列表
- - 换成一批全新的 <details>,一切纯 UI 状态随之归零 —— 用户手动摊开的分区
+ - 换成一批全新的 <details>,一切纯 UI 状态随之归零 ---- 用户手动摊开的分区
  - 被折回去,滚动位置跳回顶部,正在看的行闪烁.用户明确要求刷新不得重置
  - 分组的展开/折叠状态.
  *

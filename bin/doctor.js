@@ -7,11 +7,20 @@ import { buildAppContext } from '../src/app-context.js'
 import { listAccounts, resolveCredentialsDir } from '../src/auth-store.js'
 import { UserStore } from '../src/web/user-store.js'
 import { configureLogger } from '../src/util/log.js'
+import { printConfigSummary, printIssues, probeUpstream } from './doctor/report.ts'
 
+/**
+ - @param {unknown} host 监听地址
+ - @returns {boolean} 是否回环地址
+ */
 function isLoopbackHost(host) {
   return ['127.0.0.1', 'localhost', '::1'].includes(String(host || ''))
 }
 
+/**
+ - @param {string[]} argv 命令行参数
+ - @returns {string|undefined} --config 或 -c 后面的路径
+ */
 function parseConfigPath(argv) {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--config' || argv[i] === '-c') return argv[i + 1]
@@ -19,43 +28,14 @@ function parseConfigPath(argv) {
   return undefined
 }
 
-function printIssues(issues) {
-  if (!issues.length) {
-    console.log('doctor: all checks passed')
-    return
-  }
-  console.log('doctor: issues')
-  for (const i of issues) console.log(' -', i)
-}
-
+/** 打印配置 / 账号 / 上游可达性, 并汇总问题. */
 async function main() {
   const config = loadConfig(parseConfigPath(process.argv.slice(2)))
   configureLogger(config.logging)
 
   const issues = []
   const dir = resolveCredentialsDir(config)
-  console.log(
-    'config path:',
-    config._configPath,
-    config._configExists ? '(found)' : '(missing, using defaults)',
-  )
-  console.log('data dir:', config.server.dataDir)
-  console.log(
-    'credentials dir:',
-    dir,
-    fs.existsSync(dir) ? '(found)' : '(missing)',
-  )
-  console.log('api_base:', config.upstream.apiBase)
-  console.log('login_base:', config.upstream.loginBase)
-  console.log(
-    'proxy:',
-    config.upstream.proxy ||
-      process.env.HTTPS_PROXY ||
-      process.env.https_proxy ||
-      process.env.HTTP_PROXY ||
-      process.env.http_proxy ||
-      '(none)',
-  )
+  printConfigSummary(config, dir, fs.existsSync)
 
   const userStore = new UserStore(path.join(config.server.dataDir, 'users.json'))
   console.log(
@@ -90,33 +70,8 @@ async function main() {
     process.exitCode = 1
     return
   }
-  /**
-   - 不再用 GET /api/v1/me:客户端 165 条抓包里它出现 0 次
-   - (docs/reverse/20 §20.2).doctor 是用户主动执行的诊断工具,
-   - 允许探测,但只准用客户端真实发过的端点 —— 这里改用
-   - GET /api/v1/freebuff/session(客户端 17 次).
-   */
-  try {
-    const session = await ctx.upstream.freebuffSession('GET')
-    console.log('GET /api/v1/freebuff/session: OK', {
-      status: session?.status,
-      accessTier: session?.accessTier,
-    })
-  } catch (err) {
-    issues.push(
-      `GET /api/v1/freebuff/session failed: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    )
-  }
-  try {
-    const session = await ctx.upstream.freebuffSession('GET')
-    console.log('GET /api/v1/freebuff/session:', session?.status || session)
-  } catch (err) {
-    issues.push(
-      `GET freebuff session failed: ${err instanceof Error ? err.message : String(err)}`,
-    )
-  }
+
+  await probeUpstream(ctx.upstream, issues)
   printIssues(issues)
   if (issues.length) process.exitCode = 1
 }

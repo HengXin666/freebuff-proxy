@@ -1,5 +1,5 @@
 /**
- - check-format —— 格式红线(不引入任何格式化工具,零依赖).
+ - check-format ---- 格式红线(不引入任何格式化工具,零依赖).
  *
  - 拦什么(六条,全部是"机器能判,人不用争论"的形态):
  - 1. 缩进含 tab(本仓 1874 个函数无一处用 tab,混入会破坏所有 diff 对齐);
@@ -64,7 +64,7 @@ for (const rel of codeFiles()) {
   if (longLines > 0) observed[rel] = longLines
 }
 
-// —— 行宽棘轮 ——
+// ---- 行宽棘轮 ----
 const { entries } = readBaseline(BASELINE)
 const { grown, shrunk, fresh } = reconcile(observed, entries)
 for (const [file, was, now] of grown) {

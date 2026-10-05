@@ -85,7 +85,7 @@ export function icon(name, size = 16) {
   svg.setAttribute('aria-hidden', 'true')
   /**
    - 图标路径是手写的 SVG 片段,很多自闭合形状(<rect ... /> / <circle ... />)
-   - 漏了斜杠,HTML 解析器会把它当成开标签把后面的兄弟节点吞进去 ——
+   - 漏了斜杠,HTML 解析器会把它当成开标签把后面的兄弟节点吞进去 ----
    - 这正是[点局部刷新后多出一条栏目]的原因之一(另一个是刷新选错了容器,
    - 见 refreshAccountsCard 里的注释).
    - 这里统一补上 XHTML 自闭合斜杠,让每个图形的边界明确.

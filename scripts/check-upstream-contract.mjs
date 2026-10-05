@@ -103,7 +103,7 @@ function main() {
   const files = SCAN_ROOTS.flatMap((r) => walk(join(ROOT, r)))
   const bareRe = /['"`](x-freebuff-[a-z0-9-]+|x-fb-[a-z0-9-]+)['"`]/g
   /**
-   - 本代理自己的响应头前缀(x-freebuff-proxy-*)—— 那是给下游看的,
+   - 本代理自己的响应头前缀(x-freebuff-proxy-*)---- 那是给下游看的,
    - 不是上游契约的一部分,不能当成"未登记的上游头"误报.
    */
   const SELF_HEADER_PREFIX = 'x-freebuff-proxy-'
@@ -127,7 +127,7 @@ function main() {
     const src = readFileSync(f, 'utf8')
     for (const name of retired) {
       /**
-       - 只扫代码,注释里提到不算违规 ——
+       - 只扫代码,注释里提到不算违规 ----
        - 那些注释正是在解释"为什么废弃",把它们当违规会逼人删掉说明.
        - 这里先整体剥离块注释(含 JSDoc 的 * 行)再逐行找字符串字面量.
        */

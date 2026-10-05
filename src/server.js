@@ -1,10 +1,10 @@
 /**
- - HTTP 装配层 —— 把三张面(对外 LLM / 控制台 / 静态资源)接到一个 server 上.
+ - HTTP 装配层 ---- 把三张面(对外 LLM / 控制台 / 静态资源)接到一个 server 上.
  *
  - 这个文件刻意保持只有装配:路由分流在 ./server/route-table.js,
  - 请求上下文在 ./server/request-context.js,启动副作用在 ./server/startup-tasks.js.
  - 理由是它是全仓最容易膨胀的地方(每加一个路由就想往里塞一段),而它同时是
- - 所有模块的汇聚点 —— 一旦超过 300 行,读它的人得同时装下四五个模块的接口.
+ - 所有模块的汇聚点 ---- 一旦超过 300 行,读它的人得同时装下四五个模块的接口.
  *
  - @see ./server/route-table.js   pathname → 面(含未知路径的处置)
  - @see ./server/startup-tasks.js 启动期副作用(catalog 缓存 seed)

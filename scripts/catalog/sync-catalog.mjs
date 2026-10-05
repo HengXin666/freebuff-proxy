@@ -14,7 +14,7 @@
  *
  - 解析逻辑见 src/catalog/parser.mjs(与运行时自动同步共用一份,避免漂移).
  - 运行时自动同步见 src/catalog/runtime-sync.mjs(启动后每 6h 拉上游源码,
- - 写 data/catalog-cache.json,失败保留旧缓存——对齐 trefeon/freebuff-proxy
+ - 写 data/catalog-cache.json,失败保留旧缓存----对齐 trefeon/freebuff-proxy
  - 的 Registry.Refresh).
  *
  - 以后上游上了新模型,clone 最新 Codebuff 源码跑一次本脚本即可,

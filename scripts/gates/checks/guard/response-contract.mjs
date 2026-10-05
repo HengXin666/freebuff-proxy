@@ -1,19 +1,19 @@
 /**
- * check-response-contract —— 上游响应契约的对账与棘轮。
+ * check-response-contract ---- 上游响应契约的对账与棘轮.
  *
- * 三条判据（对应的都是实测出来的失效形态）：
+ * 三条判据(对应的都是实测出来的失效形态):
  *
- *   1. 常量本身自洽：字段名/判据码非空、不重复。重复的常量意味着同一事实
- *      有两个名字，那正是这个文件要消灭的东西。
- *   2. 快照与常量一致：docs/reverse/upstream-response-contract.json 必须
- *      与 src/upstream/response-contract.js 声明完全相同（双向比对）。
- *      上游改了字段名 → 只改常量一处 → 重生成快照 → 门禁转绿；快照忘更新会红。
- *   3. 裸字段读取只许降不许涨（棘轮）：在真源之外的地方直接写
- *      .rateLimitsByModel / 'freebucksShortfall' 这类字面量，逐文件计数，
- *      只拦新增。存量（15 个文件读 rateLimitsByModel）是历史，不要求今天就清，
- *      但新的读取必须从真源取常量，否则"上游改一处要改 N 个文件"会继续恶化。
+ *   1. 常量本身自洽:字段名/判据码非空,不重复.重复的常量意味着同一事实
+ *      有两个名字,那正是这个文件要消灭的东西.
+ *   2. 快照与常量一致:docs/reverse/upstream-response-contract.json 必须
+ *      与 src/upstream/response-contract.js 声明完全相同(双向比对).
+ *      上游改了字段名 → 只改常量一处 → 重生成快照 → 门禁转绿;快照忘更新会红.
+ *   3. 裸字段读取只许降不许涨(棘轮):在真源之外的地方直接写
+ *      .rateLimitsByModel / 'freebucksShortfall' 这类字面量,逐文件计数,
+ *      只拦新增.存量(15 个文件读 rateLimitsByModel)是历史,不要求今天就清,
+ *      但新的读取必须从真源取常量,否则"上游改一处要改 N 个文件"会继续恶化.
  *
- * 扫描根：CHECK_ROOT。退出码：0 PASS / 1 FAIL / 2 用法错。
+ * 扫描根:CHECK_ROOT.退出码:0 PASS / 1 FAIL / 2 用法错.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -28,7 +28,7 @@ const TRUTH = 'src/upstream/response-contract.js'
 const SNAPSHOT = 'docs/reverse/upstream-response-contract.json'
 const report = new Report('response-contract')
 
-/** 真源之外允许出现裸字面量的地方（它们本身就是"关于字段名"的文档或夹具）。 */
+/** 真源之外允许出现裸字面量的地方(它们本身就是"关于字段名"的文档或夹具). */
 const LITERAL_EXEMPT = [
   TRUTH,
   'docs/',
@@ -39,7 +39,7 @@ const LITERAL_EXEMPT = [
   'src/catalog/',
 ]
 
-/** 只扫这些目录找裸字面量（产品运行时代码）。 */
+/** 只扫这些目录找裸字面量(产品运行时代码). */
 const SCAN_ROOTS = ['src/', 'bin/']
 
 let mod
@@ -51,8 +51,8 @@ try {
 }
 
 /**
- * 校验一组常量：非空、无重复、无空串。
- * @param {string} label 组名（用于报错）
+ * 校验一组常量:非空,无重复,无空串.
+ * @param {string} label 组名(用于报错)
  * @param {string[]} values 常量值列表
  * @returns {number} 发现的问题数
  */
@@ -80,7 +80,7 @@ function checkConstants(label, values) {
   return bad
 }
 
-/** 快照 ↔ 常量双向比对。 */
+/** 快照 ↔ 常量双向比对. */
 function checkSnapshot(fields, codes) {
   const file = path.join(ROOT, SNAPSHOT)
   if (!fs.existsSync(file)) {
@@ -102,7 +102,7 @@ function checkSnapshot(fields, codes) {
   }
 }
 
-/** 统计每个字段名在真源之外被裸读的次数（棘轮观测值）。 */
+/** 统计每个字段名在真源之外被裸读的次数(棘轮观测值). */
 function surveyLiterals(fields, codes) {
   const observed = {}
   const patterns = [
@@ -127,7 +127,7 @@ function surveyLiterals(fields, codes) {
   return observed
 }
 
-/** 正则转义。 */
+/** 正则转义. */
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }

@@ -75,7 +75,7 @@ runtime 在构造时都会 `new ProxyAgent(...)`（带 keep-alive 连接池）�
 **可观测**：`GET /api/overview` 新增 `slots` = `{inFlight, queued, limit}`，控制台总览的
 「在途请求」卡片直接显示 `在途/上限`（排队时标注「排队 N」，打满变红）。以前这个状态完全
 不可观测，只能靠"体感不接单"发现；现在泄漏会立刻显示为 `inFlight` 长期贴着 `limit` 不降。
-回归测试见 `test/smoke.mjs` 的 `(STALL)` 用例（用真实 server + 真实半开 socket 复现，
+回归测试见 `test/suites/entries/smoke/smoke.mjs` 的 `(STALL)` 用例（用真实 server + 真实半开 socket 复现，
 旧实现在该用例下会永久挂起）。
 
 ### 客户端断开立即释放账号锁（不再占死全部请求）
@@ -115,7 +115,7 @@ abort 旧请求，但代理这边仍在闷等，**并且拿到账号锁后继续
    等待一旦超过这个悬崖，客户端只会看到一个「连上了但一直转圈」的连接；超预算即以
    429 `scheduling_timeout` 快速返回让客户端重试，绝不静默闷等。
 
-回归测试见 `test/smoke.mjs` 的 `fb-proxy-clientgone` 用例（单账号、并发 1：第一个请求
+回归测试见 `test/suites/entries/smoke/smoke.mjs` 的 `fb-proxy-clientgone` 用例（单账号、并发 1：第一个请求
 占住唯一槽位，第二个请求用裸 socket 在排队中途拔线）。**已实测**：去掉断开竞速后该用例
 失败（`2 !== 1`，死请求仍在推进上游），加上即通过。
 

@@ -4,26 +4,21 @@
     "note": "体量棘轮：逐文件当前行数水位，只许降不许涨"
   },
   "entries": {
-    "bin/serve.js": 536,
-    "cli-bridge/serve.mjs": 304,
-    "cli-bridge/upstream.mjs": 1103,
-    "dashboard/i18n.js": 917,
-    "dashboard/style.css": 732,
-    "scripts/ci/pipeline-image-test.mjs": 570,
+    "bin/serve.js": 445,
+    "cli-bridge/upstream.mjs": 313,
     "src/account-state-store.js": 311,
-    "src/app-context.js": 2803,
+    "src/app-context.js": 765,
     "src/free-mode.js": 340,
     "src/model/list-response.ts": 310,
-    "src/proxy.js": 2232,
+    "src/proxy.js": 933,
     "src/session-handles.js": 483,
-    "src/session-manager.js": 2280,
-    "src/upstream/catalog-protocol.js": 573,
+    "src/upstream/catalog-protocol.js": 302,
     "src/upstream/client/errors.ts": 323,
     "src/upstream/device-signing.js": 471,
     "src/upstream/foreign-client-signals.js": 465,
     "src/upstream/official-fingerprint.js": 569,
     "src/upstream/official-rpc.js": 397,
-    "test/smoke.mjs": 9362,
-    "test/verify-model-mapping-truth.mjs": 486
+    "test/smoke.mjs": 9314,
+    "test/verify-model-mapping-truth.mjs": 309
   }
 }

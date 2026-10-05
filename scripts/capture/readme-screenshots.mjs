@@ -4,7 +4,7 @@
  - 用法: node scripts/readme-screenshots.mjs <cdpPort> <baseUrl> <password> <outDir>
  *
  - 关键点:
- - 1) 控制台是 hash 路由 SPA,切换 #route 不会重新加载页面——必须整页
+ - 1) 控制台是 hash 路由 SPA,切换 #route 不会重新加载页面----必须整页
  - navigate + reload,再等视图真正画出内容(轮询 #app 文本长度).
  - 2) 截图用于 README,必须打码:API Key / 邮箱只保留前缀.
  */

@@ -1,5 +1,5 @@
 /**
- - bridge.mjs — Node 侧封装:把上游请求交给 bun 子进程执行.
+ - bridge.mjs -- Node 侧封装:把上游请求交给 bun 子进程执行.
  *
  - 动机见 README.md:chat 端点可能做 TLS 指纹分级检测,
  - Node(OpenSSL 3.6.5 / undici)与官方 bun 的 Client Hello 可区分

@@ -1,4 +1,4 @@
-import { t } from '../i18n.js'
+import { t } from '../locale/index.js'
 import { state } from './state.js'
 
 /**
@@ -7,7 +7,7 @@ import { state } from './state.js'
  - 两条跨模块契约必须留在这一层(其余视图只关心 await api(...)):
  - 1. 401 = 登录态失效:清空 state.me 并触发整壳重建.触发方式是回调注入
  - (setUnauthorizedHandler(render),见 app.js 装配),不在这里 import 渲染器
- - —— 否则 lib/ → views/ → lib/ 成环,模块图会退化成"谁先加载谁赢".
+ - ---- 否则 lib/ → views/ → lib/ 成环,模块图会退化成"谁先加载谁赢".
  - 2. 错误携带结构化判据:err.code(稳定业务码)/err.cause(底层原因码)
  - 一并挂上.以前只传中文文案字符串,调用方想区分故障类型只能解析文案,
  - 文案一改就崩.

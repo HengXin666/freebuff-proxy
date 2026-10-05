@@ -1,4 +1,4 @@
-import { t } from '../../i18n.js'
+import { t } from '../../locale/index.js'
 import { el } from '../dom.js'
 import { modelNameFor, poolLabel } from './models.js'
 import { firstReset, firstResetTz, fmtCountdown, fmtDuration, fmtReset } from './time.js'
@@ -13,7 +13,7 @@ export function fmtNum(n) {
 /**
  - 额度徽章颜色:用尽=红,余量≤2=黄,其余=绿.
  - 注意 recentCount 在按时长结算时是小数(admit 预占,提前释放按实际占用
- - 结算),所以这里保留小数,不用 ceil 抹平——否则 0.1 次会被显示成"已用 1 次".
+ - 结算),所以这里保留小数,不用 ceil 抹平----否则 0.1 次会被显示成"已用 1 次".
  */
 export function quotaBadgeClass(m) {
   const used = Math.max(0, Number(m.recentCount) || 0)
@@ -92,7 +92,7 @@ export function fmtQuota(quota, fb) {
   }
   // 计费口径(2026-09):上游按会话实际占用时长结算 Freebucks,每模型单价
   // 由 freebucks.prices 给出(N FB/小时).所以这里显示 FB,不再显示[次数].
-  // 诚实边界:上游只提供账号级 daily.spent,没有按模型的消耗明细——
+  // 诚实边界:上游只提供账号级 daily.spent,没有按模型的消耗明细----
   // 因此每模型能展示的是[单价]+[今日池折算的可用时长],不编造每模型已用量.
   const prices = fb && fb.prices ? fb.prices : null
   const poolLeft = fb && fb.daily ? Number(fb.daily.remaining) : null
@@ -135,7 +135,7 @@ export function fmtQuota(quota, fb) {
       style: 'margin:2px 4px 2px 0',
       title: tip,
     }, [
-      //  这里以前是 shortModel(model) —— 对目录 key(m-00032eaeec)来说
+      //  这里以前是 shortModel(model) ---- 对目录 key(m-00032eaeec)来说
       // "去 provider 前缀"是无效操作(它压根没有 /),于是裸 key 直接上屏.
       // 用户截图里那串 m-00032eaeec 10 FB/h 就是这么来的.改走统一的可读名.
       el('span', { class: 'muted' }, `${name} `),

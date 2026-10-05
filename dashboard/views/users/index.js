@@ -1,4 +1,4 @@
-import { t } from '../../i18n.js'
+import { t } from '../../locale/index.js'
 import { api } from '../../lib/api.js'
 import { $, el, icon } from '../../lib/dom.js'
 import { downloadTextFile } from '../../lib/download.js'
@@ -130,7 +130,7 @@ export function openAddAccount() {
     /**
      - 三行信息,各司其职:
      - 1. 标题(account.loginStartFailed)
-     - 2. err.message —— 含底层原始错误码(如 ECONNREFUSED),肉眼可见
+     - 2. err.message ---- 含底层原始错误码(如 ECONNREFUSED),肉眼可见
      - 3. 按 err.code 给的可操作引导(而不是让用户对着 AbortError 猜)
      */
     body.innerHTML = ''

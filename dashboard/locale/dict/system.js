@@ -1,0 +1,186 @@
+/**
+ * system 域的词条表 -- 从 dashboard/i18n.js 的 DICT 按域切出.
+ *
+ * 为什么按域切: DICT 原本 815 行单文件(超前端每文件 500 行上限), 而它全部是
+ * "key -> { 'zh-CN': ..., en: ... }" 的数据行, 没有任何逻辑. 按域切之后
+ * 每种语言的新增文案只改一个文件, 而不是在 800 行里定位.
+ *
+ * 口径: 纯切分, key 与文案逐字节不变.
+ */
+export default {
+  // ---- 代理 ----
+  'proxy.cardTitle': { 'zh-CN': '代理设置（全局代理池）', en: 'Proxy settings (global pool)' },
+  'proxy.cardHint': {
+    'zh-CN': '填一个或多个代理，保存立即生效；账号出口由系统内部分配（同一账号固定同一出口），无需逐个配置',
+    en: 'Add one or more proxies — changes take effect on save. Egress is assigned internally per account (one account keeps one exit), so no per-account setup is needed.',
+  },
+  'proxy.poolPlaceholder': {
+    'zh-CN': '一行一个代理，例如：\nhttp://user:pass@172.17.0.1:7890\nsocks5://127.0.0.1:1080\n（留空保存 = 清除全局池，走环境变量/直连）',
+    en: 'One proxy per line, e.g.:\nhttp://user:pass@172.17.0.1:7890\nsocks5://127.0.0.1:1080\n(Saving empty clears the global pool — env vars / direct connection are used instead)',
+  },
+  'proxy.testPlaceholder': { 'zh-CN': '测试单个代理，如 http://172.17.0.1:2334', en: 'Test a single proxy, e.g. http://172.17.0.1:2334' },
+  'proxy.testConfigured': { 'zh-CN': '测试已配置', en: 'Test configured' },
+  'proxy.effectiveList': { 'zh-CN': '当前生效代理：{list}', en: 'Currently effective proxies: {list}' },
+  'proxy.effectivePrefix': { 'zh-CN': '当前生效代理', en: 'Currently effective proxies' },
+  'proxy.testing': { 'zh-CN': '测试中…（最多 ~12s/个）', en: 'Testing… (up to ~12s each)' },
+  'proxy.notConfiguredDirect': { 'zh-CN': '当前未配置代理（直连）', en: 'No proxy configured (direct)' },
+  'proxy.usable': { 'zh-CN': '可用', en: 'Usable' },
+  'proxy.unusable': { 'zh-CN': '不可用', en: 'Unusable' },
+  'proxy.egressIp': { 'zh-CN': '出口 IP: {ip}', en: 'Egress IP: {ip}' },
+  'proxy.latencyMs': { 'zh-CN': ' · 延迟 {ms}ms', en: ' · latency {ms}ms' },
+  'proxy.upstreamStatus': { 'zh-CN': ' · 上游状态 {status}', en: ' · upstream status {status}' },
+  'proxy.testFailedRow': { 'zh-CN': '失败: {msg}（{ms}ms）', en: 'Failed: {msg} ({ms}ms)' },
+  'proxy.countryParen': { 'zh-CN': '（{country}）', en: '({country})' },
+  'proxy.connectFailed': { 'zh-CN': '连接失败', en: 'Connection failed' },
+  'proxy.testFailed': { 'zh-CN': '测试失败: {msg}', en: 'Proxy test failed: {msg}' },
+
+  // ---- 系统设置 ----
+  'system.freeQuotaPolicy': { 'zh-CN': '免费额度策略', en: 'Free quota policy' },
+  'system.upstreamChannel': { 'zh-CN': '上游请求链路', en: 'Upstream request channel' },
+  'system.upstreamChannelHint': {
+    'zh-CN': '照抄官方客户端抓包（官方工具集 + 官方 system + desktop 世代 agent）；切换后立即生效',
+    en: 'Mirror the official client capture (official toolset + system + desktop-generation agent); takes effect immediately',
+  },
+  'system.upstreamChannelLegacy': {
+    'zh-CN': 'legacy（已废弃，不可选）',
+    en: 'legacy (deprecated, unavailable)',
+  },
+  'system.upstreamChannelOfficial': {
+    'zh-CN': 'official（官方抓包照抄，2026-10-03 实测 200 + 工具调用）',
+    en: 'official (mirrors the capture; verified 200 + tool call on 2026-10-03)',
+  },
+  'system.toolSignatureHint': {
+    'zh-CN': '工具签名兼容（补齐官方真签名工具，避免被上游判作第三方客户端而降级）',
+    en: 'Tool signature compatibility (fills in upstream’s real signed tools, so requests are not downgraded as third-party clients)',
+  },
+  'system.toolSignatureOn': {
+    'zh-CN': '工具签名兼容已开启（转发时会补齐官方签名工具）',
+    en: 'Tool signature compatibility enabled (upstream signed tools are filled in on forward)',
+  },
+  'system.toolSignatureOff': {
+    'zh-CN': '工具签名兼容已关闭（带工具的请求可能被判第三方并降级）',
+    en: 'Tool signature compatibility disabled (tool-bearing requests may be treated as third-party and downgraded)',
+  },
+  'system.toolFallback': { 'zh-CN': '工具请求兜底', en: 'Tool request fallback' },
+  'system.toolFallbackHint': {
+    'zh-CN': '仅在明确接受无工具回答时开启：上游拒绝工具请求后会去掉 tools 重试；关闭时保留上游错误和工具请求语义。',
+    en: 'Enable only when a text-only answer is acceptable: retries without tools after an upstream rejection. When off, preserves the upstream error and tool-request semantics.',
+  },
+  'system.toolFallbackOn': { 'zh-CN': '工具兜底重试已开启', en: 'Tool fallback retry enabled' },
+  'system.toolFallbackOff': { 'zh-CN': '工具兜底重试已关闭', en: 'Tool fallback retry disabled' },
+  'system.blockPremiumOn': { 'zh-CN': '已屏蔽收费模型（列表与调度已排除）', en: 'Paid models blocked (excluded from the list and from scheduling)' },
+  'system.blockPremiumOff': { 'zh-CN': '已显示收费模型', en: 'Paid models shown again' },
+  'system.scheduling': { 'zh-CN': '账号调度', en: 'Account scheduling' },
+  'system.schedulingHint': {
+    'zh-CN': '粘性优先 = 请求集中到尽可能少的账号（换号 = 新买一条 Freebucks 计费行，能复用就复用）；并发优先 = 账号满员就换号，不再让请求在一个号上干等。两种模式都优先复用同模型热 session、都让从未用过的账号排最后。',
+    en: 'Sticky-first: concentrate requests on as few accounts as possible (switching accounts buys a new Freebucks billing line, so reuse whenever you can). Spread-first: move on as soon as an account is full instead of queuing on it. Both modes still reuse a warm session for the same model first, and both rank never-used accounts last.',
+  },
+  'system.schedulingMode': { 'zh-CN': '调度模式', en: 'Scheduling mode' },
+  'system.modeSticky': { 'zh-CN': '粘性优先（最少换号，默认）', en: 'Sticky-first (fewest switches, default)' },
+  'system.modeSpread': { 'zh-CN': '并发优先（满员即换号）', en: 'Spread-first (switch when full)' },
+  'system.accountConcurrency': { 'zh-CN': '每账号并发（单账号同时几路流）', en: 'Per-account concurrency (streams at once)' },
+  'system.overflowWait': { 'zh-CN': '溢出排队上限（毫秒，仅并发优先）', en: 'Overflow queue limit (ms, spread-first only)' },
+  'system.adminOnly': { 'zh-CN': '（管理员可调）', en: '(admin only)' },
+  'system.quotaProtection': { 'zh-CN': '额度保护（买断一小时，用满它）', en: 'Quota protection (one admit buys an hour — use it fully)' },
+  'system.twoLedgers': {
+    'zh-CN': '上游 2026-09 改版：一笔会话**同时**扣两本账——session_units（时长额度，recentCount/limit，小数）与 Freebucks（单价 N FB/小时，按整小时预扣）。两者是**并行的两道闸门**，任一不足都会被上游拒掉。',
+    en: 'Upstream reworked billing in 2026-09: one session is charged against **two ledgers at once** — session_units (time quota, recentCount/limit, fractional) and Freebucks (N FB per hour, pre-charged for the whole hour). They are **two parallel gates**: running short on either one gets the request rejected.',
+  },
+  'system.admitBuysHour': { 'zh-CN': '一次 admit = 买断一小时', en: 'One admit buys a full hour' },
+  'system.admitBody1': {
+    'zh-CN': '：POST 当场扣满整小时单价（实测 Freebucks 5 → 0，回执带 expiresAt）。所以这一小时内继续发请求的',
+    en: ': the POST charges the full hourly price upfront (measured: Freebucks 5 → 0, with expiresAt on the receipt). So within that hour, sending more requests has a',
+  },
+  'system.admitMarginalZero': { 'zh-CN': '边际成本是 0', en: 'marginal cost of 0' },
+  'system.admitBody2': {
+    'zh-CN': '，而 DELETE 之后那一小时就作废、重开 = 重新买一整小时。',
+    en: '; after a DELETE the hour is forfeited and reopening buys another full hour.',
+  },
+  'system.admitNoIdleRelease': { 'zh-CN': '因此付费时段内不再因空闲释放', en: 'So idle time never triggers a release inside the paid window' },
+  'system.admitBody3': {
+    'zh-CN': '——只有必须腾槽位给别的模型时才早退。空闲自动释放改成「付费时段结束之后」的时长。',
+    en: ' — an early release only happens when a slot must be freed for another model. Idle auto-release now measures the time **after** the paid window ends.',
+  },
+  'system.refundAsymmetric': {
+    'zh-CN': '早退 DELETE 的退款**两本账不对称**（一手实测）：',
+    en: 'Refunds on an early DELETE are **asymmetric across the two ledgers** (first-hand measurements):',
+  },
+  'system.refundUnits': { 'zh-CN': 'session_units 当场按实际占用比例退还', en: 'session_units are refunded on the spot, pro-rated to actual usage' },
+  'system.refundUnitsBody': {
+    'zh-CN': '（实测 1.1 → 0.2，小数、无取整）；',
+    en: ' (measured 1.1 → 0.2, fractional, no rounding);',
+  },
+  'system.refundFreebucks': { 'zh-CN': 'Freebucks 只回 freebucksRefundPending', en: 'Freebucks only returns freebucksRefundPending' },
+  'system.refundFreebucksBody': {
+    'zh-CN': '，实测 25s 后早退、重放 DELETE ×2、观察 2 分钟**仍未到账**。而实测 24 个「账号 × 模型」组合里',
+    en: ', and after releasing 25s in, replaying DELETE twice and watching for 2 minutes it still **never landed**. Across the 24 measured "account × model" combinations,',
+  },
+  'system.refundFreebucksFirst': { 'zh-CN': '22 个是 Freebucks 先见底', en: '22 ran out of Freebucks first' },
+  'system.refundConclusion': {
+    'zh-CN': '，所以早退等于拿稀缺的账去省不稀缺的账。',
+    en: ', so an early exit trades a scarce ledger for a plentiful one.',
+  },
+  'system.refundSources': {
+    'zh-CN': '依据：docs/freebucks-strategy.html、docs/account-scheduling-and-refund.md §3（2026-09-14 结论）、docs/evidence/ledger-session-units-vs-freebucks.json',
+    en: 'Sources: docs/freebucks-strategy.html, docs/account-scheduling-and-refund.md §3 (2026-09-14 findings), docs/evidence/ledger-session-units-vs-freebucks.json',
+  },
+  'system.idleRelease': { 'zh-CN': '空闲自动释放（秒，0 = 关闭；最小 5）', en: 'Idle auto-release (sec, 0 = off; min 5)' },
+  'system.lowBalanceThreshold': { 'zh-CN': '低额度分组阈值（FB，0 = 关闭）', en: 'Low-balance group threshold (FB, 0 = off)' },
+  'system.maxNewSessions': { 'zh-CN': '单请求新会话上限（个）', en: 'New sessions per request (max)' },
+  'system.idleReleaseHintOn': {
+    'zh-CN': '当前：会话空闲 {sec}s 后释放（付费时段内不释放，买断的一小时用满）· 一个请求最多新建 {max} 个上游会话',
+    en: 'Current: a session is released after {sec}s idle (never inside the paid window — the purchased hour is used in full) · at most {max} new upstream sessions per request',
+  },
+  'system.idleReleaseHintOff': {
+    'zh-CN': '当前：空闲不释放（会话留到自然过期，最省 admit；代价是换模型要等释放）· 一个请求最多新建 {max} 个上游会话',
+    en: 'Current: no idle release (sessions live until they expire — fewest admits, but switching models means waiting for a release) · at most {max} new upstream sessions per request',
+  },
+  'system.adviceTitle': { 'zh-CN': '推荐值（按当前账号池实时算）', en: 'Recommended (computed live from the current pool)' },
+  'system.adviceApply': { 'zh-CN': '采用推荐值 {sec}s', en: 'Apply recommended {sec}s' },
+  'system.adviceInSync': { 'zh-CN': ' 当前设置已与推荐值一致', en: ' Current setting already matches the recommendation' },
+  'system.adviceAdminHint': { 'zh-CN': '（管理员可一键采用）', en: '(an admin can apply it in one click)' },
+  'system.adviceNoAccounts': {
+    'zh-CN': '还没有账号，先给默认值 1 分钟。导入账号后这里会按真实模型分布重新计算。',
+    en: 'No accounts yet — defaulting to 1 minute. It is recomputed from the real model distribution once you import accounts.',
+  },
+  'system.adviceNoSessions': {
+    'zh-CN': '当前 {pool} 个账号都没有活跃会话，无从判断模型分布，先用默认值 1 分钟。有会话后会自动重算。',
+    en: 'None of the {pool} accounts has an active session, so the model distribution is unknown — using the 1 minute default. It recalculates once sessions appear.',
+  },
+  'system.adviceTight': {
+    'zh-CN': '{pool} 个账号上正在跑 {distinct} 种不同模型（模型数已接近账号数），会话槽位很紧：保持 1 分钟，让换模型时能尽快拿到槽位；同时早退会把未用时长退回来。',
+    en: '{pool} accounts are running {distinct} different models (model count is close to account count), so session slots are tight: keep 1 minute so a model switch gets a slot quickly; an early release also refunds the unused time.',
+  },
+  'system.adviceRelaxed': {
+    'zh-CN': '{pool} 个账号上只跑 {distinct} 种模型（模型集中在少数账号，热会话复用充分），可以放宽到 5 分钟：减少 admit 往返，又不会让空闲会话挂太久白计费。',
+    en: 'Only {distinct} models run across {pool} accounts (models concentrate on a few accounts and hot sessions are reused well), so 5 minutes is safe: fewer admit round-trips without idling a session long enough to waste the paid hour.',
+  },
+  'system.adviceBalanced': {
+    'zh-CN': '{pool} 个账号上正在跑 {distinct} 种模型，分布适中，2 分钟是兼顾「少 admit 往返」和「不为空闲时长付费」的平衡点。',
+    en: '{distinct} models run across {pool} accounts — a balanced spread, so 2 minutes balances "fewer admit round-trips" against "not paying for idle time".',
+  },
+  'system.adviceApplied': {
+    'zh-CN': '已采用推荐值：空闲 {sec}s 后释放 · 单请求最多 {max} 个新会话',
+    en: 'Recommendation applied: release after {sec}s idle · at most {max} new sessions per request',
+  },
+  'system.schedCap': { 'zh-CN': '每账号 {n} 路并发', en: '{n} concurrent streams per account' },
+  'system.schedSpread': {
+    'zh-CN': '当前：并发优先 · {cap}。账号满员就立刻换到下一个有空闲槽位的账号（最多先等 {wait} ms），不会再出现"设了并发 2 却只开 1 个号"。已用过的账号仍优先于从未用过的账号。',
+    en: 'Current: spread-first · {cap}. A full account switches immediately to the next one with a free slot (waiting at most {wait} ms), so "concurrency 2 but only 1 account opens" no longer happens. Previously used accounts still outrank never-used ones.',
+  },
+  'system.schedSticky': {
+    'zh-CN': '当前：粘性优先 · {cap}。并发请求先挤同一账号（超过上限就在该账号排队，超时才溢出到下一个），最少换号 = 最少新建计费会话。想让并发铺开多个账号，把模式改成「并发优先」。',
+    en: 'Current: sticky-first · {cap}. Concurrent requests pack onto one account (beyond the cap they queue there, overflowing only on timeout) — fewest switches means fewest billable sessions. To spread concurrency across accounts, switch the mode to "spread-first".',
+  },
+  'system.schedSavedSpread': { 'zh-CN': '调度已更新：并发优先 · 每账号 {n} 路（满员即换号）', en: 'Scheduling updated: spread-first · {n} streams per account (switches when full)' },
+  'system.schedSavedSticky': { 'zh-CN': '调度已更新：粘性优先 · 每账号 {n} 路（先排队，超时才换号）', en: 'Scheduling updated: sticky-first · {n} streams per account (queue first, switch on timeout)' },
+  'system.quotaSavedOn': {
+    'zh-CN': '额度保护已更新：空闲 {sec}s 后释放（付费时段内不释放）· 单请求最多 {max} 个新会话',
+    en: 'Quota protection updated: release after {sec}s idle (never inside the paid window) · at most {max} new sessions per request',
+  },
+  'system.quotaSavedOff': {
+    'zh-CN': '已关闭空闲释放（会话留到自然过期）· 单请求最多 {max} 个新会话',
+    en: 'Idle release disabled (sessions live until they expire) · at most {max} new sessions per request',
+  },
+
+}

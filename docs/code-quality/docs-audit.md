@@ -73,7 +73,7 @@ L104  : 「…所以空闲早退**只**换回 units 与槽位，**不能**指望
 原文：「…**admit 一次按整小时买断**；提前 `DELETE` 会把未用部分**按实际占用时长退回**。」
 ```
 
-`test/smoke.mjs` 的 `STALE_COPY` 守卫（`test/smoke.mjs:6875`）正则是：
+`test/suites/entries/smoke/smoke.mjs` 的 `STALE_COPY` 守卫（`test/suites/entries/smoke/smoke.mjs:6875`）正则是：
 
 ```js
 /按实际占用退还\s*Freebucks|退还未用时长|退还未用部分|停止为空转时长付费|.../
@@ -430,7 +430,7 @@ HEAD 上首节不是 `## Problem` 的 note 数: 4 / 84
 3. **结论必须来自实测**（本节正是这条的正面案例）：盲审报了"99 个文件里 5 个语法损坏，
    建议 `git checkout --` 回滚 224 个文件"。本 workstream 用
    `for f in $(git ls-files '*.js' '*.mjs' '*.cjs'); do node --check "$f"; done` 复核 →
-   **`broken=0 / total=99`，语法零损坏**，`test/smoke.mjs` 与 `src/web/settings-store.js` 均 `exit 0`。
+   **`broken=0 / total=99`，语法零损坏**，`test/suites/entries/smoke/smoke.mjs` 与 `src/web/settings-store.js` 均 `exit 0`。
    那份"5 个语法坏"是在批处理的**瞬时中间态**上测的。**若照它回滚，会连带吞掉各 workstream
    的正当未提交改动。**
 
@@ -442,7 +442,7 @@ HEAD 上首节不是 `## Problem` 的 note 数: 4 / 84
 |---|---|---|---|
 | 1 | 三份被删文档"已被 `reverse/02` 等完整取代" | **不成立**。`freebuff-desktop-protocol-reverse.md` 的**本地进程隔离头**（`x-freebuff-launch-id` / cookie `freebuff_launch_{port}`）全仓 `grep` **零命中**；根 `REVERSE_ENGINEERING_SUMMARY.md` 的**访问层级语义**（`full`/`limited` + `ipPrivacySignals`）文档侧**已无定义** | **捡回两项** → `reverse/00-overview.md`；并在本文件与 `docs/README.md` 记明"已完整取代"不成立 |
 | 2 | 索赔 `docs/reverse/11-tls-fingerprint.md` 是"CLI 指纹真源" | 该文件 `grep CLI` **零命中**；CLI 指纹真值是 `src/upstream/official-fingerprint.js` 的 `KNOWN_CLI_VERSION` | 索引已更正，并把它标成"文档侧无真源" |
-| 3 | `account-scheduling-and-refund.md` 的退款矛盾已随 §3.1/§3.5/§3.7 修完 | **§2.2 / §2.3 还有两处旧口径**（"早退会按实际占用退还"、空闲释放是"收益"），且**不在任何作废块内**；`test/smoke.mjs` 的 `STALE_COPY` 对该文件**整体豁免**，门禁结构性地不拦它 | 已就地改对，并把 §2.2/§2.3 纳入"读法头"覆盖范围 |
+| 3 | `account-scheduling-and-refund.md` 的退款矛盾已随 §3.1/§3.5/§3.7 修完 | **§2.2 / §2.3 还有两处旧口径**（"早退会按实际占用退还"、空闲释放是"收益"），且**不在任何作废块内**；`test/suites/entries/smoke/smoke.mjs` 的 `STALE_COPY` 对该文件**整体豁免**，门禁结构性地不拦它 | 已就地改对，并把 §2.2/§2.3 纳入"读法头"覆盖范围 |
 | 4 | 索引判据已够（防悬空 + 真源唯一 + 下界） | **缺"反向覆盖"**：`docs/` 下文档未被索引登记时它完全不响；实测 `docs/reverse/` 有 17 份漏登记 | 已加反向覆盖判据（见 §3）；漏登记已补齐，`reverse/` 全部 22 份入表 |
 
 **盲审同时给出的、我采纳但未改代码的项**（属别的 workstream 或需用户裁决）：

@@ -10,7 +10,7 @@ import {
 } from './util/json-store.js'
 
 /**
- * 启动扫尾的总预算(毫秒).启动路径绝不允许长时间阻塞——用户看到的是
+ * 启动扫尾的总预算(毫秒).启动路径绝不允许长时间阻塞----用户看到的是
  * "容器起不来",而实际上只是清孤儿慢(连不通的上游 / 已被删的账号).
  * 超出预算的句柄留在索引里,下次启动或后续释放流程继续清理.
  */
@@ -44,7 +44,7 @@ const DELETE_ATTEMPT_TIMEOUT_MS = 8_000
  *
  * 启动扫尾是有界的:总预算 STARTUP_SWEEP_BUDGET_MS,单次 DELETE
  * DELETE_ATTEMPT_TIMEOUT_MS,超预算的句柄原样留下(信息不丢,只是不挡启动).
- * 别把预算删掉"图省事"——启动被清孤儿卡住是"服务起不来,删 sessions.json 就好"
+ * 别把预算删掉"图省事"----启动被清孤儿卡住是"服务起不来,删 sessions.json 就好"
  * 的真实成因(见 .agents/notes/implemented/bug-fix/2026-09-13-startup-path-bounded.md).
  */
 export class SessionHandleStore {
@@ -63,7 +63,7 @@ export class SessionHandleStore {
      * 回执(含 0)才出队.
      *
      * 与 orphans 的分工:orphans 记"这个句柄得删"(槽位),本队列记"这笔钱得追"
-     * (退款).两者高度重叠但现在都有独立用途——启动扫尾按 orphans 删,周期扫尾
+     * (退款).两者高度重叠但现在都有独立用途----启动扫尾按 orphans 删,周期扫尾
      * 按本队列追问退款.
      */
     this.pendingRefunds = new Map()
@@ -94,7 +94,7 @@ export class SessionHandleStore {
       // 这些句柄要么还有效(需要 DELETE 退款)要么已过期(DELETE 无害).
       // 逐条口径:只取用得上的记录,绝不为一条脏数据拒绝启动.
       // sessions.json 是"重启后还能寻址 DELETE"的索引,丢了只是槽位回收变慢,
-      // 不值得让整个服务停摆——它与 users.json(凭据真源,坏了必须拒绝启动)不同.
+      // 不值得让整个服务停摆----它与 users.json(凭据真源,坏了必须拒绝启动)不同.
       // 但"丢了几条"必须记账:否则文件里明明有东西,控制台却说一切正常.
       /** @type {any[]} */
       const droppedItems = []
@@ -189,7 +189,7 @@ export class SessionHandleStore {
       return
     }
     // 上游回 freebucksRefundPending:这笔钱还没结算完,入队持续追问.
-    // 不能只在内存里挂个定时器——进程重启就没了,那笔预扣再也追不回来.
+    // 不能只在内存里挂个定时器----进程重启就没了,那笔预扣再也追不回来.
     if (ev.type === 'refund_pending' && ev.instanceId) {
       this.notePendingRefund(key, ev.instanceId, ev.model ?? null)
       return
@@ -238,7 +238,7 @@ export class SessionHandleStore {
   }
 
   /**
-   * 出队(只在拿到终态回执后调用——含退款 0).
+   * 出队(只在拿到终态回执后调用----含退款 0).
    *
    * 绝不因为"问了好几次还是 pending"就出队:pending 的语义是"最终用量还没算完",
    * 出队 = 主动放弃这笔已经预扣的 Freebucks.
@@ -264,7 +264,7 @@ export class SessionHandleStore {
    * 必须有总预算与单次超时:早期版本对每个句柄用 admitTimeoutMs(30s)
    * 且最多重放 3 次,一个连不上的上游(DNS 黑洞 / 代理挂起 / 账号已删)就能把
    * 启动整整卡住十几分钟,用户看到的是"起不来",而删掉 sessions.json 立刻
-   * 就好——这正是"删这个文件就正常"最典型的形态.启动路径只允许有界等待:
+   * 就好----这正是"删这个文件就正常"最典型的形态.启动路径只允许有界等待:
    * 超预算的句柄留在索引里,下次启动或后续释放流程继续(信息不丢,只是不挡路).
    * @param {(key: string) => any} resolveUpstream key → upstream client(可为空)
    * @param {{budgetMs?: number}} [opts] 本次扫尾的总预算(默认 15s)
@@ -290,7 +290,7 @@ export class SessionHandleStore {
         continue
       }
       // 单次尝试同样受预算约束,并且预算内也必须有上限:上游客户端会 abort
-      // 挂起的 fetch,但假死连接可能永远不 settle——所以这里再加一道本地硬超时,
+      // 挂起的 fetch,但假死连接可能永远不 settle----所以这里再加一道本地硬超时,
       // 让[启动绝不长时间卡住]成为可证明的性质(而不是依赖上游客户端行为).
       const attempt = () => {
         const left = deadline - Date.now()
@@ -306,7 +306,7 @@ export class SessionHandleStore {
         let body = await attempt()
         // 2026-09 实测:上游对提前结束的会话会持续回 freebucksRefundPending
         // (1.5s/7s/17s/37s/67s 五次重放全是 pending).有界重放后仍挂起
-        // 不能丢弃句柄——结算还没跑完,丢了这笔预扣就永远要不回来.
+        // 不能丢弃句柄----结算还没跑完,丢了这笔预扣就永远要不回来.
         // 重放同样吃预算:启动路径上只允许 1 次,其余留给下次启动.
         let pending = body?.freebucksRefundPending === true
         for (let i = 0; pending && i < 1; i += 1) {
