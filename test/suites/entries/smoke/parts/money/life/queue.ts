@@ -25,11 +25,12 @@ for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
  * 而本用例断言 sessionPosts === 1(首个请求应正常 admit),复用一个热 session
  * 就不会再 admit.
  *
- * - 所以本用例自足地建立前置状态.用 releaseStrict 真正结束它(这里测的是预算
- * 语义,不是付费时段保护).
+ * - 所以本用例自足地建立前置状态.用 releaseStrict({force:true}) 真正结束它
+ *   ---- 这里测的是预算语义, 不是付费时段保护, 所以显式要求连付费时段内也删
+ *   (force 的唯一合法用途: 调用方明确了"我就是要删"这个意图).
  */
 for (const key of ['a', 'b', 'c']) {
-  await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})
+  await fbRuntimes.get(key).sessions.releaseStrict({ force: true }).catch(() => {})
 }
 state.mockMode = 'ok'
 state.sessionPosts = 0

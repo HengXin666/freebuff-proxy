@@ -52,6 +52,7 @@ await import('./parts/pool/proxy/account-proxy.ts') // pool: 账号专属出口�
 await import('./parts/pool/proxy/proxy-fetch.ts') // pool: 单代理池也必须走代理
 await import('./parts/webapi/probe/fixture.ts') // web api 夹具
 await import('./parts/webapi/probe/probe.ts') // web api: 账号探测与运行设置
+await import('./parts/webapi/probe/tunables-secrets.ts') // web api: 可调项 admin 闸门 + 凭据不回显
 await import('./parts/webapi/proxy/proxy.ts') // web api: 代理池与账号删除
 await import('./parts/concurrency/quota/quota.ts') // quota: 额度提取与展示
 await import('./parts/concurrency/quota/conversation.ts') // scheduling: conversation_id 不参与选号

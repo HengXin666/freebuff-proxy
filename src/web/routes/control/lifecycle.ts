@@ -17,6 +17,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 interface ReleaseAllResult {
   ok: boolean
   released: number
+  skippedPaid: number
   failed: Array<{ key: string, instanceId?: string, error?: string }>
 }
 
@@ -38,18 +39,22 @@ async function reconnectAll(res: ServerResponse, runtimes: any) {
     ok: failed.length === 0,
     message: failed.length
       ? `已释放 ${accounts.length - failed.length}/${accounts.length} 条会话，${failed.length} 条取消失败（已记录句柄，服务下次启动会自动重试退款）`
-      : '已断开全部 session，下次请求将自动重建；正在传输的连接可能被中断',
+      : '已断开全部 session（含已付费时段内的），下次请求将自动重建；正在传输的连接可能被中断',
     accounts,
     failed,
   })
 }
 
 /**
- * 重启前严格释放所有上游会话;失败也不阻塞重启.
+ * 重启前释放所有上游会话;失败也不阻塞重启.
  *
- * 进程一退出内存里的 instanceId 就没了,不放就会留下无法寻址的孤儿:
- * 既白占上游会话槽位,那笔已预扣的钱也追不回来.释放失败时句柄已落盘
- * sessions.json,新进程启动扫尾.
+ * 进程一退出内存里的 instanceId 就没了, 但句柄已落盘 sessions.json
+ * (admit 时就写了, 不是退出时才写) ---- 所以[没删掉]不等于[找不回来]:
+ * 新进程启动扫尾按同一份判据处理. 这正是付费时段内不再删的前提.
+ *
+ * 付费时段内的一小时不删: 早退不退 Freebucks, 重开还要再买一小时 ----
+ * 重启是运维动作, 不是[用户想扔掉这一小时]. 新进程起来后那条会话会被
+ * holderFor 复用(跨部署/跨重启可见), 到点自然过期.
  *
  * 显式标注返回类型:初始化式里的 failed: [] 会被推成 never[],
  * 把真实的 { key, error } 明细赋进来就报 TS2322.
@@ -67,11 +72,32 @@ async function releaseBeforeRestart(runtimes: any): Promise<ReleaseAllResult> {
     return {
       ok: false,
       released: 0,
+      skippedPaid: 0,
       failed: [
         { key: '*', error: err instanceof Error ? err.message : String(err) },
       ],
     }
   }
+}
+
+/**
+ * 重启回执文案: 释放 / 跳过(付费时段内) / 失败 三种结果分开说.
+ *
+ * 分开是必须的: "跳过"意味着那条会话还在上游跑着(下一进程会复用),
+ * 把它说成"已释放"会让用户以为钱已经退回来; 把它说成"失败"又会让他去
+ * 查一个并不存在的故障.
+ * @param {ReleaseAllResult} release 释放明细
+ * @returns {string} 给用户看的一句话
+ */
+function restartMessage(release: ReleaseAllResult) {
+  const parts: string[] = []
+  if (release.released) parts.push(`已释放 ${release.released} 条会话`)
+  if (release.skippedPaid) {
+    parts.push(`${release.skippedPaid} 条仍在已付费的一小时内，保留不动（重启后继续复用，到点自然过期）`)
+  }
+  if (release.failed.length) parts.push(`${release.failed.length} 条取消失败（句柄已记录，新进程启动后重试）`)
+  const head = parts.length ? parts.join('；') : '当前没有需要处理的会话'
+  return `${head}；服务正在重启，约几秒后恢复`
 }
 
 /**
@@ -86,9 +112,7 @@ async function restartService(res: ServerResponse, runtimes: any, restart: () =>
   const release = await releaseBeforeRestart(runtimes)
   sendJson(res, 200, {
     ok: true,
-    message: release.failed.length
-      ? `已释放 ${release.released} 条会话（${release.failed.length} 条待新进程启动后重试退款）；服务正在重启，约几秒后恢复`
-      : '会话已全部释放退款，服务正在重启，约几秒后恢复',
+    message: restartMessage(release),
     release,
   })
   // 先让响应完整落地到客户端,再触发自重启

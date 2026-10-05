@@ -60,7 +60,7 @@ export function buildSettingsSections(ctx: any) {
  */
 export function buildAdvancedSection(settings: any) {
   return settingsSection('settings.sectionAdvanced', 'settings.sectionAdvancedHint', [
-    buildTunablesCard(settings.tunableSpecs, settings.tunables),
+    buildTunablesCard(settings.tunableSpecs, settings.tunables, settings.secrets),
   ])
 }
 

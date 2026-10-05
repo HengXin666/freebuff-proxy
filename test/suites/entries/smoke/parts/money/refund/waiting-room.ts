@@ -22,7 +22,7 @@ import fs from 'node:fs'
 state.mockFreebucks = null
 for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
 for (const key of ['a', 'b', 'c']) {
-  await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})
+  await fbRuntimes.get(key).sessions.releaseStrict({ force: true }).catch(() => {})
 }
 state.mockMode = 'err_500_all'
 state.sessionPosts = 0
@@ -91,7 +91,7 @@ state.mockFreebucks = null
 //    只换号的情况下客户端仍可能拿到 200, 只看状态码会漏掉"号被冷却".
 for (const key of ['a', 'b', 'c']) fbRuntimes.clearCooldown(key)
 for (const key of ['a', 'b', 'c']) {
-  await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})
+  await fbRuntimes.get(key).sessions.releaseStrict({ force: true }).catch(() => {})
 }
 state.mockFreebucks = {
   balance: 25,
@@ -153,7 +153,7 @@ state.mockFreebucks = null
 for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
 for (const key of ['a', 'b', 'c']) fbRuntimes.clearCooldown(key)
 for (const key of ['a', 'b', 'c']) {
-  await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})
+  await fbRuntimes.get(key).sessions.releaseStrict({ force: true }).catch(() => {})
 }
 
 

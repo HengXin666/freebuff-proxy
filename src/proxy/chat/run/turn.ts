@@ -11,6 +11,7 @@
  */
 import { UpstreamError } from '../../../upstream/client.ts'
 import { chooseHermesDelegateAlias } from '../../../tool-alias.ts'
+import { refreshIfExpired } from '../../../upstream/catalog/freshness.ts'
 import { buildForwardBody } from '../../transport/forward-body.ts'
 import { forwardCompletions } from '../../transport/forward.ts'
 import { startAgentRunWithFallback } from './agent-run.ts'
@@ -37,6 +38,15 @@ export async function runUpstreamTurn(st: any, res: any) {
     )
   }
   st.sessionModel = snap.model
+  /**
+   * 目录过了服务端给的 refreshAt 就先重抓一次.
+   *
+   * 句柄随每次抓取轮换, 而目录原本一旦到手就永不按 refreshAt 过期 ---- 上游推进
+   * 一代之后, 本地仍拿上一代句柄去发请求, 上游不认(chat 被拒, 对面重抓也定位不到).
+   * 这里只做"过期才抓", 正常情况零额外请求; 失败静默(抓取本身是 best-effort).
+   * 见 src/upstream/catalog/freshness.ts 的文件头.
+   */
+  await refreshIfExpired(rt.upstream?.catalog)
 
   const agentId = await startAgentRunWithFallback(st)
   const hermesDelegateAlias = chooseHermesDelegateAlias(st.body.tools)

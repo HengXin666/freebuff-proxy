@@ -19,6 +19,7 @@ import {
 } from '../../free-mode.ts'
 import { HERMES_DELEGATE_TOOL_NAME, rewriteHermesDelegateForUpstream } from '../../tool-alias.ts'
 import { EMPTY_CARRIER_PLAN, alignToolNamesForUpstream, packClientTools } from './tool-carrier.ts'
+import { resolveWireModel } from '../../upstream/catalog/freshness.ts'
 import { logger } from '../../util/log.ts'
 
 /** 一键屏蔽收费模型开关(前端[模型管理],实时生效). */
@@ -138,15 +139,22 @@ export function buildForwardBody(
   // 真机证据:{"model":"fbm1.AAEAAUPe2Us...","codebuff_metadata":{...}}
   const assigned =
     typeof sessionModel === 'string' && sessionModel ? sessionModel : upstreamModel
-  const outgoingModel =
-    catalog && typeof catalog.handleFor === 'function'
-      ? catalog.handleFor(assigned)
-      : assigned
+  /**
+   * 句柄只能在本目录这一代里用.
+   *
+   * 服务端每次抓取全量轮换 handle(见 catalog/freshness.ts 的文件头): 会话回执里
+   * 指派的要是上一代签发的句柄, 本目录查无此行, 再把它当 chat 的 model 发出去
+   * 只会得到上游的拒绝. 此时退回稳定身份(请求侧的目录 key / 可读名), 让对面的
+   * 重抓能把同一行定位回来.
+   */
+  const outgoing = resolveWireModel(catalog, assigned, upstreamModel, { prefer: 'handle' })
   logger.info('chat forward model resolved', {
     requested: upstreamModel,
     sessionModel: sessionModel ?? null,
     assigned,
-    outgoing: outgoingModel,
+    outgoing: outgoing.model,
+    resolveReason: outgoing.reason,
+    ...(outgoing.staleHandle ? { staleHandle: outgoing.staleHandle } : {}),
   })
   /**
    - 第三方工具承载 (下行打包).
@@ -169,7 +177,7 @@ export function buildForwardBody(
   let body = stripFreebuffConversationState({
     ...clientBody,
     ...(packed ? { tools: packed.tools } : {}),
-    model: outgoingModel,
+    model: outgoing.model,
   })
   // 历史消息里的下游工具名同步换成 wire 名, 否则模型看到的历史调用名
   // 不在它拿到的 tools 清单里.
@@ -224,8 +232,15 @@ export function buildForwardBody(
       freeToolSignatureEnabled,
     )
   }
-  // 可观测性:把[上游会怎么看这个工具集]记一行(判定权在上游, 见该函数注释).
-  if (Array.isArray(body.tools) && body.tools.length > 0) {
+  /**
+   * 可观测性:把[上游会怎么看这个工具集]记一行(判定权在上游, 见该函数注释).
+   *
+   * official 通道下不判: 那一跳的 tools 由副仓库按官方模板重建(本函数的产物只是
+   * 过渡形态), 拿它去套判据必然报 foreign_toolset ---- 每个带工具的请求都刷一条
+   * 警告, 而实测同一个请求可以同时是 200(2026-10-05, 带 run_code 的工具请求
+   * rpc result ok=true 与这条警告并存). 警告只在它能反映真实形态时才有价值.
+   */
+  if (channel !== 'official' && Array.isArray(body.tools) && body.tools.length > 0) {
     logForeignClientVerdict(body, upstreamModel)
   }
 

@@ -4,7 +4,9 @@
  */
 import { sendJson } from '../../../util/http.ts'
 import { TUNABLES } from '../../../config/tunable/specs.ts'
-import { snapshotTunables, specOf, validateValue } from '../../../config/tunable/store.ts'
+import {
+  snapshotTunables, specOf, validateValue, secretsEffective, secretsFromValues, redactTunables,
+} from '../../../config/tunable/store.ts'
 import { logger } from '../../../util/log.ts'
 import { envProxyOrNull } from '../lib/helpers.ts'
 import { denyUnlessAdmin } from '../lib/http-codes.ts'
@@ -47,9 +49,12 @@ function readSettings(config: any, settingsStore: any) {
      *   - 可调项:   保存后需重启才生效(启动时合并进 config).
      * 前端必须把这两类分开渲染并分别提示.
      *
-     * 值来自 config 现值(已含启动时合并进的可调项), 所以这里回显的就是"当前生效值".
+     * 值来自 config 现值(已含启动时合并进的可调项), 所以这里回显的就是"当前生效值"
+     * ---- 但凭据项(secret)例外: snapshotTunables 把它们的值一律写 null,
+     * 只经 secrets 回[有没有设置]. 明文凭据不进任何响应体.
      */
     tunables: snapshotTunables(config),
+    secrets: secretsEffective(config, settingsStore?.savedTunables?.() || {}),
     /** 可调项的声明(前端据此渲染控件类型/范围/分组), 与后端校验同一真源. */
     tunableSpecs: TUNABLES,
   }
@@ -161,6 +166,85 @@ function buildTunablePatch(body: any, res: ServerResponse) {
 }
 
 /**
+ * POST /api/settings: 保存实时字段 + 可调项.
+ *
+ * 分流两类写入(它们的生效方式不同), 并在回执里把凭据项抹掉 ----
+ * 刚写盘的值里就含凭据, 原样回等于[刚填的 Key 出现在响应体里].
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @param {any} user 当前用户
+ * @param {any} ctx 路由上下文
+ * @returns {Promise<void>}
+ */
+async function saveSettings(req: IncomingMessage, res: ServerResponse, user: any, ctx: any) {
+  const { settingsStore, readJson } = ctx
+  if (denyUnlessAdmin(user, res)) return
+  if (!settingsStore) {
+    sendJson(res, 501, { error: '当前进程未启用运行设置存储' })
+    return
+  }
+  let body
+  try {
+    body = await readJson(req)
+  } catch {
+    sendJson(res, 400, { error: '无效的 JSON' })
+    return
+  }
+  // 可调项(点分路径)按声明校验; 有非法值即已写出 400 并返回 null.
+  const tunablePatch = buildTunablePatch(body, res)
+  if (!tunablePatch) return
+  const patch = buildPatch(body, res)
+  if (!patch) return
+  if (!Object.keys(patch).length && !Object.keys(tunablePatch).length) {
+    sendJson(res, 400, { error: '没有可保存的设置项' })
+    return
+  }
+  const settings = Object.keys(patch).length ? settingsStore.save(patch) : settingsStore.get()
+  const savedTunables = Object.keys(tunablePatch).length
+    ? settingsStore.saveTunables(tunablePatch)
+    : settingsStore.savedTunables()
+  logger.event('settingsChange', 'info', 'runtime settings updated via web', {
+    live: Object.keys(patch),
+    tunables: Object.keys(tunablePatch),
+  })
+  sendJson(res, 200, {
+    ok: true,
+    ...settings,
+    tunables: redactTunables(savedTunables),
+    secrets: secretsFromValues(savedTunables),
+    restartRequired: Object.keys(tunablePatch).length > 0,
+  })
+}
+
+/**
+ * GET /api/config 的只读视图(admin).
+ *
+ * 凭据只回条数: apiKeyCount 是前端"配了几把"的展示需求, 值一律不出.
+ * @param {any} config 配置对象
+ * @returns {any} 视图
+ */
+function configView(config: any) {
+  return {
+    config: {
+      server: {
+        host: config.server.host,
+        port: config.server.port,
+        dataDir: config.server.dataDir,
+        apiKeyCount: config.server.apiKeys.length,
+      },
+      upstream: {
+        apiBase: config.upstream.apiBase,
+        loginBase: config.upstream.loginBase,
+        proxy: config.upstream.proxy || envProxyOrNull(),
+        proxies: config.upstream.proxies || [],
+        credentialsDir: config.upstream.credentialsDir,
+      },
+      web: config.web,
+    },
+  }
+}
+
+/**
  * settings / config 端点.
  *
  * @param {string} method HTTP 方法
@@ -179,72 +263,24 @@ export async function handle(
   user: any,
   ctx: any,
 ) {
-  const { config, settingsStore, readJson } = ctx
+  const { config, settingsStore } = ctx
   if (route !== '/api/settings' && route !== '/api/config') return false
 
   if (method === 'GET' && route === '/api/settings') {
+    // 对已认证用户开放(设置页对非 admin 渲染成只读态), 但凭据项的值
+    // 一律不回 ---- 见 readSettings 里的 snapshotTunables / secretsEffective.
+    // 屏蔽发生在真源那一层, 所以这个回执给谁看都是安全的.
     sendJson(res, 200, readSettings(config, settingsStore))
     return true
   }
 
   if (method === 'POST' && route === '/api/settings') {
-    if (denyUnlessAdmin(user, res)) return true
-    if (!settingsStore) {
-      sendJson(res, 501, { error: '当前进程未启用运行设置存储' })
-      return true
-    }
-    let body
-    try {
-      body = await readJson(req)
-    } catch {
-      sendJson(res, 400, { error: '无效的 JSON' })
-      return true
-    }
-    // 可调项(点分路径)按声明校验; 有非法值即已写出 400 并返回 null.
-    const tunablePatch = buildTunablePatch(body, res)
-    if (!tunablePatch) return true
-    const patch = buildPatch(body, res)
-    if (!patch) return true
-    if (!Object.keys(patch).length && !Object.keys(tunablePatch).length) {
-      sendJson(res, 400, { error: '没有可保存的设置项' })
-      return true
-    }
-    const settings = Object.keys(patch).length ? settingsStore.save(patch) : settingsStore.get()
-    const savedTunables = Object.keys(tunablePatch).length
-      ? settingsStore.saveTunables(tunablePatch)
-      : settingsStore.savedTunables()
-    logger.event('settingsChange', 'info', 'runtime settings updated via web', {
-      live: Object.keys(patch),
-      tunables: Object.keys(tunablePatch),
-    })
-    sendJson(res, 200, {
-      ok: true,
-      ...settings,
-      tunables: savedTunables,
-      restartRequired: Object.keys(tunablePatch).length > 0,
-    })
+    await saveSettings(req, res, user, ctx)
     return true
   }
 
   if (route === '/api/config' && method === 'GET' && user.role === 'admin') {
-    sendJson(res, 200, {
-      config: {
-        server: {
-          host: config.server.host,
-          port: config.server.port,
-          dataDir: config.server.dataDir,
-          apiKeyCount: config.server.apiKeys.length,
-        },
-        upstream: {
-          apiBase: config.upstream.apiBase,
-          loginBase: config.upstream.loginBase,
-          proxy: config.upstream.proxy || envProxyOrNull(),
-          proxies: config.upstream.proxies || [],
-          credentialsDir: config.upstream.credentialsDir,
-        },
-        web: config.web,
-      },
-    })
+    sendJson(res, 200, configView(config))
     return true
   }
   return false

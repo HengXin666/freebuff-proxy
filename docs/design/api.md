@@ -21,7 +21,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 ### 行为说明
 
-- **授权**：`server.api_keys`（超级 Key）或 Web 用户 API Key 均可；非 loopback 绑定且两者皆无时拒绝启动。
+- **授权**:`server.api_keys`(下游访问 Key)或 Web 用户 API Key 均可;非 loopback 绑定且两者皆无时拒绝启动.
 - **模型列表**：`GET /v1/models` 返回 Freebuff 线上 model id（含 `pool` / `available` / `access_tiers` 等附加字段），例如：
   - `deepseek/deepseek-v4-flash`（daily）
   - `deepseek/deepseek-v4-pro`（premium）
@@ -50,6 +50,8 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 ### 开放 API 账号导入（Open API）
 
 `/v1` 面新增账号管理端点，与下游 Agent 共用同一套 **Bearer API Key**（`server.api_keys` 超级 Key 或 Web 用户自己的 `sk-fb-...`），无需登录控制台即可脚本化运维账号池。
+
+> **不构成保密边界**: `server.api_keys` 是一把**服务凭据**, 不是密码. 任何拿到它的人都能读写整个代理面(模型列表 / 账号池 / 日志), 所以它只能放在可信的下游进程里. 控制台**永不回显**它的值(设置页只显示「已设置」), 改它必须整串重填.
 
 **导入账号** `POST /v1/freebuff/accounts/import`：
 

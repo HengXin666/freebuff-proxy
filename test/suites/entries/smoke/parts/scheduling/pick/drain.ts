@@ -11,7 +11,7 @@ import { saveAccountUser } from '../../../../../../../src/auth-store.ts'
 import { loadConfig } from '../../../../../../../src/config.ts'
 import { startServer } from '../../../../../../../src/server.ts'
 import { state } from '../../../../../smoke/state.ts'
-import { releaseHoldStreams, waitFor } from '../../../harness/helpers.ts'
+import { releaseHoldStreams } from '../../../harness/helpers.ts'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -71,12 +71,22 @@ import path from 'node:path'
   await new Promise((r) => setTimeout(r, 150))
   assert.equal(state.sessionDeletes, 0, '代理切换不得在流在途时删除旧 session')
 
-  // 旧流正常结束,之后旧 session 才被优雅释放
+  // 旧流正常结束 ---- 但会话不删.
+  //
+  // 代理切换是系统内部的运维动作, 不是用户对某条会话的显式意图; 而这条会话
+  // 仍在已付费的一小时内(admit 时买断整小时, 早退不退 Freebucks).
+  // 所以让位只让出 runtime, 那张已付款的一小时留给调度层复用(下次请求按
+  // holderFor 接管)或到点自然过期 ---- 见 src/session/release/release.ts 的
+  // releaseWhenIdle 与 .agents/notes/implemented/architecture/2026-09-14-paid-hour-hold.md.
   releaseHoldStreams()
   const text = await res.text()
   assert.match(text, /data: \[DONE\]/)
-  await waitFor('代理切换后旧 session 优雅释放', () => state.sessionDeletes >= 1)
-  assert.equal(state.sessionDeletes, 1)
+  await new Promise((r) => setTimeout(r, 200))
+  assert.equal(
+    state.sessionDeletes,
+    0,
+    '代理切换不得删除仍在付费时段内的会话（那一小时已实付，DELETE 不退钱）',
+  )
   assert.equal(state.sessionPosts, 1, '切换本身不应新增 admit（新请求才走新出口）')
 
   await pRuntimes.shutdown()

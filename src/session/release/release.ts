@@ -1,10 +1,6 @@
 /**
  * 会话释放与退款结算.
  *
- * 从 session-manager.js 的 release / releaseWhenIdle / _releaseUnlocked /
- * _scheduleRefundRetry / _replayPendingRefund / _scheduleReleaseRetry /
- * releaseIfLive / releaseStrict / shutdown 切出.
- *
  * 这一层管的是钱: DELETE 的句柄一旦丢弃就再也删不掉那条会话, 预扣的
  * Freebucks 也永远取不回来. 因此异常路径全部以"保住句柄"为第一优先.
  * 决策与证据见 .agents/notes/implemented/bug-fix/2026-09-13-refund-reversed.md.
@@ -19,7 +15,12 @@ import {
 } from './settle.ts'
 
 /**
- * 释放会话(早退 DELETE; Freebucks 侧只回 pending, 未到账).
+ * 释放会话(早退 DELETE).
+ *
+ * 两本账不对称: session_units 当场按实际占用退还, Freebucks 侧只回
+ * freebucksRefundPending(2 分钟内未到账, 重开直接吃 rate_limited +
+ * freebucksShortfall) ---- 所以[付费时段内不释放]是策略, 不是优化.
+ * 见 .agents/notes/implemented/architecture/2026-09-14-paid-hour-hold.md.
  * @returns {Promise<boolean>} true = 上游已确认结束
  * @param {any} this 会话实例
  */
@@ -30,11 +31,23 @@ export async function release(this: any): Promise<boolean> {
 /**
  * 优雅释放: 先在途请求全部结束(受 idle 超时约束, 不会永久阻塞),
  * 再释放 session. 用于代理切换/账号重建 -- 避免把正在传输的 SSE 掐断.
- * @returns {Promise<boolean>} true = 上游已确认结束
+ *
+ * 付费时段内默认拒绝(与 releaseStrict 同源判据): 代理切换 / 账号重建这类
+ * 系统内部动作没有资格扔掉已买断的一小时; 需要真删的调用方显式传 force
+ * (例如用户主动删除账号).
+ * @returns {Promise<boolean>} true = 上游已确认结束(或付费时段内按策略跳过)
  * @param {any} this 会话实例
+ * @param {{force?: boolean}} [opts] force=true 时连付费时段内也删
  */
-export async function releaseWhenIdle(this: any): Promise<boolean> {
+export async function releaseWhenIdle(this: any, opts: any = {}): Promise<boolean> {
   await this._waitForIdle()
+  if (opts.force !== true && this.inPaidWindow()) {
+    logger.info('refusing idle release: paid hour still running', {
+      instanceId: this.session?.instanceId,
+      model: this.session?.model,
+    })
+    return false
+  }
   return this.withLock(() => this._releaseUnlocked())
 }
 
@@ -48,7 +61,9 @@ export async function releaseIfLive(this: any): Promise<boolean> {
 }
 
 /**
- * 释放会话(早退 DELETE: 按实际占用时长退还 Freebucks 未用部分).
+ * 释放会话(早退 DELETE: session_units 按实际占用退还, Freebucks 只回
+ * freebucksRefundPending ---- 后者[退不退]至今未结, 所以策略取保守侧:
+ * 付费时段内一律不释放. 见 2026-09-13-refund-reversed.md 的结论强度标注).
  *
  * 失败时绝不丢弃 instanceId: 句柄没了就永远无法再删, 这条会话会一直占着
  * 上游会话槽位(该账号再也 admit 不了别的新模型). 所以失败时保留 session(连同
@@ -207,14 +222,38 @@ export function _clearReleaseRetry(this: any): void {
   }
 }
 
+
 /**
- * 严格释放(用于[断开全部连接]/[重启服务]/进程退出):
- * 逐次 DELETE 直到上游确认结束, 或退避重试耗尽; 返回结果明细, 绝不谎报成功
- * -- 失败时句柄仍留在 sessions.json 里, 下次启动扫尾.
- * @returns {Promise<{ok: boolean, instanceId?: string, attempts: number, error?: string}>}
+ * 严格释放(用于[断开全部连接]/[重启服务]/进程退出).
+ *
+ * 逐次 DELETE 直到上游确认结束, 或退避重试耗尽; 绝不谎报成功 -- 失败时句柄
+ * 仍留在 sessions.json 里, 下次启动扫尾.
+ *
+ * 付费时段内一律拒绝(2026-10-06): 这一层是批量路径的收尾, 不是用户对
+ * 某条会话的显式意图 ---- 已买断的一小时里发 DELETE 就是把钱扔掉(早退不退
+ * Freebucks, 重开再买一小时). 实测链路: 面板点[重启服务] ->
+ * shutdown(strict) -> releaseAllStrict -> 每账号 DELETE.
+ *
+ * 用户对单条会话的显式关闭走 closeSession, 那里显式传 force ----
+ * 意图明确就不拦(见 src/web/routes/inventory/accounts/actions.ts).
  * @param {any} this 会话实例
+ * @param {{force?: boolean}} [opts] force=true 时连付费时段内也删(用户显式意图)
+ * @returns {Promise<{ok: boolean, instanceId?: string, attempts: number, error?: string}>}
  */
-export async function releaseStrict(this: any): Promise<any> {
+export async function releaseStrict(this: any, opts: any = {}): Promise<any> {
+  if (opts.force !== true && this.inPaidWindow()) {
+    logger.info('refusing strict release: paid hour still running', {
+      instanceId: this.session?.instanceId,
+      model: this.session?.model,
+      expiresAt: this.session?.expiresAt ?? null,
+    })
+    return {
+      ok: true,
+      skippedPaidWindow: true,
+      instanceId: this.session?.instanceId,
+      attempts: 0,
+    }
+  }
   const delays = [0, 400, 1_500, 5_000]
   let attempts = 0
   let lastError: string | null = null
@@ -242,6 +281,10 @@ export async function releaseStrict(this: any): Promise<any> {
 
 /**
  * 进程退出前的收尾: 停掉所有计时器, 按配置决定是否释放会话.
+ *
+ * 仍然走 release()(不是 releaseStrict): 付费时段内的会话由 _armIdleRelease
+ * 的同一条判据保护 ---- 退出不是[用户想扔掉这一小时]的理由, 句柄已落盘,
+ * 下次启动按付费时段判据决定删或复用.
  * @returns {Promise<void>} 收尾完成即 resolve
  * @param {any} this 会话实例
  */
@@ -249,15 +292,7 @@ export async function shutdown(this: any): Promise<void> {
   this._clearPoll()
   this._clearIdleRelease()
   this._clearReleaseRetry()
-  if (this.config.session.releaseOnShutdown) {
+  if (this.config.session.releaseOnShutdown && !this.inPaidWindow()) {
     await this.release()
   }
 }
-
-/**
- * 释放失败后的退避重试: 0s -> 5s -> 15s -> 60s(最多 4 次).
- * 重试仍失败也不丢句柄 -- session 原样留着, 等下一次释放机会(空闲计时 /
- * 换号 / [断开全部连接]/ 重启前严格释放)或下次进程启动的扫尾继续删.
- * @returns {void}
- * @param {any} this 会话实例
- */

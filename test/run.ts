@@ -27,6 +27,7 @@ const SUITES = [
   ['catalog-models', 'suites/entries/verify/catalog-models.ts'],
   ['model-mapping-truth', 'suites/entries/verify/model-mapping-truth.ts'],
   ['tool-name-mapping', 'suites/entries/verify/tool-name-mapping.ts'],
+  ['catalog-freshness', 'suites/entries/verify/catalog/freshness.ts'],
   ['tool-restore-declared', 'suites/entries/verify/tool/restore-declared.ts'],
   ['tool-param-idempotent', 'suites/entries/verify/tool/param-idempotent.ts'],
   ['tool-stream-rewrite', 'suites/entries/verify/tool/stream-rewrite.ts'],

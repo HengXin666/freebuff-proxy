@@ -103,6 +103,10 @@ export async function invalidate(this: any, key: any) {
  * 全部断开重连(比重启更轻量):释放所有账号的 session(清理死任务),
  * 并重置账号并发信号量(放行等待者,等待者会在 chat 流程重新 re-admit).
  * 不重启进程;下一个请求自动 admit 全新 session.
+ *
+ * force=true: 这是用户在控制台按下按钮的显式意图("断开全部连接"),
+ * 与重启/退出那种系统内部收尾不同, 所以连付费时段内的会话也照删.
+ * 代价(那一小时作废)由用户承担, 面板文案已说明.
  * @param {any} this 账号池(runtimes)
  * @returns {Promise<Array<{key: string, email?: string, ok: boolean, error?: string}>>}
  */
@@ -115,7 +119,7 @@ export async function reconnectAll(this: any) {
       try {
         // 严格释放: 等到上游确认结束或退避重试耗尽, 失败带上错误信息(见 issue #7).
         const rel = rt
-          ? await rt.sessions.releaseStrict()
+          ? await rt.sessions.releaseStrict({ force: true })
           : { ok: true, attempts: 0 }
         // 信号量重置:清空在途计数并放行排队等待者(等待者会在 chat
         // 流程重新检查 session 并 re-admit,不会卡死)
@@ -187,9 +191,14 @@ export async function sweepPendingRefunds(this: any, opts: any = {}) {
  * 严格释放全部账号([断开全部连接]/[重启服务]/进程退出用):
  * 与 fire-and-forget 的 releaseSession 不同, 这里等到每条会话都确认结束或重试耗尽
  * 才返回, 并给出逐账号明细. 失败的句柄仍留在 sessions.json, 由下次启动扫尾继续清理.
+ *
+ * 付费时段内的会话不在此列: releaseStrict 会跳过它们(那一小时已实付),
+ * 逐账号明细里带 skippedPaidWindow, 调用方必须把它与[已释放]分开报,
+ * 否则用户会看到[已释放 N 条]而实际那条还在用 ---- 反过来也一样:
+ * 跳过不等于失败, 不该计进 failed.
  * @param {any} this 账号池(runtimes)
- * @param {{waitInFlightMs?: number}} [opts] 等在途流结束的上限(毫秒)
- * @returns {Promise<{ok: boolean, released: number,
+ * @param {{waitInFlightMs?: number, force?: boolean}} [opts] 等在途流结束的上限(毫秒)
+ * @returns {Promise<{ok: boolean, released: number, skippedPaid: number,
  *   failed: Array<{key: string, instanceId?: string, error?: string}>}>} 释放结果明细
  */
 export async function releaseAllStrict(this: any, opts: any = {}) {
@@ -204,7 +213,7 @@ export async function releaseAllStrict(this: any, opts: any = {}) {
         await rt.sessions._waitForIdle(waitMs)
       }
       try {
-        const r = await rt.sessions.releaseStrict()
+        const r = await rt.sessions.releaseStrict(opts)
         return { key: rt.key, email: rt.email, ...r }
       } catch (err) {
         return {
@@ -224,14 +233,21 @@ export async function releaseAllStrict(this: any, opts: any = {}) {
       instanceId: r.instanceId,
       error: r.error || 'release failed',
     }))
-  const released = results.filter((r: any) => r.ok).length
+  const skippedPaid = results.filter((r: any) => r.ok && r.skippedPaidWindow === true).length
+  // 跳过付费时段的不算[已释放]: 会话还在, 下次请求会复用它.
+  // 本来就没有会话的账号(attempts === 0 且 ok)也不算: 那条 DELETE 从没发出过,
+  // 计进 released 会让面板显示"已释放 N 条"而 N 大于真实条数.
+  const released = results.filter(
+    (r: any) => r.ok && r.skippedPaidWindow !== true && Number(r.attempts) > 0,
+  ).length
   if (failed.length) {
     logger.warn('strict release finished with failures (handles kept for retry)', {
       failed: failed.length,
       released,
+      skippedPaid,
     })
   }
-  return { ok: failed.length === 0, released, failed }
+  return { ok: failed.length === 0, released, skippedPaid, failed }
 }
 
 /**
@@ -239,6 +255,9 @@ export async function releaseAllStrict(this: any, opts: any = {}) {
  *
  * strict=true 走"逐次 DELETE 直到确认结束"(换容器/重启前的严格释放);
  * strict=false 走普通 release. 失败的句柄留在 sessions.json 里.
+ *
+ * 两条路径都受付费时段保护: 释放层自己判 inPaidWindow, 付费时段内一律跳过
+ * (重启/退出不是扔掉已买一小时的理由). 见 src/session/release/release.ts.
  * @param {any} this 账号池(runtimes)
  * @param {any} [opts] strict=true 走严格释放
  * @returns {Promise<any>} 释放结果明细

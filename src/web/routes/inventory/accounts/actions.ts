@@ -58,8 +58,12 @@ async function probeOne(key: any, res: ServerResponse, ctx: any) {
 /**
  * POST /api/accounts/:key/session ---- 用户主动结束该账号的上游计费会话.
  *
- * 上游按会话占用时长结算,主动早退 DELETE 才是"停止计费"的唯一手段,
- * 所以走严格释放(等到上游确认结束或退避重试耗尽),并如实返回结果;
+ * 这是唯一允许在付费时段内删除会话的路径: 用户看着面板上那条会话,
+ * 按了按钮, 明确要停掉它 ---- 早退损失(那一小时作废)由他自己承担.
+ * 所有系统内部的批量释放(重启 / 退出 / 换号 / 代理变更)都受付费时段
+ * 保护, 见 src/session/release/release.ts 与 src/proxy/routes/auth.ts.
+ *
+ * 走严格释放(等到上游确认结束或退避重试耗尽),并如实返回结果;
  * 删不掉的句柄会留在 sessions.json,由下次启动扫尾继续退款.
  *
  * @param {string} key 账号 key
@@ -94,7 +98,8 @@ async function closeSession(key: any, req: IncomingMessage, res: ServerResponse,
     const released = rt.sessions.getSnapshot()?.instanceId ?? null
     await rt.sessions._waitForIdle(waitMs)
     const interrupted = rt.sessions.inFlightCount() > 0
-    const rel = await rt.sessions.releaseStrict()
+    // force: 用户显式关闭, 连付费时段内也删(唯一允许这么做的路径).
+    const rel = await rt.sessions.releaseStrict({ force: true })
     const refund = rt.sessions.getSnapshot()?.lastRefund?.refund ?? null
     result = { ...rel, instanceId: rel.instanceId ?? released, interrupted, refund }
   } catch (err) {

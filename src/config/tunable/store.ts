@@ -124,11 +124,83 @@ export function applySavedSettings(
  * 从 config 抽出全部可调项的当前值(扁平对象).
  *
  * 前端设置页拿它渲染控件初值; /api/settings 的 GET 也用它.
+ *
+ * 凭据项(secret)的值一律不回: 这里直接写 null, 让[明文凭据绝不离开
+ * 服务端]成为这一层的性质, 而不是靠每个调用方自觉屏蔽一次. 任何一个新加的
+ * 快照消费方(日志导出 / 调试接口 / 未来的第三个前端)都不会漏掉这条.
+ * 前端据值恒空 + secretsEffective() 的布尔渲染成[留空即不改]的密码框.
+ *
+ * 为什么不在前端屏蔽: 屏蔽留在响应体里就永远有一份明文在路上, 一次
+ * 截图 / 一次浏览器插件 / 一次代理日志就够把它抄走. 屏蔽必须发生在真源.
  * @param {Record<string, any>} config 配置对象
- * @returns {Record<string, any>} 路径 → 值
+ * @returns {Record<string, any>} 路径 → 值(凭据项恒为 null)
  */
 export function snapshotTunables(config: Record<string, any>): Record<string, any> {
   const out: Record<string, any> = {}
-  for (const spec of TUNABLES) out[spec.path] = readPath(config, spec.path)
+  for (const spec of TUNABLES) {
+    out[spec.path] = spec.secret ? null : readPath(config, spec.path)
+  }
+  return out
+}
+
+/**
+ * 把一份[路径 → 值]表里的凭据项抹成布尔(值换成 null).
+ *
+ * 任何要出网络的快照都必须过这一道: 包括 POST /api/settings 的回执
+ * (它回的是刚写进盘的原值 ---- 不回抹的话, 用户刚填的那个 Key 会原样
+ * 出现在响应体与任何记录响应的地方).
+ * @param {Record<string, any>} values 路径 → 值
+ * @returns {Record<string, any>} 抹掉凭据值后的副本
+ */
+export function redactTunables(values: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {}
+  for (const [path, value] of Object.entries(values || {})) {
+    out[path] = specOf(path)?.secret ? null : value
+  }
+  return out
+}
+
+/**
+ * 各凭据项[是否已设置] ---- 以盘上保存值为准的生效视图.
+ *
+ * 为什么不能只看 config: 可调项要重启才合并进 config, 所以用户刚在设置页
+ * 保存一把 Key 之后, config 里还是旧值 ---- 只看 config 会让页面显示
+ * "未设置", 与事实相反. 盘上保存过就以盘为准(它才是下次启动会生效的那份),
+ * 没保存过才看 config(config.yaml / 环境变量里的现值).
+ * @param {Record<string, any>} config 配置对象(启动时的当前生效值)
+ * @param {Record<string, any>} saved settings.json 里已保存的可调项
+ * @returns {Record<string, boolean>} 路径 → 是否已设置
+ */
+export function secretsEffective(
+  config: Record<string, any>,
+  saved: Record<string, any>,
+): Record<string, boolean> {
+  const values: Record<string, any> = {}
+  for (const spec of TUNABLES) {
+    if (!spec.secret) continue
+    values[spec.path] = saved && spec.path in saved
+      ? saved[spec.path]
+      : readPath(config, spec.path)
+  }
+  return secretsFromValues(values)
+}
+
+/**
+ * 各凭据项[是否已设置] ---- 从一块[路径 → 值]表上判(不做 readPath).
+ *
+ * POST /api/settings 的回执用它: 那一刻真值还在刚写盘的对象里, 而 config
+ * 要等下次启动才合并.
+ * @param {Record<string, any>} values 路径 → 值
+ * @returns {Record<string, boolean>} 路径 → 是否已设置(判据 = 非空)
+ */
+export function secretsFromValues(values: Record<string, any>): Record<string, boolean> {
+  const out: Record<string, boolean> = {}
+  for (const spec of TUNABLES) {
+    if (!spec.secret) continue
+    const v = values?.[spec.path]
+    out[spec.path] = Array.isArray(v)
+      ? v.length > 0
+      : v !== null && v !== undefined && String(v).length > 0
+  }
   return out
 }

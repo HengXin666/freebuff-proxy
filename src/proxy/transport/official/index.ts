@@ -28,6 +28,7 @@ import { ensureFreebuffSystemMessages, ensureFreebuffToolSignature } from '../..
 import { agentIdForModel } from '../../../model.ts'
 import { customModels } from '../../routes/catalog.ts'
 import { logger } from '../../../util/log.ts'
+import { resolveWireModel } from '../../../upstream/catalog/freshness.ts'
 import { runStreamingRpc, logRpcResult } from './stream.ts'
 
 /**
@@ -85,23 +86,18 @@ export async function tryOfficialChannel(ctx: any, args: any) {
       if (!rpcCfg) {
         logger.warn('official channel: no rpc cfg, falling back to legacy')
       } else {
-        const wantStream = args.stream !== false
-        const rpcArgs = {
-          cfg: rpcCfg,
+        const rpc = await runOfficialRpc(ctx, {
+          rpcCfg,
+          upstream,
           instanceId,
-          modelKey: forwardBody.model,
-          messages: forwardBody.messages,
-          tools: forwardBody.tools,
-          layer: 'worker',
-          stream: true,
-          timeoutMs: Math.max(
-            Math.max(1_000, schedulingDeadline - Date.now()),
-            RPC_TOTAL_TIMEOUT_MS,
-          ),
-        }
-        const rpc = wantStream
-          ? await runStreamingRpc(rpcArgs, carrierPlan, declaredToolNames, declaredToolSchemas)
-          : await runWholeRpc(rpcArgs, carrierPlan, declaredToolNames, declaredToolSchemas)
+          forwardBody,
+          upstreamModel,
+          schedulingDeadline,
+          carrierPlan,
+          declaredToolNames,
+          declaredToolSchemas,
+          wantStream: args.stream !== false,
+        })
         if (rpc?.upstreamRes) {
           upstreamRes = rpc.upstreamRes
           upstreamErrText = rpc.upstreamErrText
@@ -132,6 +128,48 @@ export async function tryOfficialChannel(ctx: any, args: any) {
     }
   }
   return { upstreamRes, upstreamErrText, rpcResponse }
+}
+
+/**
+ * 发一次 official 通道的 RPC.
+ *
+ * 句柄是单次抓取的票据, 跨进程边界不带它: 副仓库(reuse 路径)每次都自己重抓目录,
+ * 拿到的 handle 与主服务手上那份天然不同代次; 主服务把上一代句柄当 modelKey 传过去,
+ * 对面 pickRow 必然落空 -> "model not found in catalog" -> 降级 legacy -> 上游 428.
+ * 传稳定身份(目录 key)让对面在自己那份表里定位同一行.
+ * 见 src/upstream/catalog/freshness.ts 的文件头.
+ *
+ * @param {any} ctx 依赖集合
+ * @param {any} args 本次 RPC 的全部入参
+ * @returns {Promise<{upstreamRes: any, upstreamErrText: any}|null>} RPC 结果(失败为 null)
+ */
+async function runOfficialRpc(ctx: any, args: any) {
+  const rpcModel = resolveWireModel(
+    args.upstream?.catalog, args.forwardBody.model, args.upstreamModel, { prefer: 'key' },
+  )
+  if (rpcModel.reason !== 'key') {
+    logger.warn('rpc model key not resolved to catalog key', {
+      model: args.forwardBody.model,
+      requested: args.upstreamModel,
+      reason: rpcModel.reason,
+    })
+  }
+  const rpcArgs = {
+    cfg: args.rpcCfg,
+    instanceId: args.instanceId,
+    modelKey: rpcModel.model,
+    messages: args.forwardBody.messages,
+    tools: args.forwardBody.tools,
+    layer: 'worker',
+    stream: true,
+    timeoutMs: Math.max(
+      Math.max(1_000, args.schedulingDeadline - Date.now()),
+      RPC_TOTAL_TIMEOUT_MS,
+    ),
+  }
+  return args.wantStream
+    ? await runStreamingRpc(rpcArgs, args.carrierPlan, args.declaredToolNames, args.declaredToolSchemas)
+    : await runWholeRpc(rpcArgs, args.carrierPlan, args.declaredToolNames, args.declaredToolSchemas)
 }
 
 /**

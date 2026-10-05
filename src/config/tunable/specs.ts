@@ -29,6 +29,12 @@ export interface TunableSpec {
   group: 'upstream' | 'session' | 'limits' | 'logging' | 'web' | 'users' | 'server'
   /** 中文短标签(前端显示). */
   label: string
+  /**
+   * 凭据项: 明细永不回显 ---- GET 只回[有没有设置]这个布尔, 前端
+   * 渲染成留空即不改的密码框. 见 ./store.ts 的 snapshotTunables 与
+   * secretsOf.
+   */
+  secret?: boolean
 }
 
 /**
@@ -163,8 +169,8 @@ export const TUNABLES: readonly TunableSpec[] = Object.freeze([
   { path: 'web.cookieSecure', type: 'boolean', group: 'web', label: 'Cookie Secure' },
   { path: 'web.sessionTtlHours', type: 'integer', min: 1, max: 24 * 365, group: 'web', label: '登录有效期(小时)' },
   { path: 'users.defaultAdminUsername', type: 'string', group: 'users', label: '默认管理员用户名' },
-  { path: 'users.defaultAdminPassword', type: 'string', group: 'users', label: '默认管理员密码' },
-  { path: 'server.apiKeys', type: 'stringList', group: 'server', label: '超级 API Key' },
+  { path: 'users.defaultAdminPassword', type: 'string', secret: true, group: 'users', label: '默认管理员密码' },
+  { path: 'server.apiKeys', type: 'stringList', secret: true, group: 'server', label: '下游访问 Key' },
 ])
 
 /**

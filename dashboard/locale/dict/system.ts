@@ -197,15 +197,40 @@ export default {
     en: 'Idle release disabled (sessions live until they expire) · at most {max} new sessions per request',
   },
 
-  // ---- 系统设置:全部可调项(config.yaml 里除 host/port 外的项)----
+  // ---- 系统设置:可调项(config.yaml 里除 host/port 外的项)----
   'tunables.title': { 'zh-CN': '全部配置项', en: 'All configuration' },
   'tunables.hint': {
-    'zh-CN': '除监听地址与端口外的全部配置项都在这里调整，保存在 /data/settings.json',
-    en: 'Every setting except the listen address/port lives here, saved to /data/settings.json',
+    'zh-CN': '除监听地址与端口外的全部配置项，保存在 /data/settings.json。留空 = 不改这一项。',
+    en: 'Every setting except the listen address/port, saved to /data/settings.json. '
+      + 'Leave a field empty to keep it unchanged.',
+  },
+  'tunables.readonlyHint': {
+    'zh-CN': '除监听地址与端口外的全部配置项（只读：需要管理员权限才能修改）。',
+    en: 'Every setting except the listen address/port (read-only: admin rights are required to change them).',
   },
   'tunables.restartNote': {
-    'zh-CN': '⚠️ 本区改动需重启服务后生效（保存不会立即应用）',
-    en: '⚠️ Changes in this section take effect after a restart (saving does not apply them immediately)',
+    'zh-CN': '本区改动需重启服务后生效（保存不会立即应用）',
+    en: 'Changes in this section take effect after a restart (saving does not apply them immediately)',
+  },
+  'tunables.hintZeroMeansOff': {
+    'zh-CN': '填 0 = 关闭该功能',
+    en: '0 = disabled',
+  },
+  'tunables.secretPlaceholderSet': {
+    'zh-CN': '已设置（不回显；留空保持原样）',
+    en: 'Already set (never displayed; leave empty to keep it)',
+  },
+  'tunables.hintSecretSet': {
+    'zh-CN': '出于安全，已设置的值不会回显到这里。留空 = 保持不变，填写 = 整体替换。',
+    en: 'For safety the current value is never sent to the browser. Empty keeps it, filling in replaces it.',
+  },
+  'tunables.hintSecretUnset': {
+    'zh-CN': '当前未设置。填写后需重启服务才生效。',
+    en: 'Not set. Filling it in takes effect after a restart.',
+  },
+  'tunables.hintLoginBase': {
+    'zh-CN': '浏览器登录的站点地址',
+    en: 'Site used for browser sign-in',
   },
   'tunables.savedNeedRestart': {
     'zh-CN': '已保存；重启服务后生效',

@@ -146,6 +146,18 @@ export function _armPoll(this: any): void {
       })
     })
   }, ms)
+  /**
+   * 轮询不得独自撑住事件循环.
+   *
+   * 本仓其它会自己起计时的地方一律 unref(空闲释放 / 释放重试 / 有界等待), 只有
+   * 这一处漏了 ---- 而它是 setInterval, 带 ref 时进程永不退出. 平时被
+   * "释放路径最后一定会走到 _clearPoll()" 掩盖着; 一旦有条路径提前返回(例如
+   * 付费时段内不释放), 这条 interval 就留下来把进程钉死: 表现为测试跑完全部
+   * 用例, 打完 smoke ok 却不退出(实测 headless 跑 240s 超时, 而用例本身全绿).
+   *
+   * 心跳本身是 best-effort(失败只记 warn), 没有理由要求进程为它活着.
+   */
+  if (this._pollTimer.unref) this._pollTimer.unref()
 }
 
 /**

@@ -50,11 +50,17 @@ import { fileURLToPath } from 'node:url'
   const STALE_COPY =
     /按实际占用退还\s*Freebucks|退还未用时长|退还未用部分|停止为空转时长付费|挂着的空闲会话(在按小时计价|才是花钱)|越早释放越省|早退.{0,12}省钱/
   const SKIP_DIR = new Set(['node_modules', '.git', 'data', 'data-test'])
+  // 扫描面必须覆盖 .ts/.css/.html: 全仓已转 TS, 只读 .js 等于把实现代码整段漏掉.
+  // 实测漏过一次 ---- src/session/release/release.ts 的文档注释里写着
+  // "按实际占用时长退还 Freebucks 未用部分"(已被证伪的说法, 且正是本守卫
+  // 存在的理由), 而它因为扩展名不在集合里逃过了扫描. 版本库里没有 .js 了,
+  // 所以那一条守卫实际上只在扫文档与 json.
+  const SCAN_EXT = /\.(js|mjs|cjs|ts|tsx|css|html|md|ya?ml|json)$/
   const walk = (dir, out = []) => {
     for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
       if (ent.isDirectory()) {
         if (!SKIP_DIR.has(ent.name)) walk(path.join(dir, ent.name), out)
-      } else if (/\.(js|mjs|cjs|md|ya?ml|json)$/.test(ent.name)) {
+      } else if (SCAN_EXT.test(ent.name)) {
         out.push(path.join(dir, ent.name))
       }
     }

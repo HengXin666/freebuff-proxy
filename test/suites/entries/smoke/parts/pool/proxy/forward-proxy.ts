@@ -11,7 +11,6 @@ import { saveAccountUser } from '../../../../../../../src/auth-store.ts'
 import { loadConfig } from '../../../../../../../src/config.ts'
 import { startServer } from '../../../../../../../src/server.ts'
 import { state } from '../../../../../smoke/state.ts'
-import { waitFor } from '../../../harness/helpers.ts'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -115,8 +114,16 @@ import path from 'node:path'
   assert.equal(resB.status, 200, await resB.clone().text())
   assert.match(await resB.text(), /data: \[DONE\]/)
   assert.equal(state.sessionPosts, 2, 'B 应在新 runtime 上 admit 新 session')
-  // A 的旧 session 由优雅回收释放
-  await waitFor('排队切换后旧 session 优雅释放', () => state.sessionDeletes >= 1)
+  // A 的旧 session 不删: 它仍在已付费的一小时内(早退不退 Freebucks),
+  // 而"换出口"是系统内部动作, 不是用户对那条会话的显式意图. 让位只让出
+  // runtime; 那张已付款的一小时留给下一跳复用(holderFor/takeover)或到点过期.
+  // 见 src/session/release/release.ts 的 releaseWhenIdle.
+  await new Promise((r) => setTimeout(r, 200))
+  assert.equal(
+    state.sessionDeletes,
+    0,
+    '换出口不得删除仍在付费时段内的旧会话（那一小时已实付，DELETE 不退钱）',
+  )
 
   await qRuntimes.shutdown()
   qServer.close()

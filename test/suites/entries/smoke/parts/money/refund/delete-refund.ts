@@ -29,7 +29,7 @@ fbConfig.limits.maxNewSessionsPerRequest = 2
  * - 不是付费时段保护(那条由 (3) 的 sessionDeletes === 0 覆盖).
  */
 for (const key of ['a', 'b', 'c']) {
-  await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})
+  await fbRuntimes.get(key).sessions.releaseStrict({ force: true }).catch(() => {})
 }
 
 
@@ -97,20 +97,38 @@ state.mockMode = 'ok'
 }
 
 // (6) 严格释放([断开全部连接]/[重启服务]用):等到真的删掉才返回 ok.
+//     本段测的是严格释放的机械语义(删不掉要如实回报), 不是付费时段保护,
+//     所以显式带 force ---- 不带 force 的那条路径(付费时段内跳过)由下面
+//     紧跟的一组对照覆盖.
 state.sessionPosts = 0
 state.sessionDeletes = 0
 state.deleteFailuresLeft = 0
 {
-  const r = await fbRuntimes.releaseAllStrict()
+  // 先建立一条仍在付费时段内的会话, 用来验[不带 force 就跳过].
+  const sm = fbRuntimes.get('a').sessions
+  await sm.ensureSession('deepseek/deepseek-v4-flash')
+  assert.equal(sm.inPaidWindow(), true, '对照前提：刚 admit 的会话应在付费时段内')
+  state.sessionDeletes = 0
+  const skipped = await fbRuntimes.releaseAllStrict()
+  assert.equal(skipped.ok, true, '跳过付费时段不是失败: ok 必须仍为 true')
+  assert.equal(skipped.released, 0, '不得把跳过的会话算成已释放')
+  assert.ok(skipped.skippedPaid, '必须如实回报跳过了几条（前端要分开显示）')
+  assert.equal(state.sessionDeletes, 0, '付费时段内不得发 DELETE')
+  assert.ok(sm.getSnapshot().instanceId, '跳过后句柄必须还在（下一跳要复用它）')
+}
+{
+  // 带 force: 连付费时段内的也删(这是 [断开全部连接] 按钮的语义).
+  const r = await fbRuntimes.releaseAllStrict({ force: true })
   assert.equal(r.ok, true, `严格释放应全部成功：${JSON.stringify(r.failed)}`)
   assert.ok(r.released >= 1, '至少释放一条会话')
+  assert.equal(r.skippedPaid, 0, 'force 下不应再跳过任何会话')
 }
 {
   // 上游一直删不掉 → 如实返回失败明细,绝不谎报"已全部断开"
   const sm = fbRuntimes.get('a').sessions
   await sm.ensureSession('deepseek/deepseek-v4-flash')
   state.deleteFailuresLeft = 99
-  const r = await fbRuntimes.releaseAllStrict()
+  const r = await fbRuntimes.releaseAllStrict({ force: true })
   assert.equal(r.ok, false, '删不掉时必须 ok=false')
   assert.ok(r.failed.length >= 1, '必须带上失败明细')
   assert.ok(r.failed[0].instanceId, '失败明细要带 instanceId（供排查/扫尾）')
@@ -138,16 +156,27 @@ state.deleteFailuresLeft = 0
     onDisk.sessions.some((s) => s.key === 'b' && s.instanceId),
     'admit 后句柄应落盘',
   )
-  // 模拟"进程被杀":内存句柄丢弃,文件里仍有记录 → 下次启动扫尾应删掉它
+  // 模拟"进程被杀":内存句柄丢弃,文件里仍有记录 → 下次启动扫尾处理它.
   const store = new SessionHandleStore(storeFile)
   assert.ok(store.listOrphans().length >= 1, '上次运行遗留的句柄应视为待清理')
-  // 账号已删除 / 凭据解析不到时:不得谎报清理成功,句柄要保留在文件里
-  const skipped = await store.cleanupOrphans(() => null)
+  // 默认形态(启动路径):这条会话仍在已付费的一小时内 → 一条 DELETE 都不许发,
+  // 句柄保留给调度层复用. 这条断言是本次修复的核心判据.
+  state.sessionDeletes = 0
+  {
+    const held = await store.cleanupOrphans((key) => fbRuntimes.byKey.get(key)?.upstream)
+    assert.equal(held.cleaned, 0, '付费时段内的遗留句柄不得被扫尾删掉')
+    assert.equal(held.deferred, 1, '必须如实计入 deferred（保留原因可见）')
+    assert.equal(state.sessionDeletes, 0, '付费时段内扫尾不得发 DELETE')
+    assert.ok(store.listOrphans().length >= 1, '保留的句柄必须还在')
+  }
+  // 账号已删除 / 凭据解析不到时:不得谎报清理成功,句柄要保留在文件里.
+  // 走 includePaid(把"付费时段内保留"这条先让开), 单独验解析失败这一支.
+  const skipped = await store.cleanupOrphans(() => null, { includePaid: true })
   assert.equal(skipped.cleaned, 0, '解析不到账号时不得谎报已清理')
   assert.ok(skipped.skipped >= 1, '解析不到的句柄应计入 skipped 并保留')
   assert.ok(store.listOrphans().length >= 1, '跳过的句柄必须保留')
   // 用真实 upstream 解析器再跑一次:应清掉所有遗留句柄
-  await store.cleanupOrphans((key) => fbRuntimes.byKey.get(key)?.upstream)
+  await store.cleanupOrphans((key) => fbRuntimes.byKey.get(key)?.upstream, { includePaid: true })
   assert.equal(store.listOrphans().length, 0, '启动扫尾后不应残留待清理句柄')
   // ---- 启动扫尾必须是有界的:一个连不通的上游(DNS 黑洞/代理挂起/已被删的
   // 账号)曾让每条 DELETE 各等 30s×3 次重放,服务十几分钟不进监听状态,用户看到

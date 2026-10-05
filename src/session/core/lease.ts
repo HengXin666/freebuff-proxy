@@ -155,6 +155,24 @@ export function inPaidWindow(this: any, session: any = this.session): boolean {
 }
 
 /**
+ * 入参形态的付费时段判定: 给不持有会话实例的调用方用(启动扫尾 / 路由层).
+ *
+ * 与 inPaidWindow 同一判据, 只是把会话对象直接收进来:
+ *   - 启动扫尾只有磁盘上的句柄(还没有 SessionManager);
+ *   - 控制面路由只想问"这个 key 现在能不能放".
+ * 两处都必须与调度层用同一条判据, 否则会出现"调度层不释放, 别的路径照删"
+ * 这种一边保护一边烧钱的分裂.
+ * @param {any} session 会话句柄(可来自磁盘), 缺 expiresAt 时判不出来
+ * @returns {boolean} 在已付费时段内则为真; 判不出来返回 false(不拦)
+ */
+export function inPaidWindowFor(session: any): boolean {
+  if (!session) return false
+  if (session.status === 'ended') return false
+  const exp = session.expiresAt != null ? Date.parse(session.expiresAt) : NaN
+  return Number.isFinite(exp) && exp - Date.now() > 0
+}
+
+/**
  * 空闲自动释放: 在途归零后空闲超过 session.idleReleaseSec 就早退 DELETE.
  *
  * 已付费时段内不释放. 上游一次 admit 就是买断一小时: POST 当场扣满整小时
