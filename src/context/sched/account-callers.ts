@@ -15,6 +15,28 @@ import {
 import { PAID_WINDOW_BOUND_CODES } from '../state/codes.ts'
 
 /**
+ * 对外展示用的模型名.
+ *
+ * 错误消息与错误体里的 model 是下游最先看到, 也最容易被整段转发的字段 ----
+ * 此前直接拼目录 key(m-096e75164d), 用户根本认不出是哪个模型.
+ * 这里统一换成可读名; 目录 key 仍以 freebuff_key 并列透出(排障要能对上上游日志).
+ *
+ * 取不到名字时原样返回, 不隐藏信息(与 catalogDisplayName 同一条纪律).
+ *
+ * @param {any} self 账号池(runtimes)
+ * @param {any} model 请求模型(可能是目录 key)
+ * @returns {string} 可读模型名
+ */
+function readableModel(self: any, model: any): string {
+  if (typeof model !== 'string' || !model) return String(model ?? '')
+  try {
+    return self?.displayNameFor?.(model) || model
+  } catch {
+    return model
+  }
+}
+
+/**
  * 全池账号都[这一小时已买给别的模型]时的错误.
  *
  * 与额度无关的一类不可用: 账号健康, 有钱, 有会话, 只是每个号在付费时段内各绑一个模型.
@@ -51,7 +73,8 @@ export function throwPaidWindowBound(self: any, failures: any, model: any): void
         status: 429,
         code: 'paid_window_model_mismatch',
         body: {
-          model,
+          model: readableModel(self, model),
+          freebuff_key: model,
           failures: sanitizeFailuresForClient(failures),
           reasons: countReasons(failures),
           tried: failures.length,
@@ -59,7 +82,8 @@ export function throwPaidWindowBound(self: any, failures: any, model: any): void
           // 每个账号此刻绑定的模型, 供用户改用
           boundModels: failures
             .map((f: any) => f?.body?.boundModel)
-            .filter(Boolean),
+            .filter(Boolean)
+            .map((m: any) => readableModel(self, m)),
           resumeAt: resumeAtMs != null ? new Date(resumeAtMs).toISOString() : null,
         },
         retryAfterMs: waitMs ?? undefined,
@@ -85,7 +109,7 @@ export function throwBudgetExhausted(self: any, failures: any, model: any): void
   if (allBudgetExhausted) {
     throw new UpstreamError(
       'No available Freebuff account for model ' +
-        model +
+        readableModel(self, model) +
         ': this request used up its new-session budget (Freebucks meter). ' +
         'Retry, or raise the per-request new-session limit in the console. ' +
         'Tried ' + failures.length + ' account(s).',
@@ -93,7 +117,8 @@ export function throwBudgetExhausted(self: any, failures: any, model: any): void
         status: 429,
         code: 'session_budget_exhausted',
         body: {
-          model,
+          model: readableModel(self, model),
+          freebuff_key: model,
           failures: sanitizeFailuresForClient(failures),
           reasons: countReasons(failures),
           tried: failures.length,
@@ -131,7 +156,7 @@ export function throwAllExhausted(self: any, failures: any, model: any): void {
     const onlyUnits = failures.every((f: any) => f.code === 'units_exhausted')
     const code = onlyUnits ? 'units_exhausted' : 'freebucks_exhausted'
     throw new UpstreamError(
-      `No Freebuff account can afford model ${model} ` +
+      `No Freebuff account can afford model ${readableModel(self, model)} ` +
         `(${onlyUnits ? 'session units' : 'Freebucks'} exhausted). ` +
         `${failures.length} account(s) tried (${summary}).` +
         ` Retry after ${new Date(Date.now() + self.earliestCooldownMs()).toISOString()}.`,
@@ -144,7 +169,8 @@ export function throwAllExhausted(self: any, failures: any, model: any): void {
          */
         terminalExhausted: true,
         body: {
-          model,
+          model: readableModel(self, model),
+          freebuff_key: model,
           failures: sanitizeFailuresForClient(failures),
           reasons: countReasons(failures),
           tried: failures.length,
@@ -177,7 +203,7 @@ export function throwNoAvailableAccount(self: any, failures: any, model: any): v
     )
     .join('; ')
   throw new UpstreamError(
-    `No available Freebuff account for model ${model}. Tried ${failures.length} account(s).` +
+    `No available Freebuff account for model ${readableModel(self, model)}. Tried ${failures.length} account(s).` +
       (ledger
         ? ` Per-account Freebucks: ${ledger}.` +
           (fbSummary?.resetAt ? ` Refills ${fbSummary.resetAt}.` : '') +
@@ -187,7 +213,8 @@ export function throwNoAvailableAccount(self: any, failures: any, model: any): v
       status: 429,
       code: 'no_available_account',
       body: {
-        model,
+        model: readableModel(self, model),
+        freebuff_key: model,
         failures: sanitizeFailuresForClient(failures),
         reasons: countReasons(failures),
         tried: failures.length,
@@ -223,7 +250,12 @@ export function throwAcquireFailure(
         status: 403,
         code: fatalFailure.code,
         // 出口级故障: 给用户可读的失败说明与 egress 标记, 但不给账号标识.
-        body: { model, egress: true, reason: fatalFailure.code },
+        body: {
+          model: readableModel(self, model),
+          freebuff_key: model,
+          egress: true,
+          reason: fatalFailure.code,
+        },
       },
     )
   }
@@ -233,9 +265,17 @@ export function throwAcquireFailure(
   throwNoAvailableAccount(self, failures, model)
   // 四个分支都只在条件命中时抛出; 走到这里说明 failures 为空(调用方已保证非空),
   // 兜一个显式抛错, 让本函数的返回类型诚实地是 never.
-  throw new UpstreamError(`No available Freebuff account for model ${model}.`, {
-    status: 429,
-    code: 'no_available_account',
-    body: { model, failures: [], tried: 0 },
-  })
+  throw new UpstreamError(
+    `No available Freebuff account for model ${readableModel(self, model)}.`,
+    {
+      status: 429,
+      code: 'no_available_account',
+      body: {
+        model: readableModel(self, model),
+        freebuff_key: model,
+        failures: [],
+        tried: 0,
+      },
+    },
+  )
 }

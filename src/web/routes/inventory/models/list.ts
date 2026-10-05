@@ -87,11 +87,13 @@ function listModels(res: ServerResponse, ctx: any) {
     })
     // 兼容字段:老的前端消费方读 upstreamModelIds / upstreamModels 标 .
     // 现在清单以目录为准,这两项只表示"当前有额度/有单价的 key".
+    const aliased = runtimes.modelAliases(catalog.rows.map((r: any) => r.key))
     sendJson(res, 200, {
       ...payload,
       accessTier: quota.accessTier || null,
-      upstreamModelIds: catalog.rows.map((r: any) => r.key),
-      upstreamModels: runtimes.modelAliases(catalog.rows.map((r: any) => r.key)),
+      // 可读名口径:下游把 upstreamModelIds 当模型名用,不能给裸目录 key.
+      upstreamModelIds: aliased.map((a: any) => a.displayName || a.key),
+      upstreamModels: aliased,
     })
     return
   }
@@ -149,11 +151,13 @@ async function upstreamModels(res: ServerResponse, ctx: any) {
       prices: {},
       accessTier: null,
     }
+    const aliased = runtimes.modelAliases(catalog.rows.map((r: any) => r.key))
     sendJson(res, 200, {
       models: catalog.rows.map((row: any) => modelRow(row, quota, runtimes)),
       accessTier: quota.accessTier || null,
-      upstreamModelIds: catalog.rows.map((r: any) => r.key),
-      upstreamModels: runtimes.modelAliases(catalog.rows.map((r: any) => r.key)),
+      // 同上: 判据真值在 upstreamModels[].key, 这个字段给可读名.
+      upstreamModelIds: aliased.map((a: any) => a.displayName || a.key),
+      upstreamModels: aliased,
       catalogVersion: catalog.version || null,
       catalogIssuedAt: catalog.issuedAt || null,
       note: '清单来自上游目录；额度与单价来自只读探测（不创建 session）',

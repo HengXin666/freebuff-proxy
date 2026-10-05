@@ -136,17 +136,25 @@ export async function refreshAll(res: ServerResponse, ctx: any) {
     // 额度拿不到不影响账号刷新结果
   }
   const failed = results.filter((r) => !r.ok)
-  // 上游模型清单同时给两种口径:upstreamModelIds 是目录 key(判据真值),
-  // upstreamModels 是可直接展示/选用的可读三件套(key/displayName/catalogId).
+  /**
+   * 上游模型清单同时给两种口径.
+   *
+   * upstreamModelIds 以前直接给目录 key(m-096e75164d),下游把它当模型名就什么
+   * 都认不出 ---- 它是"哪些模型有额度"的判据表, 但展示与选用的入口应给可读名.
+   * 现在这个字段统一给可读名(displayName || key), 服务端真值仍以
+   * upstreamModels[].key 并列透出.
+   */
   const upstreamKeys = results.length ? modelIds : []
+  const aliased = runtimes.modelAliases(upstreamKeys)
+  const readableIds = aliased.map((a: any) => a.displayName || a.key)
   sendJson(res, 200, {
     ok: true,
     results,
     failures: failed.length,
     accounts: runtimes.list(),
     modelNames: overviewModelNames(runtimes),
-    upstreamModelIds: modelIds,
-    upstreamModels: runtimes.modelAliases(upstreamKeys),
+    upstreamModelIds: readableIds,
+    upstreamModels: aliased,
     // 目录侧:让前端一次点击就能同时更新清单与额度
     catalogRows: catalogInfo.rows?.length || 0,
     catalogVersion: catalogInfo.version || null,

@@ -4,6 +4,8 @@ import { releaseSessionUnlessPaid } from './proxy/routes/auth.ts'
 import { mapAndSendError } from './proxy/transport/errors/respond.ts'
 import { createChatState, withRequestSlot } from './proxy/chat/state/state.ts'
 import { runChatLoop } from './proxy/chat/run/loop.ts'
+import { handleResponses } from './proxy/routes/responses/handler.ts'
+import { bodyReadTimeoutMs } from './proxy/config/limits.ts'
 
 /**
  * OpenAI-compatible surface under /v1 only.
@@ -45,7 +47,24 @@ export function createProxyHandler(ctx: any) {
    * @returns {Promise<void>} 处理完成
    */
   async function handle(req: any, res: any) {
-    return handleRoute(ctxValue, handleChatCompletions, req, res)
+    return handleRoute(ctxValue, handleChatCompletions, handleResponsesRequest, req, res)
+  }
+
+  /**
+   * Responses 协议的入口包装: 与 chat 一样先过全局槽位闸门, 再交给翻译层,
+   * 保证两条协议共享同一套并发/断开语义.
+   * @param {object} req 请求
+   * @param {object} res 响应
+   * @returns {Promise<void>} 处理完成
+   */
+  async function handleResponsesRequest(req: any, res: any) {
+    const releaseSlot = await withRequestSlot(ctxValue, req, res, mapAndSendError)
+    if (!releaseSlot) return
+    try {
+      await handleResponses(handleChatCompletions, req, res, bodyReadTimeoutMs(ctxValue))
+    } finally {
+      releaseSlot()
+    }
   }
 
   /** 一键屏蔽收费模型开关(前端[模型管理],实时生效).读取见 ./proxy/routes/catalog.ts. */

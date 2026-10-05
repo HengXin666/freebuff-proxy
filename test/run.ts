@@ -28,6 +28,7 @@ const SUITES = [
   ['model-mapping-truth', 'suites/entries/verify/model-mapping-truth.ts'],
   ['tool-name-mapping', 'suites/entries/verify/tool-name-mapping.ts'],
   ['chat-payload-contract', 'suites/entries/verify/chat-payload-contract.ts'],
+  ['responses-bridge', 'suites/entries/verify/protocol/responses-bridge.ts'],
 ]
 
 let failed = 0

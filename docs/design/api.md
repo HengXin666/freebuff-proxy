@@ -44,6 +44,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   | `DELETE /v1/freebuff/accounts` | **开放 API 删除账号**（按 email/id/key，空 body 清空全部） |
   | `POST /v1/freebuff/session/end` | 释放全部 session |
   | `POST /v1/chat/completions` | 主路径（session + 透传） |
+  | `POST /v1/responses` | Responses 协议入口 (翻成 chat 复用同一条链路) |
   | `* /v1/*`（非 chat） | 映射到上游 `/api/v1/*`，只注入 Freebuff 鉴权 |
 
 ### 开放 API 账号导入（Open API）

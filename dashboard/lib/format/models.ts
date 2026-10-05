@@ -41,10 +41,13 @@ export function applyModelNames(payload: any) {
  - 注释里别写  + /v1/...: 紧邻斜杠会提前闭合块注释(这正是
  - 刚才写这行时踩到的语法错误).
  *
- - 后端两个字段口径不同:upstreamModelIds 是目录 key(m-00032eaeec,判据真值),
- - upstreamModels 是带 catalogId/displayName 的三件套.而 /v1/models 的 id 由
- - displayName || key 决定(见 src/model.ts 的 catalogDisplayName).下拉按
- - m.id 比对打 ,所以这里必须做同样的换算,否则一个  也标不出来.
+ - 后端两个字段口径已统一为可读名:upstreamModelIds 给 displayName || key,
+ - upstreamModels 是带 catalogId/displayName/key 的三件套.而 /v1/models 的 id 也
+ - 由 displayName || key 决定(见 src/model.ts 的 catalogDisplayName) ----
+ - 三处同源, 下拉按 m.id 比对就能对上.
+ -
+ - 兼容:若拿到的是旧口径(裸目录 key m-xxx),这里仍用 upstreamModels 反查出
+ - 可读名, 所以升级过程中前端不会因为后端未同步而丢标注.
  - @returns {Set<string>}
  */
 export function upstreamReadableIds() {
@@ -54,15 +57,8 @@ export function upstreamReadableIds() {
   for (const key of keys) {
     const row = byKey.get(key)
     /**
-     - 必须与后端的名称口径逐字一致:displayName || key.
-     *
-     - 此前这里写的是 catalogId || displayName,而后端 /api/models/upstream
-     - 的 id 用的是 displayName(catalogId 只是 legacy 反查的并列字段,
-     - 值其实是另一个东西 ---- 实测 id='MiMo 2.6 Flash' 而 catalogId='mimo/mimo-v2.5').
-     - 两边算出不同的 id → 测试对话下拉的  一个也标不出来.
-     *
      - 与 src/model.ts 的 catalogDisplayName() 同源:displayName 优先,
-     - 缺失才回退 key(不凭空编名字).
+     - 缺失才回退 key(不凭空编名字).key 已是可读名时反查不到,原样使用即可.
      */
     out.add((row && (row.displayName || row.key)) || key)
   }

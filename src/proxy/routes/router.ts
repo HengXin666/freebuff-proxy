@@ -13,7 +13,7 @@ import { handleAccountsDelete, handleAccountsImport } from './accounts.ts'
 import { handleModels, handleStatus } from './catalog.ts'
 import { handleGenericPassthrough } from '../transport/passthrough.ts'
 
-export async function handle(ctx: any, chatHandler: any, req: any, res: any) {
+export async function handle(ctx: any, chatHandler: any, responsesHandler: any, req: any, res: any) {
   const url = new URL(
     req.url || '/',
     `http://${req.headers.host || 'localhost'}`,
@@ -62,6 +62,13 @@ export async function handle(ctx: any, chatHandler: any, req: any, res: any) {
   // startAgentRun + /api/v1/chat/completions).
   if (method === 'POST' && route === '/v1/chat/completions') {
     await chatHandler(req, res)
+    return
+  }
+
+  // Responses 协议入口: 翻成 chat 请求复用同一条链路(见 ./responses/handler.ts).
+  // 放在 passthrough 之前: 否则会被当作未知 /v1 路径透传给上游并拿到 404.
+  if (method === 'POST' && route === '/v1/responses') {
+    await responsesHandler(req, res)
     return
   }
 
