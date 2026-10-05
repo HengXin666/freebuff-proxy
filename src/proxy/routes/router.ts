@@ -13,7 +13,7 @@ import { handleAccountsDelete, handleAccountsImport } from './accounts.ts'
 import { handleModels, handleStatus } from './catalog.ts'
 import { handleGenericPassthrough } from '../transport/passthrough.ts'
 
-export async function handle(ctx: any, chatHandler: any, responsesHandler: any, req: any, res: any) {
+export async function handle(ctx: any, chatHandler: any, req: any, res: any) {
   const url = new URL(
     req.url || '/',
     `http://${req.headers.host || 'localhost'}`,
@@ -65,10 +65,11 @@ export async function handle(ctx: any, chatHandler: any, responsesHandler: any, 
     return
   }
 
-  // Responses 协议入口: 翻成 chat 请求复用同一条链路(见 ./responses/handler.ts).
-  // 放在 passthrough 之前: 否则会被当作未知 /v1 路径透传给上游并拿到 404.
-  if (method === 'POST' && route === '/v1/responses') {
-    await responsesHandler(req, res)
+  // /v1/responses 明确不支持(见 rejectResponses 的文件级说明). 方法不限: 任何方法
+  // 落进下面的 /v1/* 兜底都会被透传给上游, 而这条路径在上游根本不存在.
+  // 这一支必须留在 /v1/* 兜底之前: 否则请求会被透传到上游并换回 502 空体.
+  if (route === '/v1/responses') {
+    rejectResponses(res)
     return
   }
 
@@ -84,6 +85,29 @@ export async function handle(ctx: any, chatHandler: any, responsesHandler: any, 
       message: `No route for ${method} ${route}. Public API is under /v1.`,
       type: 'invalid_request_error',
       code: 'not_found',
+    },
+  })
+}
+
+/**
+ * /v1/responses 明确不支持 ---- 本仓无会话存储, 满足不了 previous_response_id 与
+ * store:true 这类只发增量, 历史由服务端留的调用形态; 静默丢上下文比报错更难查.
+ *
+ * 必须由路由表显式拒绝, 而不是没有这一支: 去掉它路径会落进下面的 /v1/* 兜底,
+ * 被原样透传到上游 /api/v1/responses, 上游无该端点 -> 404 被中间层崩成 502 空体.
+ *
+ * @param {object} res 响应对象
+ * @returns {void} 无返回
+ */
+function rejectResponses(res: any) {
+  sendJson(res, 501, {
+    error: {
+      message:
+        '/v1/responses is not supported by this proxy. It is stateless and keeps no '
+        + 'conversation store; send the full message history to /v1/chat/completions '
+        + 'instead.',
+      type: 'invalid_request_error',
+      code: 'not_supported',
     },
   })
 }

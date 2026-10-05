@@ -197,7 +197,7 @@ export default {
     en: 'Idle release disabled (sessions live until they expire) · at most {max} new sessions per request',
   },
 
-  // ---- 系统设置：全部可调项（config.yaml 里除 host/port 外的项）----
+  // ---- 系统设置:全部可调项(config.yaml 里除 host/port 外的项)----
   'tunables.title': { 'zh-CN': '全部配置项', en: 'All configuration' },
   'tunables.hint': {
     'zh-CN': '除监听地址与端口外的全部配置项都在这里调整，保存在 /data/settings.json',

@@ -2,6 +2,8 @@
 
 Status: implemented
 
+Archived: 2026-10-05
+
 ## Problem
 
 下游 harness(dsh 的 `fb` provider)按 Responses 协议发请求:
