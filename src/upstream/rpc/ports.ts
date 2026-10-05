@@ -8,7 +8,7 @@
  *
  * 见 docs/reverse/17-current-status-and-gaps.md.
  */
-import { callBun } from '../../../cli-bridge/bridge.ts'
+import { callBun, callBunStream } from '../../../cli-bridge/bridge.ts'
 
 /**
  * 委托副仓库执行 startRun + chat(不 admission).
@@ -17,8 +17,13 @@ import { callBun } from '../../../cli-bridge/bridge.ts'
  * startAgentRun,再用官方形态发 chat.主服务因此不需要知道 agent 世代,
  * 官方工具集,官方 system 的任何细节 ---- 那些只在副仓库里有一份.
  *
- * @param {object} params 同 rpcChat,但不需要 runId
- * @returns {Promise<{ ok: boolean, status?: number, text?: string, runId?: string, model?: object, error?: string }>}
+ * 两种模式:
+ *   - 默认(整份): 等 bun 收完整条上游流, 返回 text. 供离线对比/非流式调用方.
+ *   - 流式(onLine / onChunk): 上游字节按行边收边交, 主服务可立刻下发 ---- 这是
+ *     "整段缓冲"的根治点(旧实现恒走整份, 长回复必然撞穿 45s 调度预算).
+ *
+ * @param {object} params 同 rpcChat,但不需要 runId;流式另加 onLine / onError
+ * @returns {Promise<any>} 结果(ok / status / text / runId / model / error / streamed)
  */
 export async function rpcReuse(params: any) {
   const {
@@ -31,22 +36,30 @@ export async function rpcReuse(params: any) {
     reasoningEffort = null,
     stream = true,
     timeoutMs = 180_000,
+    /** 每收一行调用一次(不含行尾换行符). 给了它就切到流式通道. */
+    onLine = null,
+    onError = null,
+    /** 上游状态行到达时调用一次(下游可在提交响应头之前拿到真实状态码). */
+    onStatus = null,
   } = params
 
-  const out: any = await callBun(
-    {
-      cfg,
-      action: 'reuse',
-      modelKey,
-      instanceId,
-      messages,
-      tools,
-      layer,
-      reasoningEffort,
-      stream,
-    },
-    timeoutMs,
-  )
+  const payload = {
+    cfg,
+    action: 'reuse',
+    modelKey,
+    instanceId,
+    messages,
+    tools,
+    layer,
+    reasoningEffort,
+    stream,
+  }
+
+  if (typeof onLine === 'function') {
+    return await rpcReuseStreaming({ ...payload, streamStdout: true }, { timeoutMs, onLine, onError, onStatus })
+  }
+
+  const out: any = await callBun(payload, timeoutMs)
 
   return {
     ok: out?.chat?.status === 200,
@@ -56,6 +69,55 @@ export async function rpcReuse(params: any) {
     model: out?.model,
     error: out?.error,
   }
+}
+
+/**
+ * rpcReuse 的流式分支: 上游字节按行边收边交.
+ *
+ * 与整份分支的差别只有"不把 stdout 攒成一整块": onLine 每拿到一行就交出去,
+ * 主服务因此能在上游首字节到达时就下发, 而不是等整篇回复生成完.
+ *
+ * @param {object} payload 已带 streamStdout 的 bun 入参
+ * @param {{ timeoutMs: number, onLine: (line: string) => void, onError: any, onStatus: any }} opts 回调
+ * @returns {Promise<object>} 与整份分支同形的结果对象(含 streamed 标记)
+ */
+function rpcReuseStreaming(payload: any, opts: any): Promise<any> {
+  const { timeoutMs, onLine, onError, onStatus } = opts
+  return new Promise((resolve) => {
+    let status: number | null = null
+    let model: any = null
+    let runId: string | null = null
+
+    callBunStream(payload, {
+      timeoutMs,
+      onLine: (line: string) => {
+        // 状态行是控制信息(不属于响应正文): 解析出来给调用方, 不交给下游.
+        if (line.startsWith('@')) {
+          try {
+            status = JSON.parse(line.slice(1))?.status ?? null
+          } catch { /* 忽略畸形状态行 */ }
+          if (status != null && typeof onStatus === 'function') onStatus(status)
+          return
+        }
+        onLine(line)
+      },
+      onSummary: (out: any) => {
+        resolve({
+          ok: (out?.chat?.status ?? status) === 200,
+          status: out?.chat?.status ?? status,
+          runId: out?.startRun?.runId || null,
+          model: out?.model ?? null,
+          error: out?.error ?? null,
+          text: '',
+          streamed: true,
+        })
+      },
+      onError: (err: Error) => {
+        if (typeof onError === 'function') onError(err)
+        resolve({ ok: false, status, runId, model, error: err.message, text: '', streamed: true })
+      },
+    })
+  })
 }
 
 /**

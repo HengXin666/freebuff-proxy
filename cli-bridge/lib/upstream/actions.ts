@@ -123,6 +123,9 @@ async function actReuse({ bridge, input, out }: ActionCtx): Promise<void> {
   const c = await bridge.reuseChat({
     row, instanceId: input.instanceId, runId: run.runId,
     messages: input.messages, tools: input.tools, stream: input.stream,
+    // 流式 stdout: 正文逐行直接写出去, 不攒在内存里(见 chat.ts 的文件头).
+    // 只有显式要求时才开, 其余调用方(serve/api 等)契约不变.
+    streamStdout: input.streamStdout === true,
   })
   out.chat = c
   out.ok = c.status === 200

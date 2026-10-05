@@ -6,16 +6,38 @@
  * -> 失败时返回 null 让调用方走 legacy. 它与前后的重试状态机只通过
  * requestBody 与 upstreamRes 两个值交互, 因此可以整体搬出.
  *
- * 口径: 纯搬移, 行为零改动.
+ * 2026-10-05 修复(线上事故 reqId 0f45afc1): 本段曾把 rpcReuse 当"一次性拿整份
+ * 响应"用, 而 rpcReuse 内部 await res.text() 要等上游产完整篇回复 ----
+ * 于是长回复(实测卡在 44.8s)撞穿主服务 45s 的[首字节之前]调度预算, RPC 被判定
+ * 超时并降级 legacy 形态, 上游不认 -> 428 -> 重试 -> 换号 -> 全池买不起 -> 下游 429.
+ *
+ * 现在两处改动:
+ *   1. 流式: 上游字节按行边收边交给下游(见 rpcReuse 的 onLine), 首字节延迟与
+ *      纯透传等同. 提交下游响应头之前只等状态行(上游响应头一到就有),
+ *      不等正文 ---- 这是"整段缓冲"与"流式"的分界.
+ *   2. timeout 语义: 45s 那个预算只约束"上游首字节", 不再约束"整篇生成" ----
+ *      整篇上限是独立的一个大值, 长回答不再被调度预算误杀.
+ *
+ * 流式那一段的实现在 ./official-stream.ts(按体量红线切出).
  */
 
-import { resolveUpstreamChannel } from '../../config.ts'
-import { buildRpcCfg, rpcReuse } from '../../upstream/rpc/official-rpc.ts'
-import { buildUpstreamResponseFromRpc } from './reply/rewrite.ts'
-import { ensureFreebuffSystemMessages, ensureFreebuffToolSignature } from '../../free-mode.ts'
-import { agentIdForModel } from '../../model.ts'
-import { customModels } from '../routes/catalog.ts'
-import { logger } from '../../util/log.ts'
+import { resolveUpstreamChannel } from '../../../config.ts'
+import { buildRpcCfg, rpcReuse } from '../../../upstream/rpc/official-rpc.ts'
+import { buildUpstreamResponseFromRpc } from '../reply/rewrite.ts'
+import { ensureFreebuffSystemMessages, ensureFreebuffToolSignature } from '../../../free-mode.ts'
+import { agentIdForModel } from '../../../model.ts'
+import { customModels } from '../../routes/catalog.ts'
+import { logger } from '../../../util/log.ts'
+import { runStreamingRpc, logRpcResult } from './stream.ts'
+
+/**
+ * 上游首字节之后的整篇生成上限(毫秒).
+ *
+ * 与 schedulingDeadline 分开的理由: 后者是[首字节之前]的预算(防 Cloudflare
+ * 100s 悬崖), 前者约束"一次上游调用整体能跑多久". 把两者混用同一值, 就等于
+ * "长回复必然超时"(实测卡在 44.8s).
+ */
+const RPC_TOTAL_TIMEOUT_MS = 600_000
 
 /**
  * official 通道委派 -- 整条请求交给副仓库(cli-bridge)执行, 拿到响应就返回.
@@ -63,7 +85,8 @@ export async function tryOfficialChannel(ctx: any, args: any) {
       if (!rpcCfg) {
         logger.warn('official channel: no rpc cfg, falling back to legacy')
       } else {
-        const rpc = await rpcReuse({
+        const wantStream = args.stream !== false
+        const rpcArgs = {
           cfg: rpcCfg,
           instanceId,
           modelKey: forwardBody.model,
@@ -72,35 +95,17 @@ export async function tryOfficialChannel(ctx: any, args: any) {
           layer: 'worker',
           stream: true,
           timeoutMs: Math.max(
-            1_000,
-            Math.min(180_000, schedulingDeadline - Date.now()),
+            Math.max(1_000, schedulingDeadline - Date.now()),
+            RPC_TOTAL_TIMEOUT_MS,
           ),
-        })
-        logger.info('official channel: rpc result', {
-          status: rpc.status,
-          ok: rpc.ok,
-          model: rpc.model?.name,
-          error: rpc.error,
-          /**
-           - 非 200 时必须把上游原文记下来(2026-10-04 教训).
-           *
-           - 此前只记 status,于是 503 时日志里只有一行
-           - official channel: rpc result status=503 ---- 而上游原文
-           - ({"error":{"message":"The model is temporarily unavailable.",...}}
-           - 之类)我们明明拿到了(放在 rpc.text 里),却只塞进 Response
-           - 不记日志.排障时只能看见"503"这个数字,看不到上游给的原因.
-           *
-           - 截断到 300 字符:够看清 message/code,又不至于把整段流式体写进日志.
-           */
-          body:
-            rpc.ok || !rpc.text
-              ? undefined
-              : String(rpc.text).slice(0, 300),
-        })
-        if (rpc.status) {
+        }
+        const rpc = wantStream
+          ? await runStreamingRpc(rpcArgs, carrierPlan, declaredToolNames, declaredToolSchemas)
+          : await runWholeRpc(rpcArgs, carrierPlan, declaredToolNames, declaredToolSchemas)
+        if (rpc?.upstreamRes) {
+          upstreamRes = rpc.upstreamRes
+          upstreamErrText = rpc.upstreamErrText
           rpcResponse = true
-          upstreamRes = buildUpstreamResponseFromRpc(rpc, carrierPlan, declaredToolNames, declaredToolSchemas)
-          upstreamErrText = rpc.ok ? null : (rpc.text || '')
         }
       }
     } catch (err: any) {
@@ -127,4 +132,23 @@ export async function tryOfficialChannel(ctx: any, args: any) {
     }
   }
   return { upstreamRes, upstreamErrText, rpcResponse }
+}
+
+/**
+ * 非流式: 等 RPC 收完整份再构造响应(离线对比 / 非 stream 调用方).
+ *
+ * @param {any} rpcArgs rpcReuse 入参
+ * @param {any} carrierPlan 载体映射
+ * @param {any} declaredToolNames 本次声明的工具名
+ * @param {any} declaredToolSchemas 本次声明的工具 schema
+ * @returns {Promise<{upstreamRes: any, upstreamErrText: any}|null>} 结果
+ */
+async function runWholeRpc(rpcArgs: any, carrierPlan: any, declaredToolNames: any, declaredToolSchemas: any) {
+  const rpc: any = await rpcReuse(rpcArgs)
+  logRpcResult(rpc)
+  if (!rpc.status) return null
+  return {
+    upstreamRes: buildUpstreamResponseFromRpc(rpc, carrierPlan, declaredToolNames, declaredToolSchemas),
+    upstreamErrText: rpc.ok ? null : (rpc.text || ''),
+  }
 }

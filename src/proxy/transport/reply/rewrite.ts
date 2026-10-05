@@ -17,7 +17,7 @@
 import { createHermesDelegateSseTransform, restoreHermesDelegateInResponse } from '../../../tool-alias.ts'
 import { EMPTY_CARRIER_PLAN, createCarrierSseTransform, unpackCarrierToolCalls } from '../tool-carrier.ts'
 import { unmapToolCallsInSse } from '../errors/errors.ts'
-import { mergeAndTranslateSseToolCalls } from './sse-tool-merge.ts'
+import { createToolRewritePlan, createToolRewriteSseTransform } from './sse-tool-rewrite.ts'
 
 /**
  * 回程改写相关的响应头与观测头.
@@ -65,6 +65,13 @@ export function prepareRewriteHeaders(res: any, respHeaders: any, opts: any) {
  */
 export async function rewriteUpstreamResponse(upstreamRes: any, opts: any) {
   const { stream, hermesDelegateAlias, plan, declaredToolNames, declaredToolSchemas } = opts
+  /**
+   * RPC 路径已经在 buildUpstreamResponseFromRpc 里做过[流式增量]改写,
+   * 这里不能再做一遍(两层各改一次会让名字/参数被二次翻译).
+   */
+  if (upstreamRes?.__toolRewriteApplied) {
+    return { handled: false, body: upstreamRes.body }
+  }
   const needUnpack = Boolean(plan?.active)
   /**
    - 整体 JSON 分支的前置: 上游回的必须是有限 JSON, 不能是一个不结束的流.
@@ -102,29 +109,59 @@ export async function rewriteUpstreamResponse(upstreamRes: any, opts: any) {
 /**
  * 把 RPC 回执原文包成下游要的 Response, 并做两段上行工具名改写.
  *
- * 顺序是先载体拆包再官方名还原: 两者作用的名字集合不相交, 顺序不改变结果,
- * 先拆包是为了让后续还原处理的是下游原名.
+ * 两条路径:
+ *   - 流式(rpc.streamedBody 存在): 管道里跑增量改写(createToolRewriteSseTransform),
+ *     上游吐一片下游就收一片 ---- 不在内存里存在整份响应.
+ *   - 整份(其余): 对完整文本做载体拆包 + 名字还原 + 参数翻译, 一次性交出.
  *
- * SSE 逐行处理: 只在 data: {...} 行上做 JSON 解析与名字替换, 不是 JSON 的行
- * ([DONE], 空行)原样保留.
+ * 两者都标上 __toolRewriteApplied, 让调用方(forward.ts 的 rewriteUpstreamResponse)
+ * 跳过第二次改写 ---- 旧实现会把两层改写各做一遍.
  *
- * @param {any} rpc rpcReuse 的回执(含 status 与 text)
+ * @param {any} rpc rpcReuse 的回执(含 status 与 text, 流式时含 streamedBody)
  * @param {any} carrierPlan 本次请求的工具载体映射(可缺省)
  * @param {Iterable<string>|any[]} [declaredNames] 本次下游声明的工具名集合
  * @param {Record<string, any>} [declaredSchemas] 本次下游声明的工具 schema(名字 -> parameters)
  * @returns {any} 下游响应对象(status 与上游一致)
  */
 export function buildUpstreamResponseFromRpc(rpc: any, carrierPlan: any, declaredNames?: any, declaredSchemas?: any) {
-  const rawText = rpc.text || ''
   const plan = carrierPlan ?? EMPTY_CARRIER_PLAN
+
+  // 流式: 管道里做增量改写, 不缓冲整份.
+  if (rpc?.streamedBody) {
+    const rewritePlan = createToolRewritePlan({
+      carrierPlan: plan,
+      declaredToolNames: declaredNames,
+      declaredToolSchemas: declaredSchemas,
+    })
+    const body = rpc.streamedBody.pipeThrough(createToolRewriteSseTransform(rewritePlan))
+    return markRewritten(new Response(body, {
+      status: rpc.status || 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }))
+  }
+
+  const rawText = rpc.text || ''
   const carrierUnpacked = plan.active ? unpackCarrierInRpcText(rawText, plan) : rawText
-  // 顺序要紧: 先按[本次声明]还原名字并翻译参数(需要完整文本才能跨分片合并),
-  // 再交给逐行的通用还原兜底.
-  const merged = mergeAndTranslateSseToolCalls(carrierUnpacked, declaredNames, declaredSchemas)
-  return new Response(unmapToolCallsInSse(merged, declaredNames, declaredSchemas), {
-    status: rpc.status,
-    headers: { 'content-type': 'application/json' },
-  })
+  return markRewritten(new Response(
+    unmapToolCallsInSse(carrierUnpacked, declaredNames, declaredSchemas),
+    {
+      status: rpc.status,
+      headers: { 'content-type': 'application/json' },
+    },
+  ))
+}
+
+/**
+ * 标记"本次响应的工具改写已经做过", 避免调用方重复改写.
+ *
+ * @param {any} res 下游响应对象
+ * @returns {any} 同一对象(便于链式返回)
+ */
+function markRewritten(res: any) {
+  try {
+    Object.defineProperty(res, '__toolRewriteApplied', { value: true, enumerable: false })
+  } catch { /* 不可扩展时忽略: 调用方按内容判断 */ }
+  return res
 }
 
 /**

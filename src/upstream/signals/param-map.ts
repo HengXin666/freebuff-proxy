@@ -117,6 +117,19 @@ const PARAM_RULES: Record<string, ParamRule> = {
 }
 
 /**
+ * 该下游工具名是否有参数翻译规则.
+ *
+ * 给流式回程用: 没有规则的工具名(55 个里的大多数)完全不该被缓冲,
+ * 直接透传即可. 缓冲只在"确有规则且参数还没构齐"时才发生.
+ *
+ * @param {unknown} clientName 下游工具名
+ * @returns {boolean} 有规则为真
+ */
+export function hasParamRule(clientName: unknown): boolean {
+  return typeof clientName === 'string' && Object.prototype.hasOwnProperty.call(PARAM_RULES, clientName)
+}
+
+/**
  * 把官方形态的 tool_call 参数翻译成下游形态.
  *
  * @param {any} clientName 还原后的下游工具名

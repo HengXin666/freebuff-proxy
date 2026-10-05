@@ -100,13 +100,13 @@ export async function startRun(bridge, agentId = null, opts = {}) {
 /**
  - 复用一个已存在的会话发 chat: 不建会话, 不扣费.
  - @param {any} bridge Bridge 实例
- - @param {{row: any, instanceId: string, runId: string, messages: any[], tools: any[], stream?: boolean}} opts 参数
+ - @param {any} opts 参数(row / instanceId / runId / messages / tools / stream / streamStdout)
  - @returns {Promise<any>} chat 结果
  */
 export async function reuseChat(bridge, opts) {
 
-  const { row, instanceId, runId, messages, tools, stream = false } = opts;
-  return bridge.chat({ row, instanceId, runId, messages, tools, stream });
+  const { row, instanceId, runId, messages, tools, stream = false, streamStdout = false } = opts;
+  return bridge.chat({ row, instanceId, runId, messages, tools, stream, streamStdout });
 }
 
 /**

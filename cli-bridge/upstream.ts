@@ -19,6 +19,15 @@ const input = rawArgs
   ? JSON.parse(rawArgs)
   : JSON.parse(await Bun.stdin.text());
 
+/**
+ * 流式 stdout 协议(见 ../bridge.ts 的 callBunStream):
+ *   - chat action 在 stream 模式下把上游字节按行原样写到 stdout(无前缀);
+ *   - 所有其它情况(含非流式 chat)只在末行输出一个 '>'-前缀的 JSON 汇总,
+ *     供 Promise 版 callBun / 流式版 onSummary 解析.
+ *
+ * 用 '>' 做汇总前缀而不是给正文加前缀: 正文必须逐字节原样(下游的 SSE 改写
+ * 依赖原始行形态), 而汇总行是"额外追加"的一行, 只在结束处出现一次.
+ */
 const out = await runAction(createBridge(input.cfg), input);
 
-process.stdout.write(JSON.stringify(out) + '\n');
+process.stdout.write('>' + JSON.stringify(out) + '\n');

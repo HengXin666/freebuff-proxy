@@ -13,7 +13,10 @@
  */
 
 import { translateParamsForDownstream } from './signals/param-map.ts'
-import { toNameSet } from './signals/declared-names.ts'
+import { CLIENT_TO_OFFICIAL_TOOL, buildOfficialToClientMap, toNameSet } from './signals/tool-name-map.ts'
+
+/** 名字映射真源在本文件之外(见 signals/tool-name-map.ts), 从这里透出保持既有 import 路径可用. */
+export { CLIENT_TO_OFFICIAL_TOOL, buildOfficialToClientMap, toNameSet } from './signals/tool-name-map.ts'
 
 /** 判据源码 sha256:上游改动后这里必须一起更新. */
 export const FOREIGN_CLIENT_SIGNALS_SOURCE_SHA256 =
@@ -153,53 +156,6 @@ export {
 } from './signals/detect.ts'
 
 /**
- - 客户端工具名 → 官方工具名的下行映射表.
- *
- - 与 cli-bridge/upstream.ts 的 MAP_TOOLS 必须保持一致(同一张表两处用:
- - bun 侧做下行映射发请求,Node 侧据它做上行还原).
- - 两侧一致性由 test/verify-tool-name-mapping.mjs 扫描校验.
- *
- - 上游官方工具集是固定 37 个,里面没有 bash/edit/read/write/skill 这些下游 harness
- - 的常用名, 所以下游工具名必须先映射再发.
- */
-export const CLIENT_TO_OFFICIAL_TOOL = Object.freeze({
-  bash: 'run_terminal_command',
-  shell: 'run_terminal_command',
-  sh: 'run_terminal_command',
-  run_command: 'run_terminal_command',
-  execute_command: 'run_terminal_command',
-  terminal: 'run_terminal_command',
-  edit: 'str_replace',
-  apply_patch: 'str_replace',
-  str_replace: 'str_replace',
-  write: 'write_file',
-  create_file: 'write_file',
-  write_file: 'write_file',
-  read: 'read_files',
-  cat: 'read_files',
-  read_file: 'read_files',
-  read_files: 'read_files',
-  grep: 'code_search',
-  code_search: 'code_search',
-  find: 'code_search',
-  glob: 'glob',
-  ls: 'list_directory',
-  list_dir: 'list_directory',
-  list_directory: 'list_directory',
-  web_fetch: 'read_url',
-  fetch: 'read_url',
-  curl: 'read_url',
-  read_url: 'read_url',
-  web_search: 'web_search',
-  search: 'web_search',
-  todo_write: 'write_todos',
-  write_todos: 'write_todos',
-  ask_user_question: 'ask_questions',
-  ask_questions: 'ask_questions',
-  browser_check: 'browser_check',
-})
-
-/**
  - 把上游返回的 tool_calls 里的官方工具名还原成下游认识的名字(上行方向).
  *
  - 与下行映射配对:下行把 bash→run_terminal_command,上行就还原回 bash,
@@ -219,6 +175,14 @@ export const CLIENT_TO_OFFICIAL_TOOL = Object.freeze({
  - @param {Record<string, any>} [declaredSchemas] 本次下游声明的工具 schema(名字 -> parameters),按它裁剪翻译后的字段
  - @returns {any} 原地修改后的 body(同时返回,便于链式使用)
  */
+/**
+ * 把上游返回的 tool_calls 里的官方工具名还原成下游认识的名字(非流式整份).
+ *
+ * @param {any} body 上游响应体
+ * @param {Iterable<string>|any[]} [declaredNames] 本次下游声明的工具名集合
+ * @param {Record<string, any>} [declaredSchemas] 本次下游声明的 schema 表
+ * @returns {any} 原地修改后的 body
+ */
 export function unmapToolCallsInBody(
   body: any,
   declaredNames?: Iterable<string>,
@@ -226,13 +190,7 @@ export function unmapToolCallsInBody(
 ) {
   if (!body || typeof body !== 'object') return body
   const declared = toNameSet(declaredNames)
-  const back: Record<string, string> = {}
-  for (const [client, official] of Object.entries(CLIENT_TO_OFFICIAL_TOOL)) {
-    // [本次声明]过滤:只还原成下游这次真的声明过的名字.
-    // 声明集为空(调用方没传)时退化为全表,保持旧行为不变.
-    if (declared.size > 0 && !declared.has(client)) continue
-    if (!back[official]) back[official] = client // 取第一个 = 表内优先级
-  }
+  const back = buildOfficialToClientMap(declaredNames)
   const choices = Array.isArray(body.choices) ? body.choices : []
   for (const ch of choices) {
     /**

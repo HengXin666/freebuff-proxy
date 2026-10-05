@@ -28,6 +28,7 @@ const SUITES = [
   ['model-mapping-truth', 'suites/entries/verify/model-mapping-truth.ts'],
   ['tool-name-mapping', 'suites/entries/verify/tool-name-mapping.ts'],
   ['tool-restore-declared', 'suites/entries/verify/tool/restore-declared.ts'],
+  ['tool-stream-rewrite', 'suites/entries/verify/tool/stream-rewrite.ts'],
   ['chat-payload-contract', 'suites/entries/verify/chat-payload-contract.ts'],
 ]
 
