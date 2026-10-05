@@ -61,7 +61,7 @@
 | [reverse/08-second-ban-and-byok.md](reverse/08-second-ban-and-byok.md) | 第二次封禁（BYOK 否决依据） | `AGENTS.md` 指名 |
 | [reverse/09-third-party-review.md](reverse/09-third-party-review.md) | 第三方实现考究（拒采理由） | |
 | [reverse/10-third-party-lza6.md](reverse/10-third-party-lza6.md) | 第三方实现考究（拒采理由） | |
-| [reverse/11-tls-fingerprint.md](reverse/11-tls-fingerprint.md) | TLS 指纹实证（Node vs 官方 bun） |  曾误标「CLI 指纹真源」；**CLI 指纹真源 = `src/upstream/official-fingerprint.ts`**（`KNOWN_CLI_VERSION`），文档侧无真源 |
+| [reverse/11-tls-fingerprint.md](reverse/11-tls-fingerprint.md) | TLS 指纹实证（Node vs 官方 bun） |  曾误标「CLI 指纹真源」；**CLI 指纹真源 = `src/upstream/fingerprint/official-fingerprint.ts`**（`KNOWN_CLI_VERSION`），文档侧无真源 |
 | [reverse/12-waiting-room-slot-contention.md](reverse/12-waiting-room-slot-contention.md) | 428 waiting_room 真因 | `AGENTS.md` 指名 |
 | [reverse/13-client-ui-recon.md](reverse/13-client-ui-recon.md) | 纯 UI 侦查（零协议请求） | |
 | [reverse/14-captured-diff.md](reverse/14-captured-diff.md) | 抓包逐字段 diff | |

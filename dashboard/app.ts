@@ -6,7 +6,7 @@
  *
  * 为什么需要 registerHooks 这一步:视图之间不能互相 import(会成环,环里
  * 顶层求值读到对方 const 会命中 TDZ 白屏).谁提供实现只有装配层知道,
- * 所以由这里一次性登记;视图侧用 need(name) 取.详见 dashboard/lib/hooks.ts.
+ * 所以由这里一次性登记;视图侧用 need(name) 取.详见 dashboard/lib/boot/hooks.ts.
  *
  * import 方向的唯一真源是这里:app.ts -> views/shell -> 各视图 -> lib/*.
  */
@@ -14,7 +14,7 @@
 
 import { initLocale } from './locale/index.ts'
 import { api, setUnauthorizedHandler } from './lib/api.ts'
-import { registerHooks } from './lib/hooks.ts'
+import { registerHooks } from './lib/boot/hooks.ts'
 import { state } from './lib/state.ts'
 import {
   addCustomModelRow, buildCustomModelRows, pruneStaleModels, refreshModelSettingsCard,

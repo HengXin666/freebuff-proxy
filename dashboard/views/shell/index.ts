@@ -9,7 +9,7 @@ import { renderOverview } from '../overview/index.ts'
 import { renderPlayground } from '../playground/index.ts'
 import { renderSystem } from '../system/index.ts'
 import { renderUsers } from '../users/index.ts'
-import { need } from '../../lib/hooks.ts'
+import { need } from '../../lib/boot/hooks.ts'
 
 
 /* ---------------- render ---------------- */

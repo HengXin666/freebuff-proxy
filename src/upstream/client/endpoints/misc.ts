@@ -7,7 +7,7 @@
  */
 import { logger } from '../../../util/log.ts'
 import { freebuffAuthHeaders } from '../../../auth-store.ts'
-import { UpstreamError, safeText } from '../errors.ts'
+import { UpstreamError, safeText } from '../errors/index.ts'
 import { apiFetch, fetchLoginUpstream } from '../http.ts'
 
 /**

@@ -1,7 +1,7 @@
 import { t } from '../../../locale/index.ts'
 import { api } from '../../../lib/api.ts'
 import { $, el } from '../../../lib/dom.ts'
-import { need } from '../../../lib/hooks.ts'
+import { need } from '../../../lib/boot/hooks.ts'
 import { fmtNum } from '../../../lib/format/quota.ts'
 import { applyModelNames, modelNameFor } from '../../../lib/format/models.ts'
 import { toast, withButtonLoading } from '../../../lib/ui.ts'

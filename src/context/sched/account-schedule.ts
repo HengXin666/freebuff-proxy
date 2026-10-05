@@ -96,7 +96,7 @@ export async function _withAcquireLock(this: any, fn: any) {
  * 满员排队超时)时才启用,避免把每个账号都摸一遍(账号农场特征).
  * @param {any} this 账号池(runtimes)
  * @param {string} key
- * @param {import('./session-manager.js').SessionManager} [sessions]
+ * @param {import('../../session-manager.ts').SessionManager} [sessions]
  * @returns {any} 见实现
  */
 export function everUsed(this: any, key: any, sessions: any) {

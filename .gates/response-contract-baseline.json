@@ -4,7 +4,7 @@
     "note": "上游响应字段/判据码的裸读棘轮：只许降不许涨；新增读取必须从 response-contract.js 取常量"
   },
   "entries": {
-    "src/app-context.ts::waiting_room_required": 2,
+    "src/context/acquire/acquire.ts::waiting_room_required": 2,
     "src/context/ops/account-list.ts::banned": 2,
     "src/context/sched/account-callers.ts::banned": 3,
     "src/context/state/account-cooldown.ts::banned": 1,
@@ -18,8 +18,8 @@
     "src/context/state/codes.ts::purchase_in_use": 1,
     "src/context/state/codes.ts::rate_limited": 3,
     "src/context/state/codes.ts::spend_limited": 3,
-    "src/free-mode.ts::instanceId": 1,
-    "src/free-mode.ts::sessionId": 1,
+    "src/free-mode/body.ts::instanceId": 1,
+    "src/free-mode/body.ts::sessionId": 1,
     "src/proxy/transport/errors/errors.ts::banned": 1,
     "src/proxy/transport/errors/errors.ts::free_mode_capacity_deferred": 1,
     "src/proxy/transport/errors/errors.ts::ip_capped": 1,
@@ -46,12 +46,12 @@
     "src/upstream/client/endpoints/session-result.ts::purchase_in_use": 1,
     "src/upstream/client/endpoints/session-result.ts::rate_limited": 1,
     "src/upstream/client/endpoints/session-result.ts::spend_limited": 1,
-    "src/upstream/client/errors.ts::banned": 3,
-    "src/upstream/client/errors.ts::free_mode_capacity_deferred": 2,
-    "src/upstream/client/errors.ts::ip_capped": 1,
-    "src/upstream/client/errors.ts::rate_limited": 2,
-    "src/upstream/client/errors.ts::session_expired": 2,
-    "src/upstream/client/errors.ts::spend_limited": 1,
-    "src/upstream/client/errors.ts::waiting_room_required": 2
+    "src/upstream/client/errors/codes.ts::banned": 3,
+    "src/upstream/client/errors/codes.ts::free_mode_capacity_deferred": 2,
+    "src/upstream/client/errors/codes.ts::ip_capped": 1,
+    "src/upstream/client/errors/codes.ts::rate_limited": 2,
+    "src/upstream/client/errors/codes.ts::session_expired": 2,
+    "src/upstream/client/errors/codes.ts::spend_limited": 1,
+    "src/upstream/client/errors/codes.ts::waiting_room_required": 2
   }
 }

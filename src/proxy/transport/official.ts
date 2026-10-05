@@ -10,7 +10,7 @@
  */
 
 import { resolveUpstreamChannel } from '../../config.ts'
-import { buildRpcCfg, rpcReuse } from '../../upstream/official-rpc.ts'
+import { buildRpcCfg, rpcReuse } from '../../upstream/rpc/official-rpc.ts'
 import { unmapToolCallsInSse } from './errors/errors.ts'
 import { ensureFreebuffSystemMessages, ensureFreebuffToolSignature } from '../../free-mode.ts'
 import { agentIdForModel } from '../../model.ts'

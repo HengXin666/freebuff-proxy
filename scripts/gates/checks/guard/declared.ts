@@ -9,7 +9,7 @@
  *      tsc 当时 checkJs:false,两关都抓不到.它进了远程镜像,55 个工具一
  *      进来就抛 ReferenceError → 官方通道整轮失败.
  *   2. 2026-10-05(本次重构):把 shouldSwitchAccountOnError 搬进子模块后,原文件
- *      只留了 export { ... } from './x.js' ---- 而 re-export 不会把名字带进本模块
+ *      只留了 export { ... } from './x.ts' ---- 而 re-export 不会把名字带进本模块
  *      作用域.函数体里两处调用点仍在直接调用它,于是每次走"账号侧故障换号"
  *      分支都抛 ReferenceError,被 catch 成 500 回给客户端(npm test 实测复现:
  *      AssertionError: 500 !== 404).

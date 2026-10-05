@@ -12,7 +12,7 @@
  * test/smoke.mjs 都直接 new SessionManager({...}) 并断言解构到的参数
  * (resolveModelAlias 漏解构曾让归一静默失效).
  */
-import { newRawInstanceId } from '../upstream/official-fingerprint.ts'
+import { newRawInstanceId } from '../upstream/fingerprint/official-fingerprint.ts'
 import { SESSION_METHODS } from './methods.ts'
 import { createSessionState, installSessionState } from './state.ts'
 

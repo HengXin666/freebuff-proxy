@@ -1,12 +1,12 @@
 import { t } from '../../locale/index.ts'
 import { api } from '../../lib/api.ts'
 import { $, el, icon } from '../../lib/dom.ts'
-import { downloadTextFile } from '../../lib/download.ts'
+import { downloadTextFile } from '../../lib/boot/download.ts'
 import { modelLabel } from '../../lib/format/models.ts'
 import { fmtNum } from '../../lib/format/quota.ts'
 import { state } from '../../lib/state.ts'
 import { toast, withButtonLoading } from '../../lib/ui.ts'
-import { need } from '../../lib/hooks.ts'
+import { need } from '../../lib/boot/hooks.ts'
 
 
 /**

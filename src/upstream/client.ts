@@ -29,7 +29,7 @@ export {
   extractAccountBanError,
   extractGateError,
   isSessionRecoverableGate,
-} from './client/errors.ts'
+} from './client/errors/index.ts'
 
 export { createProxyFetch } from './client/transport.ts'
 export { createUpstreamClient } from './client/factory.ts'
@@ -42,4 +42,4 @@ export {
   BUN_USER_AGENT,
   HEADER_INSTANCE_ID as FREEBUFF_INSTANCE_HEADER,
   HEADER_MODEL as FREEBUFF_MODEL_HEADER,
-} from './official-fingerprint.ts'
+} from './fingerprint/official-fingerprint.ts'

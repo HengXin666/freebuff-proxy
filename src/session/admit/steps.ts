@@ -10,7 +10,7 @@
  * purchase_claim_released 要换全新 instanceId 重试一次.
  */
 import { isTerminalCountryBlock } from '../../upstream/client.ts'
-import { newRawInstanceId } from '../../upstream/official-fingerprint.ts'
+import { newRawInstanceId } from '../../upstream/fingerprint/official-fingerprint.ts'
 import { logger } from '../../util/log.ts'
 
 /**

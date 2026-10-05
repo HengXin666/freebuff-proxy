@@ -9,9 +9,9 @@
  * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
  */
 import { logger } from '../../util/log.ts'
-import { DeviceSigner } from '../device-signing.ts'
+import { DeviceSigner } from '../device/device-signing.ts'
 import { CatalogHolder } from '../catalog-protocol.ts'
-import { BUN_USER_AGENT } from '../official-fingerprint.ts'
+import { BUN_USER_AGENT } from '../fingerprint/official-fingerprint.ts'
 import { buildFetchWithProxy, resolveProxy } from './transport.ts'
 import { makeBunFetcher, makeDeviceKeysViaBun, makeReleaseViaBun, makeSessionViaBun } from './bun-channel.ts'
 import { buildEndpoints } from './endpoints/misc.ts'

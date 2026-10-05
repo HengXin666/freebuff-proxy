@@ -1,6 +1,6 @@
 import { t } from '../../../locale/index.ts'
 import { el, icon } from '../../../lib/dom.ts'
-import { need } from '../../../lib/hooks.ts'
+import { need } from '../../../lib/boot/hooks.ts'
 import { modelLabel, modelNameFor } from '../../../lib/format/models.ts'
 import { fmtFreebucks, fmtQuota } from '../../../lib/format/quota.ts'
 import { accountTimeCell, fmtMs, fmtTime } from '../../../lib/format/time.ts'

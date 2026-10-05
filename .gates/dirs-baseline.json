@@ -4,9 +4,7 @@
     "note": "目录文件数棘轮：逐目录当前文件数水位，只许降不许涨"
   },
   "entries": {
-    "dashboard/lib": 6,
     "src": 12,
-    "src/upstream": 10,
     "src/web": 8
   }
 }

@@ -11,9 +11,9 @@
 import { generateClientId, newIds } from '../../util/http.ts'
 import { randomUUID } from 'node:crypto'
 import { resolveUpstreamChannel } from '../../config.ts'
-import { clientEnvironment, META_CLIENT_ENV, isCliClaim } from '../../upstream/official-fingerprint.ts'
+import { clientEnvironment, META_CLIENT_ENV, isCliClaim } from '../../upstream/fingerprint/official-fingerprint.ts'
 import { ENFORCED_FOREIGN_SIGNALS, detectForeignClient } from '../../upstream/foreign-client-signals.ts'
-import { withChatMetadataParity as chatMetadataParity } from '../../upstream/chat-metadata-parity.ts'
+import { withChatMetadataParity as chatMetadataParity } from '../../upstream/metadata/chat-metadata-parity.ts'
 import {
   ensureFreebuffSystemMessages,
   ensureFreebuffToolSignature,

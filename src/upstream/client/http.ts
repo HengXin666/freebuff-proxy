@@ -10,7 +10,7 @@
  */
 import { logger } from '../../util/log.ts'
 import { freebuffAuthHeaders } from '../../auth-store.ts'
-import { safeText, UpstreamError } from './errors.ts'
+import { safeText, UpstreamError } from './errors/index.ts'
 
 /**
  * @typedef {object} UpstreamCtx

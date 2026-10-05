@@ -4,7 +4,7 @@ import { el, icon } from '../../lib/dom.ts'
 import { applyModelNames } from '../../lib/format/models.ts'
 import { state } from '../../lib/state.ts'
 import { endProgress, startProgress } from '../../lib/ui.ts'
-import { need } from '../../lib/hooks.ts'
+import { need } from '../../lib/boot/hooks.ts'
 import { renderAccountsCard } from './accounts/index.ts'
 import { oneClickRefresh, probeAllAccounts } from './accounts/refresh.ts'
 

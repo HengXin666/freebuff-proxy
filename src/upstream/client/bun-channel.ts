@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { logger } from '../../util/log.ts'
-import { UpstreamError } from './errors.ts'
+import { UpstreamError } from './errors/index.ts'
 
 /**
  * bun 通道总开关.
@@ -103,7 +103,7 @@ export function makeReleaseViaBun(
   return async (instanceId: string) => {
     try {
       if (!bunEnabled()) return null
-      if (loader === null) loader = import('../official-rpc.ts').catch(() => null)
+      if (loader === null) loader = import('../rpc/official-rpc.ts').catch(() => null)
       const mod: any = await loader
       if (!mod?.rpcReleaseSession || !mod?.buildRpcCfg) return null
       const cfg: any = await mod.buildRpcCfg(
@@ -152,7 +152,7 @@ export function makeDeviceKeysViaBun(
     }
     try {
       if (!bunEnabled()) return fallback(url, init)
-      if (loader === null) loader = import('../official-rpc.ts').catch(() => null)
+      if (loader === null) loader = import('../rpc/official-rpc.ts').catch(() => null)
       const mod: any = await loader
       if (!mod?.rpcRegisterDeviceKey) return fallback(url, init)
       const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {}
@@ -201,7 +201,7 @@ export function makeSessionViaBun(
   return async (opts: { instanceId?: string | null, heartbeat?: boolean } = {}) => {
     try {
       if (!bunEnabled()) return null
-      if (loader === null) loader = import('../official-rpc.ts').catch(() => null)
+      if (loader === null) loader = import('../rpc/official-rpc.ts').catch(() => null)
       const mod: any = await loader
       if (!mod?.rpcSession || !mod?.buildRpcCfg) return null
       /**

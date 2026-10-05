@@ -91,7 +91,7 @@
     "AGENTS.md": 20,
     "CLAUDE.md": 20,
     "cli-bridge/README.md": 5,
-    "cli-bridge/upstream.ts": 9,
+    "cli-bridge/upstream.ts": 3,
     "dashboard/css/base.css": 15,
     "dashboard/css/views.css": 11,
     "docs/account-scheduling-and-refund.md": 1194,
@@ -134,9 +134,7 @@
     "docs/web-console.md": 142,
     "README.md": 164,
     "scripts/gates/undeclared-allow.txt": 7,
-    "src/app-context.ts": 1,
-    "test/suites/entries/smoke/smoke.ts": 2,
-    "test/suites/entries/verify/model-mapping-truth.ts": 18,
+    "test/suites/entries/verify/model-mapping-truth.ts": 2,
     "test/suites/entries/verify/model-name-chain.ts": 6,
     "test/suites/entries/verify/tool-name-mapping.ts": 2
   }

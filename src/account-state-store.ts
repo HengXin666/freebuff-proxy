@@ -2,11 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { logger } from './util/log.ts'
 import { readJsonFileState, noteDataFile } from './util/json-store.ts'
-
-/** 两位小数(Freebucks 金额对账用). */
-function round2(n: any) {
-  return Math.round(n * 100) / 100
-}
+import { normalizeAccountState, recordRefund, refundsOf } from './account-state/records.ts'
 
 /**
  - 账号运行状态的持久化账本(/data/account-state.json).
@@ -32,6 +28,8 @@ function round2(n: any) {
  - 都同步写文件会拖慢吞吐,所以合并成一次延迟写;进程退出前 flush.
  - - 读盘永不抛:账本坏了也只当没有(控制台少显示点历史,但不影响转发).
  - - 账号被删除时同步清掉记录,避免文件无限增长与幽灵账号.
+ *
+ - 读盘的逐字段归一在 ./account-state/records.ts, 本类只保留状态机与落盘.
  */
 export class AccountStateStore {
   declare file: any
@@ -47,13 +45,7 @@ export class AccountStateStore {
     /** 去抖写盘定时器. */
     this._timer = null
     /** @type {{ version: number, updatedAt: string | null, total: number, lastSuccessKey: string | null, accounts: Record<string, any> }} */
-    this.state = {
-      version: 1,
-      updatedAt: null,
-      total: 0,
-      lastSuccessKey: null,
-      accounts: {},
-    }
+    this.state = normalizeAccountState(null)
     /** 装载结果('ok' | 'missing' | 'invalid'):损坏 = 账号履历与
      - "余额买不起就别 admit"闸门失效(重启后可能去撞已知余额不足的号). */
     this.loadStatus = 'missing'
@@ -76,23 +68,7 @@ export class AccountStateStore {
       return st
     }
     try {
-      const raw = st.data
-      const accounts: any = {}
-      const src = raw?.accounts
-      if (src && typeof src === 'object' && !Array.isArray(src)) {
-        for (const [key, rec] of Object.entries(src)) {
-          if (!key || !rec || typeof rec !== 'object') continue
-          accounts[key] = rec
-        }
-      }
-      this.state = {
-        version: 1,
-        updatedAt: typeof raw?.updatedAt === 'string' ? raw.updatedAt : null,
-        total: Number.isFinite(Number(raw?.total)) ? Number(raw.total) : 0,
-        lastSuccessKey:
-          typeof raw?.lastSuccessKey === 'string' ? raw.lastSuccessKey : null,
-        accounts,
-      }
+      this.state = normalizeAccountState(st.data)
     } catch (err) {
       logger.warn('account-state: 读取失败，按空账本继续', {
         file: this.file,
@@ -211,38 +187,10 @@ export class AccountStateStore {
 
   /**
    - 追加一条退款记录(最近 100 条,新的在前).
-   *
-   - 为什么值得单独记:控制台原本只有 lastRefund 一个内存里的最新值,
-   - 既看不到历史,重启就丢,于是"退款到底成没成功 / 金额对不对"根本没法审.
-   - 记下 holdMs(实际占用)与 expected(按未用时长应付的金额)之后,
-   - "退款是不是被上游吞了 / 是不是被四舍五入成 5 的倍数"就能直接对账.
+   - 实现见 ./account-state/records.ts 的 recordRefund.
    */
   recordRefund(key: any, entry: any) {
-    if (!key || !entry) return
-    const rec = this.account(key)
-    if (!rec) return
-    const list = Array.isArray(rec.refunds) ? rec.refunds : []
-    list.unshift(entry)
-    rec.refunds = list.slice(0, 100)
-    // 累计退款/累计预期:控制台一眼看出"总共该退多少,实际退了多少".
-    if (typeof entry.refund === 'number') {
-      rec.refundTotal = round2(Number(rec.refundTotal || 0) + entry.refund)
-    }
-    if (typeof entry.expected === 'number') {
-      rec.refundExpectedTotal = round2(
-        Number(rec.refundExpectedTotal || 0) + entry.expected,
-      )
-    }
-    // session_units 口径的应退(上游会立即兑现的那本账;Freebucks 侧长期 pending).
-    if (typeof entry.expectedUnits === 'number') {
-      rec.refundUnitsExpectedTotal = round2(
-        Number(rec.refundUnitsExpectedTotal || 0) + entry.expectedUnits,
-      )
-    }
-    if (entry.pending === true) {
-      rec.refundPendingCount = Number(rec.refundPendingCount || 0) + 1
-    }
-    this._schedule()
+    recordRefund(this, key, entry)
   }
 
   /**
@@ -267,8 +215,7 @@ export class AccountStateStore {
 
   /** @param {string} key */
   refunds(key: any) {
-    const rec = key ? this.state.accounts[key] : null
-    return Array.isArray(rec?.refunds) ? rec.refunds : []
+    return refundsOf(this, key)
   }
 
   /** 标记"有改动待落盘"(外部调用入口,避免从类外碰私有 _schedule). */

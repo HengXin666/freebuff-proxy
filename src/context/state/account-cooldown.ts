@@ -61,7 +61,7 @@ export function _pruneCooldown(this: any, key: any) {
  * @param {any} this 账号池(runtimes)
  * @param {any} this 账号池(runtimes)
  * @param {string} key
- * @param {import('./upstream/client.js').UpstreamError | { code?: string, retryAfterMs?: number }} err
+ * @param {import('../../upstream/client.ts').UpstreamError | { code?: string, retryAfterMs?: number }} err
  * @param {string | null} [model]
  */
 export function markCooldown(this: any, key: any, err: any, model: any = null) {

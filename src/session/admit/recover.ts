@@ -4,7 +4,7 @@
  * 从 steps.ts 按职责切出. 这三支的共同点是"回执不是 active, 但也不是终态",
  * 各自有官方对齐的重试动作; 与"正常路径怎么拿会话"分开更好审查.
  */
-import { newRawInstanceId } from '../../upstream/official-fingerprint.ts'
+import { newRawInstanceId } from '../../upstream/fingerprint/official-fingerprint.ts'
 import { logger } from '../../util/log.ts'
 import { activateSession } from './steps.ts'
 

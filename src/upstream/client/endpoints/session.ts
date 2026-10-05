@@ -7,8 +7,8 @@
  * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
  */
 import { logger } from '../../../util/log.ts'
-import { SESSION_ADMISSION_ENDPOINT, SESSION_ENDPOINT } from '../../official-fingerprint.ts'
-import { parseRetryAfterMs } from '../errors.ts'
+import { SESSION_ADMISSION_ENDPOINT, SESSION_ENDPOINT } from '../../fingerprint/official-fingerprint.ts'
+import { parseRetryAfterMs } from '../errors/index.ts'
 import { apiFetch } from '../http.ts'
 import { normalizeSessionResult } from './session-result.ts'
 import { sessionHeaders } from './session-headers.ts'

@@ -88,7 +88,7 @@ function resolveDirs(merged: Record<string, any>): void {
  * 载入配置(YAML + 默认值 + 环境变量 + 路径解析).
  *
  * @param {string} [configPath] 显式配置文件路径;缺省走 FREEBUFF_PROXY_CONFIG 或 ./config.yaml
- * @returns {import('./index.js').ProxyConfig & { _configPath: string, _configExists: boolean, _dataDir: string }}
+ * @returns {import('./index.ts').ProxyConfig & { _configPath: string, _configExists: boolean, _dataDir: string }}
  *   合并后的配置(含 _* 诊断字段)
  */
 export function loadConfig(configPath?: string): Record<string, any> {

@@ -7,7 +7,7 @@
  * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
  */
 import { logger } from '../../../util/log.ts'
-import { UpstreamError, isTerminalCountryBlock } from '../errors.ts'
+import { UpstreamError, isTerminalCountryBlock } from '../errors/index.ts'
 
 /**
  * 判定 409 / 429 这两类"可原样透传"的槽位与限流码.

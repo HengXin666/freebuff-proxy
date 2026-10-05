@@ -14,7 +14,7 @@ import { logger } from '../../util/log.ts'
 /**
  * 把账本里某账号的状态灌回它的 runtime(懒创建时调用)+ 内存冷却表.
  * @param {any} this 账号池(runtimes)
- * @param {{ key: string, sessions: import('./session-manager.js').SessionManager, email?: string }} runtime
+ * @param {{ key: string, sessions: import('../../session-manager.ts').SessionManager, email?: string }} runtime
  */
 export function _hydrateRuntime(this: any, runtime: any) {
   const key = runtime?.key

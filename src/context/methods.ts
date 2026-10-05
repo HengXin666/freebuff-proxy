@@ -70,6 +70,12 @@ import {
   reacquireAfterGate,
   schedulingMode,
 } from './sched/account-schedule.ts'
+import { candidateKeys } from './select/candidates.ts'
+import {
+  _acquireForModelUnlocked,
+  _reacquireAfterGateUnlocked,
+  _retrySameAccount,
+} from './acquire/acquire.ts'
 
 /** 方法名 -> 实现. 名字即契约, 必须与调用点逐字一致. */
 export const CONTEXT_METHODS: Record<string, any> = {
@@ -132,4 +138,9 @@ export const CONTEXT_METHODS: Record<string, any> = {
   everUsed,
   acquireForModel,
   reacquireAfterGate,
+  // 选号与重试(实现按职责拆在 ./select 与 ./acquire)
+  candidateKeys,
+  _acquireForModelUnlocked,
+  _reacquireAfterGateUnlocked,
+  _retrySameAccount,
 }

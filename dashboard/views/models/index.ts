@@ -1,7 +1,7 @@
 import { t } from '../../locale/index.ts'
 import { api } from '../../lib/api.ts'
 import { el, icon } from '../../lib/dom.ts'
-import { need } from '../../lib/hooks.ts'
+import { need } from '../../lib/boot/hooks.ts'
 import { modelNameFor } from '../../lib/format/models.ts'
 import { state } from '../../lib/state.ts'
 import { toast } from '../../lib/ui.ts'
@@ -27,7 +27,7 @@ export {
  *   sync.ts    与上游目录对账(局部刷新 / 同步 / 清理 / 报告)
  *   index.ts   本文件:拉数据 -> 组装卡片
  *
- * 跨文件引用一律走 need(name)(见 dashboard/lib/hooks.ts),避免模块环.
+ * 跨文件引用一律走 need(name)(见 dashboard/lib/boot/hooks.ts),避免模块环.
  */
 
 export async function renderModelSettings(view: any) {

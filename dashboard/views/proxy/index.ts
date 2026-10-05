@@ -1,7 +1,7 @@
 import { t } from '../../locale/index.ts'
 import { api } from '../../lib/api.ts'
 import { $, el, icon } from '../../lib/dom.ts'
-import { need } from '../../lib/hooks.ts'
+import { need } from '../../lib/boot/hooks.ts'
 import { state } from '../../lib/state.ts'
 import { toast } from '../../lib/ui.ts'
 import {

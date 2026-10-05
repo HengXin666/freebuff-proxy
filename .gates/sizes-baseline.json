@@ -4,21 +4,6 @@
     "note": "体量棘轮：逐文件当前行数水位，只许降不许涨"
   },
   "entries": {
-    "bin/serve.ts": 445,
-    "cli-bridge/upstream.ts": 313,
-    "src/account-state-store.ts": 316,
-    "src/app-context.ts": 706,
-    "src/free-mode.ts": 340,
-    "src/model/list-response.ts": 310,
-    "src/proxy.ts": 933,
-    "src/session-handles.ts": 491,
-    "src/upstream/catalog-protocol.ts": 322,
-    "src/upstream/client/errors.ts": 323,
-    "src/upstream/device-signing.ts": 480,
-    "src/upstream/foreign-client-signals.ts": 465,
-    "src/upstream/official-fingerprint.ts": 569,
-    "src/upstream/official-rpc.ts": 397,
-    "test/suites/entries/smoke/smoke.ts": 9329,
-    "test/suites/entries/verify/model-mapping-truth.ts": 309
+    "src/upstream/device/device-signing.ts": 318
   }
 }

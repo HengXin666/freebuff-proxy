@@ -12,7 +12,7 @@ import { logger } from '../../../util/log.ts'
 import { freebuffAuthHeaders } from '../../../auth-store.ts'
 import { FREEBUFF_AVAILABLE_MODELS } from '../../../model.ts'
 import { isModelHandle } from '../../catalog-protocol.ts'
-import { officialSessionHeaders } from '../../official-fingerprint.ts'
+import { officialSessionHeaders } from '../../fingerprint/official-fingerprint.ts'
 
 /**
  * 把请求的模型解析成上线形态(目录句柄).

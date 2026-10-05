@@ -1,6 +1,6 @@
 import { t } from '../../locale/index.ts'
 import { el, icon } from '../../lib/dom.ts'
-import { need } from '../../lib/hooks.ts'
+import { need } from '../../lib/boot/hooks.ts'
 import { modelNameFor, poolBadgeClass, poolLabel } from '../../lib/format/models.ts'
 import { fmtModelPrice } from '../../lib/format/quota.ts'
 import { state } from '../../lib/state.ts'
