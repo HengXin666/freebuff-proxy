@@ -56,6 +56,18 @@ function sampleValue(prop) {
   return 'X'
 }
 
+/**
+ * dsh 真实声明的工具 schema 与名字集合.
+ *
+ * ③f/③g/③h 共用一份: 参数翻译的裁剪与必填补全都以下游[本次声明]为判据,
+ * 用真 fixture 而不是手写 schema, 才测得到真实的 required 约束.
+ */
+const DSH_TOOLS = JSON.parse(
+  fs.readFileSync(path.join(ROOT, 'test/fixtures/dsh-tools.json'), 'utf8'),
+)
+const schemas = Object.fromEntries(DSH_TOOLS.map((t) => [t.name, t.parameters]))
+const declared = new Set(Object.keys(schemas))
+
 const callByName = (name) => {
  return {
  choices: [{ message: { tool_calls: [{ function: { name: name, arguments: '{}' } }] } }],
@@ -203,11 +215,6 @@ const callByName = (name) => {
 // 案例来源: bash 的下游 required 含 description, 而官方 run_terminal_command
 // 没有该字段 ---- 必须有合成规则补上.
 {
-  const dsh = JSON.parse(
-    fs.readFileSync(path.join(ROOT, 'test/fixtures/dsh-tools.json'), 'utf8'),
-  )
-  const schemas = Object.fromEntries(dsh.map((t) => [t.name, t.parameters]))
-  const declared = new Set(Object.keys(schemas))
   const official = new Map(
     OFFICIAL_TOOLS.map((t) => [t.function.name, t.function.parameters || {}]),
   )
@@ -250,6 +257,7 @@ const callByName = (name) => {
     }
   }
 }
+
 
 // ── ③b 非对象/畸形输入不得抛 ──────────────────────────────────────
   for (const bad of [null, undefined, 'x', 42, {}, { choices: 'no' }, { choices: [{}] }]) {

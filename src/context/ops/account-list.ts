@@ -81,7 +81,14 @@ function buildAccountRow(self: any, a: any, now: number): any {
 Boolean(self.accountState.account(a.key)?.bannedAt) || coolingCode === 'banned'
     const unavailable =
 banned || (cooling && UNAVAILABLE_COOLDOWN_CODES.has(coolingCode))
-    const rt = self.byKey.get(a.key)
+    /**
+     * 用 runtimeFor 而不是 byKey.get: 后者是裸读 Map, 绕过懒创建, 于是
+     * freebucks / quota / lastProbe(由 _hydrateRuntime 从账本回灌)在服务重启
+     * 后的首屏全是 null ---- 用户要手动刷新一次才看得到上次缓存的账号状态.
+     * runtimeFor 会按需建 runtime 并完成回灌, 且拿不到凭据时返回 null 而不是抛.
+     * 见 src/context/ops/account-runtime.ts 的 runtimeFor.
+     */
+    const rt = self.runtimeFor(a.key)
     const snap = rt?.sessions?.getSnapshot?.()
     const chatLock = self.chatLocks.get(a.key)
     // 账本记录(生命周期/时间轴):account() 会按需创建并盖上导入时间.

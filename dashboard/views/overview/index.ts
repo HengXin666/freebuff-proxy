@@ -31,14 +31,38 @@ export async function renderOverview(view: any) {
     view.append(renderOverviewHeader(data))
     view.append(renderStatCards(data))
     view.append(await renderAccountsCard(data))
-    await need('renderProxySettings')(view)
-    await need('renderModelSettings')(view)
+    // 全局配置(工具签名 / 请求链路 / 负载均衡 / 额度保护 / 代理池 / 可调项)
+    // 不再挂在总览页尾部 ---- 它们与"账号池状态"是两件事, 平铺在一起会让
+    // 输入框挤成一片且看不出归属. 现在整体在 #settings 页按用途分区渲染
+    // (见 views/settings/index.ts).
+    view.append(settingsPointerCard())
     if (state.me.role === 'admin') await renderFlowsCard(view)
   } catch (err) {
     endProgress()
     view.innerHTML = ''
     view.append(el('div', { class: 'card' }, err.message))
   }
+}
+
+/**
+ * 总览页尾部的[配置已搬家]提示卡.
+ *
+ * 为什么留一张卡而不是静默移除: 老用户会照旧在总览页找"代理设置", 找不到就
+ * 以为功能没了. 这里给一句明确去向 + 一键跳转.
+ *
+ * @returns {any} 卡片元素
+ */
+function settingsPointerCard() {
+  return el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
+    el('div', {}, [
+      el('h3', { style: 'margin:0 0 2px' }, t('settings.sectionUpstream')),
+      el('span', { class: 'muted' }, t('settings.overviewHint')),
+    ]),
+    el('button', {
+      class: 'primary',
+      onclick: () => { location.hash = 'settings' },
+    }, [icon('cpu', 14), t('settings.openSettings')]),
+  ])
 }
 
 function skeletonOverview() {

@@ -54,6 +54,39 @@ export const CLIENT_TO_OFFICIAL_TOOL = Object.freeze({
   ask_user_question: 'ask_questions',
   ask_questions: 'ask_questions',
   browser_check: 'browser_check',
+
+  /**
+   * 其它 harness 的等价名 -- Claude Code / Codex / Cursor / opencode.
+   *
+   * 为什么必须收进来: 本代理要同时服务多个下游(dsh / Claude Code / Codex ...).
+   * 不收的代价不是"不可用"(载体通道仍会把它包成 proxy__x 发出去), 而是
+   * 上游按外来客户端判据识别: 这些名字本身就在上游的
+   * FOREIGN_HARNESS_TOOL_NAMES 里(见 ../../foreign-client-signals.ts), 原样或
+   * 经载体发出去都躲不开语义降级; 映射到官方等价物后上游只看到官方名.
+   *
+   * 名字形态取自本仓已有的上游判据镜像(同文件 FOREIGN_HARNESS_TOOL_NAMES_BY_HARNESS),
+   * 不另行猜测: 大写是 Claude Code 与 Cursor 的形态, 小写是 Codex 与 opencode 的.
+   * 没有官方等价物的(Task / NotebookEdit / read_lints 之类)一律不进表 ----
+   * 它们交给载体通道, 硬凑一个官方名等于篡改语义.
+   */
+  Bash: 'run_terminal_command',
+  Read: 'read_files',
+  Write: 'write_file',
+  Edit: 'str_replace',
+  MultiEdit: 'str_replace',
+  Glob: 'glob',
+  Grep: 'code_search',
+  LS: 'list_directory',
+  TodoWrite: 'write_todos',
+  WebFetch: 'read_url',
+  WebSearch: 'web_search',
+  AskUserQuestion: 'ask_questions',
+  StrReplace: 'str_replace',
+  Shell: 'run_terminal_command',
+  AskQuestion: 'ask_questions',
+  exec_command: 'run_terminal_command',
+  todowrite: 'write_todos',
+  webfetch: 'read_url',
 })
 
 /**

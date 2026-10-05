@@ -47,6 +47,44 @@ export default {
   'overview.noRequestsYet': { 'zh-CN': '尚无请求记录', en: 'No requests recorded yet' },
   'overview.shareBarTip': { 'zh-CN': '{email} {pct}%（{req}/{total}）', en: '{email} {pct}% ({req}/{total})' },
 
+  // ---- 设置页(全局配置从总览剥离后的独立页)----
+  'settings.title': { 'zh-CN': '设置', en: 'Settings' },
+  'settings.subtitle': {
+    'zh-CN': '全局配置按用途分区。改动即时生效，无需改配置文件。',
+    en: 'Global configuration grouped by purpose. Changes take effect immediately; no config file edits needed.',
+  },
+  'settings.sectionUpstream': { 'zh-CN': '上游与工具', en: 'Upstream and tools' },
+  'settings.sectionUpstreamHint': {
+    'zh-CN': '请求链路、工具集形态与兼容兜底。',
+    en: 'Request channel, tool-set shape, and compatibility fallbacks.',
+  },
+  'settings.sectionScheduling': { 'zh-CN': '调度与额度', en: 'Scheduling and quota' },
+  'settings.sectionSchedulingHint': {
+    'zh-CN': '账号如何被选中、并发上限与额度保护闸门。',
+    en: 'How accounts are picked, concurrency limits, and quota-protection gates.',
+  },
+  'settings.sectionNetwork': { 'zh-CN': '网络与出口', en: 'Network and egress' },
+  'settings.sectionNetworkHint': {
+    'zh-CN': '全局代理池：账号会自动分配到池内出口并保持稳定。',
+    en: 'Global proxy pool: accounts are assigned to a pool egress automatically and stay stable.',
+  },
+  'settings.sectionModels': { 'zh-CN': '模型', en: 'Models' },
+  'settings.sectionModelsHint': {
+    'zh-CN': '模型清单与上游目录对账；此处决定哪些模型对外可见。',
+    en: 'Model list and reconciliation with the upstream catalog; decides which models are exposed.',
+  },
+  'settings.sectionAdvanced': { 'zh-CN': '高级（需重启）', en: 'Advanced (restart required)' },
+  'settings.sectionAdvancedHint': {
+    'zh-CN': '不常改的底层可调项。这些改完需要重启服务才生效。',
+    en: 'Low-level tunables you rarely touch. These need a service restart to take effect.',
+  },
+  'settings.jumpTo': { 'zh-CN': '跳到', en: 'Jump to' },
+  'settings.overviewHint': {
+    'zh-CN': '这里只有账号池状态；全局配置已移到设置页。',
+    en: 'Only the account pool lives here; global configuration moved to Settings.',
+  },
+  'settings.openSettings': { 'zh-CN': '打开设置', en: 'Open settings' },
+
   // ---- 系统(数据文件自检 / 服务操作)----
   'system.reconnectConfirm': {
     'zh-CN': '确定要全部断开重连吗？\n\n将释放所有账号的 session（正在传输的 SSE 可能被中断），下一个请求会自动重建新 session。',

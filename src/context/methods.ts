@@ -18,7 +18,7 @@ import {
 } from './catalog/account-catalog.ts'
 import { catalogQuota, catalogRows, refreshCatalogs } from './catalog/account-rows.ts'
 import { list } from './ops/account-list.ts'
-import { get } from './ops/account-runtime.ts'
+import { get, runtimeFor } from './ops/account-runtime.ts'
 import {
   _cooldownKey,
   _persistCooldowns,
@@ -81,6 +81,7 @@ export const CONTEXT_METHODS: Record<string, any> = {
   // 账号列表与 runtime 懒创建
   list,
   get,
+  runtimeFor,
   // 模型目录与标识归一
   _fromCatalogs,
   displayNameFor,

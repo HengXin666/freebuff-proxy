@@ -116,3 +116,35 @@ export function get(this: any, key: any) {
     this.accountState.patch(accountKey, { email: user.email })
     return runtime
 }
+
+/**
+ * 取 runtime 供[只读展示]用: 拿不到就返回 null, 绝不抛.
+ *
+ * 与 get() 的唯一差别是失败姿态: get() 的调用方是转发链路, 凭据不可用必须
+ * 显式报错; 而控制台账号表只是展示, 某个账号凭据读不出来时应当继续把其余
+ * 账号渲染出来, 不能整张表崩掉.
+ *
+ * 为什么必须有这个入口(2026-10-06 实测缺陷): 控制台账号表原先写的是
+ * this.byKey.get(key) ---- 直接读 Map, 绕过懒创建. 而 freebucks / quota /
+ * lastProbe 是在 _hydrateRuntime 里从账本回灌的, 只挂在[创建出来的] runtime
+ * 上. 服务重启后 byKey 是空的, 首屏于是把这三个字段全部读成 null:
+ * 账号行显示不出余额与额度, 必须手动点一次刷新(那一跳会走 get() 建 runtime)
+ * 才回来. 这正是用户报的"首次打开网页拿不到上次缓存的账号状态".
+ *
+ * 回灌只读账本, 不发任何上游请求, 因此首屏调用它不违反[零自动探测]
+ * (见 docs/reverse/20 §20.3).
+ *
+ * @param {any} this 账号池(runtimes)
+ * @param {string} key 账号 key(id 或旧布局的邮箱)
+ * @returns {any | null} 账号 runtime;凭据不可用为 null
+ */
+export function runtimeFor(this: any, key: any) {
+  if (typeof key !== 'string' || !key) return null
+  try {
+    return this.get(key)
+  } catch {
+    // 凭据缺失/读不出来: 该账号照样出现在表里(账本与凭据列表是两处来源),
+    // 只是拿不到运行时会话那部分字段 ---- 由调用方按 null 处理.
+    return null
+  }
+}

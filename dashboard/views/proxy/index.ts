@@ -9,7 +9,7 @@ import {
   buildQuotaProtectionCard, buildStripToolsCard, buildToolCarrierCard,
   buildUpstreamChannelCard,
 } from './cards.ts'
-import { buildTunablesCard } from './tunables.ts'
+import { buildAdvancedSection, buildSettingsSections } from './sections.ts'
 
 /* ---------------- proxy settings ---------------- */
 export async function renderProxySettings(view: any) {
@@ -73,16 +73,22 @@ export async function renderProxySettings(view: any) {
   const lowBalanceThreshold = settings.lowBalanceThreshold ?? 15
   state.lowBalanceThreshold = lowBalanceThreshold
   const advice = idleReleaseAdvice(state.accounts)
-  view.append(buildFreeToolSignatureCard(toggleAttrs, signatureEnabled))
-  view.append(buildStripToolsCard(stripAttrs, stripTools))
-  view.append(buildToolCarrierCard(carrierAttrs, carrierEnabled))
-  view.append(buildUpstreamChannelCard(channel))
-  view.append(buildLoadBalanceCard(schedMode, concurrency, overflowWaitMs))
-  view.append(buildQuotaProtectionCard(advice, idleReleaseSec, lowBalanceThreshold, maxNewSessions))
-  view.append(buildProxyPoolCard(data))
-  // 可调项卡片(除 server.host/port 外的全部配置项): 与上面各卡不同, 它保存后
-  // 需要重启才生效 ---- 提示由卡片自己渲染, 见 ./tunables.ts 的文档注释.
-  view.append(buildTunablesCard(settings.tunableSpecs, settings.tunables))
+  /**
+   * 按用途分四区渲染, 不再把 8 张卡平铺成一长串.
+   *
+   * 为什么必须分区(用户反馈): 原先总览页尾部一次性挂出工具签名 / 工具兜底 /
+   * 工具承载 / 请求链路 / 负载均衡 / 额度保护 / 代理池 / 可调项, 八张卡视觉
+   * 权重完全相同, "代理池"与"额度保护"这种毫不相干的配置挤在一起, 看不出归属,
+   * 也找不到想改的那一项. 分区后每区有自己的标题与说明, 跳转条按区定位.
+   */
+  const sections = buildSettingsSections({
+    toggleAttrs, signatureEnabled, stripAttrs, stripTools,
+    carrierAttrs, carrierEnabled, channel,
+    schedMode, concurrency, overflowWaitMs,
+    advice, idleReleaseSec, lowBalanceThreshold, maxNewSessions,
+    data, settings,
+  })
+  for (const section of sections) view.append(section)
 }
 
 /** 保存[官方工具签名兼容]开关并即时反映状态文案. */

@@ -1,0 +1,72 @@
+/* 设置页样式 ---- 左侧分区边栏 + 内容区.
+ *
+ * 从 base.css 按域切出(base.css 触及 500 行红线). 这些类只有设置页用, 独立成
+ * 文件后 base.css 回到通用基础样式的定位.
+ *
+ * 注册: dashboard/index.html 的 link 列表.
+ */
+
+/* ---------- settings page (左侧边栏 + 内容区) ----------
+   设置页按用途分成若干区, 用左侧竖排边栏切换(一次只显示一个区), 而不是把
+   所有区纵向堆成一长条. 用户要求: "左侧边栏有个导航那种, 就像是左侧边栏换哪一页".
+
+   两栏: 左边固定宽度的导航, 右边内容. 窄屏(<=820px)回退成上下堆叠, 边栏变横向
+   可滚动的标签条 ---- 手机上左侧栏会挤掉内容宽度. */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: sticky;
+  top: 12px;
+}
+.settings-nav button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: none;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background .15s var(--ease), color .15s var(--ease);
+}
+.settings-nav button:hover { background: rgba(255, 255, 255, .04); color: var(--fg); }
+.settings-nav button.active {
+  background: linear-gradient(135deg, rgba(91, 140, 255, .16), rgba(139, 92, 246, .16));
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.settings-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* 一次只显示当前区: 未选中的整段隐藏. */
+.settings-section { display: none; flex-direction: column; gap: 10px; }
+.settings-section.active { display: flex; }
+.settings-section-head {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.settings-section-head h3 { font-size: 14px; letter-spacing: .3px; text-transform: uppercase; color: var(--muted); }
+.settings-section-body { display: flex; flex-direction: column; gap: 12px; }
+/* 区内卡片不再各自带上动画(margin-top 由 body 的 gap 统一控制). */
+.settings-section-body > .card { animation: none; margin-top: 0; }
+
+@media (max-width: 820px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .settings-nav {
+    position: static;
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .settings-nav button { width: auto; white-space: nowrap; }
+}

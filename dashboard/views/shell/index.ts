@@ -6,6 +6,7 @@ import { toast, withButtonLoading } from '../../lib/ui.ts'
 import { renderLogs } from '../logs/index.ts'
 import { renderMe } from '../me/index.ts'
 import { renderOverview } from '../overview/index.ts'
+import { renderSettings } from '../settings/index.ts'
 import { renderPlayground } from '../playground/index.ts'
 import { renderSystem } from '../system/index.ts'
 import { renderUsers } from '../users/index.ts'
@@ -44,6 +45,7 @@ export async function render(opts = {}) {
   void view.offsetWidth // reflow 以重放动画
   view.classList.add('view-enter')
   if (route === 'users' && state.me.role === 'admin') await renderUsers(view)
+  else if (route === 'settings') await renderSettings(view)
   else if (route === 'playground') await renderPlayground(view)
   else if (route === 'system' && state.me.role === 'admin') await renderSystem(view)
   else if (route === 'logs' && state.me.role === 'admin') await renderLogs(view)
@@ -198,7 +200,12 @@ async function restartService() {
 }
 
 function renderNav() {
-  const items = [['overview', t('nav.overview'), 'gauge'], ['playground', t('nav.playground'), 'chat']]
+  // 设置排在总览之后: 全局配置已从总览页剥离到独立页(用户要求分区排版).
+  const items = [
+    ['overview', t('nav.overview'), 'gauge'],
+    ['settings', t('nav.settings'), 'cpu'],
+    ['playground', t('nav.playground'), 'chat'],
+  ]
   if (state.me.role === 'admin') {
     items.push(['users', t('nav.usersManagement'), 'users'])
     // 数据文件自检是排障工具,不是日常操作----从总览页搬出来,admin 专属独立页.

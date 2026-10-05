@@ -14,6 +14,9 @@
  * 判据来源: 官方 schema 取 docs/reverse/captures/official-tools.json,
  * 下游 schema 取调用方本次声明(dsh 的 read / edit / write / bash / grep).
  *
+ * 规则数据(接口 + PARAM_RULES 表)已按 300 行上限切到 ./tools/param-rules.ts;
+ * 本文件只剩翻译引擎(按规则改参数并裁剪). 语义零改动.
+ *
  * 三条纪律:
  *   1. 没有规则的组合一律返回 null, 调用方原样保留参数 ----
  *      宁可下游看到陌生的官方字段, 也不要被错误规则改坏.
@@ -22,99 +25,10 @@
  *      synth 兜底补上 ---- 否则回程调用仍会被下游判为参数缺失.
  */
 
-/** 一个字段级翻译规则. */
-interface FieldRule {
-  /** 官方字段名 -> 下游字段名. 省略表示同名. */
-  to?: string
-  /** 自定义取值(返回值 undefined 表示不产出该字段). */
-  get?: (value: any, src: any) => any
-  /** 取到的值是对象时是否摊平成顶层键(edit 的 replacements[0] 用). */
-  flatten?: boolean
-}
+import { PARAM_RULES } from './tools/param-rules.ts'
 
-/** 单条工具的参数翻译规则. */
-interface ParamRule {
-  /** 官方字段名 -> 规则. 未列出的官方字段一律丢弃. */
-  fields: Record<string, FieldRule>
-  /** 下游必填但官方 schema 里没有的字段: 名字 -> 由整份官方参数合成. */
-  synth?: Record<string, (src: any) => any>
-}
-
-/**
- * 下游工具名 -> 参数翻译规则.
- *
- * 只列形态确实不同的组合; 同形的(ask_questions / write_todos)不在这里.
- */
-const PARAM_RULES: Record<string, ParamRule> = {
-  /** read_files(paths: (string | {path,offset,limit})[]) -> read(file_path, offset?, limit?). */
-  read: {
-    fields: {
-      // paths 是数组, 下游是单文件: 取第一条. 元素是对象时整条摊平(带 offset/limit).
-      paths: {
-        to: 'file_path',
-        flatten: true,
-        get: (paths: any) => (Array.isArray(paths) ? paths[0] : paths),
-      },
-    },
-  },
-  /** str_replace(path, replacements[]) -> edit(file_path, old_string, new_string, replace_all?). */
-  edit: {
-    fields: {
-      path: { to: 'file_path' },
-      replacements: {
-        flatten: true,
-        get: (reps: any) => (Array.isArray(reps) ? reps[0] : reps),
-      },
-    },
-  },
-  /** write_file(path, instructions, content) -> write(file_path, content). */
-  write: {
-    fields: { path: { to: 'file_path' }, content: { to: 'content' } },
-  },
-  /**
-   * run_terminal_command(command, cwd?, timeout_seconds?) -> bash(command, description, workdir?, timeoutMs?).
-   *
-   * description 是下游的必填项而官方没有对应字段(官方把意图放在工具调用外层),
-   * 用 command 原文合成一句, 保证下游 required 校验能过.
-   */
-  bash: {
-    fields: {
-      command: { to: 'command' },
-      cwd: { to: 'workdir' },
-      timeout_seconds: {
-        to: 'timeoutMs',
-        get: (v: any) => (typeof v === 'number' ? v * 1000 : undefined),
-      },
-    },
-    synth: {
-      description: (src: any) =>
-        typeof src?.command === 'string' && src.command
-          ? `run: ${src.command}`
-          : 'run command',
-    },
-  },
-  /** code_search(pattern, cwd?) -> grep(pattern, path?). */
-  grep: {
-    fields: { pattern: { to: 'pattern' }, cwd: { to: 'path' } },
-  },
-  /** list_directory(path) -> ls(path). */
-  ls: { fields: { path: { to: 'path' } } },
-  /** read_url(url, max_chars?) -> web_fetch(url). */
-  web_fetch: { fields: { url: { to: 'url' } } },
-  /**
-   * 同名工具的形态差异: 官方 glob(pattern, cwd?, max_results?) ->
-   * 下游 glob(pattern, path?). 名字相同但参数名不同, 同样必须翻译.
-   */
-  glob: {
-    fields: { pattern: { to: 'pattern' }, cwd: { to: 'path' } },
-  },
-  /** web_search(query, depth?) -> web_search(queries: string[]). */
-  web_search: {
-    fields: {
-      query: { to: 'queries', get: (q: any) => (q == null ? undefined : [String(q)]) },
-    },
-  },
-}
+export { PARAM_RULES } from './tools/param-rules.ts'
+export type { FieldRule, ParamRule } from './tools/param-rules.ts'
 
 /**
  * 该下游工具名是否有参数翻译规则.
@@ -177,8 +91,41 @@ export function translateParamsForDownstream(
     const value = make(src)
     if (value !== undefined && value !== null) out[key] = value
   }
+  /**
+   * 旁路保留: 上游参数里[已经是下游形态]的字段, 规则没消费也要留下.
+   *
+   * 为什么必须有(2026-10-06 实测): 上游偶尔直接回下游 schema 的字段名
+   * (回程链路不是每次都能保证是官方形态). write_file 的规则只认 path,
+   * 于是 {"file_path":"a.txt","content":"hi"} 会被翻成 {"content":"hi"} ----
+   * file_path 落在 src 里没人接, 下游 required 校验直接失败.
+   *
+   * 判据是[下游 schema 声明过这个键], 不是[规则里没有] ---- 只放行下游自己
+   * 认识的字段, 不把上游的多余字段泄给下游.
+   */
+  for (const [key, value] of Object.entries(src)) {
+    if (out[key] !== undefined) continue
+    // 规则已消费的源字段不得回头再加一遍(否则官方名与下游名会同时出现).
+    if (key in rule.fields) continue
+    if (!declaresField(clientSchema, key)) continue
+    out[key] = value
+  }
   if (Object.keys(out).length === 0) return null
   return JSON.stringify(applySchemaKeys(out, clientSchema))
+}
+
+/**
+ * 下游 schema 是否声明过该字段(properties 里出现).
+ *
+ * 与 requiresField 的区别: 这个只管[认识], 不管[必填] ---- 旁路保留放行的
+ * 是下游自己知道的键, 包括可选字段(offset / limit / workdir 之类).
+ *
+ * @param {any} schema 下游工具的 parameters
+ * @param {string} key 字段名
+ * @returns {boolean} 声明过则为真
+ */
+function declaresField(schema: any, key: string): boolean {
+  const props = schema?.properties
+  return Boolean(props && typeof props === 'object' && key in props)
 }
 
 /**

@@ -48,6 +48,27 @@ export const MAP_TOOLS = Object.freeze({
   ask_user_question: 'ask_questions',
   ask_questions: 'ask_questions',
   browser_check: 'browser_check',
+  // 其它 harness 的等价名(Claude Code / Codex / Cursor / opencode).
+  // 真值与理由见 Node 侧唯一真源 src/upstream/signals/tool-name-map.ts 的同名段;
+  // 两侧表必须逐条一致(test/suites/entries/verify/tool-name-mapping.ts 有断言).
+  Bash: 'run_terminal_command',
+  Read: 'read_files',
+  Write: 'write_file',
+  Edit: 'str_replace',
+  MultiEdit: 'str_replace',
+  Glob: 'glob',
+  Grep: 'code_search',
+  LS: 'list_directory',
+  TodoWrite: 'write_todos',
+  WebFetch: 'read_url',
+  WebSearch: 'web_search',
+  AskUserQuestion: 'ask_questions',
+  StrReplace: 'str_replace',
+  Shell: 'run_terminal_command',
+  AskQuestion: 'ask_questions',
+  exec_command: 'run_terminal_command',
+  todowrite: 'write_todos',
+  webfetch: 'read_url',
 })
 
 /**

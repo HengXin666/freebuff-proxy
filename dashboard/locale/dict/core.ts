@@ -37,6 +37,7 @@ export default {
   'nav.language': { 'zh-CN': '语言', en: 'Language' },
   'nav.logout': { 'zh-CN': '退出登录', en: 'Log out' },
   'nav.overview': { 'zh-CN': '总览', en: 'Overview' },
+  'nav.settings': { 'zh-CN': '设置', en: 'Settings' },
   'nav.system': { 'zh-CN': '系统', en: 'System' },
   'nav.usersManagement': { 'zh-CN': '用户管理', en: 'Users' },
   'nav.playground': { 'zh-CN': '测试对话', en: 'Playground' },
