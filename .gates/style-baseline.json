@@ -134,6 +134,7 @@
     "docs/web-console.md": 142,
     "README.md": 164,
     "scripts/gates/undeclared-allow.txt": 7,
+    "src/upstream/device/register.ts": 1,
     "test/suites/entries/verify/model-mapping-truth.ts": 2,
     "test/suites/entries/verify/model-name-chain.ts": 6,
     "test/suites/entries/verify/tool-name-mapping.ts": 2

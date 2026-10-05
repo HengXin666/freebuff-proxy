@@ -5,7 +5,7 @@ import {
   noteDataFile,
   noteDroppedEntries,
   sanitizeProxyList,
-} from '../util/json-store.ts'
+} from '../../../util/json-store.ts'
 
 /**
  * 前端管理的全局代理池.
@@ -35,7 +35,7 @@ export class ProxyStore {
     this.load()
   }
 
-  /** @returns {import('../util/json-store.ts').JsonFileState} */
+  /** @returns {import('../../../util/json-store.ts').JsonFileState} */
   load() {
     const st = readJsonFileState(this.file)
     noteDataFile(this.file, st)

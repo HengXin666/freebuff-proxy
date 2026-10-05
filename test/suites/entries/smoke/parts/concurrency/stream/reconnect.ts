@@ -26,11 +26,11 @@ import path from 'node:path'
   rcConfig.server.apiKeys = ['sk-test']
   rcConfig.upstream.credentialsDir = rcDir
   rcConfig.session.pollIntervalSec = 3600
-  const { UserStore: RCUS } = await import('../../../../../../../src/web/user-store.ts')
-  const { WebSessionStore: RCWS } = await import('../../../../../../../src/web/session-store.ts')
-  const { LoginFlowManager: RCLFM } = await import('../../../../../../../src/web/login-flows.ts')
-  const { ProxyStore: RCPS } = await import('../../../../../../../src/web/proxy-store.ts')
-  const { SettingsStore: RCSS } = await import('../../../../../../../src/web/settings-store.ts')
+  const { UserStore: RCUS } = await import('../../../../../../../src/web/store/session/user-store.ts')
+  const { WebSessionStore: RCWS } = await import('../../../../../../../src/web/store/session/session-store.ts')
+  const { LoginFlowManager: RCLFM } = await import('../../../../../../../src/web/store/session/login-flows.ts')
+  const { ProxyStore: RCPS } = await import('../../../../../../../src/web/store/config/proxy-store.ts')
+  const { SettingsStore: RCSS } = await import('../../../../../../../src/web/store/config/settings-store.ts')
   const rcUsers = new RCUS(path.join(rcDir, 'users.json'))
   rcUsers.create({ username: 'admin', password: 'secret123', role: 'admin' })
   rcUsers.create({ username: 'viewer', password: 'secret123', role: 'user' })
@@ -127,11 +127,11 @@ import path from 'node:path'
   const rsRuntimes = new AccountRuntimes(rsConfig)
   // 重启回调标记
   let restarted = false
-  const { UserStore: US } = await import('../../../../../../../src/web/user-store.ts')
-  const { WebSessionStore: WS } = await import('../../../../../../../src/web/session-store.ts')
-  const { LoginFlowManager: LFM } = await import('../../../../../../../src/web/login-flows.ts')
-  const { ProxyStore: PS } = await import('../../../../../../../src/web/proxy-store.ts')
-  const { SettingsStore: SS } = await import('../../../../../../../src/web/settings-store.ts')
+  const { UserStore: US } = await import('../../../../../../../src/web/store/session/user-store.ts')
+  const { WebSessionStore: WS } = await import('../../../../../../../src/web/store/session/session-store.ts')
+  const { LoginFlowManager: LFM } = await import('../../../../../../../src/web/store/session/login-flows.ts')
+  const { ProxyStore: PS } = await import('../../../../../../../src/web/store/config/proxy-store.ts')
+  const { SettingsStore: SS } = await import('../../../../../../../src/web/store/config/settings-store.ts')
   const rsUsers = new US(path.join(rsDir, 'users.json'))
   rsUsers.create({ username: 'admin', password: 'secret123', role: 'admin' })
   const rsWS = new WS(path.join(rsDir, 'web-sessions.json'), 3600_000)

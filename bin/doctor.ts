@@ -5,7 +5,7 @@ import path from 'node:path'
 import { loadConfig } from '../src/config.ts'
 import { buildAppContext } from '../src/app-context.ts'
 import { listAccounts, resolveCredentialsDir } from '../src/auth-store.ts'
-import { UserStore } from '../src/web/user-store.ts'
+import { UserStore } from '../src/web/store/session/user-store.ts'
 import { configureLogger } from '../src/util/log.ts'
 import { printConfigSummary, printIssues, probeUpstream } from './doctor/report.ts'
 

@@ -10,12 +10,12 @@
 import path from 'node:path'
 
 import { logger } from '../../../src/util/log.ts'
-import { UserStore } from '../../../src/web/user-store.ts'
-import { WebSessionStore } from '../../../src/web/session-store.ts'
-import { LoginFlowManager } from '../../../src/web/login-flows.ts'
-import { ProxyStore } from '../../../src/web/proxy-store.ts'
-import { SettingsStore } from '../../../src/web/settings-store.ts'
-import { ModelStore } from '../../../src/web/model-store.ts'
+import { UserStore } from '../../../src/web/store/session/user-store.ts'
+import { WebSessionStore } from '../../../src/web/store/session/session-store.ts'
+import { LoginFlowManager } from '../../../src/web/store/session/login-flows.ts'
+import { ProxyStore } from '../../../src/web/store/config/proxy-store.ts'
+import { SettingsStore } from '../../../src/web/store/config/settings-store.ts'
+import { ModelStore } from '../../../src/web/store/config/model-store.ts'
 
 /**
  * 建用户库(启动装配的第一件事, 因为下面两条准入判定都要读它).

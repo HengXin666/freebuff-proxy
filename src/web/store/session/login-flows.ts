@@ -2,13 +2,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { randomUUID } from 'node:crypto'
-import { createUpstreamClient } from '../upstream/client.ts'
+import { createUpstreamClient } from '../../../upstream/client.ts'
 import {
   generateFingerprintId,
   saveAccountUser,
   accountKeyOf,
-} from '../auth-store.ts'
-import { logger } from '../util/log.ts'
+} from '../../../auth-store.ts'
+import { logger } from '../../../util/log.ts'
 import {
   readJsonFileState,
   noteDataFile,
@@ -17,7 +17,7 @@ import {
   ensureObjectEntries,
   dumpDroppedEntries,
   isPlainRecord,
-} from '../util/json-store.ts'
+} from '../../../util/json-store.ts'
 
 /**
  * Web-driven Freebuff login flow ("callback" style):
@@ -106,7 +106,7 @@ export class LoginFlowManager {
     this._poller.unref?.()
   }
 
-  /** @returns {import('../util/json-store.ts').JsonFileState} */
+  /** @returns {import('../../../util/json-store.ts').JsonFileState} */
   load() {
     let st = readJsonFileState(this.file)
     if (st.status === 'ok' && st.data?.flows !== undefined && !Array.isArray(st.data.flows)) {

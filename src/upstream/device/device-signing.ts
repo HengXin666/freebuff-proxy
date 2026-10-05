@@ -34,6 +34,7 @@ import {
   createDeviceKeyRecord,
   signPayload,
 } from './signing.ts';
+import { registerDeviceKey } from './register.ts';
 
 export {
   DEVICE_KEYS_PATH,
@@ -191,64 +192,7 @@ export class DeviceSigner {
    * @returns {Promise<any>} keyId; 失败返回 null 并退避
    */
   async register(scope: any, key: any) {
-    const url = `${this.apiHost}${DEVICE_KEYS_PATH}`;
-    logger.info('registering device key', { url, scope: scope.slice(0, 50) + '...' });
-
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), REGISTER_TIMEOUT_MS);
-
-      const res = await this.fetchImpl(url, {
-        method: 'POST',
-        headers: {
-          //  只有 Bearer:客户端注册 device-keys 时也只带 Bearer +
-          // Content-Type(抓包真值),没有 x-codebuff-api-key.
-          'Authorization': `Bearer ${this.token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          publicKey: key.publicKey,
-          //  官方抓包 body 是 client: "desktop"(二进制
-          // orchestrator.js:216629 同源).此前写 'freebuff-proxy' ---- 那是
-          // 自报家门的第三方特征.
-          client: 'desktop',
-        }),
-        signal: controller.signal
-      });
-
-      clearTimeout(timeout);
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        logger.warn('device key registration failed', {
-          status: res.status,
-          statusText: res.statusText,
-          body: text.slice(0, 200),
-        });
-        this.retryAfter = Date.now() + REGISTER_RETRY_MS;
-        return null;
-      }
-
-      const body = await res.json();
-      const keyId = body.keyId;
-
-      if (!keyId) {
-        logger.warn('device key registration failed: no keyId in response', { body });
-        this.retryAfter = Date.now() + REGISTER_RETRY_MS;
-        return null;
-      }
-
-      // 保存注册
-      key.registrations[scope] = keyId;
-      await this.persist();
-      logger.info('device key registered successfully', { keyId, scope: scope.slice(0, 50) + '...' });
-      return keyId;
-
-    } catch (err: any) {
-      logger.warn('device key registration error', { error: err.message, stack: err.stack?.slice(0, 300) });
-      this.retryAfter = Date.now() + REGISTER_RETRY_MS;
-      return null;
-    }
+    return registerDeviceKey(this, scope, key)
   }
 
   /**

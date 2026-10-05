@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { readJsonFileState, noteDataFile } from '../util/json-store.ts'
+import { readJsonFileState, noteDataFile } from '../../../util/json-store.ts'
 
 /** 运行设置字段表; 语义逐项见 DEFAULT_SETTINGS 的注释. */
 interface Settings {

@@ -14,7 +14,7 @@ import path from 'node:path'
 
 // --- unit: 管理员 bootstrap 报告真实结果(issue #9:日志撒谎导致"无法登录")---
 {
-  const { UserStore } = await import('../../../../../../src/web/user-store.ts')
+  const { UserStore } = await import('../../../../../../src/web/store/session/user-store.ts')
   const adminsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-admin-'))
   const store = new UserStore(path.join(adminsDir, 'users.json'))
 
@@ -46,8 +46,8 @@ import path from 'node:path'
 
 // --- unit: user store + web sessions ---
 {
-  const { UserStore } = await import('../../../../../../src/web/user-store.ts')
-  const { WebSessionStore } = await import('../../../../../../src/web/session-store.ts')
+  const { UserStore } = await import('../../../../../../src/web/store/session/user-store.ts')
+  const { WebSessionStore } = await import('../../../../../../src/web/store/session/session-store.ts')
   const us = new UserStore(path.join(tmpDir, 'users.json'))
   assert.equal(us.all().length, 0)
   const u = us.create({ username: 'Alice', password: 'secret123', role: 'user' })

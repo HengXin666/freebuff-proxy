@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { readJsonFileState, noteDataFile } from '../util/json-store.ts'
+import { readJsonFileState, noteDataFile } from '../../../util/json-store.ts'
 
 /**
  * 前端管理的自定义模型列表(全局生效).
@@ -62,7 +62,7 @@ export class ModelStore {
     this.load()
   }
 
-  /** @returns {import('../util/json-store.ts').JsonFileState} */
+  /** @returns {import('../../../util/json-store.ts').JsonFileState} */
   load() {
     const st = readJsonFileState(this.file)
     noteDataFile(this.file, st)

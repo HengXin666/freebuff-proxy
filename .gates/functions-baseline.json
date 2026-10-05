@@ -17,6 +17,6 @@
     "src/proxy/transport/forward.ts::forwardCompletions": 233,
     "src/proxy/transport/official.ts::tryOfficialChannel": 102,
     "src/upstream/rpc/official-rpc.ts::buildRpcCfg": 94,
-    "src/web/settings-store.ts::save": 100
+    "src/web/store/config/settings-store.ts::save": 100
   }
 }

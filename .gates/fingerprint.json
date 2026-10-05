@@ -3,8 +3,7 @@
   "algorithm": "sha256",
   "ratchets": {
     "dirs-baseline.json": {
-      "src": 12,
-      "src/web": 8
+      "src": 12
     },
     "fingerprint.json": {},
     "format-long-lines.json": {
@@ -48,7 +47,7 @@
       "src/upstream/fingerprint/official-fingerprint.ts": 1,
       "src/upstream/foreign-client-signals.ts": 3,
       "src/upstream/metadata/chat-metadata-parity.ts": 1,
-      "src/web/model-store.ts": 4,
+      "src/web/store/config/model-store.ts": 4,
       "test/suites/entries/verify/model-name-chain.ts": 2,
       "test/suites/smoke/state.ts": 2
     },
@@ -66,7 +65,7 @@
       "src/proxy/transport/forward.ts::forwardCompletions": 233,
       "src/proxy/transport/official.ts::tryOfficialChannel": 102,
       "src/upstream/rpc/official-rpc.ts::buildRpcCfg": 94,
-      "src/web/settings-store.ts::save": 100
+      "src/web/store/config/settings-store.ts::save": 100
     },
     "jsdoc-baseline.json": {
       "cli-bridge/bridge.ts::hasBun": 1,
@@ -222,40 +221,40 @@
       "src/util/log.ts::currentLogContext": 1,
       "src/util/log.ts::log": 1,
       "src/util/log.ts::patchLogContext": 1,
-      "src/web/login-flows.ts::cancel": 1,
-      "src/web/login-flows.ts::get": 1,
-      "src/web/login-flows.ts::LoginFlowManager": 1,
-      "src/web/login-flows.ts::publicFlow": 1,
-      "src/web/model-store.ts::hide": 1,
-      "src/web/model-store.ts::ModelStore": 1,
-      "src/web/model-store.ts::remove": 1,
-      "src/web/model-store.ts::save": 1,
-      "src/web/model-store.ts::unhide": 1,
-      "src/web/proxy-store.ts::save": 1,
-      "src/web/session-store.ts::create": 1,
-      "src/web/session-store.ts::destroy": 1,
-      "src/web/session-store.ts::get": 1,
-      "src/web/session-store.ts::WebSessionStore": 1,
-      "src/web/settings-store.ts::get": 1,
-      "src/web/settings-store.ts::load": 1,
-      "src/web/settings-store.ts::save": 1,
-      "src/web/user-store.ts::all": 1,
-      "src/web/user-store.ts::create": 5,
-      "src/web/user-store.ts::delete": 1,
-      "src/web/user-store.ts::ensureDefaultAdmin": 2,
-      "src/web/user-store.ts::generateApiKey": 1,
-      "src/web/user-store.ts::generatePassword": 1,
-      "src/web/user-store.ts::getByApiKey": 1,
-      "src/web/user-store.ts::getByUsername": 1,
-      "src/web/user-store.ts::hasAdmin": 1,
-      "src/web/user-store.ts::load": 1,
-      "src/web/user-store.ts::publicUser": 1,
-      "src/web/user-store.ts::resetApiKey": 1,
-      "src/web/user-store.ts::save": 1,
-      "src/web/user-store.ts::setPassword": 1,
-      "src/web/user-store.ts::setRole": 1,
-      "src/web/user-store.ts::UserStore": 1,
-      "src/web/user-store.ts::verifyPassword": 3,
+      "src/web/store/config/model-store.ts::hide": 1,
+      "src/web/store/config/model-store.ts::ModelStore": 1,
+      "src/web/store/config/model-store.ts::remove": 1,
+      "src/web/store/config/model-store.ts::save": 1,
+      "src/web/store/config/model-store.ts::unhide": 1,
+      "src/web/store/config/proxy-store.ts::save": 1,
+      "src/web/store/config/settings-store.ts::get": 1,
+      "src/web/store/config/settings-store.ts::load": 1,
+      "src/web/store/config/settings-store.ts::save": 1,
+      "src/web/store/session/login-flows.ts::cancel": 1,
+      "src/web/store/session/login-flows.ts::get": 1,
+      "src/web/store/session/login-flows.ts::LoginFlowManager": 1,
+      "src/web/store/session/login-flows.ts::publicFlow": 1,
+      "src/web/store/session/session-store.ts::create": 1,
+      "src/web/store/session/session-store.ts::destroy": 1,
+      "src/web/store/session/session-store.ts::get": 1,
+      "src/web/store/session/session-store.ts::WebSessionStore": 1,
+      "src/web/store/session/user-store.ts::all": 1,
+      "src/web/store/session/user-store.ts::create": 5,
+      "src/web/store/session/user-store.ts::delete": 1,
+      "src/web/store/session/user-store.ts::ensureDefaultAdmin": 2,
+      "src/web/store/session/user-store.ts::generateApiKey": 1,
+      "src/web/store/session/user-store.ts::generatePassword": 1,
+      "src/web/store/session/user-store.ts::getByApiKey": 1,
+      "src/web/store/session/user-store.ts::getByUsername": 1,
+      "src/web/store/session/user-store.ts::hasAdmin": 1,
+      "src/web/store/session/user-store.ts::load": 1,
+      "src/web/store/session/user-store.ts::publicUser": 1,
+      "src/web/store/session/user-store.ts::resetApiKey": 1,
+      "src/web/store/session/user-store.ts::save": 1,
+      "src/web/store/session/user-store.ts::setPassword": 1,
+      "src/web/store/session/user-store.ts::setRole": 1,
+      "src/web/store/session/user-store.ts::UserStore": 1,
+      "src/web/store/session/user-store.ts::verifyPassword": 3,
       "test/suites/verify-cases/_harness.ts::bumpAssertions": 1,
       "test/suites/verify-cases/_harness.ts::makeHolder": 1,
       "test/suites/verify-cases/handle.ts::run": 1,
@@ -313,9 +312,7 @@
       "src/upstream/client/errors/codes.ts::spend_limited": 1,
       "src/upstream/client/errors/codes.ts::waiting_room_required": 2
     },
-    "sizes-baseline.json": {
-      "src/upstream/device/device-signing.ts": 318
-    },
+    "sizes-baseline.json": {},
     "style-baseline.json": {
       ".agents/notes/AGENTS.md": 5,
       ".agents/notes/implemented/AGENTS.md": 1,
@@ -447,6 +444,7 @@
       "docs/web-console.md": 142,
       "README.md": 164,
       "scripts/gates/undeclared-allow.txt": 7,
+      "src/upstream/device/register.ts": 1,
       "test/suites/entries/verify/model-mapping-truth.ts": 2,
       "test/suites/entries/verify/model-name-chain.ts": 6,
       "test/suites/entries/verify/tool-name-mapping.ts": 2
@@ -500,5 +498,5 @@
     ],
     "checkpoints": "CHECKPOINTS = { 'pre-commit': [ 'syntax', 'sizes', 'dirs', 'functions', 'format', 'style', 'md-in-comment', 'notes', 'route-table', 'declared', 'lanes', 'fingerprint', ], 'pre-push': [ 'syntax', 'sizes', 'dirs', 'functions', 'notes', 'format', 'route-table', 'declared', 'types', 'lanes', 'fingerprint', 'contract', 'response-contract', 'docs', 'i18n', ], ci: 'all', }"
   },
-  "fingerprint": "0129911e1d34c548bbb0f9fce98614dd302edde7eeee3986a69d8f10bedd21c4"
+  "fingerprint": "3f9bd5febdb354d438fbcb8a04c3d8fbf7f9866073dfdffb10af4f3e27dcba1f"
 }

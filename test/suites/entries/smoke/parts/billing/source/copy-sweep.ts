@@ -46,7 +46,7 @@ import { fileURLToPath } from 'node:url'
     .map((f) => fs.readFileSync(new URL(f, cssDir), 'utf8'))
     .join('\n')
   const settingsSrc = fs.readFileSync(
-    new URL('../../../../../../../src/web/settings-store.ts', import.meta.url),
+    new URL('../../../../../../../src/web/store/config/settings-store.ts', import.meta.url),
     'utf8',
   )
   // 覆盖整个仓库:一开始只扫了 3 个文件,结果 README / bin/pricing.ts /

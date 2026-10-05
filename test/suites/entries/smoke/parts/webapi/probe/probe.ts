@@ -6,7 +6,7 @@
  * 由 test/suites/entries/smoke/smoke.ts 按职责机械切出. 口径: 纯搬移.
  */
 
-import { SettingsStore } from '../../../../../../../src/web/settings-store.ts'
+import { SettingsStore } from '../../../../../../../src/web/store/config/settings-store.ts'
 import { cookie, settingsStore, wDir, wport } from './fixture.ts'
 import assert from 'node:assert/strict'
 import path from 'node:path'

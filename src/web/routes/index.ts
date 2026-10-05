@@ -65,13 +65,13 @@ function buildContext(deps: any) {
  *
  * @param {{
  *   config: any,
- *   userStore: import('../user-store.ts').UserStore,
- *   webSessions: import('../session-store.ts').WebSessionStore,
- *   loginFlows: import('../login-flows.ts').LoginFlowManager,
+ *   userStore: import('../store/session/user-store.ts').UserStore,
+ *   webSessions: import('../store/session/session-store.ts').WebSessionStore,
+ *   loginFlows: import('../store/session/login-flows.ts').LoginFlowManager,
  *   runtimes: any,
- *   proxyStore?: import('../proxy-store.ts').ProxyStore,
- *   settingsStore?: import('../settings-store.ts').SettingsStore,
- *   modelStore?: import('../model-store.ts').ModelStore,
+ *   proxyStore?: import('../store/config/proxy-store.ts').ProxyStore,
+ *   settingsStore?: import('../store/config/settings-store.ts').SettingsStore,
+ *   modelStore?: import('../store/config/model-store.ts').ModelStore,
  *   restart?: () => void,
  * }} deps
  * @returns {{handle: (req: IncomingMessage, res: ServerResponse, url: URL) => Promise<boolean>}}

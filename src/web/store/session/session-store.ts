@@ -9,7 +9,7 @@ import {
   ensureObjectEntries,
   dumpDroppedEntries,
   isPlainRecord,
-} from '../util/json-store.ts'
+} from '../../../util/json-store.ts'
 
 /**
  * Web session store (control-plane logins). Persisted so restarts keep
@@ -55,7 +55,7 @@ export class WebSessionStore {
     this._prune()
   }
 
-  /** @returns {import('../util/json-store.ts').JsonFileState} */
+  /** @returns {import('../../../util/json-store.ts').JsonFileState} */
   load() {
     let st = readJsonFileState(this.file)
     // 数组字段存在但不是数组 → 结构不兼容,按损坏记账(照样不抛).

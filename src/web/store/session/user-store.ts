@@ -9,7 +9,7 @@ import {
   ensureObjectEntries,
   dumpDroppedEntries,
   isPlainRecord,
-} from '../util/json-store.ts'
+} from '../../../util/json-store.ts'
 
 /**
  * JSON-file backed web users (control-plane accounts), separate from

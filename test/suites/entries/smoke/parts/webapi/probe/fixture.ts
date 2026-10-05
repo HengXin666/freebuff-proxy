@@ -12,7 +12,7 @@ import { AccountRuntimes } from '../../../../../../../src/app-context.ts'
 import { saveAccountUser } from '../../../../../../../src/auth-store.ts'
 import { loadConfig } from '../../../../../../../src/config.ts'
 import { startServer } from '../../../../../../../src/server.ts'
-import { SettingsStore } from '../../../../../../../src/web/settings-store.ts'
+import { SettingsStore } from '../../../../../../../src/web/store/config/settings-store.ts'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -26,10 +26,10 @@ wConfig.server.port = 0
 wConfig.server.apiKeys = ['sk-test']
 wConfig.upstream.credentialsDir = wDir
 wConfig.session.pollIntervalSec = 3600
-const { UserStore } = await import('../../../../../../../src/web/user-store.ts')
-const { WebSessionStore } = await import('../../../../../../../src/web/session-store.ts')
-const { LoginFlowManager } = await import('../../../../../../../src/web/login-flows.ts')
-const { ProxyStore } = await import('../../../../../../../src/web/proxy-store.ts')
+const { UserStore } = await import('../../../../../../../src/web/store/session/user-store.ts')
+const { WebSessionStore } = await import('../../../../../../../src/web/store/session/session-store.ts')
+const { LoginFlowManager } = await import('../../../../../../../src/web/store/session/login-flows.ts')
+const { ProxyStore } = await import('../../../../../../../src/web/store/config/proxy-store.ts')
 const userStore = new UserStore(path.join(wDir, 'users.json'))
 const webSessions = new WebSessionStore(path.join(wDir, 'web-sessions.json'), 3600_000)
 userStore.create({ username: 'admin', password: 'secret123', role: 'admin' })

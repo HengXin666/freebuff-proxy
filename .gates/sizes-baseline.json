@@ -3,7 +3,5 @@
   "meta": {
     "note": "体量棘轮：逐文件当前行数水位，只许降不许涨"
   },
-  "entries": {
-    "src/upstream/device/device-signing.ts": 318
-  }
+  "entries": {}
 }

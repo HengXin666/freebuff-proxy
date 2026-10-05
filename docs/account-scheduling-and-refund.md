@@ -538,7 +538,7 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 | # | 文件 | 改动 |
 | --- | --- | --- |
 | 1 | `docs/scheduling.md` | 修正"并发上限"措辞（它是**溢出阈值**）+ 指向本文 |
-| 2 | `src/web/settings-store.ts` | 新增 `accountSchedulingMode`（默认 `sticky`）、`accountOverflowWaitMs` |
+| 2 | `src/web/store/config/settings-store.ts` | 新增 `accountSchedulingMode`（默认 `sticky`）、`accountOverflowWaitMs` |
 | 3 | `src/app-context.ts` | `candidateKeys` 支持 spread 排序；`list()` 暴露新时间字段；`importedAt` 校正 |
 | 4 | `src/session-manager.ts` | 调度时长统计（`schedulingSince` / `scheduledMs`） |
 | 5 | `src/web/api.ts` | `GET/POST /api/settings` 支持新字段；导入时记 `credentialUpdatedAt` |
@@ -558,7 +558,7 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 
 | # | 文件 | 改动 | 状态 |
 | --- | --- | --- | --- |
-| 1 | `src/config.ts` / `src/web/settings-store.ts` / `config.example.yaml` | `session.idle_release_sec` 默认值 **600 → 60** |  |
+| 1 | `src/config.ts` / `src/web/store/config/settings-store.ts` / `config.example.yaml` | `session.idle_release_sec` 默认值 **600 → 60** |  |
 | 2 | `dashboard/app.ts` | 文案改为「早退按实际占用退还未用时长」，并给出 pending 的准确含义 |  |
 | 3 | `dashboard/app.ts` | `idleReleaseAdvice` 推荐值**反向重算**（60 / 120 / 300s） |  |
 | 4 | `src/*.js` + `docs/*.md` + `config.example.yaml` + `README.md` + `bin/pricing.ts` | 清掉「早退不退 / 整小时买断」的旧口径 |  |
