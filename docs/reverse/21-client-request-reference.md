@@ -284,8 +284,8 @@ env HTTP_PROXY=http://127.0.0.1:8899 HTTPS_PROXY=http://127.0.0.1:8899 \
     --remote-debugging-port=9333 --ignore-certificate-errors
 
 # 3) 只操作 UI 触发（不发协议请求）
-node tools/cdp-ui.mjs click '.agent-trigger'    # 打开模型菜单 → 触发目录刷新
-node tools/cdp-ui.mjs send  '.composer-input' '<文本>'
+node tools/cdp-ui.ts click '.agent-trigger'    # 打开模型菜单 → 触发目录刷新
+node tools/cdp-ui.ts send  '.composer-input' '<文本>'
 ```
 
 ---
@@ -294,13 +294,13 @@ node tools/cdp-ui.mjs send  '.composer-input' '<文本>'
 
 判断"是否一致"**必须抓真实报文**。做法：起一个本地镜像，
 用环境变量 `FREEBUFF_UPSTREAM_API_BASE` 把上游主机指向它（**不是** `config.yaml` 的
-`api_base` —— 那个已被硬编码真源覆盖、写了无效，见 `docs/configuration.md` 与 `src/config.js:381`），
+`api_base` —— 那个已被硬编码真源覆盖、写了无效，见 `docs/configuration.md` 与 `src/config.ts:381`），
 打印收到的原始头。
 
 ```bash
 # 镜像（HTTP 即可，排除 TLS 干扰）
 node /tmp/mirror.mjs        # listen 9544，打印 req.headers
-# 启动本服务时：FREEBUFF_UPSTREAM_API_BASE=http://127.0.0.1:9544 node bin/serve.js
+# 启动本服务时：FREEBUFF_UPSTREAM_API_BASE=http://127.0.0.1:9544 node bin/serve.ts
 ```
 
 实测发现的两类坑：

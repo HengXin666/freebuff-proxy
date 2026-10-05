@@ -8,7 +8,7 @@
  *   结清待结束会话 -> GET claim -> POST admission -> [补一次 POST]
  *   -> 终态封锁 / active -> model_locked -> 槽位接管 -> claim 轮换
  */
-import { UpstreamError } from '../../upstream/client.js'
+import { UpstreamError } from '../../upstream/client.ts'
 import { logger } from '../../util/log.ts'
 import {
   activateSession,
@@ -124,7 +124,7 @@ async function dispatchAdmission(
  * @param {any} this 会话实例
  * @param {any} body 上游回执
  * @param {string} model 请求模型
- * @returns {import('../../upstream/client.js').UpstreamError} 归一后的错误
+ * @returns {import('../../upstream/client.ts').UpstreamError} 归一后的错误
  */
 export function _terminalSessionError(this: any, body: any, model: string): any {
   const statusMap: Record<string, number> = {

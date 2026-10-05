@@ -6,7 +6,7 @@
  * 才不会各自持有一份互相看不见的孤儿; 也保证"删容器不丢数据"的 /data 约定.
  */
 import path from 'node:path'
-import { resolveCredentialsDir } from '../../auth-store.js'
+import { resolveCredentialsDir } from '../../auth-store.ts'
 
 /**
  * 会话句柄索引(sessions.json)落盘位置.

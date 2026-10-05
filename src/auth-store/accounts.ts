@@ -3,11 +3,11 @@
  *
  * Runtime format is bare user object. Migrate-only: 兼容历史 { default: user }.
  *
- * 从 src/auth-store.js 拆出(原 392 行单文件).
+ * 从 src/auth-store.ts 拆出(原 392 行单文件).
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { logger } from '../util/log.js'
+import { logger } from '../util/log.ts'
 import {
   accountCredentialsPath,
   accountKeyOf,

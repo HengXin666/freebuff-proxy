@@ -22,7 +22,7 @@ Status: implemented
   见 startup-path-bounded 那篇),并在说明里点明"不是故障,会继续清,不要手工删".
 - [处置]列对 `CRITICAL_DATA_FILES`(`users.json` / `sessions.json`)不再给
   可直接复制的 `mv` 命令,改为提示"先备份再移走(真源文件,删了就找不回)".
-- 所有指向该功能的文案(`bin/serve.js` 的启动横幅,`docs/deployment.md`)
+- 所有指向该功能的文案(`bin/serve.ts` 的启动横幅,`docs/deployment.md`)
   从[总览 → 数据文件自检]改成[系统 → 数据文件自检].
 
 ## Alternatives considered
@@ -48,5 +48,5 @@ Status: implemented
 - `npm run pipeline:image`:每个场景在容器内真实登录后打 8 个鉴权接口(含
   `/api/system/data-status`)必须全部 200 —— 这次搬动如果只改前端,接口挂了,
   会在这一步被抓到.
-- 本地 `node bin/serve.js` 起服务后请求 `/app.js`,确认服务端下发的就是新前端
+- 本地 `node bin/serve.ts` 起服务后请求 `/app.js`,确认服务端下发的就是新前端
   (`renderSystem` 存在,nav 里有 `system`).

@@ -4,8 +4,8 @@
  * 起点是 POST /api/accounts/login 发起一次上游登录,然后前端轮询
  * GET /api/accounts/login/:id 拿状态,必要时 POST .../:id/cancel.
  */
-import { sendJson } from '../../../util/http.js'
-import { logger } from '../../../util/log.js'
+import { sendJson } from '../../../util/http.ts'
+import { logger } from '../../../util/log.ts'
 import { denyUnlessAdmin, decodeSegment } from '../lib/http-codes.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
@@ -17,7 +17,7 @@ const FLOW_RE = /^\/api\/accounts\/login\/([^/]+)(?:\/([^/]+))?$/
  * ! 除 error(给人看)之外,还要把结构化判据传给前端:
  *
  *   - code  稳定业务码:upstream_timeout / upstream_network
- *     (来自 fetchLoginUpstream,见 src/upstream/client.js).
+ *     (来自 fetchLoginUpstream,见 src/upstream/client.ts).
  *     前端据此可以做不同的提示/重试引导,而不是去匹配中文文案.
  *   - cause 底层原始错误码(如 ECONNREFUSED / ENOTFOUND / ETIMEDOUT).
  *     error 字符串里已经带了它供人阅读,这里单独给一份供程序读取.

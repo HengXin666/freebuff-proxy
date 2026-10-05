@@ -6,10 +6,10 @@
  * 依赖 7 个外层变量,任何一处拼错名字都只在运行时抛 ReferenceError
  * (node --check 与旧 typecheck 都抓不到,本仓已两次踩中).
  *
- * 从 src/upstream/client.js 拆出(原 1499 行单文件).
+ * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
  */
-import { logger } from '../../util/log.js'
-import { freebuffAuthHeaders } from '../../auth-store.js'
+import { logger } from '../../util/log.ts'
+import { freebuffAuthHeaders } from '../../auth-store.ts'
 import { safeText, UpstreamError } from './errors.ts'
 
 /**
@@ -129,7 +129,7 @@ async function buildHeaders(ctx: any, url: string, init: any): Promise<Record<st
  * 登录类请求(/api/auth/cli/code,/api/auth/cli/status)的瞬时故障重试.
  *
  * 为什么需要:代理池回落 + 单次尝试超时只存在于 fetchWithProxy 的 pool 分支
- * (见 transport.js 的 buildFetchWithProxy).而 resolveProxy 在[无代理且无环境变量]
+ * (见 transport.ts 的 buildFetchWithProxy).而 resolveProxy 在[无代理且无环境变量]
  * 时返回 kind:'none',fetchWithProxy 直接走裸 fetch 一次性返回 -- 没有任何回落.
  * 官方推荐的家庭部署恰恰就是[代理设置留空],于是这条最推荐的路径上一次
  * 网络抖动 = 一次硬失败,前台表现为[发起登录失败: This operation was aborted]

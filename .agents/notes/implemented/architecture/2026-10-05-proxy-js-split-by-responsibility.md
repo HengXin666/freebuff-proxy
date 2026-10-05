@@ -1,12 +1,12 @@
-# Agent Note: src/proxy.js 从 2232 行拆到 933 行(薄门面 + 职责子目录)
+# Agent Note: src/proxy.ts 从 2232 行拆到 933 行(薄门面 + 职责子目录)
 
 Status: implemented
 
-受影响代码: `src/proxy.js`(保留原路径与原导出名),`src/proxy/**`(17 个新模块)
+受影响代码: `src/proxy.ts`(保留原路径与原导出名),`src/proxy/**`(17 个新模块)
 
 ## Problem
 
-`src/proxy.js` 拆前 **2232 行**,其中 `createProxyHandler` 一个函数就 **2109 行** ----
+`src/proxy.ts` 拆前 **2232 行**,其中 `createProxyHandler` 一个函数就 **2109 行** ----
 它是个闭包,选号 / 会话 / 流式 / 错误映射 / 白名单 / 路由分发六套逻辑全在里面,
 靠 `ctx` 解构出的四个变量与模块 import 捕获依赖.读它的人必须同时装下六件事.
 
@@ -14,7 +14,7 @@ Status: implemented
 
 ## Decision
 
-**薄门面 + 职责子目录**:`src/proxy.js` 保留原路径与原导出名(只 re-export),
+**薄门面 + 职责子目录**:`src/proxy.ts` 保留原路径与原导出名(只 re-export),
 实现按职责搬进 `src/proxy/**`.
 
 ### 搬法:加显式 `ctx` 参数,而不是改成类
@@ -28,28 +28,28 @@ Status: implemented
 ### 目录结构(每层 ≤5 文件)
 
 ```
-src/proxy.js                        933   薄门面 + handleChatCompletionsInner（重试状态机）
-src/proxy/routes/catalog.js         163   模型表 + 状态快照
-src/proxy/routes/accounts.js        217   账号导入/删除
-src/proxy/routes/chat-request.js    167   chat 前置解析与校验（原 141 行内联段）
-src/proxy/routes/auth.js             75   authorize + releaseSessionUnlessPaid
-src/proxy/routes/router.js          119   路由分发 + endAllSessions
-src/proxy/config/limits.js           64   5 个超时/预算常量（有单测）
-src/proxy/transport/forward.js      273   forwardCompletions 重试状态机
-src/proxy/transport/forward-body.js 203   buildForwardBody
-src/proxy/transport/official.js     140   official 通道 RPC 委派
-src/proxy/transport/passthrough.js   94   非 chat 的 /v1 透传
+src/proxy.ts                        933   薄门面 + handleChatCompletionsInner（重试状态机）
+src/proxy/routes/catalog.ts         163   模型表 + 状态快照
+src/proxy/routes/accounts.ts        217   账号导入/删除
+src/proxy/routes/chat-request.ts    167   chat 前置解析与校验（原 141 行内联段）
+src/proxy/routes/auth.ts             75   authorize + releaseSessionUnlessPaid
+src/proxy/routes/router.ts          119   路由分发 + endAllSessions
+src/proxy/config/limits.ts           64   5 个超时/预算常量（有单测）
+src/proxy/transport/forward.ts      273   forwardCompletions 重试状态机
+src/proxy/transport/forward-body.ts 203   buildForwardBody
+src/proxy/transport/official.ts     140   official 通道 RPC 委派
+src/proxy/transport/passthrough.ts   94   非 chat 的 /v1 透传
 src/proxy/transport/errors/           3 文件  错误映射 + 上游回执归一化
 src/proxy/transport/stream/           3 文件  槽位 + 流管道
 ```
 
-`handleChatCompletionsInner`(722 行)**留在 `src/proxy.js`**:它有 14 个可变局部状态
+`handleChatCompletionsInner`(722 行)**留在 `src/proxy.ts`**:它有 14 个可变局部状态
 (`lastKey` / `attempt` / `sameAccountRetries` / `pendingGateCode` / `skipKeys` ...),
 读写分散在重试循环各处.搬它需要先把状态封装成对象(约 140 处引用要改)----那是
 真正的重构而非搬移,不在本次范围.
 
 `router.js` 的 `handle` 通过**参数注入**拿 `handleChatCompletions`,而不是 import:
-后者留在 `src/proxy.js` 且依赖这个 `ctxValue`,反向 import 会成环.
+后者留在 `src/proxy.ts` 且依赖这个 `ctxValue`,反向 import 会成环.
 
 ## Alternatives considered
 
@@ -64,14 +64,14 @@ src/proxy/transport/stream/           3 文件  槽位 + 流管道
 - **按行号区间机械切块**:最强的理由是"最快,一次脚本搞定".否决原因:实测踩到 ----
   区间偏了几行就把相邻的 `buildForwardBody` 尾部一起删掉,而 `node --check` 通过
   (删完仍是合法 JS),坏在运行时,直到 `npm test` 报 `admit_failed` 才暴露.
-  最终改用**函数名 + 大括号配对**定位(`scripts/gates/meta/drop-proxy-fn.mjs`).
+  最终改用**函数名 + 大括号配对**定位(`scripts/gates/meta/drop-proxy-fn.ts`).
 - **把 `handleChatCompletionsInner` 一起拆掉**:最强的理由是"它 722 行,是最后一根刺".
   否决原因:见上.凑合拆(按行切)会引入并发状态泄漏;正确拆(状态对象)是独立的重构题,
   混在"纯搬移"里做会让这次改动失去"行为零改动"这个可核对的属性.
 
 ## Consequences
 
-- `src/proxy.js` 2232 → 933 行;`createProxyHandler` 2109 → 869 行.
+- `src/proxy.ts` 2232 → 933 行;`createProxyHandler` 2109 → 869 行.
 - **17 个模块的 `import()` 逐个验证可加载**;导出集合与 HEAD 逐名一致
   (`requestSlotStats` / `shouldSwitchAccountOnError` / `upstreamBodyEmbeddedError`).
 - 搬移过程中由 `declared` 门禁抓到 4 轮"缺 import"(共 20+ 个符号,如 `hasClientTools` /
@@ -81,5 +81,5 @@ src/proxy/transport/stream/           3 文件  槽位 + 流管道
   1. 切函数块用**大括号配对**,不要用"第一个 `  }`"或行号区间;
   2. 往文件顶部插 import 要**从文件头连续吃掉所有 import**(含多行),
      不能 `lastIndexOf('\nimport ')` ---- 那会命中文件中部的多行 import;
-  3. 搬完后跑三件套:`node --check` + `node scripts/gates/checks/guard/declared.mjs` +
+  3. 搬完后跑三件套:`node --check` + `node scripts/gates/checks/guard/declared.ts` +
      **一次真实调用路径**(后两条分别抓"缺 import"与"`this.` 残留 / 漏解构").

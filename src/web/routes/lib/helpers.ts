@@ -1,15 +1,15 @@
 /**
  * 控制面路由的共享小工具.
  *
- * 拆 src/web/api.js 时,这些"每个域都要用一次"的纯函数若各自复制一份,
+ * 拆 src/web/api.ts 时,这些"每个域都要用一次"的纯函数若各自复制一份,
  * 就会出现"某域改了分档规则,别的域还是旧口径"的漂移 ---- 本仓已经在模型名
  * 映射上踩过同一个坑(见 .agents/notes/implemented/architecture/2026-10-04-model-name-three-layers.md).
  * 所以收拢到这一处,只有一份实现.
  */
 import { createHash } from 'node:crypto'
 
-import { readRequestBody } from '../../../util/http.js'
-import { listAccounts } from '../../../auth-store.js'
+import { readRequestBody } from '../../../util/http.ts'
+import { listAccounts } from '../../../auth-store.ts'
 import type { IncomingMessage } from 'node:http'
 
 /**

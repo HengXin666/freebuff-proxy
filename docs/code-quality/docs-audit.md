@@ -2,7 +2,7 @@
 
 > 最后核对: 2026-10-05 · 对应代码: 3a8aebb
 > 本文件是 **WS-E 一轮文档整理的取证与决策留档**。它是审计报告（会故意引用错误说法作反例），
-> 因此被 `scripts/gates/checks/doc/check-docs.mjs` **排除在判据之外**。
+> 因此被 `scripts/gates/checks/doc/check-docs.ts` **排除在判据之外**。
 >
 > 用户原话：「然后这些文档也要规范，旧的文档直接淘汰，不要混淆视听。」
 
@@ -57,9 +57,9 @@ L104  : 「…所以空闲早退**只**换回 units 与槽位，**不能**指望
 
 三者互斥。**真值 = L82/L104**，证据：
 
-- `bin/serve.js` / `src/config.js:100-118` —— 注释记了一手实测：`admit rem 5 → 0`，25s 后
+- `bin/serve.ts` / `src/config.ts:100-118` —— 注释记了一手实测：`admit rem 5 → 0`，25s 后
   DELETE 只回 `{freebucksRefundPending:true}`；`+20/+40/+60/+120s` 重放 ×2 仍无金额。
-- `src/session-manager.js:414-422`（`_armIdleRelease()`）——「仍在已付费时段内：闲置不花钱，
+- `src/session-manager.ts:414-422`（`_armIdleRelease()`）——「仍在已付费时段内：闲置不花钱，
   释放才是浪费」，实现上**付费时段内不释放**。
 - `.agents/notes/implemented/architecture/2026-09-14-paid-hour-hold.md` —— 决策记录，
   Problem 段列出"重开同模型 `rate_limited` + `freebucksShortfall`"。
@@ -73,7 +73,7 @@ L104  : 「…所以空闲早退**只**换回 units 与槽位，**不能**指望
 原文：「…**admit 一次按整小时买断**；提前 `DELETE` 会把未用部分**按实际占用时长退回**。」
 ```
 
-`test/suites/entries/smoke/smoke.mjs` 的 `STALE_COPY` 守卫（`test/suites/entries/smoke/smoke.mjs:6875`）正则是：
+`test/suites/entries/smoke/smoke.ts` 的 `STALE_COPY` 守卫（`test/suites/entries/smoke/smoke.ts:6875`）正则是：
 
 ```js
 /按实际占用退还\s*Freebucks|退还未用时长|退还未用部分|停止为空转时长付费|.../
@@ -100,7 +100,7 @@ node -e "写入 upstream.api_base=http://127.0.0.1:18999 后 loadConfig()"
 # 实际生效 apiBase = https://www.codebuff.com   ← 配置文件被忽略
 ```
 
-代码真值：`src/config.js:44`（`UPSTREAM_API_BASE` 常量）、`src/config.js:381-383`
+代码真值：`src/config.ts:44`（`UPSTREAM_API_BASE` 常量）、`src/config.ts:381-383`
 （`merged.upstream.apiBase = stripTrailingSlash(process.env.FREEBUFF_UPSTREAM_API_BASE || UPSTREAM_API_BASE)`
 —— **无条件覆盖**）。裁决（Lead，2026-10-05）：**保持硬编码**，文档侧写清真相。
 
@@ -116,7 +116,7 @@ node -e "写入 upstream.api_base=http://127.0.0.1:18999 后 loadConfig()"
 ### 2.5 `docs/reverse/21-client-request-reference.md:290,295` 同样的 `api_base` 误教
 
 原文教「把 `config.yaml` 的 `api_base` 指向它」（指向本地镜像以打印原始头）。已改为
-`FREEBUFF_UPSTREAM_API_BASE=http://127.0.0.1:9544 node bin/serve.js`。
+`FREEBUFF_UPSTREAM_API_BASE=http://127.0.0.1:9544 node bin/serve.ts`。
 
 ### 2.6 `docs/protocol-implementation-status.md` 整份过期（**已删除**）
 
@@ -131,9 +131,9 @@ L87-101: 验证清单全部是未勾选的 [ ]（"Session 创建 / admission / c
 ```bash
 $ ls src/upstream/client-headers.js
 ls: 无法访问 'src/upstream/client-headers.js': 没有那个文件或目录
-$ grep -rn "x-freebuff-client" src/upstream/upstream-contract.js src/upstream/catalog-protocol.js
-src/upstream/upstream-contract.js:44:export const H_CLIENT = 'x-freebuff-client'
-src/upstream/catalog-protocol.js:40:export const HEADER_CLIENT = 'x-freebuff-client'
+$ grep -rn "x-freebuff-client" src/upstream/upstream-contract.ts src/upstream/catalog-protocol.ts
+src/upstream/upstream-contract.ts:44:export const H_CLIENT = 'x-freebuff-client'
+src/upstream/catalog-protocol.ts:40:export const HEADER_CLIENT = 'x-freebuff-client'
 ```
 
 → 声称的文件不存在；它列为"缺失"的 `x-freebuff-client` 已定义并发出。替代：
@@ -149,8 +149,8 @@ L96-101「缺失（导致被识别为第三方客户端）」
    x-freebuff-client: desktop / -install-id
 ```
 
-证据：上述四项**全部已实现** —— `src/upstream/device-signing.js`（471 行，三头常量在
-`:28-30`）、`src/upstream/catalog-protocol.js`（573 行，句柄 + fetchId 头）。
+证据：上述四项**全部已实现** —— `src/upstream/device-signing.ts`（471 行，三头常量在
+`:28-30`）、`src/upstream/catalog-protocol.ts`（573 行，句柄 + fetchId 头）。
 被 `docs/reverse/02-device-signing.md` 完整取代，且后者更准（有逐字常量、6 行载荷、
 "不是前 43 字符"的易错提示、本机实测 keyId）。
 
@@ -158,9 +158,9 @@ L96-101「缺失（导致被识别为第三方客户端）」
 
 | # | 原文（行） | 真值 | 证据 |
 |---|---|---|---|
-| 1 | `X-Freebuff-Device-Signature` / `-Key-Id` / `-Timestamp`（L65-67） | `x-freebuff-device-key` / `-ts` / `-sig` | `src/upstream/device-signing.js:28-30` |
+| 1 | `X-Freebuff-Device-Signature` / `-Key-Id` / `-Timestamp`（L65-67） | `x-freebuff-device-key` / `-ts` / `-sig` | `src/upstream/device-signing.ts:28-30` |
 | 2 | 「签名载荷（换行分隔的 **5 个字段**）」（L52）、`sha256(...).slice(0, 43)`（L58） | **6 行**、**完整 64 位 hex** | `device-signing.js:9-11,83-93`；`docs/reverse/02 §2.2` 明写「不是前 43 字符！」 |
-| 3 | CLI 指纹 `0.2.12`（L94,97,112,218） | `KNOWN_CLI_VERSION = '0.0.178'` | `src/upstream/official-fingerprint.js:30` |
+| 3 | CLI 指纹 `0.2.12`（L94,97,112,218） | `KNOWN_CLI_VERSION = '0.0.178'` | `src/upstream/official-fingerprint.ts:30` |
 
 额外发现：`git check-ignore --no-index` 命中 `.gitignore:57`（声明它不该入库），
 但 `git ls-files -s REVERSE_ENGINEERING_SUMMARY.md` 显示它**已被跟踪**（`100644 e6a8f81`）
@@ -192,9 +192,9 @@ device-keys  proxies.json  sessions.json  settings.json  users.json  web-session
 
 ### 2.10 `docs/reverse/17-current-status-and-gaps.md` 与现状相悖
 
-L33-60 讲"主服务（`src/proxy.js`）未同步的 3 项结构性差异（agentId = `base3-free-catalog`、
+L33-60 讲"主服务（`src/proxy.ts`）未同步的 3 项结构性差异（agentId = `base3-free-catalog`、
 自编签名工具、CLI 开场白）"。现状：主服务已改为经 `official-rpc` **RPC 委托 cli-bridge**，
-legacy 通道在 `src/config.js` 的 `resolveUpstreamChannel()` 里**强制回落并告警**
+legacy 通道在 `src/config.ts` 的 `resolveUpstreamChannel()` 里**强制回落并告警**
 （`docs/reverse/18` 与 `README` 的「上游请求链路」节均已如此描述）。
 
 处置：**保留**（它开头已自标"2026-10-03 的历史盘点快照，判断当前请以 21 为准"，
@@ -205,9 +205,9 @@ legacy 通道在 `src/config.js` 的 `resolveUpstreamChannel()` 里**强制回�
 三条建议经复核**确未实施**：
 
 ```bash
-$ sed -n '116p' src/catalog/parser.mjs
+$ sed -n '116p' src/catalog/parser.ts
       multimodal: false,                      # 仍写死
-$ grep -n RAW_BASE src/catalog/runtime-sync.mjs
+$ grep -n RAW_BASE src/catalog/runtime-sync.ts
 27:const RAW_BASE = '.../CodebuffAI/freebuff/main/common/src/constants/'   # 仍指 re-export 残页
 $ node -e "内置 catalog 里 deepseek/deepseek-v4-flash 的 multimodal"
 deepseek/deepseek-v4-flash multimodal= false  # 仍是 false
@@ -216,7 +216,7 @@ deepseek/deepseek-v4-flash multimodal= false  # 仍是 false
 → 它不是"过期文档"，而是"准确的未执行建议书"。已加状态头
 （「建议未采纳（截至 2026-10-05）」+ 逐条未执行清单），防止被误读为已实现说明。
 
-## 3. 机器判据（`scripts/gates/checks/doc/check-docs.mjs`）
+## 3. 机器判据（`scripts/gates/checks/doc/check-docs.ts`）
 
 四条判据（详见脚本头 JSDoc）：
 
@@ -240,7 +240,7 @@ deepseek/deepseek-v4-flash multimodal= false  # 仍是 false
 **基线（应绿）**
 
 ```bash
-$ node scripts/gates/checks/doc/check-docs.mjs ; echo "exit=$?"
+$ node scripts/gates/checks/doc/check-docs.ts ; echo "exit=$?"
   · 端点：对外 8 条 · 控制台 24 条 · docs/api.md 声明 7 条（扫 src/ 全域）
   · 文件引用：核对 58 处本仓路径（豁免 2 条构建产物）
   · 真源声明：12 个主题（scheduling-research / api / code-quality-landscape / configuration /
@@ -256,7 +256,7 @@ exit=0
 
 ```bash
 $ sed -i 's|`GET /v1/freebuff/status`|`GET /v1/freebuff/status-v2`|' docs/api.md
-$ node scripts/gates/checks/doc/check-docs.mjs ; echo "exit=$?"
+$ node scripts/gates/checks/doc/check-docs.ts ; echo "exit=$?"
   FAIL docs/api.md:41
        文档写到的端点 `GET /v1/freebuff/status-v2` 在代码里没有注册
   FAIL docs/api.md
@@ -271,7 +271,7 @@ exit=1
 
 ```bash
 $ cp /tmp/api.final.bak docs/api.md
-$ node scripts/gates/checks/doc/check-docs.mjs ; echo "exit=$?"
+$ node scripts/gates/checks/doc/check-docs.ts ; echo "exit=$?"
   · 索引：登记 39 个链接 / 覆盖 14 份文档
   · 扫描 15 份文档
 ok  docs
@@ -282,7 +282,7 @@ exit=0
 
 ```bash
 $ sed -i 's/\[\([^]]*\)\](\([^)]*\)/\1/g' docs/README.md      # 链接全部变裸文本
-$ node scripts/gates/checks/doc/check-docs.mjs ; echo "exit=$?"
+$ node scripts/gates/checks/doc/check-docs.ts ; echo "exit=$?"
   FAIL docs/README.md
        索引只解析出 0 个文档链接（下限 24）—— 链接语法可能被整批破坏
   FAIL docs/README.md
@@ -292,7 +292,7 @@ $ node scripts/gates/checks/doc/check-docs.mjs ; echo "exit=$?"
   …（另 11 条同型）
 OVER docs: 15 条违规
 exit=1
-$ cp /tmp/idx.final.bak docs/README.md && node scripts/gates/checks/doc/check-docs.mjs
+$ cp /tmp/idx.final.bak docs/README.md && node scripts/gates/checks/doc/check-docs.ts
 ok  docs ; exit=0
 ```
 
@@ -303,7 +303,7 @@ ok  docs ; exit=0
 本文件落盘、索引补齐后：
 
 ```bash
-$ node scripts/gates/checks/doc/check-docs.mjs ; echo "exit=$?"
+$ node scripts/gates/checks/doc/check-docs.ts ; echo "exit=$?"
 ok  docs
 exit=0
 ```
@@ -326,7 +326,7 @@ $ for f in README.md docs/README.md docs/scheduling.md; do grep -c '](' $f; done
 1        # README.md        （原 15）
 0        # docs/README.md   （原 29）
 0        # docs/scheduling.md（原 6）
-$ node scripts/gates/checks/doc/check-docs.mjs ; echo "exit=$?"
+$ node scripts/gates/checks/doc/check-docs.ts ; echo "exit=$?"
 ok  docs        ←  报警器在最该响的时候变绿灯
 exit=0
 ```
@@ -338,12 +338,12 @@ exit=0
 
 ```bash
 # 链接被整批吃掉（模拟）
-$ node scripts/gates/checks/doc/check-docs.mjs
+$ node scripts/gates/checks/doc/check-docs.ts
   FAIL docs/README.md
        索引只解析出 0 个文档链接（下限 12）—— 链接语法可能被整批破坏
 OVER docs: 1 条违规
 # 还原
-$ node scripts/gates/checks/doc/check-docs.mjs
+$ node scripts/gates/checks/doc/check-docs.ts
 ok  docs ; exit=0
 ```
 
@@ -353,8 +353,8 @@ ok  docs ; exit=0
 
 **事故 B：门禁写死源码位置，重构一拆就假红（**已修**）。**
 
-同一次审阅期间 `src/web/api.js` 从 1847 行单体拆成 13 行 re-export 门面，实现移入
-`src/web/routes/**`。本门禁原先写死读 `src/proxy.js` + `src/web/api.js`，于是 24 条
+同一次审阅期间 `src/web/api.ts` 从 1847 行单体拆成 13 行 re-export 门面，实现移入
+`src/web/routes/**`。本门禁原先写死读 `src/proxy.ts` + `src/web/api.ts`，于是 24 条
 `/api/*` 路由全部被判"代码里没有注册"（报 5 条违规，**真凶是门禁自己过时**）。
 
 修复分两步，各有独立理由：
@@ -383,7 +383,7 @@ ok  docs ; exit=0
 
 ### 3.5 本轮事故全记录：`fix-style.mjs` 批处理（2026-10-05）
 
-**事故概述**：Lead 的自动修复器 `scripts/gates/meta/fix-style.mjs` 一次跑动改写了
+**事故概述**：Lead 的自动修复器 `scripts/gates/meta/fix-style.ts` 一次跑动改写了
 **223 个已跟踪文件**，其中两类是**真损坏**（不是目标状态）：
 
 | # | 损坏类别 | 机理 | 观察到的形态 |
@@ -430,7 +430,7 @@ HEAD 上首节不是 `## Problem` 的 note 数: 4 / 84
 3. **结论必须来自实测**（本节正是这条的正面案例）：盲审报了"99 个文件里 5 个语法损坏，
    建议 `git checkout --` 回滚 224 个文件"。本 workstream 用
    `for f in $(git ls-files '*.js' '*.mjs' '*.cjs'); do node --check "$f"; done` 复核 →
-   **`broken=0 / total=99`，语法零损坏**，`test/suites/entries/smoke/smoke.mjs` 与 `src/web/settings-store.js` 均 `exit 0`。
+   **`broken=0 / total=99`，语法零损坏**，`test/suites/entries/smoke/smoke.ts` 与 `src/web/settings-store.ts` 均 `exit 0`。
    那份"5 个语法坏"是在批处理的**瞬时中间态**上测的。**若照它回滚，会连带吞掉各 workstream
    的正当未提交改动。**
 
@@ -441,8 +441,8 @@ HEAD 上首节不是 `## Problem` 的 note 数: 4 / 84
 | # | 我的结论 | 盲审的实测反证 | 处置 |
 |---|---|---|---|
 | 1 | 三份被删文档"已被 `reverse/02` 等完整取代" | **不成立**。`freebuff-desktop-protocol-reverse.md` 的**本地进程隔离头**（`x-freebuff-launch-id` / cookie `freebuff_launch_{port}`）全仓 `grep` **零命中**；根 `REVERSE_ENGINEERING_SUMMARY.md` 的**访问层级语义**（`full`/`limited` + `ipPrivacySignals`）文档侧**已无定义** | **捡回两项** → `reverse/00-overview.md`；并在本文件与 `docs/README.md` 记明"已完整取代"不成立 |
-| 2 | 索赔 `docs/reverse/11-tls-fingerprint.md` 是"CLI 指纹真源" | 该文件 `grep CLI` **零命中**；CLI 指纹真值是 `src/upstream/official-fingerprint.js` 的 `KNOWN_CLI_VERSION` | 索引已更正，并把它标成"文档侧无真源" |
-| 3 | `account-scheduling-and-refund.md` 的退款矛盾已随 §3.1/§3.5/§3.7 修完 | **§2.2 / §2.3 还有两处旧口径**（"早退会按实际占用退还"、空闲释放是"收益"），且**不在任何作废块内**；`test/suites/entries/smoke/smoke.mjs` 的 `STALE_COPY` 对该文件**整体豁免**，门禁结构性地不拦它 | 已就地改对，并把 §2.2/§2.3 纳入"读法头"覆盖范围 |
+| 2 | 索赔 `docs/reverse/11-tls-fingerprint.md` 是"CLI 指纹真源" | 该文件 `grep CLI` **零命中**；CLI 指纹真值是 `src/upstream/official-fingerprint.ts` 的 `KNOWN_CLI_VERSION` | 索引已更正，并把它标成"文档侧无真源" |
+| 3 | `account-scheduling-and-refund.md` 的退款矛盾已随 §3.1/§3.5/§3.7 修完 | **§2.2 / §2.3 还有两处旧口径**（"早退会按实际占用退还"、空闲释放是"收益"），且**不在任何作废块内**；`test/suites/entries/smoke/smoke.ts` 的 `STALE_COPY` 对该文件**整体豁免**，门禁结构性地不拦它 | 已就地改对，并把 §2.2/§2.3 纳入"读法头"覆盖范围 |
 | 4 | 索引判据已够（防悬空 + 真源唯一 + 下界） | **缺"反向覆盖"**：`docs/` 下文档未被索引登记时它完全不响；实测 `docs/reverse/` 有 17 份漏登记 | 已加反向覆盖判据（见 §3）；漏登记已补齐，`reverse/` 全部 22 份入表 |
 
 **盲审同时给出的、我采纳但未改代码的项**（属别的 workstream 或需用户裁决）：

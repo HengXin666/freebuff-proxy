@@ -2,7 +2,7 @@
 
 Status: implemented
 
-**Affects:** `src/upstream/catalog-protocol.js`, `src/web/api.js`, `dashboard/app.js`
+**Affects:** `src/upstream/catalog-protocol.ts`, `src/web/api.ts`, `dashboard/app.ts`
 
 ## Problem
 

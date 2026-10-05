@@ -5,7 +5,7 @@
  * 由 dispatcher 用来决定是否继续往下试别的域.把它收在一处,
  * 免得某个域改了自己的返回语义,dispatcher 却按旧语义判断.
  */
-import { sendJson } from '../../../util/http.js'
+import { sendJson } from '../../../util/http.ts'
 import type { ServerResponse } from 'node:http'
 
 /**

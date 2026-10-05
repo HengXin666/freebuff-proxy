@@ -1,12 +1,12 @@
 /**
  * 流管道 ---- 把上游响应体透传给下游:idle 兜底,客户端断开感知,背压等待.
  *
- * 从原 stream-pipe.js 按职责切分后保留原文件名,作为本组模块的入口.
+ * 从原 stream-pipe.ts 按职责切分后保留原文件名,作为本组模块的入口.
  */
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import { UpstreamError } from '../../../upstream/client.js'
+import { UpstreamError } from '../../../upstream/client.ts'
 import { ClientGoneError, StreamStallError } from '../errors/respond.ts'
 import { createStreamGuards, failPipe } from './stream-guards.ts'
 

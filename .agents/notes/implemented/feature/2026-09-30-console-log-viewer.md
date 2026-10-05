@@ -18,13 +18,13 @@ Status: implemented
 **把日志在进程内留一份有界环形缓冲,并在控制台加一个可读,可筛选,可展开的
 [日志]页(admin 专属).**
 
-- `src/util/log.js`:新增环形缓冲(默认 500 条)+ `readLogBuffer()`;
+- `src/util/log.ts`:新增环形缓冲(默认 500 条)+ `readLogBuffer()`;
   `log()` 在写 stdout 的同时入缓冲.**有界是硬要求** —— 长期运行的实例
   不能被日志吃光内存(早期"日志把服务拖死"的教训),超容量丢最旧的.
-- `src/web/api.js`:`GET /api/logs`,支持 `level` / `q` / `limit` / `since`,
+- `src/web/api.ts`:`GET /api/logs`,支持 `level` / `q` / `limit` / `since`,
   admin 专属.关键词搜索命中**整条 JSON**(不只是 msg),所以能直接搜
   `country`,`banned`,邮箱这类只出现在字段里的值.
-- `dashboard/app.js`:新增 `logs` 路由 + 页面,默认只显示 ts/level/msg,
+- `dashboard/app.ts`:新增 `logs` 路由 + 页面,默认只显示 ts/level/msg,
   **点行展开完整字段**并可一键复制;带级别筛选,关键词搜索,自动刷新开关.
 
 ### 为什么默认折叠,点开才给完整字段

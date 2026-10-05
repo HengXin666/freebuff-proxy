@@ -6,8 +6,8 @@
  * 两本额度账(units / Freebucks), 付费时段接管, 新会话预算, 热会话复用,
  * 以及失败后的冷却. 任何一处判据漂移都会直接烧钱, 因此单独成文件.
  */
-import { UpstreamError } from '../../upstream/client.js'
-import { logger } from '../../util/log.js'
+import { UpstreamError } from '../../upstream/client.ts'
+import { logger } from '../../util/log.ts'
 import { PAID_WINDOW_BOUND_CODES, SLOT_BUSY_CODES } from '../state/codes.ts'
 import { admitAndSettle } from './account-settle.ts'
 import { checkQuotaGates, makePaidUpstreamChecker } from './account-gates.ts'

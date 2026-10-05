@@ -86,7 +86,7 @@ cli.knowledge_file_updated  cli.terminal_watchdog_failed
 
 ## Proposal
 
-实现 `src/upstream/cli-telemetry.js`,在启动预热里按官方时序上报
+实现 `src/upstream/cli-telemetry.ts`,在启动预热里按官方时序上报
 `app_launched` + `fingerprint_generated`(同一个 `client_session_id` 贯穿).
 控制台加 `cliTelemetryEnabled` 开关,**默认关闭**.
 

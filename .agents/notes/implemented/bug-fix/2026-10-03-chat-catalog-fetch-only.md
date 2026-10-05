@@ -16,7 +16,7 @@ x-freebuff-device-key / x-freebuff-device-sig / x-freebuff-device-ts
 
 **没有** `x-freebuff-catalog-protocol`.它只出现在 catalog 抓取与 admission 上.
 
-根因是装配位置:`src/upstream/client.js` 的 `apiFetch()` 内部会
+根因是装配位置:`src/upstream/client.ts` 的 `apiFetch()` 内部会
 best-effort 地 `Object.assign(headers, catalog.headers())`,而
 `catalog.headers()` 一次返回**两个**头(protocol + fetch).
 chat 走 `raw() → apiFetch()`,于是被连带加上了 protocol.

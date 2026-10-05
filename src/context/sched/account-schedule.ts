@@ -4,7 +4,7 @@
  * 从 app-context.js 按职责切出. 选号排序的完整依据见 account-try / account-gates;
  * 这里放它周边的状态读写与两个加锁入口.
  */
-import { logger } from '../../util/log.js'
+import { logger } from '../../util/log.ts'
 
 /**
  * 每个账号的当前并发上限(控制台设置, 实时生效).

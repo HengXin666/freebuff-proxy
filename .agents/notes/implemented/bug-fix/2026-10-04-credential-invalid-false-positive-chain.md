@@ -44,7 +44,7 @@ state.json.device-key.json`，`registrations` 里明摆着
 
 ### 成因 3:bun 侧 session GET 漏了 `x-fb-timezone`
 
-`cli-bridge/upstream.mjs` 的 `admit()` 在补 `x-fb-timezone`(443 行),
+`cli-bridge/upstream.ts` 的 `admit()` 在补 `x-fb-timezone`(443 行),
 `getSession()` 没补.客户端真值(21 文档 §21.3)GET /session 带此头.
 这是"客户端有而我们没有"的**缺失项**,不是多余项.
 
@@ -77,7 +77,7 @@ state.json.device-key.json`，按**同一个 scope 格式**（`<host> user:<user
 实测 keyId 仍为 null,等于没写.这正是 §21.5 那条教训的复现:
 **兜底自己失败时也要看得见,绝不与主路径共用同一个 catch.**
 
-### 二,`getSession()` 补 `x-fb-timezone`(改 `cli-bridge/upstream.mjs`)
+### 二,`getSession()` 补 `x-fb-timezone`(改 `cli-bridge/upstream.ts`)
 
 与 `admit()` 同源取值:`cfg.timeZone` → `Intl` 解析 → `'UTC'`.
 

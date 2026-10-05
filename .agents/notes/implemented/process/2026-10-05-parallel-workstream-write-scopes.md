@@ -1,17 +1,17 @@
-# Agent Note: 并行工作流的写范围裁决（src/server.js 归谁拆）
+# Agent Note: 并行工作流的写范围裁决（src/server.ts 归谁拆）
 
 Status: implemented
 
 ## Problem
 
-五个并行 doer 的写范围是互斥的，但 `src/server.js`（147 行）落在五个人的范围
+五个并行 doer 的写范围是互斥的，但 `src/server.ts`（147 行）落在五个人的范围
 之外：
 
 | 工作流 | 独占写范围 |
 |---|---|
-| WS-A 后端核心 | `src/proxy.js`, `src/app-context.js`, `src/session-manager.js`, `src/session-handles.js`, `src/free-mode.js`, `src/tool-alias.js`, `src/account-state-store.js` |
-| WS-B 平台层 | `src/upstream/**`, `src/config.js`, `src/model.js`, `src/catalog-models.js`, `src/auth-store.js`, `src/util/**`, `bin/**`, `cli-bridge/**`, `scripts/**`（除 `scripts/gates/**`） |
-| WS-C 前端 | `dashboard/**`, `src/web/static.js` |
+| WS-A 后端核心 | `src/proxy.ts`, `src/app-context.ts`, `src/session-manager.ts`, `src/session-handles.ts`, `src/free-mode.ts`, `src/tool-alias.ts`, `src/account-state-store.ts` |
+| WS-B 平台层 | `src/upstream/**`, `src/config.ts`, `src/model.ts`, `src/catalog-models.ts`, `src/auth-store.ts`, `src/util/**`, `bin/**`, `cli-bridge/**`, `scripts/**`（除 `scripts/gates/**`） |
+| WS-C 前端 | `dashboard/**`, `src/web/static.ts` |
 | WS-D 控制面 | `src/web/**`（除 `static.js`）, `test/**` |
 | WS-E 文档 | `docs/**`, `README.md` |
 
@@ -20,16 +20,16 @@ Status: implemented
 
 ## Decision
 
-**Lead 自己拆 `src/server.js`**，因为它同时是四个模块的装配点
+**Lead 自己拆 `src/server.ts`**，因为它同时是四个模块的装配点
 （`createProxyHandler` / `createWebApi` / `serveStatic` / `startServer` 的调用方），
 任何 doer 单独改它都会与另外三条工作流的接口变动冲突。
 
 拆分形状：
 
-- `src/server/request-context.js` —— 请求级日志上下文（reqId 分配）
-- `src/server/route-table.js` —— 路径到处理器的分流表（`/healthz` `/v1/*` `/api/*` 静态）
-- `src/server/startup-tasks.js` —— 启动期副作用（catalog 缓存 seed；自动同步刻意停用）
-- `src/server.js` —— 薄装配层，保留 `startServer` 导出名
+- `src/server/request-context.ts` —— 请求级日志上下文（reqId 分配）
+- `src/server/route-table.ts` —— 路径到处理器的分流表（`/healthz` `/v1/*` `/api/*` 静态）
+- `src/server/startup-tasks.ts` —— 启动期副作用（catalog 缓存 seed；自动同步刻意停用）
+- `src/server.ts` —— 薄装配层，保留 `startServer` 导出名
 
 `src/` 顶层的进一步收缩（`src/context/` 收 `app-context.js`、`src/model/` 收
 `model.js` 等）由**各文件的所有者自行完成**，不由 Lead 代拆。
@@ -37,7 +37,7 @@ Status: implemented
 ## Alternatives considered
 
 - **什么都不做 / 让 WS-A 顺手拆**：最强的理由是"它是后端，WS-A 离得最近"。
-  否决原因：`src/server.js` 的每一行都在调用别人正在改的接口（`deps` 里 8 个依赖
+  否决原因：`src/server.ts` 的每一行都在调用别人正在改的接口（`deps` 里 8 个依赖
   全是别的 doer 的模块）。让 WS-A 拆，等于让它去读四份正在变动的接口，
   每次别人改一处它就红一次 —— 那是把并行变成串行。
 - **让 WS-D 拆**（因为 `createWebApi` 的接线在里面）：否决原因同上，
@@ -50,6 +50,6 @@ Status: implemented
 
 ## Consequences
 
-- Lead 只碰 `src/server.js` 与它拆出的 `src/server/**`；doer 们的接口变动只需保证
+- Lead 只碰 `src/server.ts` 与它拆出的 `src/server/**`；doer 们的接口变动只需保证
   `startServer(deps)` 的入参形状不变，装配层无需跟着改。
 - `src/server/**` 目录内文件数不超过 5，函数不超过 80 行，同样受六条红线约束。

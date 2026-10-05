@@ -35,7 +35,7 @@ tar xzf freebuff-linux-x64.tar.gz && strings -n 6 freebuff > fbref-str.txt
 
 ## Decision
 
-**把官方指纹收敛到一个单一真源模块 `src/upstream/official-fingerprint.js`,逐字对齐.**
+**把官方指纹收敛到一个单一真源模块 `src/upstream/official-fingerprint.ts`,逐字对齐.**
 
 - 常量直源:`KNOWN_CLI_VERSION`(0.0.178),`officialChatUserAgent()`,
   `officialSessionHeaders()`,`officialChatHeaders()`,`officialApiKeyHeaders()`,

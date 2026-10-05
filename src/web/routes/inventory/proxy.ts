@@ -6,8 +6,8 @@
  */
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 
-import { sendJson } from '../../../util/http.js'
-import { logger } from '../../../util/log.js'
+import { sendJson } from '../../../util/http.ts'
+import { logger } from '../../../util/log.ts'
 import { envProxyOrNull, uniqueStrings } from '../lib/helpers.ts'
 import { denyUnlessAdmin } from '../lib/http-codes.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'

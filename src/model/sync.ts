@@ -1,7 +1,7 @@
 /**
  * 运行时 catalog 自动同步的启动入口.
  *
- * 从 src/model.js 拆出(原 758 行单文件).
+ * 从 src/model.ts 拆出(原 758 行单文件).
  */
 import { currentCatalogCachePath } from './catalog-store.ts'
 
@@ -32,7 +32,7 @@ export interface CatalogSyncController {
 export function startCatalogSync(opts: SyncOpts = {}): CatalogSyncController {
   const inner: { current: any } = { current: null }
   // 先同步拉起模块再启动循环(首启即刷).
-  import('../catalog/runtime-sync.mjs')
+  import('../catalog/runtime-sync.ts')
     .then((m) => {
       inner.current = (m as any).startCatalogSync(currentCatalogCachePath(), {
         intervalMs: opts.intervalMs,

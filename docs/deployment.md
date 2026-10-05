@@ -96,11 +96,11 @@ docker logs --tail 60 freebuff-proxy
 
 **症状 A2：服务起来了，但控制台某个接口 500**（例：`系统 → 数据文件自检`）
 
-这不是数据问题，是代码缺陷。已修的真例：`src/web/api.js` 里 `const path = url.pathname`
+这不是数据问题，是代码缺陷。已修的真例：`src/web/api.ts` 里 `const path = url.pathname`
 把 `node:path` 模块遮蔽了，于是该接口内部的 `path.basename(...)` 抛
 `path.basename is not a function` → 一路 500（v1.12.0 引入，v1.13.2 修复）。
 另一处同类：路由变量改名只改一半，残留的 `${path}` 让 404 分支抛 `ReferenceError`。
-这两处都补了**源码级防回归断言**（`test/suites/entries/smoke/smoke.mjs` 的 SRC-GUARD 段）。
+这两处都补了**源码级防回归断言**（`test/suites/entries/smoke/smoke.ts` 的 SRC-GUARD 段）。
 遇到"只有某个接口 500"，先看容器日志里的堆栈行号，那才是真凶。
 
 > **为什么"旧数据 + 新镜像"曾经会起不来（v1.13.0 修复）**：早先三个 store 直接信任
@@ -134,7 +134,7 @@ docker logs --tail 60 freebuff-proxy
 > 结论：出问题时**优先只删派生/配置类文件**（表格前 7 行），
 > `sessions.json` 与 `users.json` 请先备份再动。
 
-## 镜像流水线（scripts/ci/pipeline-image-test.mjs）
+## 镜像流水线（scripts/ci/pipeline-image-test.ts）
 
 CI 里的 `npm test` 用 mock 上游、**不启动容器**，所以覆盖不到「新镜像 + 真实 /data」
 这条路 —— 真实事故正是发生在这里（换镜像后容器起不来，删几个 json 才恢复）。

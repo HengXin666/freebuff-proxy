@@ -1,7 +1,7 @@
 /**
  * 账号记录的形状归一 + 上游鉴权头 + 本机指纹.
  *
- * 从 src/auth-store.js 拆出(原 392 行单文件).
+ * 从 src/auth-store.ts 拆出(原 392 行单文件).
  */
 import os from 'node:os'
 import { createHash } from 'node:crypto'

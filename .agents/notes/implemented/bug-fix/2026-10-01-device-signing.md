@@ -26,7 +26,7 @@ x-freebuff-catalog-protocol: 1
 
 ## Decision
 
-**实现完整签名链(`src/upstream/device-signing.js`),并在 `apiFetch` 里
+**实现完整签名链(`src/upstream/device-signing.ts`),并在 `apiFetch` 里
 对每个请求自动签名.**
 
 机制逐字对齐官方公开源码(`common/src/util/freebuff-device-signing.ts`,

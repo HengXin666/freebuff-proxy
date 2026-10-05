@@ -1,13 +1,13 @@
 /**
  * 会话端点:/api/v1/freebuff/session 的 GET / POST(admission) / DELETE.
  *
- * 拆分为三个文件(本文件 + session-headers.js + session-result.js),
+ * 拆分为三个文件(本文件 + session-headers.ts + session-result.ts),
  * 但保持一条请求的线性顺序可读:取头 → 发送(含 legacy 回落)→ 归一.
  *
- * 从 src/upstream/client.js 拆出(原 1499 行单文件).
+ * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
  */
-import { logger } from '../../../util/log.js'
-import { SESSION_ADMISSION_ENDPOINT, SESSION_ENDPOINT } from '../../official-fingerprint.js'
+import { logger } from '../../../util/log.ts'
+import { SESSION_ADMISSION_ENDPOINT, SESSION_ENDPOINT } from '../../official-fingerprint.ts'
 import { parseRetryAfterMs } from '../errors.ts'
 import { apiFetch } from '../http.ts'
 import { normalizeSessionResult } from './session-result.ts'

@@ -7,7 +7,7 @@
  *   - 缓存里新增的模型(内置没有)-> 直接采用缓存条目;
  *   - 缓存不存在/损坏/为空 -> 纯内置 catalog(基线行为,与改动前一致).
  *
- * 从 src/model.js 拆出(原 758 行单文件).
+ * 从 src/model.ts 拆出(原 758 行单文件).
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -17,7 +17,7 @@ import {
   noteDataFile,
   quarantineFile,
   invalidShape,
-} from '../util/json-store.js'
+} from '../util/json-store.ts'
 
 /** 内置静态 catalog 的路径(<src>/catalog/freebuff-catalog.json). */
 export const CATALOG_PATH = path.join(

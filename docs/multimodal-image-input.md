@@ -3,8 +3,8 @@
 > 最后核对: 2026-10-05 · 对应代码: 3a8aebb
 > 真源: multimodal-research
 > **状态：建议未采纳（截至 2026-10-05）。本文是"可行性调研 + 未执行建议书"，不是已实现说明。**
-> §四 的三条建议经复核**均未实施**：`src/catalog/parser.mjs:116` 仍写死 `multimodal: false`；
-> `src/catalog/runtime-sync.mjs:27` 仍指向 `CodebuffAI/freebuff`（re-export 残页）；
+> §四 的三条建议经复核**均未实施**：`src/catalog/parser.ts:116` 仍写死 `multimodal: false`；
+> `src/catalog/runtime-sync.ts:27` 仍指向 `CodebuffAI/freebuff`（re-export 残页）；
 > 内置 catalog 的 `deepseek/deepseek-v4-flash` 仍为 `multimodal: false`。
 > **保鲜期**：上游目录每月变动，§六 的实测结论以 2026-09-13 为准。
 
@@ -57,7 +57,7 @@ curl -sS https://raw.githubusercontent.com/CodebuffAI/freebuff/main/common/src/c
 wc -c /tmp/cb/common/src/constants/freebuff-models.ts /tmp/upstream-freebuff-models.ts
 
 # 3) 用本仓库的解析器跑一遍上游源（可复现「multimodal 全 false」）
-#    见 src/catalog/parser.mjs buildCatalogFromSources
+#    见 src/catalog/parser.ts buildCatalogFromSources
 ```
 
 ## 一、上游怎么表达多模态
@@ -174,12 +174,12 @@ filePartSchema  = { type: 'file',  data:  dataContent | URL, filename?: string, 
 
 ### 3.1 数据面：已通
 
-- 请求体读取上限 **32MB**（`src/util/http.js:23-25`），远高于单图 1MB / 多图 5MB 的客户端预算。
-- `buildForwardBody`（`src/proxy.js:1212-1271`）以 `...clientBody` 展开，
+- 请求体读取上限 **32MB**（`src/util/http.ts:23-25`），远高于单图 1MB / 多图 5MB 的客户端预算。
+- `buildForwardBody`（`src/proxy.ts:1212-1271`）以 `...clientBody` 展开，
   只改动：`model` / `reasoning` / 输出预算 / **`messages`（仅补 system 开场）** /
   `tools`（补签名）/ `codebuff_metadata` / `provider.data_collection` / `stop`。
   **没有任何 content part 的白名单或图片剥离逻辑。**
-- `ensureFreebuffSystemMessages`（`src/free-mode.js:78-115`）只处理**首条 system 消息**；
+- `ensureFreebuffSystemMessages`（`src/free-mode.ts:78-115`）只处理**首条 system 消息**；
   `normalizeContentToText` 也只在 system 上调用。user 的 `[{type:'text'},{type:'image_url'}]`
   原样抵达上游。
 - 结论：**下游 Agent 直接把 OpenAI 形态的 `image_url`（http(s) URL 或 data URL）放进
@@ -188,17 +188,17 @@ filePartSchema  = { type: 'file',  data:  dataContent | URL, filename?: string, 
 ### 3.2 元数据面：`multimodal` 会漂
 
 - 内置 catalog 的 `multimodal` 是**手工精修**的，而运行时缓存的 `multimodal` 来自解析器；
-  合并规则（`src/model.js:152-167`）里**内置条目以"内置元信息优先"整条返回**，
+  合并规则（`src/model.ts:152-167`）里**内置条目以"内置元信息优先"整条返回**，
   因此**内置标记永远压过缓存值**——上游把 flash 改成 `true` 也不会自动生效。
-- 更硬的问题：`src/catalog/parser.mjs:116` 对每个模型写死 `multimodal: false`
+- 更硬的问题：`src/catalog/parser.ts:116` 对每个模型写死 `multimodal: false`
   （它只从源码里抽 `id` / `displayName` / agent 映射，**根本没读 `multimodal` 字段**）。
 - 叠加"两个仓库文件不同源"（34,623 B vs 214,559 B），运行时同步源里**根本没有行内
   `multimodal:` 字面量**。实测：用本仓库解析器跑一遍最新上游源 → 14 个模型 `multimodal` **全部 `false`**。
 
 影响面（当前可控，但会误导）：
-- `GET /v1/models` 返回的 `multimodal` 字段（`src/model.js:350`）——下游 Agent 若据此做
+- `GET /v1/models` 返回的 `multimodal` 字段（`src/model.ts:350`）——下游 Agent 若据此做
   "能不能传图"的决策，会得到错误答案（对 flash 是**假阴性**）。
-- 前端「模型管理」的自定义模型覆盖（`src/web/model-store.js:177`）是**唯一现在能修正它的入口**。
+- 前端「模型管理」的自定义模型覆盖（`src/web/model-store.ts:177`）是**唯一现在能修正它的入口**。
 
 ### 3.3 Web 控制台：无图片输入
 
@@ -210,10 +210,10 @@ filePartSchema  = { type: 'file',  data:  dataContent | URL, filename?: string, 
 
 按「先降风险、再补能力」排序：
 
-1. **修同步源**（`src/catalog/runtime-sync.mjs:27-28`）：改为 `CodebuffAI/codebuff`，
+1. **修同步源**（`src/catalog/runtime-sync.ts:27-28`）：改为 `CodebuffAI/codebuff`，
    或保留 `freebuff` 但明确"该仓库的 `freebuff-models.ts` 是 re-export 残页"。
    *风险*：换源 = 换文件体积（214KB），且要确认 raw/CDN 可达性——属于独立改动，建议单独验证。
-2. **让解析器读 `multimodal`**（`src/catalog/parser.mjs`）：在行内对象里抽 `multimodal:\s*(true|false)`，
+2. **让解析器读 `multimodal`**（`src/catalog/parser.ts`）：在行内对象里抽 `multimodal:\s*(true|false)`，
    并对**老上游那份**回退到"未标注 ⇒ 不覆盖内置值"，避免把好标记刷成 `false`。
 3. **校正内置 catalog**：`deepseek/deepseek-v4-flash` → `multimodal: true`（`:1388` 实锤）；
    补充缺失行（`google/gemini-3.8-flash`、`meta/muse-spark-1.3-contributor`）。
@@ -260,7 +260,7 @@ filePartSchema  = { type: 'file',  data:  dataContent | URL, filename?: string, 
 |---|---|---|
 | ① DSH/CLI → 网关 | **声明层拦着（可配置）** | DSH 的 `dsh-llm-pi-ai` 插件把模型模态取自 `input` 字段，缺省常量 `DEFAULT_INPUT = ["text"]`（`lib/index.js:906`），schema 默认 `defaultInput` 同值（`:993`）。上游自带目录把 `deepseek/deepseek-v4-flash` 标成 `input:["text"]`（pi-ai 的 openrouter / vercel-ai-gateway data 文件——**是过期元数据**，对应 2026-09-10 前的老 flash），所以图片默认被当成不支持。 |
 | ② sub2api → freebuff-proxy | **支持** | `internal/pkg/apicompat/chatcompletions_responses_bridge.go` 的 `responsesContentPartsToChatContent` 把 `input_image` → `{type:"image_url", image_url:{url}}`（`:568-580`），正是 OpenAI 标准形状；`/v1/chat/completions` 入站更是直通不转换。 |
-| ③ freebuff-proxy → freebuff.com | **支持** | `src/proxy.js:1212-1271` 原样透传；只有 system 消息被重写。 |
+| ③ freebuff-proxy → freebuff.com | **支持** | `src/proxy.ts:1212-1271` 原样透传；只有 system 消息被重写。 |
 | ④ 上游模型 | **支持** | 见上表，双端点实测通过。 |
 
 ### 6.2 真正的"不支持点"只有一个，且可修

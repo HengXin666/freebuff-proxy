@@ -22,7 +22,7 @@
 | 上游 host | `https://www.codebuff.com` | 同 | 一致 |
 | chat 端点 | `/api/v1/chat/completions` | 同 | 一致 |
 | `run_id` | 在 `codebuff_metadata.run_id` | 同(`/api/v1/agent-runs`) | 一致 |
-| **设备签名(Ed25519)** | **已实现** `src/upstream/device-signing.js` | **完全没有**(grep 无 ed25519/device signing) |  它缺 |
+| **设备签名(Ed25519)** | **已实现** `src/upstream/device-signing.ts` | **完全没有**(grep 无 ed25519/device signing) |  它缺 |
 | **catalog 协议** | 已实现 `catalog-protocol.js` | 无对应实现 |  它缺 |
 | system 开场白 | base2 **与** base3 双版本,按 agent 世代选 | 只有 base2 一句(`cliSystemMarker`) |  它只有旧世代 |
 | agent id | `base3-free-catalog`(目录模式) | `base2-free`(写死) |  旧世代 |

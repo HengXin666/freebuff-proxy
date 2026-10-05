@@ -9,7 +9,7 @@ Status: implemented
 
 取证发现的真实形状(不是猜的):
 
-1. **`cli-bridge/upstream.mjs` 不复用 `official-fingerprint.js` 的常量** ——
+1. **`cli-bridge/upstream.ts` 不复用 `official-fingerprint.js` 的常量** ——
    18 个头名全是硬编码字符串.而它才是**官方形态的唯一实现**.
    于是出现过:主服务补了 `x-freebuff-client`,cli-bridge 里没有;
    反过来 cli-bridge 有 `x-freebuff-install-id`,主服务缺失.
@@ -24,13 +24,13 @@ Status: implemented
 
 建立**单一真源 + 机器对账**三层:
 
-1. `src/upstream/upstream-contract.js` —— 端点与头名的**唯一定义处**.
+1. `src/upstream/upstream-contract.ts` —— 端点与头名的**唯一定义处**.
    主服务与 cli-bridge 都必须从这里取,不得各写字符串.
 2. `docs/reverse/upstream-contract.json` —— 由
    `scripts/gen-upstream-contract.mjs` 从抓包 JSONL **生成**的契约快照
    (7 个必需端点 + 19 个业务头 + 首次出现顺序).真值来自客户端流量,
    不是手抄.
-3. `scripts/check-upstream-contract.mjs` —— 四条确定性判据:
+3. `scripts/check-upstream-contract.ts` —— 四条确定性判据:
    - 契约里每个**必需端点**必须在真源有常量 → 上游加端点会红
    - 契约里每个**业务头**必须在真源有常量 → 上游改头名会红
    - 源码不得出现**未登记**的 `x-freebuff-*` 字面量 → 绕过真源会红

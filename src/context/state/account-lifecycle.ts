@@ -7,9 +7,9 @@
  * "买不起就别 admit" 的闸门失忆.
  */
 import fs from 'node:fs'
-import { accountCredentialsPath, listAccounts } from '../../auth-store.js'
-import { UpstreamError } from '../../upstream/client.js'
-import { logger } from '../../util/log.js'
+import { accountCredentialsPath, listAccounts } from '../../auth-store.ts'
+import { UpstreamError } from '../../upstream/client.ts'
+import { logger } from '../../util/log.ts'
 
 /**
  * 把账本里某账号的状态灌回它的 runtime(懒创建时调用)+ 内存冷却表.

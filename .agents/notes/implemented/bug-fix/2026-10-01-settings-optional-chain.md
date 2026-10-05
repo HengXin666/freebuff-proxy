@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-`src/proxy.js` 取[是否补齐官方真签名工具]的开关时写的是
+`src/proxy.ts` 取[是否补齐官方真签名工具]的开关时写的是
 `settingsStore?.get().freeToolSignatureEnabled`.可选链只覆盖到 `get` 之前:
 `settingsStore` 存在而 `get` 不是函数,或 `get()` 返回 undefined 时,
 `.freeToolSignatureEnabled` 这一跳抛 `TypeError`.
@@ -16,15 +16,15 @@ Status: implemented
 经本地判据 `detectForeignClient` 计算 `signal === null`,是干净的).
 
 同一个文件里 `blockPremiumModels` 的读法写的是 `settingsStore?.get()?.x`
-(`src/proxy.js:276`)——两处写法不一致,新写法照抄错的那处就会重犯.
+(`src/proxy.ts:276`)——两处写法不一致,新写法照抄错的那处就会重犯.
 
 ## Decision
 
 **读设置一律 `?.get()?.`**,并在原地留一行注释说明为什么不能写成 `?.get().`.
 
-本次只改了 `src/proxy.js` 这一处(工具链路上的那个).`src/web/api.js` 里另有
+本次只改了 `src/proxy.ts` 这一处(工具链路上的那个).`src/web/api.ts` 里另有
 10 处同样的 `?.get().`,但那是控制台接口层:`SettingsStore#get()` 的实现恒返回
-`{ ...this.settings }`(`src/web/settings-store.js:131`),返回 undefined 不成立,
+`{ ...this.settings }`(`src/web/settings-store.ts:131`),返回 undefined 不成立,
 剩余风险只有"get 非函数"这种注入形态,属防御性收益 —— 批量改会让 diff 盖过本次
 真正的语义,留到有实测触发时再统一收口.
 

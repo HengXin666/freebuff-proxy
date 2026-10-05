@@ -36,7 +36,7 @@ Status: implemented
 真实抓包里的官方名        = ask_questions
 ```
 
-根源:`src/upstream/foreign-client-signals.js` 的 `OFFICIAL_TOOL_PARAMETER_KEYS`
+根源:`src/upstream/foreign-client-signals.ts` 的 `OFFICIAL_TOOL_PARAMETER_KEYS`
 (手写 40 项)与**真实抓包**(37 项)**只有约 12 项重叠**:
 
 - 抓包有,代码无:**25 项**(`ask_questions`,`preview_*` 共 18 个,
@@ -55,7 +55,7 @@ Status: implemented
 
 ### 一,下行映射:客户端名 → **真实抓包的官方名**,映射不到的**原样保留**
 
-`cli-bridge/upstream.mjs` 的 `MAP_TOOLS` + `mergeOfficialTools(official, client)`:
+`cli-bridge/upstream.ts` 的 `MAP_TOOLS` + `mergeOfficialTools(official, client)`:
 
 ```
 bash  → run_terminal_command      read  → read_files

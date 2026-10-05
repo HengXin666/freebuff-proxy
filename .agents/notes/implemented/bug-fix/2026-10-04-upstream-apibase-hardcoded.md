@@ -28,7 +28,7 @@ registering device key  url: https://codebuff.com/api/v1/freebuff/device-keys
 |---|---|
 | 全新容器生成的 config.yaml | `https://codebuff.com`  |
 | 本地能通的实例 | `https://www.codebuff.com`  |
-| `src/config.js` 默认值 | `https://www.codebuff.com`  |
+| `src/config.ts` 默认值 | `https://www.codebuff.com`  |
 
 `config.example.yaml` 第 13 行写的是不带 www 的主机.全新容器把它复制成
 `/data/config.yaml`,于是**所有**上游请求打到不带 www 的主机:
@@ -50,13 +50,13 @@ registering device key  url: https://codebuff.com/api/v1/freebuff/device-keys
 
 用户裁决:上游主机硬编码,不可能有人会去改这个.
 
-- `src/config.js` 新增 `UPSTREAM_API_BASE` 常量作为**唯一真源**;
+- `src/config.ts` 新增 `UPSTREAM_API_BASE` 常量作为**唯一真源**;
   `loadConfig` **无条件以它为准** —— 配置文件里写错也一并纠正,
   而不是"没配才用默认值"(老配置文件同样受益).
 - 唯一覆盖口是 `FREEBUFF_UPSTREAM_API_BASE` 环境变量,仅供本地镜像对照
   / 离线契约测试(docs/reverse 里有这条用法),生产不设.
 - `config.example.yaml` **移除** api_base 项:不给写错的机会.
-- 新增 `scripts/check-config-consistency.mjs`:钉住"配置模板不得再出现
+- 新增 `scripts/check-config-consistency.ts`:钉住"配置模板不得再出现
   api_base" + "硬编码值必须是带 www 的官方主机".
 
 ## 顺带:bun 侧惰性注册(同一条链上的第二道保险)
@@ -67,7 +67,7 @@ registering device key  url: https://codebuff.com/api/v1/freebuff/device-keys
 
 - `official-rpc.js` 的 `buildRpcCfg`:密钥文件缺失时**就地生成**(纯本地 IO,
   不发请求)并把 publicKey 带上;
-- `cli-bridge/upstream.mjs` 新增 `ensureKeyId()`:有私钥但无 keyId 时自行
+- `cli-bridge/upstream.ts` 新增 `ensureKeyId()`:有私钥但无 keyId 时自行
   注册(此前 `signHeaders()` 见 keyId 为空直接返回 `{}`,等于放弃签名).
 
 ## Alternatives considered
@@ -92,7 +92,7 @@ registering device key  url: https://codebuff.com/api/v1/freebuff/device-keys
   CI/生产均不设.
 - **`config.example.yaml` 少了 api_base 一项**:全新部署不再生成它,
   用户也不会以为它是可调项.
-- **新增一个门禁脚本**:`scripts/check-config-consistency.mjs`,
+- **新增一个门禁脚本**:`scripts/check-config-consistency.ts`,
   防 api_base 悄悄回到配置模板里.
 - 过程中踩到一次 **TDZ**:`UPSTREAM_API_BASE` 声明在 `DEFAULTS` 之后却被它
   引用 → `ReferenceError: Cannot access ... before initialization`.

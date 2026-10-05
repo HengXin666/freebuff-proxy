@@ -7,10 +7,10 @@
  * 在途请求结束后再优雅释放, 绝不掐断正在传输的 SSE.
  */
 import path from 'node:path'
-import { accountKeyOf, readAccountUser } from '../../auth-store.js'
-import { SessionManager } from '../../session-manager.js'
-import { UpstreamError, createUpstreamClient } from '../../upstream/client.js'
-import { runWithLogContext } from '../../util/log.js'
+import { accountKeyOf, readAccountUser } from '../../auth-store.ts'
+import { SessionManager } from '../../session-manager.ts'
+import { UpstreamError, createUpstreamClient } from '../../upstream/client.ts'
+import { runWithLogContext } from '../../util/log.ts'
 import { _disposeRuntime } from './account-ops.ts'
 import { _hydrateRuntime } from '../state/account-lifecycle.ts'
 
@@ -41,7 +41,7 @@ function buildUpstream(self: any, user: any, accountKey: string): any {
       // 用 user.id 而不是 accountKey ---- accountKey 是凭据文件名(可能是邮箱).
       accountId: user.id || accountKey,
       // 设备签名密钥落盘位置:与上游官方 CLI 同款(每账号一个文件).
-      // 上游据此判定[是不是注册过的真客户端]----见 src/upstream/device-signing.js
+      // 上游据此判定[是不是注册过的真客户端]----见 src/upstream/device-signing.ts
       deviceKeyPath: path.join(
         self.config.server.dataDir,
         'device-keys',

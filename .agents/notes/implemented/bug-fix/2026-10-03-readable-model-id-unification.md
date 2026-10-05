@@ -2,12 +2,12 @@
 
 Status: implemented
 
-**Affects:** `src/model.js`, `src/web/api.js`, `dashboard/app.js`, `dashboard/i18n.js`
+**Affects:** `src/model.ts`, `src/web/api.ts`, `dashboard/app.ts`, `dashboard/i18n.js`
 
 ## Problem
 
 用户要求把[前端显示的模型名]与[对外 API 提供的模型名]统一成**一种可见的模型名**,
-不要再出现上游不透明标识 `m-00032eaeec`.实测(2026-10-03,本地 `node bin/serve.js` +
+不要再出现上游不透明标识 `m-00032eaeec`.实测(2026-10-03,本地 `node bin/serve.ts` +
 CDP 抓控制台)复现两处:
 
 1. **控制台[模型管理]的[模型 ID]列仍是裸目录 key**.`/api/models/upstream` 的
@@ -57,7 +57,7 @@ CDP 抓控制台)复现两处:
 - **完全不显示 agent 列** —— 表格信息少一列,用户看不到"调度到底会用哪个 agent",
   而这一列的意图正是暴露映射错误.**否决**.
 - **什么都不做,等用户报障再修** —— i18n 三处是 CI 稳定失败(本地可复现
-  `node scripts/check-i18n.mjs` → exit 1),镜像推不出去,没有"等待"的余地.
+  `node scripts/check-i18n.ts` → exit 1),镜像推不出去,没有"等待"的余地.
 
 ## Consequences
 
@@ -73,10 +73,10 @@ CDP 抓控制台)复现两处:
 
 ## Evidence
 
-- 实测(本地 `FREEBUFF_PROXY_PORT=28287 node bin/serve.js` + CDP 抓 `#accounts` 视图文本):
+- 实测(本地 `FREEBUFF_PROXY_PORT=28287 node bin/serve.ts` + CDP 抓 `#accounts` 视图文本):
   修复前 `m-00032eaeec	MiMo 2.6 Flash	limited	10 FB/h	base2-free-m-00032eaeec	base2-free	上游`
   (共 5 行同形);`/v1/models` 已无裸 key(`裸key条数: 0`).
-- `node scripts/check-i18n.mjs` 修复前 `exit=1`,报 3 项硬编码中文
+- `node scripts/check-i18n.ts` 修复前 `exit=1`,报 3 项硬编码中文
   (`app.js:565` / `app.js:572` / `app.js:2727`);CI run 37064022127 与 37111896574
   的 `i18n` job 复现同一组报错,`build-push` 因 `needs: [test, image-boot, i18n]` 被跳过.
 - 目录抓取实测:`handles: 53`,`recommendedKey: m-00032eaeec`,

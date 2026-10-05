@@ -4,7 +4,7 @@
  * 登录是唯一的公开端点(不需要 fb_session),所以它单独走
  * handlePublic,在 dispatcher 拿到 user 之前调用;其余两个要求已认证.
  */
-import { sendJson, serializeCookie } from '../../../../util/http.js'
+import { sendJson, serializeCookie } from '../../../../util/http.ts'
 import { sanitize } from '../../lib/helpers.ts'
 import { SESSION_COOKIE } from '../../lib/session.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'

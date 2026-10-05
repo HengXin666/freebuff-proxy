@@ -21,7 +21,7 @@ import {
   C_PREMIUM_SLOT_TAKEN,
   C_RATE_LIMITED,
   C_SPEND_LIMITED,
-} from '../../../upstream/response-contract.js'
+} from '../../../upstream/response-contract.ts'
 import { probeErrorFields } from './helpers.ts'
 
 /**
@@ -30,8 +30,8 @@ import { probeErrorFields } from './helpers.ts'
  * 账号既不该被调度,也不该在控制台显示成正常.
  * 注意不含 model_unavailable(那是单模型级,不能拿它封整个账号).
  *
- * 判据码一律从 src/upstream/response-contract.js 取常量,不写字面量:
- * 上游改码时只改真源一处.门禁 scripts/gates/checks/guard/response-contract.mjs
+ * 判据码一律从 src/upstream/response-contract.ts 取常量,不写字面量:
+ * 上游改码时只改真源一处.门禁 scripts/gates/checks/guard/response-contract.ts
  * 会把真源之外的裸字面量判成新增债务.
  */
 export const ACCOUNT_LEVEL_PROBE_CODES = new Set([

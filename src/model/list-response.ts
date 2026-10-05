@@ -3,7 +3,7 @@
  *
  * 依赖方向:list-response -> {catalog-store, agents, flags},单向无环.
  *
- * 从 src/model.js 拆出(原 758 行单文件).
+ * 从 src/model.ts 拆出(原 758 行单文件).
  */
 import { catalogModels } from './catalog-store.ts'
 import { isPremiumModel } from './flags.ts'

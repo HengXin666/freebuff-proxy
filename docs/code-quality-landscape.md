@@ -34,9 +34,9 @@
 | 项 | 证据 | 保留理由 |
 |---|---|---|
 | `typecheck`（tsc --noEmit） | package.json | 已接线 CI |
-| `test:smoke`（mock 上游） | test/suites/entries/smoke/smoke.mjs 7815 行 | 覆盖调度/冷却/换号/代理 |
-| i18n 红线 | `.github/workflows/docker-image.yml` 的 `i18n` job + `scripts/check-i18n.mjs` | 三条判据钉死多语言退化 |
-| 镜像启动门禁 | `image-boot` job + `scripts/ci/pipeline-image-test.mjs` | 真实起容器 + 打坏 data 验证 |
+| `test:smoke`（mock 上游） | test/suites/entries/smoke/smoke.ts 7815 行 | 覆盖调度/冷却/换号/代理 |
+| i18n 红线 | `.github/workflows/docker-image.yml` 的 `i18n` job + `scripts/check-i18n.ts` | 三条判据钉死多语言退化 |
+| 镜像启动门禁 | `image-boot` job + `scripts/ci/pipeline-image-test.ts` | 真实起容器 + 打坏 data 验证 |
 | 发版版本号门禁 | `check-version` job | tag 与 package.json 必须一致 |
 | note 门禁 | `agent-notes.yml` + pre-commit | 受保护改动必须带决策记录 |
 | pre-commit | `.git/hooks/pre-commit` | 已装，跑 format/backlinks/coverage（本轮追加契约门禁） |
@@ -47,10 +47,10 @@
 
 | 层 | 文件 | 职责 |
 |---|---|---|
-| 真源 | `src/upstream/upstream-contract.js` | 端点与头名的**唯一定义处** |
+| 真源 | `src/upstream/upstream-contract.ts` | 端点与头名的**唯一定义处** |
 | 快照 | `docs/reverse/upstream-contract.json` | 从抓包**生成**的客户端真值（7 端点 / 19 头 / 顺序） |
-| 门禁 | `scripts/check-upstream-contract.mjs` | 四条判据对账 |
-| 生成器 | `scripts/catalog/gen-upstream-contract.mjs` | 重建快照（上游变更后第一步） |
+| 门禁 | `scripts/check-upstream-contract.ts` | 四条判据对账 |
+| 生成器 | `scripts/catalog/gen-upstream-contract.ts` | 重建快照（上游变更后第一步） |
 
 ### 四条判据（每条都有判据 + 检查点 + 自证）
 
@@ -100,13 +100,13 @@
 ## 五、体量热点（取证，尚未设限）
 
 ```
-7815  test/suites/entries/smoke/smoke.mjs            ← 同时是 churn 第一（95 次）
-3548  dashboard/app.js          ← churn 第三（59 次）
-2643  src/proxy.js              ← churn 第二（69 次）
-2276  src/app-context.js
-1723  src/web/api.js
-1662  src/session-manager.js
-1309  src/upstream/client.js
+7815  test/suites/entries/smoke/smoke.ts            ← 同时是 churn 第一（95 次）
+3548  dashboard/app.ts          ← churn 第三（59 次）
+2643  src/proxy.ts              ← churn 第二（69 次）
+2276  src/app-context.ts
+1723  src/web/api.ts
+1662  src/session-manager.ts
+1309  src/upstream/client.ts
 ```
 
 高 churn × 大体量的三个文件（`smoke.mjs` / `proxy.js` / `app.js`）是最该被

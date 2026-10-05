@@ -60,7 +60,7 @@ legacy id —— 于是 `holderFor('m-096e75164d')` 与清单里的
 禁止在别处实现同一映射 —— `test/verify-model-mapping-truth.mjs` 会把第二真源扫出来.
 
 同时把展示侧收拢:新增公开入口 `AccountRuntimes.displayNameFor(key)`(内部先
-`resolveModelAlias` 归一再查名),`src/web/api.js` 的 `modelDisplayName` 改为调它
+`resolveModelAlias` 归一再查名),`src/web/api.ts` 的 `modelDisplayName` 改为调它
 (此前自己遍历 runtime 的 catalog,是第二套实现,既漏 legacy id 又无内置表兜底).
 
 ### 二,额度闸门之前,先问[上游有没有我能接管的已付费会话]
@@ -97,8 +97,8 @@ legacy id —— 于是 `holderFor('m-096e75164d')` 与清单里的
   "能复用已付费会话"而不是"白花钱重买".
 - **`displayNameFor()` 成为展示侧唯一入口**;`web/api.js` 的本地实现已收拢.
 - **`npm test` 新增一节** `verify-model-mapping-truth.mjs`(41 条断言).
--  **遗留债务**:`src/app-context.js` 的 `_modelDisplayName`/`_modelCatalogId` 与
-  `src/web/api.js` 的 `catalogIdForKey` 仍直读 `keyByDigest`(既有邻接点).
+-  **遗留债务**:`src/app-context.ts` 的 `_modelDisplayName`/`_modelCatalogId` 与
+  `src/web/api.ts` 的 `catalogIdForKey` 仍直读 `keyByDigest`(既有邻接点).
   新测试对它们走"逐行授权 + 例外清单不命中即 FAIL"的防腐机制;
   收拢进 `resolveModelAlias`/`displayNameFor` 后应清空例外,升级为零例外.
 

@@ -5,7 +5,7 @@ Status: implemented
 ## Problem
 
 上游并不总是用 HTTP 状态码表达失败.它可能返回 **200**,却在响应体里夹
-`free_mode_*` 错误串.本仓库 `src/proxy.js` 只在 `!upstreamRes.ok` 分支解析错误体:
+`free_mode_*` 错误串.本仓库 `src/proxy.ts` 只在 `!upstreamRes.ok` 分支解析错误体:
 
 ```js
 if (!upstreamRes.ok) {
@@ -22,7 +22,7 @@ if (!upstreamRes.ok) {
 
 ## Decision
 
-**新增 `upstreamBodyEmbeddedError(text)` 导出(`src/proxy.js`),
+**新增 `upstreamBodyEmbeddedError(text)` 导出(`src/proxy.ts`),
 识别响应体里内嵌的 free_mode / 账号级错误码.**
 
 - 扫描码表:`free_mode_invalid_agent_model` / `free_mode_invalid_agent_hierarchy` /
@@ -58,7 +58,7 @@ if (!upstreamRes.ok) {
 
 ## Evidence
 
-- 代码核对:`src/proxy.js` 的错误解析整段位于 `if (!upstreamRes.ok)` 分支内,
+- 代码核对:`src/proxy.ts` 的错误解析整段位于 `if (!upstreamRes.ok)` 分支内,
   200 分支无任何错误码扫描.
 - 第三方佐证:lza6/Freebuff-2API `src/api.rs:5314` `upstream_body_error()`
   在 `CODES` 里对 `free_mode_*` 扫串,不依赖 HTTP 状态.

@@ -71,7 +71,7 @@ node test/repro-concurrency.mjs sticky 3 2 16   # 3 个账号、每账号上限 
 
 | 观测 | 等级 | 说明 |
 | --- | --- | --- |
-| 同一 `instanceId` 支持并发 chat | `实测` | mock 与真实上游都验证过；`src/app-context.js` ChatMutex 注释："实测同一 instanceId 支持并发 chat" |
+| 同一 `instanceId` 支持并发 chat | `实测` | mock 与真实上游都验证过；`src/app-context.ts` ChatMutex 注释："实测同一 instanceId 支持并发 chat" |
 | 一个账号同时只能有 **1 条 session**（多客户端互顶） | `实测` | 同账号换客户端 re-admit → 旧客户端收到 `superseded` / `waiting_room`；`SessionManager.refresh()` 在有在途请求时**直接跳过**轮询 GET，否则会干扰活跃会话 |
 | 并发**条数**上限（429 / 专属错误码） | `未知` | 全仓库没有一处记录过"并发 N 条被上游拒绝"。`free_mode_capacity_deferred`（"Free mode is briefly at capacity"）是**免费模式容量排队**，不是"你这个号并发超了"——实测同 session 立即重试就恢复，项目因此**明确不为它冷却换号** |
 | 并发**速率**上限（风控/封号阈值） | `未知，且危险` | 没有实证。但账号池里大量账号已被封（见 §3.3），历史上"轮换健康账号"被当作账号农场特征（ADR-0012）。所以"往上加并发"是**未知风险**，不是免费午餐 |
@@ -116,7 +116,7 @@ google/gemini-3.8-flash          50
 
 ### 2.1 现状（v1.12.1，粘性优先 / drain, not rotate）
 
-选号排序（`AccountRuntimes.candidateKeys`，`src/app-context.js`）：
+选号排序（`AccountRuntimes.candidateKeys`，`src/app-context.ts`）：
 
 1. **tier**：同模型热 session（复用零成本） > 冷账号 > 活跃 session 绑在别的模型上；
 2. **used**：已用过的账号 > **从未用过的账号**（未用号排最后）；
@@ -124,7 +124,7 @@ google/gemini-3.8-flash          50
 4. **lastUsedAt 倒序**：继续用最近用过的那个；
 5. 在途少 > 额度耗尽 > 余额不足 > 轮询打破平局。
 
-排队与溢出（`src/proxy.js`）：
+排队与溢出（`src/proxy.ts`）：
 
 - 选号后**必须再拿账号 chat 锁**（`runtimes.acquireChat`），容量 = `accountMaxConcurrency`；
 - 满员时**有界排队**：热 session 等 `streamIdleTimeoutSec + 15s`，冷账号等 `accountChatWaitMs`（默认 120s）；
@@ -372,10 +372,10 @@ Amount`` 三态 + 「A zero receipt is a real receipt」**——与我们当年�
 
 | 位置 | 改动 |
 | --- | --- |
-| `src/session-handles.js` | 新增**持久化待结算退款队列**（`pendingRefunds`）+ `sweepPendingRefunds()`：周期追问，拿到终态（含 0）才出队 |
-| `src/session-manager.js` | 进程内 `_replayPendingRefund()` + 30s 追问定时器（1 小时窗口），pending 时把句柄登记进队列 |
-| `bin/serve.js` | 5 分钟一次的常驻扫尾（有界 30s 预算、unref） |
-| `test/suites/entries/smoke/smoke.mjs` | `REFUND-COPY` **反向**：现在钉死「早退不退」这类旧说法；并断言扫尾必须存在 |
+| `src/session-handles.ts` | 新增**持久化待结算退款队列**（`pendingRefunds`）+ `sweepPendingRefunds()`：周期追问，拿到终态（含 0）才出队 |
+| `src/session-manager.ts` | 进程内 `_replayPendingRefund()` + 30s 追问定时器（1 小时窗口），pending 时把句柄登记进队列 |
+| `bin/serve.ts` | 5 分钟一次的常驻扫尾（有界 30s 预算、unref） |
+| `test/suites/entries/smoke/smoke.ts` | `REFUND-COPY` **反向**：现在钉死「早退不退」这类旧说法；并断言扫尾必须存在 |
 
 **3. 省钱的完整图景**（旧版只承认一条路）：
 
@@ -420,7 +420,7 @@ Amount`` 三态 + 「A zero receipt is a real receipt」**——与我们当年�
 | `limits.max_new_sessions_per_request` | 2 | 保持 2 | 仍不该无谓换号（换号 = 新买一条整小时计费会话） |
 | `accountMaxConcurrency` | 2 | 1~4 按场景 | 见 §1.2；同一 instance 并发 chat 不额外扣费 |
 
-**控制台推荐值算法也已随实测重算**（`dashboard/app.js` 的 `idleReleaseAdvice`）：
+**控制台推荐值算法也已随实测重算**（`dashboard/app.ts` 的 `idleReleaseAdvice`）：
 
 | 账号池状态 | 推荐 | 直觉 |
 | --- | --- | --- |
@@ -429,7 +429,7 @@ Amount`` 三态 + 「A zero receipt is a real receipt」**——与我们当年�
 | 活跃模型数 ÷ 账号数 **≤ 0.5** | **300s** | 模型集中、热会话复用充分，可容忍稍长的空闲 |
 | 其余 | **120s** | 平衡点 |
 
-**护栏（防回归）**：`test/suites/entries/smoke/smoke.mjs` 断言 `idleReleaseSec` 默认 **60s**，
+**护栏（防回归）**：`test/suites/entries/smoke/smoke.ts` 断言 `idleReleaseSec` 默认 **60s**，
 且 `REFUND-COPY` 全仓扫描**「早退能退 Freebucks / 挂着空闲才花钱」这类已被证伪的说法**；
 同时断言 `sweepPendingRefunds` 与 `serve.js` 的周期调用必须存在（少了它就等于放弃那笔预扣）。
 
@@ -501,7 +501,7 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 
 展示 **①导入时间 ②凭证更新时间 ③调度运行时长**，**都要持久化**。
 
-### 5.2 现状（`src/account-state-store.js`）
+### 5.2 现状（`src/account-state-store.ts`）
 
 - `firstSeenAt`（加入时间）**已有**，取值来自**凭据文件创建时间**（`birthtime`，回退 `mtime`，
   见 `AccountRuntimes._importedAtHint()`）。这是"导入时刻"的**近似**——服务内导入即文件创建瞬间，够用；
@@ -538,16 +538,16 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 | # | 文件 | 改动 |
 | --- | --- | --- |
 | 1 | `docs/scheduling.md` | 修正"并发上限"措辞（它是**溢出阈值**）+ 指向本文 |
-| 2 | `src/web/settings-store.js` | 新增 `accountSchedulingMode`（默认 `sticky`）、`accountOverflowWaitMs` |
-| 3 | `src/app-context.js` | `candidateKeys` 支持 spread 排序；`list()` 暴露新时间字段；`importedAt` 校正 |
-| 4 | `src/session-manager.js` | 调度时长统计（`schedulingSince` / `scheduledMs`） |
-| 5 | `src/web/api.js` | `GET/POST /api/settings` 支持新字段；导入时记 `credentialUpdatedAt` |
-| 6 | `src/proxy.js` | 开放 API 导入路径同样记 `credentialUpdatedAt` |
-| 7 | `dashboard/app.js` | 账号表新增「时间」列 + 调度模式切换控件 |
-| 8 | `test/suites/entries/smoke/smoke.mjs` | spread 模式回归（满员换号）+ 时间字段持久化断言 |
-| 9 | `src/session-manager.js` | 去掉 admit 前多余的 `session:GET`（§4，首字节 −580ms） |
-| 10 | `src/proxy.js` | 模型白名单改为"先本地判定、未知才探测"（§4，首字节再 −580ms） |
-| 11 | `test/tools/repro-firstbyte.mjs` | 首字节耗时剖析脚本（可复现 §4 的表） |
+| 2 | `src/web/settings-store.ts` | 新增 `accountSchedulingMode`（默认 `sticky`）、`accountOverflowWaitMs` |
+| 3 | `src/app-context.ts` | `candidateKeys` 支持 spread 排序；`list()` 暴露新时间字段；`importedAt` 校正 |
+| 4 | `src/session-manager.ts` | 调度时长统计（`schedulingSince` / `scheduledMs`） |
+| 5 | `src/web/api.ts` | `GET/POST /api/settings` 支持新字段；导入时记 `credentialUpdatedAt` |
+| 6 | `src/proxy.ts` | 开放 API 导入路径同样记 `credentialUpdatedAt` |
+| 7 | `dashboard/app.ts` | 账号表新增「时间」列 + 调度模式切换控件 |
+| 8 | `test/suites/entries/smoke/smoke.ts` | spread 模式回归（满员换号）+ 时间字段持久化断言 |
+| 9 | `src/session-manager.ts` | 去掉 admit 前多余的 `session:GET`（§4，首字节 −580ms） |
+| 10 | `src/proxy.ts` | 模型白名单改为"先本地判定、未知才探测"（§4，首字节再 −580ms） |
+| 11 | `test/tools/repro-firstbyte.ts` | 首字节耗时剖析脚本（可复现 §4 的表） |
 | 12 | `package.json` | `npm version minor` → **v1.13.0 本次发布** |
 
 ## 7. 退款结论反转后的落地清单（2026-09-13 第二次反转）
@@ -558,17 +558,17 @@ mock 里看到"两次 `agent-runs` 调用"，其中第二次是 `action: FINISH`
 
 | # | 文件 | 改动 | 状态 |
 | --- | --- | --- | --- |
-| 1 | `src/config.js` / `src/web/settings-store.js` / `config.example.yaml` | `session.idle_release_sec` 默认值 **600 → 60** |  |
-| 2 | `dashboard/app.js` | 文案改为「早退按实际占用退还未用时长」，并给出 pending 的准确含义 |  |
-| 3 | `dashboard/app.js` | `idleReleaseAdvice` 推荐值**反向重算**（60 / 120 / 300s） |  |
-| 4 | `src/*.js` + `docs/*.md` + `config.example.yaml` + `README.md` + `bin/pricing.js` | 清掉「早退不退 / 整小时买断」的旧口径 |  |
-| 5 | `test/suites/entries/smoke/smoke.mjs` | `idleReleaseSec` 断言改回 **60s** |  |
-| 6 | `test/suites/entries/smoke/smoke.mjs` | `REFUND-COPY` **反向**：现在钉死「早退不退」这类旧说法 |  |
-| 7 | `src/session-handles.js` | **持久化待结算退款队列** + `sweepPendingRefunds()` |  |
-| 8 | `src/session-manager.js` | `_replayPendingRefund()` + 30s 追问定时器（1 小时窗口，pending 时入队） |  |
-| 9 | `bin/serve.js` | 5 分钟一次的常驻扫尾（有界 30s 预算、unref） |  |
-| 10 | `test/suites/entries/smoke/smoke.mjs` | 回归：断言 `sweepPendingRefunds` 与 serve.js 的周期调用存在 |  |
-| 11 | `test/tools/repro-refund.mjs` | 头部标注：默认参数（3 分钟占用）**不足以区分竞争假设**，需 55 分钟级占用 |  |
+| 1 | `src/config.ts` / `src/web/settings-store.ts` / `config.example.yaml` | `session.idle_release_sec` 默认值 **600 → 60** |  |
+| 2 | `dashboard/app.ts` | 文案改为「早退按实际占用退还未用时长」，并给出 pending 的准确含义 |  |
+| 3 | `dashboard/app.ts` | `idleReleaseAdvice` 推荐值**反向重算**（60 / 120 / 300s） |  |
+| 4 | `src/*.js` + `docs/*.md` + `config.example.yaml` + `README.md` + `bin/pricing.ts` | 清掉「早退不退 / 整小时买断」的旧口径 |  |
+| 5 | `test/suites/entries/smoke/smoke.ts` | `idleReleaseSec` 断言改回 **60s** |  |
+| 6 | `test/suites/entries/smoke/smoke.ts` | `REFUND-COPY` **反向**：现在钉死「早退不退」这类旧说法 |  |
+| 7 | `src/session-handles.ts` | **持久化待结算退款队列** + `sweepPendingRefunds()` |  |
+| 8 | `src/session-manager.ts` | `_replayPendingRefund()` + 30s 追问定时器（1 小时窗口，pending 时入队） |  |
+| 9 | `bin/serve.ts` | 5 分钟一次的常驻扫尾（有界 30s 预算、unref） |  |
+| 10 | `test/suites/entries/smoke/smoke.ts` | 回归：断言 `sweepPendingRefunds` 与 serve.js 的周期调用存在 |  |
+| 11 | `test/tools/repro-refund.ts` | 头部标注：默认参数（3 分钟占用）**不足以区分竞争假设**，需 55 分钟级占用 |  |
 
 #### 推荐值算法（本次已反向重算）
 

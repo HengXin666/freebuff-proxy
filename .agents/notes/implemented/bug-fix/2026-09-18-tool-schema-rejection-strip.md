@@ -57,16 +57,16 @@ schema 双真",零参数工具永远不算.本文发表时那句"精确规则仍
 
 **把"工具被上游拒"当成一种可恢复杂志,剥离工具后重发一次.**
 
-- `src/free-mode.js` 新增 `hasClientTools` / `stripClientTools`:后者删
+- `src/free-mode.ts` 新增 `hasClientTools` / `stripClientTools`:后者删
   `tools` / `tool_choice` / `parallel_tool_calls`(`functions` 不删).
-- `src/proxy.js` 的 `forwardCompletions` 在响应头阶段改为**最多两轮**:第一轮带原
+- `src/proxy.ts` 的 `forwardCompletions` 在响应头阶段改为**最多两轮**:第一轮带原
   工具集;若被 `isToolSchemaRejection`(404 + "No endpoints found")判定为工具拒绝,
   第二轮去掉工具重发.命中时回 `x-freebuff-proxy-tools-stripped: 1`.
 - 只在**客户端确实带了 `tools`** 时才可能重试;受
   `settingsStore.stripToolsOnSchemaRejection`(默认 false,明确开启后才回退)控制,
   控制台可开.默认行为的决策见
   [2026-10-02-tool-request-fail-closed.md](2026-10-02-tool-request-fail-closed.md).
-- `src/upstream/client.js` 新增 `extractAccountBanError`:把
+- `src/upstream/client.ts` 新增 `extractAccountBanError`:把
   `account_suspended` / `banned` / `country_blocked` 归一为 `banned`;
   `forwardCompletions` 据此**重算 `effectiveErrCode`**(只改响应体而不改
   `errCode`,`shouldSwitchAccountOnError` 与 `markCooldown` 仍照旧分支,等于没改).

@@ -6,7 +6,7 @@ Status: implemented
 
 `SettingsStore` 的 `load()` 只白名单读了 8 个字段,**漏了 `webChannelEnabled`
 与 `cliTelemetryEnabled`**.两者都能经 `save()` 写进 `/data/settings.json`
-(`src/web/settings-store.js:184-195` 有校验并写盘),但重启后一律回落到
+(`src/web/settings-store.ts:184-195` 有校验并写盘),但重启后一律回落到
 `DEFAULT_SETTINGS` 的 `false`.
 
 症状是**静默**的:控制台显示开关已开,`settings.json` 里也是 `true`,

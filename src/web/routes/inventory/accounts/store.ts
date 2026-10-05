@@ -5,15 +5,15 @@
  * token 的短指纹与末 6 位).没有它,用户在控制台上无法区分"导入没生效"
  * 与"token 真被上游吊销",只能反复重登(2026-10-04 实测踩过).
  */
-import { sendJson } from '../../../../util/http.js'
-import { logger } from '../../../../util/log.js'
+import { sendJson } from '../../../../util/http.ts'
+import { logger } from '../../../../util/log.ts'
 import {
   saveAccountUser,
   coerceUser,
   deleteAccountUser,
   readJsonFile,
   writeJsonFile,
-} from '../../../../auth-store.js'
+} from '../../../../auth-store.ts'
 import { tokenFingerprint, findAccountRow, overviewModelNames } from '../../lib/helpers.ts'
 import { denyUnlessAdmin, decodeSegment } from '../../lib/http-codes.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'

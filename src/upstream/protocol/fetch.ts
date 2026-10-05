@@ -7,7 +7,7 @@
  *
  * 口径: 纯搬移, 不改行为. 逐字节对齐官方抓包的头集与注释原样保留.
  */
-import { logger } from '../../util/log.js'
+import { logger } from '../../util/log.ts'
 import {
   CATALOG_FETCH_USER_AGENT,
   CATALOG_PATH,

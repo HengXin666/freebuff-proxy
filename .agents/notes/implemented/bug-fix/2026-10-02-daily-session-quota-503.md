@@ -38,7 +38,7 @@ limited 档**每模型每天 6 次会话**(`period: pacific_day`),用满即 503.
 
 ## Decision
 
-**新增 `dailySessionQuota(quota, model)`(`src/upstream/client.js`)导出,
+**新增 `dailySessionQuota(quota, model)`(`src/upstream/client.ts`)导出,
 把 session 回执里的 `rateLimitsByModel` / `rateLimit` 读成
 `{ exhausted, resetAtMs, limit, recentCount }`.**
 

@@ -43,7 +43,7 @@ Bun 1.4.2 → 只有 5 个业务头（与客户端逐项一致）
   避免两套逻辑漂移.
 - bun 不可用(未随镜像分发 / 执行失败)时静默退回 Node 路径:
   功能不降级,只是头集差两项.
-- `cli-bridge/upstream.mjs` 的 `fetchCatalog()` 同步对齐:
+- `cli-bridge/upstream.ts` 的 `fetchCatalog()` 同步对齐:
   补 `x-freebuff-client: desktop`,**去掉设备签名**(带了会拿到 53 行,
   见 `2026-10-03-catalog-fetch-unsigned.md`).
 - Node 路径仍保留,并把能改的都改掉:`accept-language: ''`,

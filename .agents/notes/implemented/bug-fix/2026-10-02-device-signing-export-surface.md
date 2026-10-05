@@ -2,7 +2,7 @@
 
 Status: implemented
 
-**Affects:** `src/upstream/device-signing.js`
+**Affects:** `src/upstream/device-signing.ts`
 
 ## Problem
 

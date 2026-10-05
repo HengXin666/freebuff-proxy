@@ -4,7 +4,7 @@
     "note": "上游响应字段/判据码的裸读棘轮：只许降不许涨；新增读取必须从 response-contract.js 取常量"
   },
   "entries": {
-    "src/app-context.js::waiting_room_required": 2,
+    "src/app-context.ts::waiting_room_required": 2,
     "src/context/ops/account-list.ts::banned": 2,
     "src/context/sched/account-callers.ts::banned": 3,
     "src/context/state/account-cooldown.ts::banned": 1,
@@ -18,8 +18,8 @@
     "src/context/state/codes.ts::purchase_in_use": 1,
     "src/context/state/codes.ts::rate_limited": 3,
     "src/context/state/codes.ts::spend_limited": 3,
-    "src/free-mode.js::instanceId": 1,
-    "src/free-mode.js::sessionId": 1,
+    "src/free-mode.ts::instanceId": 1,
+    "src/free-mode.ts::sessionId": 1,
     "src/proxy/transport/errors/errors.ts::banned": 1,
     "src/proxy/transport/errors/errors.ts::free_mode_capacity_deferred": 1,
     "src/proxy/transport/errors/errors.ts::ip_capped": 1,
@@ -27,7 +27,7 @@
     "src/proxy/transport/errors/errors.ts::premium_slot_taken": 1,
     "src/proxy/transport/errors/errors.ts::purchase_capacity": 1,
     "src/proxy/transport/errors/errors.ts::purchase_in_use": 1,
-    "src/proxy/transport/errors/normalize.js::free_mode_capacity_deferred": 3,
+    "src/proxy/transport/errors/normalize.ts::free_mode_capacity_deferred": 3,
     "src/session/admit/recover.ts::premium_slot_taken": 1,
     "src/session/admit/recover.ts::purchase_capacity": 1,
     "src/session/admit/recover.ts::purchase_in_use": 1,

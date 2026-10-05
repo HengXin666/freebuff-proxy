@@ -9,7 +9,7 @@ import {
   ensureObjectEntries,
   dumpDroppedEntries,
   isPlainRecord,
-} from '../util/json-store.js'
+} from '../util/json-store.ts'
 
 /**
  * JSON-file backed web users (control-plane accounts), separate from
@@ -129,7 +129,7 @@ export class UserStore {
     if (st.status !== 'ok') {
       // 损坏的 users.json 如果被当成"还没有账号",ensureDefaultAdmin 会立刻
       // 建一个新 admin ---- 用户看到的就是"我的用户/密码全没了".这里保持空列表
-      // 但把状态交给启动流程裁决(bin/serve.js 会拒绝启动并要求人工处置).
+      // 但把状态交给启动流程裁决(bin/serve.ts 会拒绝启动并要求人工处置).
       this.users = []
       if (st.status === 'invalid') {
         console.error(`[freebuff-proxy] 数据文件损坏: ${this.file} — ${st.reason}`)

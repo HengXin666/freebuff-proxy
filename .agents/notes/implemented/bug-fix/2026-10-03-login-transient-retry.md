@@ -11,7 +11,7 @@ aborted]——`AbortError` 的原文,用户无法判断是超时,DNS 还是 TLS.
 
 关键不在超时本身,而在于**这次失败没有任何第二次机会**:
 
-- `buildFetchWithProxy`(`src/upstream/client.js`)里,代理池回落 + 单次尝试超时
+- `buildFetchWithProxy`(`src/upstream/client.ts`)里,代理池回落 + 单次尝试超时
   (`fetchWithAttemptTimeout`)**只存在于 `kind === 'pool'` 分支**.
 - `resolveProxy` 在[无显式代理 + 无环境变量]时返回 `kind: 'none'`,于是
   `fetchWithProxy` 走 `proxyRes.kind !== 'pool'` 的提前 `return`,直接裸 fetch,
@@ -114,7 +114,7 @@ message + `cause:` 行 + 按 `code` 的可操作引导(新增两条 i18n 文案)
    可配项,而不是直接套 600s——登录是交互式前台操作,600s 会让[发起登录失败]
    变成[发起登录卡 10 分钟].
 2. `kind:'none'`(无代理部署)下 chat / admit 链路看起来同样没有池内回落.但复核
-   后确认**不是同一个问题**:`src/proxy.js` 已有 `maxAutoRetryOnSessionError`
+   后确认**不是同一个问题**:`src/proxy.ts` 已有 `maxAutoRetryOnSessionError`
    (同账号重试)与 `maxAttempts = min(账号数+1, 5)`(换号),且整条路径受
    `maxNewSessionsPerRequest` 闸门约束,所以瞬时抖动已被调度层兜住.缺的只是
    [换出口],在无代理部署下本就没有出口可换.**结论:不作为独立缺陷跟进.**

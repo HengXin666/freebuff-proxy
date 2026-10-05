@@ -2,7 +2,7 @@
 
 Status: implemented
 
-**Affects:** `src/app-context.js`(`_restoreAccountState` / `getAny`)
+**Affects:** `src/app-context.ts`(`_restoreAccountState` / `getAny`)
 
 ## Problem
 
@@ -12,10 +12,10 @@ Status: implemented
 [freebuff-proxy]  启动失败（服务未能进入监听状态）
   错误: Account not found or not logged in: 31c7b96c-1565-4c42-a754-2903d0a1e1bf
 UpstreamError: Account not found or not logged in: 31c7b96c-1565-4c42-a754-2903d0a1e1bf
-    at AccountRuntimes.get (src/app-context.js:604)
-    at AccountRuntimes.getAny (src/app-context.js:1672)
-    at buildAppContext (src/app-context.js:2107)
-    at main (bin/serve.js:304)
+    at AccountRuntimes.get (src/app-context.ts:604)
+    at AccountRuntimes.getAny (src/app-context.ts:1672)
+    at buildAppContext (src/app-context.ts:2107)
+    at main (bin/serve.ts:304)
 ```
 
 `account-state.json` 的 `lastSuccessKey` 是**账本里的历史指针**,指向的账号
@@ -68,7 +68,7 @@ UpstreamError: Account not found or not logged in: 31c7b96c-1565-4c42-a754-2903d
   已删的 `31c7b96c-…`)→ 修复前逐字复现用户堆栈;修复后 `listening` +
   `upstream auth ready account=new@example.com`.
 - 用户线上堆栈(RackNerd VPS,`ghcr.io/hengxin666/freebuff-proxy:latest`):
-  `app-context.js:604 → :1672 → :2107 → bin/serve.js:304`,与本地复现一致.
-- 该缺陷在 v1.17.0 起就存在(`git show v1.17.0:src/app-context.js` 第 1511 行
+  `app-context.js:604 → :1672 → :2107 → bin/serve.ts:304`,与本地复现一致.
+- 该缺陷在 v1.17.0 起就存在(`git show v1.17.0:src/app-context.ts` 第 1511 行
   同样是 `this._lastSuccessKey || keys[0]`),与 2026-10-03 的模型名改动无关
   (那次未触碰 `app-context.js`).

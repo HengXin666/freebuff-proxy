@@ -10,7 +10,7 @@ server:
   data_dir: ./data
 
 upstream:
-  # ⚠️ api_base 已**硬编码**在代码里（src/config.js 的 UPSTREAM_API_BASE），
+  # ⚠️ api_base 已**硬编码**在代码里（src/config.ts 的 UPSTREAM_API_BASE），
   # 不再从配置读取 —— 配置文件里即便写了也一律忽略。
   # 原因：本文件此前写的是 https://codebuff.com（少 www），全新容器复制它后
   # 所有上游请求 401、控制台误报「凭证失效」，而凭证本身完全有效。

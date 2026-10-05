@@ -130,7 +130,7 @@ OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**.核心卖点:
 2. **流水线强制门禁**: CI 的 `check-version` job 校验 git tag(`v*`)与 package.json 版本必须一致,
    不一致直接 fail.这就是[发版必须更新版本号]的硬保障, 不需要人工提醒.
 3. **镜像内版本号由流水线硬编码**: `build-push` 在 docker build 前跑
-   `node scripts/release/inject-version.mjs --version <tag版本> --repo <仓库>`,
+   `node scripts/release/inject-version.ts --version <tag版本> --repo <仓库>`,
    生成 `dashboard/version.json`(含 version + repo + commit sha)写进镜像.
    前端 header 的 `vX.Y.Z` 徽章就是读它——**镜像里显示什么版本完全由流水线决定**,
    与本地文件无关; 本地没有 version.json 时前端 fallback 显示 `dev`.

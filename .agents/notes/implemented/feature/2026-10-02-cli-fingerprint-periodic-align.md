@@ -2,7 +2,7 @@
 
 Status: implemented
 
-**Affects:** `bin/serve.js`, `src/upstream/official-fingerprint.js`
+**Affects:** `bin/serve.ts`, `src/upstream/official-fingerprint.ts`
 
 ## Problem
 
@@ -51,5 +51,5 @@ CLI 指纹版本号(chat UA 里的 `ai-sdk/openai-compatible/<v>/codebuff`)随�
 
 ## Related
 
-- `src/upstream/official-fingerprint.js`:版本真源与 `refreshCliVersion()` / `getCliVersion()`
+- `src/upstream/official-fingerprint.ts`:版本真源与 `refreshCliVersion()` / `getCliVersion()`
 - 协议逆向总结:`docs/reverse/11-tls-fingerprint.md` § CLI 指纹(`REVERSE_ENGINEERING_SUMMARY.md` 已废弃删除:它写的 CLI 版本号 `0.2.12` 与真值 `KNOWN_CLI_VERSION` 不符)

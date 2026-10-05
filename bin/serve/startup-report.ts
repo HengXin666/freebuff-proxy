@@ -1,5 +1,5 @@
 /**
- * 启动失败的兜底报告 -- 从 bin/serve.js 按职责切出.
+ * 启动失败的兜底报告 -- 从 bin/serve.ts 按职责切出.
  *
  * 为什么切出来: 这段代码唯一的价值是"进程起不来时把原因写清楚", 它与启动
  * 流程本身没有任何耦合; 单独成文件后, 那份诊断文案可以被独立阅读与修改.
@@ -9,8 +9,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
-import { loadConfig } from '../../src/config.js'
-import { dirtyDataFiles, invalidDataFiles } from '../../src/util/json-store.js'
+import { loadConfig } from '../../src/config.ts'
+import { dirtyDataFiles, invalidDataFiles } from '../../src/util/json-store.ts'
 import { parseConfigPath } from './cli-args.ts'
 
 /**

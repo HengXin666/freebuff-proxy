@@ -19,7 +19,7 @@ Status: implemented
 13 项逐项一致**(`docs/reverse/13` §13.3 与本次 CDP 实测 `.agent-option`
 两项吻合).
 
-53 的成因:`src/upstream/client.js` 给 `CatalogHolder` 的 `fetchImpl`
+53 的成因:`src/upstream/client.ts` 给 `CatalogHolder` 的 `fetchImpl`
 加了设备签名三头,而客户端在这一跳**不签**.165 条抓包里只有
 `/api/v1/freebuff/session` 带签名(13 次),`/models` 与 `/device-keys`
 都不带.多带一个客户端没有的特征 → 上游返回了另一份目录.
@@ -59,7 +59,7 @@ Accept: */*
 
 ## Verification
 
-- `src/upstream/client.js` 的 catalog `fetchImpl` 只剩 `fetchWithProxy`,
+- `src/upstream/client.ts` 的 catalog `fetchImpl` 只剩 `fetchWithProxy`,
   日志不再出现 `catalog fetch: adding device signature`.
 - 抓包复核:165 条里 `/models` 与 `/device-keys` 均无签名头,
   `/session` 13 次带签名.

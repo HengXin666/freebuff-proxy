@@ -8,7 +8,7 @@
  *     (面板能显示它, 调度就必须能用它);
  *   - 探测必须是惰性的: 官方建会话路径上那个 GET 会真的建出会话.
  */
-import { logger } from '../../util/log.js'
+import { logger } from '../../util/log.ts'
 
 /**
  * Freebucks 闸门与新会话预算闸门.

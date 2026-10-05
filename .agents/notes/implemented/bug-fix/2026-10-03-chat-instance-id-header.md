@@ -17,7 +17,7 @@ chat          428 {"error":"waiting_room_required",
 **会话建完就消失**,于是排查方向被引向槽位竞争,客户端占用,TLS 指纹,
 代理出口,全都查了一圈也没对上.
 
-真因在 `src/proxy.js` 的 chat 头部组装:只有 `officialChatHeaders`
+真因在 `src/proxy.ts` 的 chat 头部组装:只有 `officialChatHeaders`
 (Authorization + user-agent + 可选的 `x-freebuff-acting-user-id`),
 **没有 `x-freebuff-instance-id`**.上游收到 chat 请求但不知道它属于哪条会话,
 于是按"无会话"处理 → 428.
@@ -31,7 +31,7 @@ chat          428 {"error":"waiting_room_required",
 **`forwardCompletions` 新增 `instanceId` 参数,并在 chat 头部带上
 `x-freebuff-instance-id`.**
 
-- 头部常量复用 `src/upstream/official-fingerprint.js` 的 `HEADER_INSTANCE_ID`,
+- 头部常量复用 `src/upstream/official-fingerprint.ts` 的 `HEADER_INSTANCE_ID`,
   不另立字符串.
 - 值取 `snap.instanceId`(admission 回执给出,调用点已在用).
 - 缺失时(老上游 / 无会话路径)不发该头,行为与改前一致 —— 不引入新失败面.
@@ -62,6 +62,6 @@ chat          428 {"error":"waiting_room_required",
   - 补上后:头部出现 `x-freebuff-instance-id: cli:fc4a5595-…` →
     **428 消失**,转为模型侧 503(另一个独立问题).
   - 单变量对照:只改这一个字段,其余完全不动.
-- 代码核对:`src/proxy.js` 的 chat headers 只有 `officialChatHeaders`,
+- 代码核对:`src/proxy.ts` 的 chat headers 只有 `officialChatHeaders`,
   而 `buildForwardBody` 的 metadata 里一直有 `freebuff_instance_id`.
 - 详见 `docs/reverse/12-waiting-room-slot-contention.md`.

@@ -1,0 +1,237 @@
+/**
+ - 排验脚本:粘性调度(drain, not rotate)vs 每账号并发上限
+ *
+ - 2026-09 改版后的调度原则:请求集中到尽可能少的账号上,用尽才换号;从未用过的
+ - 账号排最后.上游把"轮换健康账号"当账号农场特征,Freebucks 又按会话占用时长
+ - 计费(换号 = 新买一条计费行),所以"全钉一个账号"现在是预期行为.
+ *
+ - 用法:
+ - node test/repro-concurrency.mjs sticky 2 3 8        # 2 账号,上限 3,8 并发 → 全在 A 上排队
+ - node test/repro-concurrency.mjs sticky 2 3 8 broken # 账号 B admit 一直失败(被冷却)
+ - node test/repro-concurrency.mjs sticky 2 3 8 seq    # 顺序请求(一个个来)→ 复用同一热 session
+ - node test/repro-concurrency.mjs sticky 2 3 8 mix    # 先 3 并发占满 A,再顺序来
+ *
+ - 输出: 账号分配 / 响应头账号序列 / 每账号流峰值 / 是否粘性优先
+ */
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { loadConfig } from '../../src/config.ts'
+import { AccountRuntimes } from '../../src/app-context.ts'
+import { startServer } from '../../src/server.ts'
+import { configureLogger } from '../../src/util/log.ts'
+import { saveAccountUser } from '../../src/auth-store.ts'
+
+configureLogger({ level: 'error' })
+
+const [,, modeArg = 'sticky', accountsArg = '2', capArg = '3', reqsArg = '8', extraArg = '' ] = process.argv
+const ACCOUNTS = Number(accountsArg)
+const CAP = Number(capArg)
+const REQS = Number(reqsArg)
+const BROKEN_B = extraArg === 'broken'
+const SEQ = extraArg === 'seq'
+const MIX = extraArg === 'mix'
+
+const originalFetch = globalThis.fetch
+let sessionPosts = 0
+let completionAttempts = 0
+/** token -> 当前在途流数(按账号 token 区分) */
+const activeByToken = new Map()
+/** token -> 峰值 */
+const peakByToken = new Map()
+
+function jsonRes(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
+const enc = new TextEncoder()
+const STREAM_DELAY_MS = 300 // 每块间隔,决定单流时长
+
+globalThis.fetch = async (url, init = {}) => {
+  const u = String(url)
+  if (u.includes('127.0.0.1') || u.includes('localhost')) return originalFetch(url, init)
+  const method = (init.method || 'GET').toUpperCase()
+  const headers = init.headers || {}
+  const auth = headers.Authorization || headers.authorization || headers['x-codebuff-api-key'] || ''
+  const token = String(auth).replace('Bearer ', '').trim()
+
+  if (u.includes('/api/v1/freebuff/session') && method === 'POST') {
+    sessionPosts++
+    if (BROKEN_B && token === 'token-b') {
+      return jsonRes({ status: 'rate_limited', message: 'quota', retryAfterMs: 60_000 }, 429)
+    }
+    const model = headers['x-freebuff-model'] || 'deepseek/deepseek-v4-flash'
+    const rateLimit = {
+      model, entitlementBreakdown: { base: 6 }, limit: 6,
+      period: 'pacific_day', resetTimeZone: 'America/Los_Angeles',
+      resetAt: '2026-08-09T07:00:00.000Z', windowHours: 24, recentCount: 1,
+    }
+    return jsonRes({
+      status: 'active', instanceId: `inst-${token}-${sessionPosts}`, model,
+      admittedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      remainingMs: 3600_000, accessTier: 'full',
+      rateLimit, rateLimitsByModel: { [model]: rateLimit },
+    })
+  }
+  if (u.includes('/api/v1/freebuff/session') && method === 'GET') return jsonRes({ status: 'none', accessTier: 'full' })
+  if (u.includes('/api/v1/freebuff/session') && method === 'DELETE') return jsonRes({ status: 'none' })
+  if (u.includes('/api/v1/agent-runs') && method === 'POST') {
+    const body = JSON.parse(init.body || '{}')
+    if (body.action === 'START') return jsonRes({ runId: '00000000-0000-4000-8000-000000000001' })
+    return jsonRes({ ok: true })
+  }
+  if (u.includes('/api/v1/chat/completions')) {
+    completionAttempts++
+    const cur = activeByToken.get(token) || 0
+    activeByToken.set(token, cur + 1)
+    peakByToken.set(token, Math.max(peakByToken.get(token) || 0, cur + 1))
+    const stream = new ReadableStream({
+      start(controller) {
+        let i = 0
+        const emit = () => {
+          if (i >= 5) {
+            activeByToken.set(token, (activeByToken.get(token) || 0) - 1)
+            try { controller.close() } catch { /* ignore */ }
+            return
+          }
+          controller.enqueue(enc.encode(`data: {"x":"${i}"}\n\n`))
+          i++
+          setTimeout(emit, STREAM_DELAY_MS)
+        }
+        emit()
+      },
+      cancel() {
+        activeByToken.set(token, (activeByToken.get(token) || 0) - 1)
+      },
+    })
+    return new Response(stream, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    })
+  }
+  return originalFetch(url, init)
+}
+
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-repro-'))
+for (let i = 0; i < ACCOUNTS; i++) {
+  const letter = String.fromCharCode(97 + i)
+  saveAccountUser(dir, { id: `k${letter}`, email: `acc-${letter}@example.com`, authToken: `token-${letter}` })
+}
+
+const config = loadConfig()
+config.server.host = '127.0.0.1'
+config.server.port = 0
+config.server.apiKeys = ['sk-test']
+config.upstream.credentialsDir = dir
+config.session.pollIntervalSec = 3600
+config.limits.maxConcurrentRequests = 64
+
+const runtimes = new AccountRuntimes(config, {
+  getAccountConcurrency: () => CAP,
+})
+const server = await startServer({
+  config,
+  runtimes,
+  ...(() => {
+    const rt = runtimes.getAny()
+    return {
+      authToken: rt.authToken, authSource: rt.source, authEmail: rt.email,
+      upstream: rt.upstream, sessions: rt.sessions,
+    }
+  })(),
+})
+const port = server.address().port
+
+const startedAt = Date.now()
+const fire = (i) =>
+  fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer sk-test', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v4-flash',
+      stream: true,
+      messages: [{ role: 'user', content: `hello ${i}` }],
+    }),
+  }).then(async (r) => ({
+    status: r.status,
+    account: r.headers.get('x-freebuff-proxy-account'),
+    elapsed: Date.now() - startedAt,
+    body: (await r.text()).slice(0, 60),
+  }))
+
+let results
+if (SEQ) {
+  // 顺序请求:一个结束才开始下一个(间隔 10ms,保证上一个流已释放锁)
+  results = []
+  for (let i = 0; i < REQS; i++) {
+    results.push(await fire(i))
+    await new Promise((r) => setTimeout(r, 10))
+  }
+} else if (MIX) {
+  // 先 CAP 个并发把 A 占满(不 await 完成,让流保持活跃),再顺序发剩余请求
+  const head = Array.from({ length: CAP }, (_, i) => fire(i))
+  await new Promise((r) => setTimeout(r, 150)) // 等 A 的在途流真正建立(锁已持有)
+  const tail = []
+  for (let i = CAP; i < REQS; i++) {
+    tail.push(await fire(i))
+    await new Promise((r) => setTimeout(r, 10))
+  }
+  results = [...(await Promise.all(head)), ...tail]
+} else {
+  results = await Promise.all(Array.from({ length: REQS }, (_, i) => fire(i)))
+}
+const elapsed = Date.now() - startedAt
+
+const rows = runtimes.list().map((r) => ({
+  email: r.email,
+  inFlight: r.inFlight,
+  concurrency: r.concurrency,
+  requests: r.requests,
+  cooling: r.available ? false : r.cooldownCode,
+}))
+const byAccount = {}
+for (const r of results) {
+  byAccount[r.account] = (byAccount[r.account] || 0) + 1
+}
+
+console.log(`\n=== 场景: 粘性调度 账号数=${ACCOUNTS} 每账号并发上限=${CAP} 请求数=${REQS}${BROKEN_B ? ' B账号损坏(admit失败)' : ''} ===`)
+console.log('账号分配:', byAccount)
+console.log('响应头账号序列:', results.map((r) => r.account))
+console.log('每账号流峰值(mock 观测):', Object.fromEntries([...peakByToken.entries()].map(([k, v]) => [k, v])))
+const cells = rows.map((r) => `${r.email}=${r.inFlight}/${r.concurrency}`
+    + ` 请求${r.requests}${r.cooling ? ` 冷却:${r.cooling}` : ''}`)
+console.log('账号状态(锁口径):', cells.join(' | '))
+console.log('总耗时:', elapsed, 'ms; 上游 admit 次数:', sessionPosts, '; chat 次数:', completionAttempts)
+console.log('全部 200:', results.every((r) => r.status === 200))
+if (results.some((r) => r.status !== 200)) {
+  const bad = results.filter((r) => r.status !== 200)
+    .map((r) => ({ status: r.status, account: r.account, body: r.body, elapsed: r.elapsed }))
+  console.log('非 200 明细:', bad)
+}
+
+// 判定:粘性优先是预期行为----只要没超过单账号并发上限,且没有故障换号,
+// 请求集中在一个账号上就是对的(换号 = 多买一条 Freebucks 计费会话).
+const accountCount = Object.keys(byAccount).length
+const overCap = [...peakByToken.entries()].filter(([, v]) => v > CAP)
+const spilled = accountCount > 1
+
+console.log(`\n--- 结论 ---`)
+console.log(`用了 ${accountCount}/${ACCOUNTS} 个账号; 单账号流峰值是否超上限: ${overCap.length ? JSON.stringify(overCap) : '否'}`)
+if (overCap.length) {
+  console.log(' 单账号并发超过上限（调度异常）')
+} else if (BROKEN_B && spilled) {
+  console.log(` 账号被冷却后换号（用了 ${accountCount} 个账号，共 admit ${sessionPosts} 次）`)
+} else if (accountCount === 1) {
+  console.log(` 粘性优先：请求集中在一个账号上（共 admit ${sessionPosts} 次），未用过的账号保持未启用`)
+} else {
+  console.log(` 换号了 ${accountCount} 个账号（并发上限/故障溢出），共 admit ${sessionPosts} 次`)
+}
+
+globalThis.fetch = originalFetch
+await runtimes.shutdown()
+server.close()
+fs.rmSync(dir, { recursive: true, force: true })

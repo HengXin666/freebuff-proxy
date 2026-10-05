@@ -4,9 +4,9 @@
  * 单独成文件是因为这里每条分支都对应一次实测事故(地理封锁夹在 200 里,
  * 403 才算 terminal,401 必须单独归一),把判据与出处留在同一处便于核对.
  *
- * 从 src/upstream/client.js 拆出(原 1499 行单文件).
+ * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
  */
-import { logger } from '../../../util/log.js'
+import { logger } from '../../../util/log.ts'
 import { UpstreamError, isTerminalCountryBlock } from '../errors.ts'
 
 /**

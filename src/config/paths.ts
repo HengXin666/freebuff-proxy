@@ -2,12 +2,12 @@
  * 路径解析:仓库根 / 凭据目录 / 默认凭据目录.
  *
  *  projectRootFromModule() 靠 import.meta.url 数层级定位仓库根.本文件
- * 从 src/config.js(src/ 下一层)搬到 src/config/(src/ 下两层),
+ * 从 src/config.ts(src/ 下一层)搬到 src/config/(src/ 下两层),
  * 所以上跳层数必须是 ../..  --  写错会让整个仓库的默认 dataDir /
  * credentials 目录指到 src/ 下,且只在运行时表现为找不到数据.
  * 这正是"搬家式重构最典型的静默故障",已用 node -e 实测目录值.
  *
- * 从 src/config.js 拆出(原 446 行单文件).
+ * 从 src/config.ts 拆出(原 446 行单文件).
  */
 import fs from 'node:fs'
 import path from 'node:path'

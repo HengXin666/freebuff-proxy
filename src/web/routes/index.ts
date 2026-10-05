@@ -1,8 +1,8 @@
 /**
  * 控制面路由总装.
  *
- * src/web/api.js 只保留一个薄门面(export { createWebApi }),真正的
- * 实现搬到这里.为什么这样切:src/server.js 只 import web/api.js 一处,
+ * src/web/api.ts 只保留一个薄门面(export { createWebApi }),真正的
+ * 实现搬到这里.为什么这样切:src/server.ts 只 import web/api.js 一处,
  * 门面能把"拆文件"这件事对外的契约面完全隐藏 ---- 不做的话,拆一次就得
  * 同步改 bin/,test/,文档三处引用.
  *
@@ -17,9 +17,9 @@
  * 权限,错误分支,硬塞进表里只会把每个域写成 switch.域内部自己判断更清楚,
  * 且"未处理"是显式的(返回 false),不会出现"以为注册了其实没接上".
  */
-import { sendJson, parseCookies } from '../../util/http.js'
-import { requestSlotStats } from '../../proxy.js'
-import { buildModelsListResponse } from '../../model.js'
+import { sendJson, parseCookies } from '../../util/http.ts'
+import { requestSlotStats } from '../../proxy.ts'
+import { buildModelsListResponse } from '../../model.ts'
 import { readJson } from './lib/helpers.ts'
 import { getSessionUser } from './lib/session.ts'
 import { DOMAINS as CONTROL_DOMAINS, authPublic } from './control/index.ts'

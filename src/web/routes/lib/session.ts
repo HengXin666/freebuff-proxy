@@ -17,7 +17,7 @@
  * 安全性:API Key 本就是该用户的长期凭据(前端"用户管理"里可见,
  * 可重置),拿它读自己账号池的状态与日志不扩大暴露面.未认证仍然 401.
  */
-import { parseCookies } from '../../../util/http.js'
+import { parseCookies } from '../../../util/http.ts'
 import type { IncomingMessage } from 'node:http'
 
 export const SESSION_COOKIE = 'fb_session'

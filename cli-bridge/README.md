@@ -32,16 +32,16 @@ Client Hello 与官方同源.
 ```
 freebuff-cli-bridge/
 ├── bun            官方客户端自带的 bun 1.4.2（79MB，已从 AppImage 固化）
-├── upstream.mjs   跑在 bun 里的上游请求层（设备签名/目录协议/chat 全在此）
-├── bridge.mjs     Node 侧封装：spawn bun、构造 cfg
-├── serve.mjs      OpenAI 兼容服务：/v1/models、/v1/chat/completions、/healthz
+├── upstream.ts   跑在 bun 里的上游请求层（设备签名/目录协议/chat 全在此）
+├── bridge.ts     Node 侧封装：spawn bun、构造 cfg
+├── serve.ts      OpenAI 兼容服务：/v1/models、/v1/chat/completions、/healthz
 └── README.md
 ```
 
 用法
 
 ```bash
-PORT=8791 node serve.mjs
+PORT=8791 node serve.ts
 curl http://127.0.0.1:8791/v1/models
 curl -X POST http://127.0.0.1:8791/v1/chat/completions \
   -H 'Content-Type: application/json' \
@@ -53,9 +53,9 @@ curl -X POST http://127.0.0.1:8791/v1/chat/completions \
 单独调 bun 层(调试用):
 
 ```bash
-./bun upstream.mjs '{"cfg":{...},"action":"catalog"}'
+./bun upstream.ts '{"cfg":{...},"action":"catalog"}'
 echo '{"cfg":{...},"action":"full","modelKey":"m-00032eaeec",
-      "messages":[{"role":"user","content":"hi"}]}' | ./bun upstream.mjs
+      "messages":[{"role":"user","content":"hi"}]}' | ./bun upstream.ts
 ```
 
 action:`catalog` / `session` / `admit` / `startRun` / `chat` / `full`

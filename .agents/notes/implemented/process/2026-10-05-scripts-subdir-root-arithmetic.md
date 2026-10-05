@@ -2,7 +2,7 @@
 
 Status: implemented
 
-受影响代码: `scripts/release/inject-version.mjs`,`scripts/catalog/sync-catalog.mjs`
+受影响代码: `scripts/release/inject-version.ts`,`scripts/catalog/sync-catalog.ts`
 
 ## Problem
 

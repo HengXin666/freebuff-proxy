@@ -4,12 +4,12 @@
  * 所有"看起来像配置就能覆盖"的口子在这里收敛成一条规则:能覆盖的只有
  * 明确列出的环境变量,其余一律以 DEFAULTS 为准(api_base 尤其如此).
  *
- * 从 src/config.js 拆出(原 446 行单文件).
+ * 从 src/config.ts 拆出(原 446 行单文件).
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { parse as parseYaml } from 'yaml'
-import { sanitizeProxyList } from '../util/json-store.js'
+import { sanitizeProxyList } from '../util/json-store.ts'
 import { DEFAULTS, UPSTREAM_API_BASE } from './defaults.ts'
 import { deepMerge, normalizeKeys, stripTrailingSlash } from './merge.ts'
 import { projectRootFromModule, resolveDefaultCredentialsDir } from './paths.ts'
@@ -113,7 +113,7 @@ export function loadConfig(configPath?: string): Record<string, any> {
    * 老配置文件(含全新容器从 config.example.yaml 生成的那份)里可能写着
    * https://codebuff.com(主机名少了 w 前缀),那会让所有上游请求 401,控制台显示
    * [凭证失效].这里无条件纠正,而不是"用户没配才用默认值".
-   * 详见 defaults.js 里 UPSTREAM_API_BASE 的注释.
+   * 详见 defaults.ts 里 UPSTREAM_API_BASE 的注释.
    *
    * 唯一可覆盖口是环境变量 FREEBUFF_UPSTREAM_API_BASE(本地镜像对照用).
    */

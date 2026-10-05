@@ -9,12 +9,12 @@
  *   credentials/<key>.json      key = Freebuff 用户 id(新布局)
  *   credentials/<email>.json    历史布局,读取时自动迁移到 <id>.json
  *
- * 从 src/auth-store.js 拆出(原 392 行单文件).
+ * 从 src/auth-store.ts 拆出(原 392 行单文件).
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { credentialsDir, projectRootFromModule } from '../config.js'
-import { logger } from '../util/log.js'
+import { credentialsDir, projectRootFromModule } from '../config.ts'
+import { logger } from '../util/log.ts'
 
 /**
  * 解析凭据目录(配置显式值优先,否则仓库默认).

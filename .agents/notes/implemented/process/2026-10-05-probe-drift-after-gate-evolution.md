@@ -2,7 +2,7 @@
 
 Status: implemented
 
-受影响代码: `scripts/gates/probes/cases.mjs`,`scripts/gates/probe-gates.mjs`
+受影响代码: `scripts/gates/probes/cases.ts`,`scripts/gates/probe-gates.ts`
 
 ## Problem
 
@@ -61,6 +61,6 @@ Status: implemented
 ## Consequences
 
 - 门禁新增/修改 `MIN_*` 下界,输出文案,或注册表路径时,**必须同时检查探针**.
-  这条写进 `scripts/gates/probes/cases.mjs` 的文件头.
+  这条写进 `scripts/gates/probes/cases.ts` 的文件头.
 - `npm run check:gates:probe` 现在是 `quality` job 的必过步骤;本次修复后
   22 条探针全部符合预期.

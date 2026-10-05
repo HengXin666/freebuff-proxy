@@ -4,7 +4,7 @@
  * 全部是纯函数(无 IO),因此可以单独测试.deepMerge 的深拷贝不是优化
  * 而是正确性要求(历史 bug:浅拷贝让 DEFAULTS 被污染).
  *
- * 从 src/config.js 拆出(原 446 行单文件).
+ * 从 src/config.ts 拆出(原 446 行单文件).
  */
 import { DROPPED_KEYS, KEY_MAP } from './defaults.ts'
 

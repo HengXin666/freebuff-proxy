@@ -4,12 +4,12 @@
  * 主服务(Node)不复制任何协议逻辑,只做端口调用;bun 不可用或失败时
  * 按各函数注释里写明的规则回落(可用性优先,但 401 是例外,必须显式抛出).
  *
- * 从 src/upstream/client.js 拆出(原 1499 行单文件).
+ * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
  */
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { logger } from '../../util/log.js'
+import { logger } from '../../util/log.ts'
 import { UpstreamError } from './errors.ts'
 
 /**
@@ -69,7 +69,7 @@ export function makeBunFetcher(apiBase?: string): ((input: Record<string, any>) 
   return async (input: Record<string, any>) => {
     if (bunEnabled() === false) return null
     if (loader === null) {
-      loader = import('../../../cli-bridge/bridge.mjs')
+      loader = import('../../../cli-bridge/bridge.ts')
         .then((m) => (m.hasBun() ? m.callBun : null))
         .catch(() => null)
     }
@@ -103,7 +103,7 @@ export function makeReleaseViaBun(
   return async (instanceId: string) => {
     try {
       if (!bunEnabled()) return null
-      if (loader === null) loader = import('../official-rpc.js').catch(() => null)
+      if (loader === null) loader = import('../official-rpc.ts').catch(() => null)
       const mod: any = await loader
       if (!mod?.rpcReleaseSession || !mod?.buildRpcCfg) return null
       const cfg: any = await mod.buildRpcCfg(
@@ -152,7 +152,7 @@ export function makeDeviceKeysViaBun(
     }
     try {
       if (!bunEnabled()) return fallback(url, init)
-      if (loader === null) loader = import('../official-rpc.js').catch(() => null)
+      if (loader === null) loader = import('../official-rpc.ts').catch(() => null)
       const mod: any = await loader
       if (!mod?.rpcRegisterDeviceKey) return fallback(url, init)
       const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {}
@@ -201,7 +201,7 @@ export function makeSessionViaBun(
   return async (opts: { instanceId?: string | null, heartbeat?: boolean } = {}) => {
     try {
       if (!bunEnabled()) return null
-      if (loader === null) loader = import('../official-rpc.js').catch(() => null)
+      if (loader === null) loader = import('../official-rpc.ts').catch(() => null)
       const mod: any = await loader
       if (!mod?.rpcSession || !mod?.buildRpcCfg) return null
       /**

@@ -5,8 +5,8 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import { sendJson } from '../../../util/http.js'
-import { UpstreamError } from '../../../upstream/client.js'
+import { sendJson } from '../../../util/http.ts'
+import { UpstreamError } from '../../../upstream/client.ts'
 
 /** 管道失败归类后交给调用方的处置结论. */
 export interface StreamPipeFailure {

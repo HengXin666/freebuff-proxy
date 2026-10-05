@@ -4,8 +4,8 @@
  * 从 app-context.js 按职责切出. 这些动作的共同点是"会动到别的请求正在用的
  * 出网资源", 因此每个都以"先优雅释放会话, 再关 agent"为顺序.
  */
-import { UpstreamError } from '../../upstream/client.js'
-import { logger } from '../../util/log.js'
+import { UpstreamError } from '../../upstream/client.ts'
+import { logger } from '../../util/log.ts'
 
 /**
  * 丢弃一个 runtime 时的统一收尾:先优雅释放它的上游会话(要用它的

@@ -39,7 +39,7 @@ upstream error; switching account  code=freebucks_exhausted  attempt=1/2/3
 且**不落盘**(纯内存).用户想查 30 分钟前的记录时,缓冲里只剩最近 16 分钟 ——
 **取证彻底不可能**.
 
-顺带发现一处**骗人的注释**:`src/util/log.js` 写着"可由 config.log.ringCap 调整",
+顺带发现一处**骗人的注释**:`src/util/log.ts` 写着"可由 config.log.ringCap 调整",
 但 `config.js` 里**根本没有 `ringCap` 这一项**,`configureLogBuffer` 也从未被调用 ——
 容量永远锁死 500.
 

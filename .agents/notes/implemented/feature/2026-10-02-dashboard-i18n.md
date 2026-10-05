@@ -2,8 +2,8 @@
 
 Status: implemented
 
-**Affects:** `dashboard/i18n.js`(新),`dashboard/app.js`,`dashboard/index.html`,
-`dashboard/style.css`,`scripts/check-i18n.mjs`(新),`.github/workflows/docker-image.yml`
+**Affects:** `dashboard/i18n.js`(新),`dashboard/app.ts`,`dashboard/index.html`,
+`dashboard/style.css`,`scripts/check-i18n.ts`(新),`.github/workflows/docker-image.yml`
 
 ## Problem
 
@@ -21,7 +21,7 @@ Status: implemented
 - 顶栏 `<select>` 切换;切换后 `render()` 整页重渲染(只重画 DOM,不重拉数据,
   所以在途请求与已买断会话不受影响),并同步 `<html lang>`.
 
-**红线** `scripts/check-i18n.mjs`,CI 独立 job `i18n`,且 `build-push` 依赖它:
+**红线** `scripts/check-i18n.ts`,CI 独立 job `i18n`,且 `build-push` 依赖它:
 1. `app.js` 不得有硬编码 CJK(豁免:块注释/行注释/`console.*`)
 2. 各语种 key 与基准语种完全一致(缺/多都失败)
 3. 代码引用的 key 必须存在于字典
@@ -62,7 +62,7 @@ Status: implemented
 
 ## Related
 
-- `scripts/check-i18n.mjs`:红线实现(含各条检查的注释说明)
+- `scripts/check-i18n.ts`:红线实现(含各条检查的注释说明)
 - CI:`.github/workflows/docker-image.yml` 的 `i18n` job
 - 本轮同时修的模型名显示:`.agents/notes/implemented/bug-fix/2026-10-02-catalog-key-display-name-bridge.md`
 

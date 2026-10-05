@@ -57,7 +57,7 @@ jobs:
   # 多语言红线：控制台文案一旦有人图快直接写中文字面量，多语言会**静默退化**
   # —— 中文用户看不出问题，英文用户看到一块中文，且 review 极难发现。
   # 这里用机器钉死三条线：
-  #   1) dashboard/app.js 不得出现硬编码 CJK 字面量（注释/调试输出除外）
+  #   1) dashboard/app.ts 不得出现硬编码 CJK 字面量（注释/调试输出除外）
   #   2) 各语种词条 key 必须与基准语种一致（不许缺、不许多个）
   #   3) 代码里 t('key') 用到的 key 必须在字典里存在
   i18n:
@@ -68,11 +68,11 @@ jobs:
         with:
           node-version: 22
       - name: Check i18n red lines
-        run: node scripts/check-i18n.mjs
+        run: node scripts/check-i18n.ts
 
   # 上游契门禁：上游改了端点/头名，必须**机器发现**，不能靠人读文档再对代码。
   # 判据：抓包生成的契约快照（docs/reverse/upstream-contract.json）
-  #       ↔ 单一真源（src/upstream/upstream-contract.js）对账；
+  #       ↔ 单一真源（src/upstream/upstream-contract.ts）对账；
   #       另拦两类违规：源码里绕过真源的裸头字面量、已废弃头的回潮。
   # 上游变更后的处置：重抓包 → npm run gen:contract → 改真源文件 → 本关转绿。
   contract:
@@ -83,7 +83,7 @@ jobs:
         with:
           node-version: 22
       - name: Verify upstream contract matches the single source of truth
-        run: node scripts/check-upstream-contract.mjs
+        run: node scripts/check-upstream-contract.ts
 
   # 镜像启动门禁：真实构建 + 真实起容器 + 真实打健康检查。
   #
@@ -100,7 +100,7 @@ jobs:
         with:
           node-version: 22
       - name: Build image and verify it actually boots
-        run: node scripts/ci/pipeline-image-test.mjs
+        run: node scripts/ci/pipeline-image-test.ts
 
   # 发版门禁：tag（v*）必须与 package.json 版本一致，否则直接失败。
   # 这是「发版必须更新版本号」的强制保障——漏 bump 版本就推 tag 会在这一步被拦下。
@@ -172,7 +172,7 @@ jobs:
           fi
           VERSION="${VERSION#v}"
           SHA="${{ github.sha }}"
-          node scripts/release/inject-version.mjs --version "${VERSION}" --repo "https://github.com/${{ github.repository }}"
+          node scripts/release/inject-version.ts --version "${VERSION}" --repo "https://github.com/${{ github.repository }}"
           # 额外把 commit sha 也带上，便于追版本来源
           node -e "const fs=require('fs');const p='dashboard/version.json';const j=JSON.parse(fs.readFileSync(p));j.commit='${SHA}';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
           cat dashboard/version.json

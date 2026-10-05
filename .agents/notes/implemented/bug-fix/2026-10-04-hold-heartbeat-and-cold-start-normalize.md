@@ -50,7 +50,7 @@ bun 侧 `getSession()` 也不构造这两个头.
 
 ### 一,补上持有心跳(三处接线)
 
-- `cli-bridge/upstream.mjs` 的 `getSession(opts)`:接收 `instanceId` / `heartbeat`,
+- `cli-bridge/upstream.ts` 的 `getSession(opts)`:接收 `instanceId` / `heartbeat`,
   按官方三元构造头(心跳不带时区,带 `x-freebuff-heartbeat: 1`).
 - `official-rpc.js` 的 `rpcSession`:透传 `instanceId` / `heartbeat` 到 bun.
 - `client.js` 的 `makeSessionViaBun`:改签名收 `opts` 并透传(**此前静默丢弃**).

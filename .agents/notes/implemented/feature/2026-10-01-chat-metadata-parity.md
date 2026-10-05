@@ -23,7 +23,7 @@ Status: implemented
 
 ## Decision
 
-**实现 `src/upstream/chat-metadata-parity.js` 并在 `buildForwardBody` 里补齐.**
+**实现 `src/upstream/chat-metadata-parity.ts` 并在 `buildForwardBody` 里补齐.**
 
 格式逐字对齐官方 `cli/src/utils/input-profile.ts` 的 `encodeInputProfile()`:
 

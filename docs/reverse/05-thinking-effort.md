@@ -47,7 +47,7 @@ freebuffCatalogRowSchema = {
 
 即上游认识两个思考字段:`reasoning`(对象式)与 `reasoning_effort`(字符串式).
 
- **只能发一个**:仓库 `src/proxy.js` 的 `normalizeReasoningFields(body)`
+ **只能发一个**:仓库 `src/proxy.ts` 的 `normalizeReasoningFields(body)`
 注释写得很直白 —— "One reasoning field only — avoids Freebuff default +
 client dual fields.".同时发两个会与上游默认值打架.
 

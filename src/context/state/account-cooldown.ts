@@ -6,7 +6,7 @@
  * @param {any} this 账号池(runtimes)
  * @returns {any} 见实现
  */
-import { logger } from '../../util/log.js'
+import { logger } from '../../util/log.ts'
 import {
   ACCOUNT_COOLDOWN_CODES,
   BANNED_COOLDOWN_MS,

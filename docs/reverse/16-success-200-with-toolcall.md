@@ -66,13 +66,13 @@ review 报告推测 **`cli:` 前缀 + 每次新建** 是"购买被全额退款"�
 ## 复现
 
 ```bash
-node cli-bridge/serve.mjs            # OpenAI 兼容服务
+node cli-bridge/serve.ts            # OpenAI 兼容服务
 # 或直接用 action=full，layer=worker，modelKey=m-096e75164d
 ```
 
 ## 后续
 
-- 若要把这条链路并回主项目 `src/proxy.js`,需要同步上表 9 项
+- 若要把这条链路并回主项目 `src/proxy.ts`,需要同步上表 9 项
   (尤其是 chat 头部删 5 个,instance id 裸 UUID,agent 世代,工具集).
 - FINISH 上报(P1-6)尚未实现,run 不会主动结束 —— 官方每次都发.
 - `repo_snapshot` 仍是硬编码 0(P1-9),worker 层应为真实项目统计.

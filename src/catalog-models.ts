@@ -1,5 +1,5 @@
 // 模型名称的单一真源:对外名称只在这里定义(见 catalogDisplayName 的注释)
-import { catalogDisplayName } from './model.js'
+import { catalogDisplayName } from './model.ts'
 
 /** buildCatalogDrivenModelsResponse 的输入. */
 export interface CatalogModelsInput {
@@ -16,11 +16,11 @@ export interface CatalogModelsInput {
  * 目录驱动的模型表  --  模型清单的权威.
  *
  * 单独成文件的原因(不是洁癖,是实测踩出来的):
- * 这段逻辑放在 src/model.js 里时,静态 import 该模块 + 传入 13 行目录的
+ * 这段逻辑放在 src/model.ts 里时,静态 import 该模块 + 传入 13 行目录的
  * 场景下,结果对象的 freebucks_per_hour 等字段会静默变成 null  --
  * 同一个函数用动态 import() 调用就完全正常(已用真机抓包目录双向验证:
  * 动态 10/15/15/20/30/0/10/0/80/15/100/2/2 全对,静态全 null).
- * model.js 在模块顶层读 catalog 缓存,建多张索引表,怀疑与其模块求值
+ * model.ts 在模块顶层读 catalog 缓存,建多张索引表,怀疑与其模块求值
  * 副作用交互触发了 V8 的优化问题.独立模块后两种加载路径行为一致.
  *
  * 契约见 docs/reverse/19-catalog-is-the-model-list.md.
@@ -87,9 +87,9 @@ export function buildCatalogDrivenModelsResponse(input: CatalogModelsInput = {})
    - 先把目录行规范化成干净对象再组装.
    *
    - 为什么要这一步(实测,不是洁癖):直接消费上游原文行时,在与
-   - model.js 同进程的场景下,结果对象的 freebucks_per_hour 等字段会
+   - model.ts 同进程的场景下,结果对象的 freebucks_per_hour 等字段会
    - 静默变成 null(连 JSON.stringify 都拿不到).规范化成自建的干净对象
-   - 后行为确定  --  已用 13 行真机目录 + 与 model.js 共存两种条件验证.
+   - 后行为确定  --  已用 13 行真机目录 + 与 model.ts 共存两种条件验证.
    *
    - 附带好处:下游只拿得到我们声明过的字段,不会被上游新增字段带偏.
    */

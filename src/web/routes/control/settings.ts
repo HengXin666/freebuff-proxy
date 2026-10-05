@@ -5,8 +5,8 @@
  * 字段表.分开放最容易出现的漂移是"写进去的字段 GET 没回显",于是前端
  * 保存后刷新一次设置就变回旧值 ---- 用户看到的现象是"设置保存不了".
  */
-import { sendJson } from '../../../util/http.js'
-import { logger } from '../../../util/log.js'
+import { sendJson } from '../../../util/http.ts'
+import { logger } from '../../../util/log.ts'
 import { envProxyOrNull } from '../lib/helpers.ts'
 import { denyUnlessAdmin } from '../lib/http-codes.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'

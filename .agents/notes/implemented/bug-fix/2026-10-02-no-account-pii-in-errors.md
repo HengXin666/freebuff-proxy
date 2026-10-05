@@ -2,7 +2,7 @@
 
 Status: implemented
 
-**Affects:** `src/app-context.js`(`sanitizeFailuresForClient` / `countReasons` / `maskEmail`),`test/smoke.mjs`
+**Affects:** `src/app-context.ts`(`sanitizeFailuresForClient` / `countReasons` / `maskEmail`),`test/smoke.mjs`
 
 ## Problem
 

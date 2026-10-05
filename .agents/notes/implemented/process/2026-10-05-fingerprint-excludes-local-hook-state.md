@@ -2,7 +2,7 @@
 
 Status: implemented
 
-受影响代码: `scripts/gates/meta/fingerprint.mjs`,`.gates/fingerprint.json`
+受影响代码: `scripts/gates/meta/fingerprint.ts`,`.gates/fingerprint.json`
 
 ## Problem
 
@@ -17,7 +17,7 @@ Status: implemented
 本地跑 `npm run check:gates` 全绿, CI 红, 原因只是"CI 没装 hook".
 
 同一处还有第二个缺陷: 抽取组名的正则用了 `(\S+)`, 会贪婪匹配到
-`if [ -f scripts/gates/run.mjs ];` 那行的 `];`, 所以指纹里原本记的是垃圾值,
+`if [ -f scripts/gates/run.ts ];` 那行的 `];`, 所以指纹里原本记的是垃圾值,
 且它随 shell 语法微调而变.
 
 ## Decision
@@ -26,7 +26,7 @@ Status: implemented
 
 hook 是否真的在跑门禁, 改由两条更可靠的东西守:
 
-- pre-commit 自己调 `scripts/gates/run.mjs pre-commit` -- 装了 hook 就会跑;
+- pre-commit 自己调 `scripts/gates/run.ts pre-commit` -- 装了 hook 就会跑;
 - CI 的 `quality` job 直接跑 `npm run check:gates` -- 不依赖任何本地 hook.
 
 也就是说: 这个风险的**检查点**本来就不该是指纹, 而是那两个真实入口本身.

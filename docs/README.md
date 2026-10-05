@@ -2,7 +2,7 @@
 
 > 最后核对: 2026-10-05 · 对应代码: 3a8aebb
 > 这个文件是**文档的入口**：回答"某个主题该看哪个文件"，并声明**每份文档的唯一真源地位**。
-> 它由门禁 `scripts/gates/checks/doc/check-docs.mjs` 对账（端点 / 路径引用 / 真源唯一性 / 索引链接）。
+> 它由门禁 `scripts/gates/checks/doc/check-docs.ts` 对账（端点 / 路径引用 / 真源唯一性 / 索引链接）。
 
 ## 一、文档规范（三条硬约定）
 
@@ -61,7 +61,7 @@
 | [reverse/08-second-ban-and-byok.md](reverse/08-second-ban-and-byok.md) | 第二次封禁（BYOK 否决依据） | `AGENTS.md` 指名 |
 | [reverse/09-third-party-review.md](reverse/09-third-party-review.md) | 第三方实现考究（拒采理由） | |
 | [reverse/10-third-party-lza6.md](reverse/10-third-party-lza6.md) | 第三方实现考究（拒采理由） | |
-| [reverse/11-tls-fingerprint.md](reverse/11-tls-fingerprint.md) | TLS 指纹实证（Node vs 官方 bun） |  曾误标「CLI 指纹真源」；**CLI 指纹真源 = `src/upstream/official-fingerprint.js`**（`KNOWN_CLI_VERSION`），文档侧无真源 |
+| [reverse/11-tls-fingerprint.md](reverse/11-tls-fingerprint.md) | TLS 指纹实证（Node vs 官方 bun） |  曾误标「CLI 指纹真源」；**CLI 指纹真源 = `src/upstream/official-fingerprint.ts`**（`KNOWN_CLI_VERSION`），文档侧无真源 |
 | [reverse/12-waiting-room-slot-contention.md](reverse/12-waiting-room-slot-contention.md) | 428 waiting_room 真因 | `AGENTS.md` 指名 |
 | [reverse/13-client-ui-recon.md](reverse/13-client-ui-recon.md) | 纯 UI 侦查（零协议请求） | |
 | [reverse/14-captured-diff.md](reverse/14-captured-diff.md) | 抓包逐字段 diff | |
@@ -90,8 +90,8 @@
 ## 四、常见误配（都已误导过至少一份文档，写在这里防复发）
 
 1. **`upstream.api_base` 写了不生效 —— 它是硬编码的。**
-   真源 = `src/config.js` 的 `UPSTREAM_API_BASE`（`https://www.codebuff.com`），
-   `loadConfig()` 在 `src/config.js:381-383` **无条件覆盖**配置文件里的值。
+   真源 = `src/config.ts` 的 `UPSTREAM_API_BASE`（`https://www.codebuff.com`），
+   `loadConfig()` 在 `src/config.ts:381-383` **无条件覆盖**配置文件里的值。
    唯一可覆盖口 = 环境变量 `FREEBUFF_UPSTREAM_API_BASE`（仅供本地镜像对照 / 离线契约测试）。
    误配原型：`docs/configuration.md`、`docs/screenshots.md`、`docs/reverse/21` 都曾教人改
    `api_base` 去指向 mock 上游 —— 那条路**走不通**。

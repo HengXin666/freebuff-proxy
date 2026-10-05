@@ -8,7 +8,7 @@
  * 两本账是并行的两道闸门, 见
  * .agents/notes/implemented/architecture/2026-09-14-two-ledgers-parallel-gates.md
  */
-import { isFreeModel } from '../../model.js'
+import { isFreeModel } from '../../model.ts'
 
 /**
  * session_units 闸门(与 Freebucks 并行的第二道).

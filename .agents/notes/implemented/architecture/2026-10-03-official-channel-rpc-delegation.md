@@ -31,7 +31,7 @@ Status: implemented
 - 用副仓库的 `reuse`(只 startRun + chat)而非 `full`:
   主服务**已经**做过 admission 并持有会话,副仓库不该再买一次
   (一次 admit = 买断一小时).
-- `src/upstream/official-rpc.js` 是薄客户端:只做参数转发与结果透传,
+- `src/upstream/official-rpc.ts` 是薄客户端:只做参数转发与结果透传,
   **不含任何协议逻辑**.`buildRpcCfg()` 负责把主服务的设备密钥文件转成
   副仓库需要的 cfg(`client.js` 为此暴露 `deviceKeyPath`).
 - 通道优先级:`settingsStore.upstreamChannel`(前端可调)>

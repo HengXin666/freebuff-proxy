@@ -9,8 +9,8 @@
  * countryBlockReason 只是说明性字段, 槽位被占要带 takeover id 接管,
  * purchase_claim_released 要换全新 instanceId 重试一次.
  */
-import { isTerminalCountryBlock } from '../../upstream/client.js'
-import { newRawInstanceId } from '../../upstream/official-fingerprint.js'
+import { isTerminalCountryBlock } from '../../upstream/client.ts'
+import { newRawInstanceId } from '../../upstream/official-fingerprint.ts'
 import { logger } from '../../util/log.ts'
 
 /**

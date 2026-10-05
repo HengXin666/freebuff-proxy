@@ -5,9 +5,9 @@
  *   - hide  : 把 id 记进隐藏集,内置目录条目也一起从列表/调度里消失,可 unhide 恢复;
  *   - remove: 只从自定义列表里删掉,回退到内置目录(不是隐藏,也无需恢复).
  */
-import { sendJson } from '../../../../util/http.js'
-import { logger } from '../../../../util/log.js'
-import { buildModelsListResponse } from '../../../../model.js'
+import { sendJson } from '../../../../util/http.ts'
+import { logger } from '../../../../util/log.ts'
+import { buildModelsListResponse } from '../../../../model.ts'
 import { denyUnlessAdmin } from '../../lib/http-codes.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 

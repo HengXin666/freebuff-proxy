@@ -7,8 +7,8 @@
  *
  * 模型标识的唯一真源在这里, 上层(proxy / web)一律复用它, 不得另写映射.
  */
-import { freebuffLegacyModelDigest } from '../../upstream/catalog-protocol.js'
-import { FREEBUFF_AVAILABLE_MODELS } from '../../model.js'
+import { freebuffLegacyModelDigest } from '../../upstream/catalog-protocol.ts'
+import { FREEBUFF_AVAILABLE_MODELS } from '../../model.ts'
 
 /**
  * 在所有已知 runtime 的目录持有者上依次尝试解析,返回第一个非空结果.

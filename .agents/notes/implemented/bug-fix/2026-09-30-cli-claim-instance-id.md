@@ -37,7 +37,7 @@ export const FREEBUFF_CLI_CLAIM_PREFIX = 'cli:'
 **admit 时自生成 `cli:<uuid>` claim 并发给服务端,同时按官方条件带齐
 multi-session 协议头与 `surface: 'cli'` metadata.**
 
-- `newCliClaimId()` / `isCliClaim()` 落在 `src/upstream/official-fingerprint.js`.
+- `newCliClaimId()` / `isCliClaim()` 落在 `src/upstream/official-fingerprint.ts`.
 - POST 是否带 instance-id 头严格照官方判据
   `if ((multiSession || method !== 'POST') && opts.instanceId)`:
   GET/DELETE 总是带;POST **只在 cli claim 时**带(那是客户端声明的 claim).

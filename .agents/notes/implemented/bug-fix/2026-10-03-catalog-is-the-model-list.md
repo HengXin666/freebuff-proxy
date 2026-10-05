@@ -36,7 +36,7 @@ Status: implemented
    新增 `runtimes.catalogRows()` 做跨账号并集,`refreshCatalogs()` 补抓 ——
    目录是懒加载的,而 `/v1/models` 常常是启动后第一个请求.
 2. `runtimes.catalogQuota()` 只出 `{ rateLimits, prices, accessTier }`.
-3. 新增 `src/catalog-models.js` 的 `buildCatalogDrivenModelsResponse()`:
+3. 新增 `src/catalog-models.ts` 的 `buildCatalogDrivenModelsResponse()`:
    以目录行的 `displayName` 为 `id`(可读),`freebuff_key` 透出 `m-xxx`.
    用户明确要求对外模型名必须可读,且对外 API 与控制台口径一致.
 4. `isModelAllowed` 新增 `catalogKeys`(key + 可读名两个口径),否则目录里
@@ -47,9 +47,9 @@ Status: implemented
 
 ### 为什么 buildCatalogDrivenModelsResponse 单独成文件
 
-放在 `src/model.js` 里时,在与 model.js 同进程,进程早期调用的场景下,
+放在 `src/model.ts` 里时,在与 model.js 同进程,进程早期调用的场景下,
 结果对象的部分字段会出现"键存在但读不到"的现象.独立成
-`src/catalog-models.js` 后行为确定(真实服务与离线测试两侧都验证过).
+`src/catalog-models.ts` 后行为确定(真实服务与离线测试两侧都验证过).
 
 ## Consequences
 

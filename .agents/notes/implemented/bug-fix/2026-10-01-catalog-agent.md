@@ -55,7 +55,7 @@ Ps$(H) { return WD().row(H)?.key === H ? UK : cCH(H) }
 ## Consequences
 
 - 目录模式下 agent 与系统消息开场白**同代**,不再出现跨世代组合.
-- `CATALOG_UNIFIED_AGENT_ID` 成为该常量的唯一定义处(`src/model.js`).
+- `CATALOG_UNIFIED_AGENT_ID` 成为该常量的唯一定义处(`src/model.ts`).
 
 ## Evidence
 

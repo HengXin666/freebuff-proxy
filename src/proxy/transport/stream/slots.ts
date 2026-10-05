@@ -1,9 +1,9 @@
 /**
- * 全局 chat 并发闸门(进程内信号量)---- 从 stream-pipe.js 按职责切出.
+ * 全局 chat 并发闸门(进程内信号量)---- 从 stream-pipe.ts 按职责切出.
  *
  * _inFlight / _waitQueue 是模块私有状态,必须与操作它们的函数同处一个模块.
  */
-import { UpstreamError } from '../../../upstream/client.js'
+import { UpstreamError } from '../../../upstream/client.ts'
 
 /** 在途 chat 请求数(占用中的槽位). */
 let _inFlight = 0

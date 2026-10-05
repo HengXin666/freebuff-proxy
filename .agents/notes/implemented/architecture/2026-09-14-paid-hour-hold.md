@@ -83,6 +83,6 @@ Freebucks 退回来,所以[挂着的空闲会话是在花钱],越早释放越省
   **断言 `sessionDeletes === 0` 且会话仍为 `active`**;把 `expiresAt` 拨到过去后再断言释放**恢复生效**
   (`DELETE` 带 `x-freebuff-instance-id`,退款回执落账).这条用例在两个方向上都钉死了行为.
 - `REFUND-COPY` 全仓扫描改为钉死**新**的旧说法(按实际占用退还 Freebucks / 退还未用时长 /
-  挂着的空闲会话在按小时计价 / 越早释放越省).它在本轮真的抓到了 AGENTS.md,bin/pricing.js,
-  docs/configuration.md,docs/scheduling.md,dashboard/app.js 里漏改的 8 处.
+  挂着的空闲会话在按小时计价 / 越早释放越省).它在本轮真的抓到了 AGENTS.md,bin/pricing.ts,
+  docs/configuration.md,docs/scheduling.md,dashboard/app.ts 里漏改的 8 处.
 - `npm test`,`npm run typecheck`,`npm run verify-notes`,`docker compose config --quiet` 全过.

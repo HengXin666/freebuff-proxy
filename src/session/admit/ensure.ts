@@ -7,7 +7,7 @@
  *
  * 见 .agents/notes/implemented/architecture/2026-09-14-paid-hour-hold.md
  */
-import { UpstreamError } from '../../upstream/client.js'
+import { UpstreamError } from '../../upstream/client.ts'
 import { logger } from '../../util/log.ts'
 
 /**

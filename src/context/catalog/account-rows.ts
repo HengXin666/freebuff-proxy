@@ -5,7 +5,7 @@
  * 这边把多个账号各自持有的目录合成本服务对外的一份清单, 并从 session 回执
  * 里取额度与单价.
  */
-import { logger } from '../../util/log.js'
+import { logger } from '../../util/log.ts'
 
 /**
  * 模型清单(权威):聚合所有账号已抓取的目录行.

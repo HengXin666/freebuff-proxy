@@ -9,7 +9,7 @@
  *   默认            = 普通探测(能拿回额度/单价)
  * 见 orchestrator.js:207945-207957.
  */
-import { UpstreamError } from '../../upstream/client.js'
+import { UpstreamError } from '../../upstream/client.ts'
 import { logger } from '../../util/log.ts'
 import { accountLevelSessionStatus } from '../inventory.ts'
 

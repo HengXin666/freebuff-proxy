@@ -10,7 +10,7 @@
  * 持锁者受 streamIdleTimeoutSec / 各 HTTP 阶段超时约束, 无限等待在实际运行中
  * 是有上界的.
  */
-import { UpstreamError } from '../../upstream/client.js'
+import { UpstreamError } from '../../upstream/client.ts'
 
 /**
  * 账号级 chat 并发信号量(公平 FIFO + 有界等待).

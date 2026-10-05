@@ -19,7 +19,7 @@ Status: implemented
 
 根子是**没有单一真源**:
 - 名称计算散在 6 处(`catalog-models.js` ×2,`web/api.js` ×1,`model.js` ×2,
-  `dashboard/app.js` ×1),规则字面相同(`displayName || key`)但各写各的实现;
+  `dashboard/app.ts` ×1),规则字面相同(`displayName || key`)但各写各的实现;
 - 白名单判定前挂了 60s 缓存(`catalogKeyCache`):冷启动时它缓存了**空数组**
   → 60 秒内所有模型都被判"不在白名单";
 - 另有一个 60s 会话探测缓存 + 死函数 `probeUpstreamSessionCached()`,
@@ -39,10 +39,10 @@ Status: implemented
 
 ### 一,名称计算收成单一真源
 
-新增 `src/model.js` 的 `catalogDisplayName(row)`,规则 `displayName → key`
+新增 `src/model.ts` 的 `catalogDisplayName(row)`,规则 `displayName → key`
 (displayName 缺失才回退 key,**绝不凭空编名字**;空行返回空串供调用方过滤).
 所有出口改调它:`catalog-models.js`(清单),`web/api.js`(`/api/models/upstream`),
-`dashboard/app.js`( 标注).
+`dashboard/app.ts`( 标注).
 
 `model.js` 里另两处 `displayName || id`(内置 catalog 条目 / 前端自定义条目)
 **保持不变** —— 它们的 `id` 是 provider 口径或用户自填,语义不是目录行,
@@ -126,7 +126,7 @@ Status: implemented
 
 盲审(fresh 上下文 agent,不知我的结论)找出 4 类问题,全部已修:
 
-1. **漏删一层同类死缓存**:`src/web/api.js` 的 `upstreamSessionCache`(60s) +
+1. **漏删一层同类死缓存**:`src/web/api.ts` 的 `upstreamSessionCache`(60s) +
    `probeUpstreamSession()` + `probeUpstreamSessionFresh()`.独立复核确认
    `probeUpstreamSessionFresh` 全仓无调用者,`probeUpstreamSession` 只被前者调用
    → 该缓存**只被写,从不被读**(唯一读点在死函数里),
@@ -156,7 +156,7 @@ Status: implemented
 
 ### 仍待 YG 裁决的一项(盲审点出,我不擅自定)
 
-`src/proxy.js` 的[目录为空则先加载一次再判]引入了**请求驱动的目录抓取**.
+`src/proxy.ts` 的[目录为空则先加载一次再判]引入了**请求驱动的目录抓取**.
 盲审指出:`docs/reverse/20-upstream-endpoint-whitelist.md` 的允许清单里
 (一键刷新 / 单账号检测 / 真正要发 chat)没有明文列这一项,须由 YG 裁决.
 

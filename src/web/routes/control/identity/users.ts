@@ -4,7 +4,7 @@
  * 建/删/改角色/改密码/重置 API Key.删除自己是被禁止的 ---- 把自己删掉之后
  * 就再没有管理员能登进来了,这个锁不是"防误操作",是防"整个部署失去管理入口".
  */
-import { sendJson } from '../../../../util/http.js'
+import { sendJson } from '../../../../util/http.ts'
 import { sanitize } from '../../lib/helpers.ts'
 import { denyUnlessAdmin, decodeSegment } from '../../lib/http-codes.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'

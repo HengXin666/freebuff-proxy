@@ -4,8 +4,8 @@
  * 两者都会动上游计费会话,所以共用一条纪律:先严格释放会话,释放失败也
  * 如实回报并把句柄留在 sessions.json 等下次启动扫尾退款 ---- 绝不谎报"已经干净".
  */
-import { sendJson } from '../../../util/http.js'
-import { logger } from '../../../util/log.js'
+import { sendJson } from '../../../util/http.ts'
+import { logger } from '../../../util/log.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 /**

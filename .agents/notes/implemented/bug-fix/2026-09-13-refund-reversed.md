@@ -48,7 +48,7 @@ its receipt"*,即**结算未完成**)读成[不退],就得出了错误的[已结
    `notePendingRefund` / `dropPendingRefund` / `sweepPendingRefunds`.**只有拿到终态回执
    (含 0)才出队**——绝不因为[问了几次还是 pending]就丢弃.
 3. **两条追问通道**:进程内 `SessionManager._replayPendingRefund()` + 30s 定时器(窗口 1 小时);
-   进程级 `bin/serve.js` 每 5 分钟一次 `sweepPendingRefunds`(有界 30s 预算,`unref`).
+   进程级 `bin/serve.ts` 每 5 分钟一次 `sweepPendingRefunds`(有界 30s 预算,`unref`).
    重启后由启动扫尾接着追.
 
 护栏也**反向**:`REFUND-COPY` 现在钉死[早退不退]这类旧说法;并断言 `sweepPendingRefunds`

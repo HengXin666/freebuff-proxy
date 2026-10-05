@@ -1,8 +1,8 @@
 /**
  * 默认值真源:硬编码常量 + 配置默认值 + YAML 键归一表.
  *
- * 从 src/config.js 拆出(原 446 行单文件).本文件只放数据,
- * 不放加载逻辑(那是 load.js).
+ * 从 src/config.ts 拆出(原 446 行单文件).本文件只放数据,
+ * 不放加载逻辑(那是 load.ts).
  */
 
 /**
@@ -51,7 +51,7 @@ export const DEFAULTS: Record<string, any> = {
      *   'official'(唯一有效值) --  上游请求一律经 RPC 委托给副仓库
      *       (cli-bridge / bun)执行:官方 37 工具,官方 system 模板,
      *       desktop 世代 agent,分层 provider.主服务不再自己拼上游请求.
-     *       见 src/upstream/official-rpc.js 与 docs/reverse/18.
+     *       见 src/upstream/official-rpc.ts 与 docs/reverse/18.
      *   'legacy'  --  已废弃,禁止调用:主服务自己拼的那套旧形态
      *       (ensureFreebuffSystemMessages + ensureFreebuffToolSignature +
      *        CLI 世代 agent + 自管 session 调度).它与官方抓包逐字段不符,

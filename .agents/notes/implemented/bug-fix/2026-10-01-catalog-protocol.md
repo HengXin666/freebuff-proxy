@@ -19,7 +19,7 @@ Status: implemented
 
 ## Decision
 
-**实现目录协议(`src/upstream/catalog-protocol.js`):抓一次目录,缓存
+**实现目录协议(`src/upstream/catalog-protocol.ts`):抓一次目录,缓存
 `fetchId` 与 `id → 句柄` 映射,并在每个请求上带这两个头.**
 
 抓取实测响应结构(字段名与文档直觉不符,值得记下):

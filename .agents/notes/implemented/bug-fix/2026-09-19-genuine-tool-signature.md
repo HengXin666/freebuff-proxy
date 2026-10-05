@@ -68,13 +68,13 @@ export const PROXY_HOLLOW_END_TURN: WireTool = {
 
 **单一真源镜像上游判据,并据此注入[货真价实]的官方签名工具.**
 
-- 新增 `src/upstream/foreign-client-signals.js`:`detectForeignClient` /
+- 新增 `src/upstream/foreign-client-signals.ts`:`detectForeignClient` /
   `isGenuineSignatureTool` / `isHollowSignatureTool` / `schemaPropertyKeys`
   与上游同名函数**同义实现**,外加常量表 `OFFICIAL_TOOL_PARAMETER_KEYS`(37 个官方
   工具的顶层参数名,由上游 `toolParams` 逐个 `z.toJSONSchema` 提取),
   `FOREIGN_HARNESS_TOOL_NAMES`,`FOREIGN_HARNESS_PROMPT_MARKERS`,
   `FREEBUFF_DOWNGRADE_MODEL_ID`,`ENFORCED_FOREIGN_SIGNALS`.
-- `src/free-mode.js` 的 `ensureFreebuffToolSignature` 改为追加
+- `src/free-mode.ts` 的 `ensureFreebuffToolSignature` 改为追加
   `FREEBUFF_SIGNATURE_TOOL_DEFINITIONS`,**两个并挂,任一通过即可**(上游是 `some()`):
   `lookup_agent_info`(真实 schema `{ agentId }`,走 schema 子集判定)与
   `decide`(官方自定义工具名,走自定义名放行).两条规则各自独立:任一条被上游收紧,
@@ -83,7 +83,7 @@ export const PROXY_HOLLOW_END_TURN: WireTool = {
   上游对**有参数**的工具只比对 schema,不比对描述(描述只在零参数工具上用于日志),
   所以这里可以自由取舍;而一个真诚邀请模型调用的描述,会让模型真的去调一个下游客户端
   根本不认识的名字.
-- `src/proxy.js` 在转发前用 `detectForeignClient` 算一次判定,命中**受罚信号**时
+- `src/proxy.ts` 在转发前用 `detectForeignClient` 算一次判定,命中**受罚信号**时
   记 `logger.warn('upstream may treat request as a foreign client')`,带
   `signal / sampleToolNames / foreignToolNames / hollowToolNames`.判定权永远在上游,
   这份本地判定只为让[正在被降级]可见 —— 上游降级时不回明确错误,症状只是回答变差

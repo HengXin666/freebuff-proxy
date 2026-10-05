@@ -3,8 +3,8 @@
  *
  * 这里判的都是"上游给了什么 → 我们怎么归类",与传输管道本身无关.
  */
-import { extractRateLimitError } from '../../../upstream/client.js'
-import { unmapToolCallsInBody } from '../../../upstream/foreign-client-signals.js'
+import { extractRateLimitError } from '../../../upstream/client.ts'
+import { unmapToolCallsInBody } from '../../../upstream/foreign-client-signals.ts'
 
 /**
  * 上游是否因为工具集指纹拒绝了这次 chat.
@@ -130,7 +130,7 @@ export function unmapToolCallsInSse(
  * @param {unknown} code
  * @returns {boolean}
  */
-export function shouldSwitchAccountOnError(status: number, code: unknown): boolean {
+export function shouldSwitchAccountOnError(status: number | undefined, code: unknown): boolean {
   /**
    *  503 不冷却账号(2026-10-04 真实事故修正).
    *
@@ -151,8 +151,10 @@ export function shouldSwitchAccountOnError(status: number, code: unknown): boole
    *  仍保留 switchAccount 语义(试下一个账号不冷却当前账号)----
    * 多账号池里换个号确实可能成功,但不该留下冷却记录.
    */
+  // status 可能为 undefined(上游错误体里没带 HTTP 码): 此时任何按码判定都不成立,
+  // 与旧 JS 版行为一致(undefined >= 500 为 false), 不改变分支走向.
   if (status === 503) return false
-  if (status >= 500) return true
+  if (status !== undefined && status >= 500) return true
   if (status === 429) return true
   const codeStr = String(code)
   // country_blocked 是出口属性不是账号属性:所有账号共享同一个出口,

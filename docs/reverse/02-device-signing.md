@@ -59,7 +59,7 @@ content-type: application/json
 
 注册失败退避：
 - 官方 `register()` 对 404 / 405 走"1 小时后再试"分支；
-- **本仓实现只有 5 分钟一档**（`REGISTER_RETRY_MS = 300000`，见 `src/upstream/device-signing.js:44`
+- **本仓实现只有 5 分钟一档**（`REGISTER_RETRY_MS = 300000`，见 `src/upstream/device-signing.ts:44`
   —— 全仓 `grep REGISTER_UNSUPPORTED_RETRY_MS` 为 **0**，本文件早期版本写的那个常量名
   **在代码里不存在**）。
 

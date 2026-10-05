@@ -20,8 +20,8 @@ Status: implemented
 
 取证时的现状：**一条都没有机械判据**。
 
-- 体量：`src/app-context.js` 2803 行 / `src/proxy.js` 2788 行 / `src/session-manager.js` 2280 行 /
-  `dashboard/app.js` 4000 行 / `test/smoke.mjs` 9330 行；25 个受控文件超各自档位上限。
+- 体量：`src/app-context.ts` 2803 行 / `src/proxy.ts` 2788 行 / `src/session-manager.ts` 2280 行 /
+  `dashboard/app.ts` 4000 行 / `test/smoke.mjs` 9330 行；25 个受控文件超各自档位上限。
 - 目录：`src/` 12 个文件、`test/` 11 个、`scripts/` 9 个、`src/upstream/` 9 个、`src/web/` 8 个
   都超过 5。
 - 函数：1874 个函数里 93 个超 50 行、37 个超 100 行，最长 `createProxyHandler` **2109 行**。
@@ -39,7 +39,7 @@ Status: implemented
 
 ### 一、判据真源唯一
 
-`scripts/gates/rules.mjs` 是唯一的阈值/分档/白名单语法来源，所有 `check-*.mjs`
+`scripts/gates/rules.ts` 是唯一的阈值/分档/白名单语法来源，所有 `check-*.mjs`
 只能从它取常量。同一组数字写进两处之后，改一处忘一处就会变成"文档说 300、脚本判 500"，
 而两边都看起来是对的。
 

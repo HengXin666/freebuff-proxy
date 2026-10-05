@@ -6,12 +6,12 @@
  * typecheck 都抓不到,本仓 mapped is not defined 进过生产镜像).现在所有依赖
  * 显式声明并显式传参.
  *
- * 从 src/upstream/client.js 拆出(原 1499 行单文件).
+ * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
  */
-import { logger } from '../../util/log.js'
-import { DeviceSigner } from '../device-signing.js'
-import { CatalogHolder } from '../catalog-protocol.js'
-import { BUN_USER_AGENT } from '../official-fingerprint.js'
+import { logger } from '../../util/log.ts'
+import { DeviceSigner } from '../device-signing.ts'
+import { CatalogHolder } from '../catalog-protocol.ts'
+import { BUN_USER_AGENT } from '../official-fingerprint.ts'
 import { buildFetchWithProxy, resolveProxy } from './transport.ts'
 import { makeBunFetcher, makeDeviceKeysViaBun, makeReleaseViaBun, makeSessionViaBun } from './bun-channel.ts'
 import { buildEndpoints } from './endpoints/misc.ts'
@@ -121,7 +121,7 @@ export function createUpstreamClient(config: any, token: string, opts: UpstreamC
   const poolIndex = proxyRes.kind === 'pool' ? proxyRes.indexFor(opts.accountId || token) : 0
   /** 该账号实际生效的代理 URL(用于控制台展示) */
   const proxyUrl = proxyRes.kind === 'pool' ? proxyRes.urls[poolIndex] : proxyRes.url
-  // 带代理池的 fetch(无池/单代理/池回落/单次尝试超时都在 transport.js).
+  // 带代理池的 fetch(无池/单代理/池回落/单次尝试超时都在 transport.ts).
   // 注意:单代理池也必须走池分支(见 buildFetchWithProxy 的说明).
   const fetchWithProxy = buildFetchWithProxy(proxyRes, poolIndex)
   const deviceSigner = makeDeviceSigner({

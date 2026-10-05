@@ -7,7 +7,7 @@
 
 ## TL;DR
 
-README 的截图**不连真实上游、不动真实账号**：用 `scripts/capture/screenshot-mock-upstream.mjs`
+README 的截图**不连真实上游、不动真实账号**：用 `scripts/capture/screenshot-mock-upstream.ts`
 起一个 mock 上游，用独立数据目录起一个临时控制台实例，再用 CDP 驱动无头 Chromium 抓图。
 产物是 1400×880 的 WebP，直接覆盖 `docs/images/`。
 
@@ -38,11 +38,11 @@ README 的截图**不连真实上游、不动真实账号**：用 `scripts/captu
 mkdir -p /tmp/fb-shots/shots /tmp/fb-shots/data/credentials
 
 # 1. 起 mock 上游（端口任意，别和真实服务冲突）
-node scripts/capture/screenshot-mock-upstream.mjs 18999 &
+node scripts/capture/screenshot-mock-upstream.ts 18999 &
 
 # 2. 写演示配置 + 占位凭据（authToken 用 tok-alice/tok-bob/tok-carol，与 mock 对应）
 #     上游主机**不可配**（config.yaml 的 api_base 会被硬编码真源覆盖，见 docs/configuration.md）。
-#    指向 mock 上游的唯一口是环境变量 FREEBUFF_UPSTREAM_API_BASE（src/config.js:381）。
+#    指向 mock 上游的唯一口是环境变量 FREEBUFF_UPSTREAM_API_BASE（src/config.ts:381）。
 cat > /tmp/fb-shots/config.yaml <<'YAML'
 server:
   host: 127.0.0.1
@@ -57,7 +57,7 @@ YAML
 
 # 3. 起临时控制台实例（用 env 覆盖上游主机指向 mock）
 FREEBUFF_UPSTREAM_API_BASE=http://127.0.0.1:18999 \
-ADMIN_PASSWORD=demo1234 node bin/serve.js --config /tmp/fb-shots/config.yaml &
+ADMIN_PASSWORD=demo1234 node bin/serve.ts --config /tmp/fb-shots/config.yaml &
 
 # 4. 登录 + 只读探测（把额度/session 灌进内存与账本）
 curl -c /tmp/fb-shots/cj -X POST http://127.0.0.1:28787/api/auth/login \
@@ -70,7 +70,7 @@ curl -b /tmp/fb-shots/cj -X POST http://127.0.0.1:28787/api/accounts/probe \
 chromium --headless=new --disable-gpu --no-sandbox --hide-scrollbars \
   --remote-debugging-port=9333 --window-size=1400,880 \
   --user-data-dir=/tmp/fb-shots/chrome about:blank &
-node scripts/capture/readme-screenshots.mjs 9333 http://127.0.0.1:28787 demo1234 /tmp/fb-shots/shots
+node scripts/capture/readme-screenshots.ts 9333 http://127.0.0.1:28787 demo1234 /tmp/fb-shots/shots
 
 # 6. 2x 抓图降采样到 1400×880 并转 WebP，覆盖 docs/images/
 python3 - <<'PY'
@@ -114,7 +114,7 @@ mock 上游按 `x-codebuff-api-key` 头部识别账号，返回对应处境：
    四张图会长得一模一样（都停在登录页）。必须 `Page.navigate` + `Page.reload`，
    再轮询 `#app` 的 `innerText` 长度确认视图真的画出来了。
 2. **版本徽章不是本地文件**：`dashboard/version.json` 是发版流水线注入的构建产物
-   （`.gitignore` 已忽略）。本地抓图前要先跑 `node scripts/release/inject-version.mjs`，
+   （`.gitignore` 已忽略）。本地抓图前要先跑 `node scripts/release/inject-version.ts`，
    否则徽章显示的是上一次注入的旧版本号。
 3. **探测才有额度数据**：不调 `/api/accounts/probe` 的话，Freebucks / session 列全是空的。
 4. **别用 `pkill -f <关键字>`**：关键字若同时出现在你自己那条 `bash -c` 命令行里，

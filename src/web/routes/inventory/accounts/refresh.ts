@@ -6,7 +6,7 @@
  * ! 探测结果的额度在 quota.byModel 上,不在 refresh() 返回的本地快照上
  * (那是 extractQuota 解析出来的).取错字段的表现是"永远 0 个模型".
  */
-import { sendJson } from '../../../../util/http.js'
+import { sendJson } from '../../../../util/http.ts'
 import { overviewModelNames, probeErrorFields } from '../../lib/helpers.ts'
 import { ACCOUNT_LEVEL_PROBE_CODES, probeAllAccountsSession } from '../../lib/probe.ts'
 import type { ServerResponse } from 'node:http'

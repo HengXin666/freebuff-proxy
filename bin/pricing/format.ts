@@ -1,5 +1,5 @@
 /**
- - 人类可读格式化(duration / number / time / countdown) -- 从 bin/pricing.js 逐字搬出.
+ - 人类可读格式化(duration / number / time / countdown) -- 从 bin/pricing.ts 逐字搬出.
  - 上游 resetAt 是 ISO, 别让用户自己算时区.
  */
 

@@ -1,5 +1,5 @@
 3a8aebb77c69989a5f0fb7a9ee653b202cf8d6e0
-  4000 dashboard/app.js
+  4000 dashboard/app.ts
    915 dashboard/i18n.js
    732 dashboard/style.css
     19 dashboard/index.html

@@ -25,7 +25,7 @@ and **may get your account banned**"),账号被封.
 
 ## Decision
 
-**在 `src/upstream/official-fingerprint.js` 实现该描述符,并同时用于
+**在 `src/upstream/official-fingerprint.ts` 实现该描述符,并同时用于
 session 请求头与 chat 的 `codebuff_metadata`.**
 
 - `formatClientEnvironment()` 逐字对齐官方的 13 个字段与顺序:

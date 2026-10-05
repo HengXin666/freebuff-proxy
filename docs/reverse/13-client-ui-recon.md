@@ -2,7 +2,7 @@
 
 > 本章**全程只操作客户端界面**,不发任何上游请求.
 > 起因:此前只要从代理侧发请求就必然封号,因此改为纯观察客户端自身行为.
-> 工具:`tools/cdp-ui.mjs`(CDP 驱动,只做读 DOM / 点击 / 输入).
+> 工具:`tools/cdp-ui.ts`(CDP 驱动,只做读 DOM / 点击 / 输入).
 
 ## 13.1 方法
 
@@ -12,9 +12,9 @@
 /home/hx/Downloads/Freebuff-0.0.156-linux-x86_64.AppImage \
   --remote-debugging-port=9333
 curl http://127.0.0.1:9333/json/list        # 拿 page target 的 ws 地址
-node tools/cdp-ui.mjs eval  '<JS>'          # 只读
-node tools/cdp-ui.mjs send  '.composer-input' '<文本>'   # 输入 + Enter
-node tools/cdp-ui.mjs shot  /tmp/ui.png
+node tools/cdp-ui.ts eval  '<JS>'          # 只读
+node tools/cdp-ui.ts send  '.composer-input' '<文本>'   # 输入 + Enter
+node tools/cdp-ui.ts shot  /tmp/ui.png
 ```
 
 ## 13.2 UI 结构(实测)

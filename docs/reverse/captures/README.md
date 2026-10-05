@@ -27,7 +27,7 @@ env HTTP_PROXY=http://127.0.0.1:8899 HTTPS_PROXY=http://127.0.0.1:8899 \
     ./Freebuff-*.AppImage --remote-debugging-port=9333 --ignore-certificate-errors
 
 # 3) 用 CDP 操作 UI 触发请求（不发任何协议请求）
-node tools/cdp-ui.mjs send '.composer-input' '你的消息'
+node tools/cdp-ui.ts send '.composer-input' '你的消息'
 ```
 
 重新生成摘要：

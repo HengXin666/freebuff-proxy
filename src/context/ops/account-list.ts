@@ -6,7 +6,7 @@
  * 这边给人看, 那边给调度用. 两边必须用同一套判据(available / banned /
  * unavailable), 因此分档逻辑集中在这里, 调度侧只取冷却状态.
  */
-import { listAccounts } from '../../auth-store.js'
+import { listAccounts } from '../../auth-store.ts'
 import {
   DEFAULT_COOLDOWN_MS,
   UNAVAILABLE_COOLDOWN_CODES,

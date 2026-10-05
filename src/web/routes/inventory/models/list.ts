@@ -1,7 +1,7 @@
 /**
  * models 域(清单侧):/api/models 与 /api/models/upstream.
  *
- * ! 这两个端点与 /v1/models(src/proxy.js)必须同源:清单以上游
+ * ! 这两个端点与 /v1/models(src/proxy.ts)必须同源:清单以上游
  * 目录行为准,额度/单价挂上去.此前这里从 rateLimitsByModel 反推清单
  * (只有 6 个键),于是额度满,未封禁的账号照样报"上游暂无可用模型".
  * 见 docs/reverse/19-catalog-is-the-model-list.md.
@@ -10,12 +10,12 @@
  * GET /api/models/upstream 是"同步上游模型"按钮的后端,属用户主动触发,
  * 允许抓目录.
  */
-import { sendJson } from '../../../../util/http.js'
+import { sendJson } from '../../../../util/http.ts'
 import {
   buildModelsListResponse,
   CATALOG_UNIFIED_AGENT_ID,
   catalogDisplayName,
-} from '../../../../model.js'
+} from '../../../../model.ts'
 import { buildCatalogDrivenModelsResponse } from '../../../../catalog-models.ts'
 import { catalogIdForKey } from '../../lib/helpers.ts'
 import { probeAllAccountsSession } from '../../lib/probe.ts'

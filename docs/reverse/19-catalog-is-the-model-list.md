@@ -36,8 +36,8 @@ env HTTP_PROXY=http://127.0.0.1:8899 HTTPS_PROXY=http://127.0.0.1:8899 \
     ./Freebuff-0.0.156-linux-x86_64.AppImage \
     --remote-debugging-port=9333 --ignore-certificate-errors
 
-# 3) 只操作 UI 触发请求（tools/cdp-ui.mjs），不发任何协议请求
-node tools/cdp-ui.mjs click '.agent-trigger'   # 打开模型菜单 = 触发目录刷新
+# 3) 只操作 UI 触发请求（tools/cdp-ui.ts），不发任何协议请求
+node tools/cdp-ui.ts click '.agent-trigger'   # 打开模型菜单 = 触发目录刷新
 ```
 
  **第三个坑**:客户端空闲一分钟会自动装 0.0.158 并重启,抓包窗口会被切断.
@@ -283,7 +283,7 @@ Muse Spark 1.3 / GPT-6 Luna / MiMo 2.6 Pro / Gemini 3.8 Flash / GPT-6.1 Sol
 
 ### 53 是怎么来的
 
-`src/upstream/client.js` 给 `CatalogHolder` 的 `fetchImpl` 加了设备签名三头,
+`src/upstream/client.ts` 给 `CatalogHolder` 的 `fetchImpl` 加了设备签名三头,
 而客户端在这一跳不签(165 条抓包里,**只有 `/api/v1/freebuff/session` 带
 签名**,13 次;`/models` 与 `/device-keys` 都不带).
 

@@ -7,7 +7,7 @@
  *
  * 返回 never: 每条支路都以 throw 结束; 调用方写完这条语句即代表"控制流已终止".
  */
-import { UpstreamError } from '../../upstream/client.js'
+import { UpstreamError } from '../../upstream/client.ts'
 import {
   countReasons,
   sanitizeFailuresForClient,

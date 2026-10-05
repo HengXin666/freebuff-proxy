@@ -11,7 +11,7 @@
 
 > 复核对象:
 > - **真值**:`docs/reverse/captures/2026-10-03-official-client.jsonl`(88 行,8 个 chat/completions 样本)
-> - **待检**:`cli-bridge/upstream.mjs`(当前代码)+ `docs/reverse/captures/dump1..dump4/`(旧版实现的逐字节快照)
+> - **待检**:`cli-bridge/upstream.ts`(当前代码)+ `docs/reverse/captures/dump1..dump4/`(旧版实现的逐字节快照)
 > - **资产**:`official-tools.json`(37 工具),`official-system-prompts.json`(manager 13443 字符 / worker 7918 字符)
 >
 > 方法:只做本地只读解析,未向 codebuff.com / freebuff.com 发任何请求.
@@ -295,7 +295,7 @@ model, codebuff_metadata, provider, messages, tools, tool_choice, stream
 
 ### C.4 与 `normalizeReasoningFields` 的关系
 
-仓库 `src/proxy.js` 的归一化"只能发一个思考字段"仍成立(防的是顶层 `reasoning` + `reasoning_effort` 打架).但它**不该拦 metadata 里的 `freebuff_reasoning_effort`** —— 那是一个不同命名空间的参数.需确认归一化逻辑不误删 metadata 键.
+仓库 `src/proxy.ts` 的归一化"只能发一个思考字段"仍成立(防的是顶层 `reasoning` + `reasoning_effort` 打架).但它**不该拦 metadata 里的 `freebuff_reasoning_effort`** —— 那是一个不同命名空间的参数.需确认归一化逻辑不误删 metadata 键.
 
 ---
 

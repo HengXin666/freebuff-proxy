@@ -3,8 +3,8 @@
 Status: implemented
 
 受影响代码: `dashboard/locale/**`(新建),`dashboard/css/**`(新建),
-`dashboard/i18n.js`,`dashboard/index.html`,`dashboard/app.js`,`dashboard/views/**`,
-`scripts/check-i18n.mjs`
+`dashboard/i18n.js`,`dashboard/index.html`,`dashboard/app.ts`,`dashboard/views/**`,
+`scripts/check-i18n.ts`
 
 ## Problem
 
@@ -33,7 +33,7 @@ system.js(186) 系统设置 / 代理
 views.js (146) 总览 / 日志
 ```
 
-`dashboard/locale/index.js`(117 行)只做合并与 `t()` / `setLocale()` 等逻辑.
+`dashboard/locale/index.ts`(117 行)只做合并与 `t()` / `setLocale()` 等逻辑.
 沿用**原文件里已有的分段注释**作为切分依据,而不是另设计一套分类 ---- 那些注释是
 当初写词典的人分的,按它切不会引入"这个 key 该归哪个域"的新争议.
 

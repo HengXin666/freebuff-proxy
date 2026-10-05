@@ -8,9 +8,9 @@
 import path from 'node:path'
 
 import type { LogQuery } from '../../../util/log.ts'
-import { sendJson } from '../../../util/http.js'
-import { logger, readLogBuffer, clearRing } from '../../../util/log.js'
-import { dataFileAudit } from '../../../util/json-store.js'
+import { sendJson } from '../../../util/http.ts'
+import { logger, readLogBuffer, clearRing } from '../../../util/log.ts'
+import { dataFileAudit } from '../../../util/json-store.ts'
 import { overviewModelNames } from '../lib/helpers.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 

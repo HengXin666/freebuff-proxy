@@ -4,12 +4,12 @@ Status: implemented
 
 ## Problem
 
-控制台[额度保护]把[单请求新会话上限]的 `0` 显示成 **不限**(`dashboard/app.js` 的
+控制台[额度保护]把[单请求新会话上限]的 `0` 显示成 **不限**(`dashboard/app.ts` 的
 `maxNewSessions \|\| '不限'`),`docs/configuration.md` 写[0 = 不限],API 校验也放行 `0`
-(`src/web/api.js`:`0..16` 的整数,`0 = 不限制`).
+(`src/web/api.ts`:`0..16` 的整数,`0 = 不限制`).
 
-但 `src/proxy.js` 在构造请求级预算时无条件 `Math.max(0, ...)`,把 `0` 存成了
-`{ remaining: 0 }`;`src/app-context.js` 的闸门随即按 `remaining <= 0` 判[预算耗尽],
+但 `src/proxy.ts` 在构造请求级预算时无条件 `Math.max(0, ...)`,把 `0` 存成了
+`{ remaining: 0 }`;`src/app-context.ts` 的闸门随即按 `remaining <= 0` 判[预算耗尽],
 把**每一个账号**都以 `session_budget_exhausted` 跳过,`failures` 里全是这一条,最终抛出
 
 ```
@@ -25,14 +25,14 @@ No available Freebuff account for model <model>. Tried N account(s).
 
 **预算的 `0` 在调度层表示不限额,用 `remaining: null` 承载.**
 
-- `src/proxy.js`:`budgetLimit > 0 ? budgetLimit : null` —— `0`(或负数)映射为 `null`,
+- `src/proxy.ts`:`budgetLimit > 0 ? budgetLimit : null` —— `0`(或负数)映射为 `null`,
   而不是会被用尽的数字.
-- `src/app-context.js`:闸门判据从 `remaining <= 0` 改为
+- `src/app-context.ts`:闸门判据从 `remaining <= 0` 改为
   `remaining !== null && remaining <= 0`;扣减处同样跳过 `null`.
-- `src/app-context.js`:全部账号都只因预算被拦下时抛**独立错误码**
+- `src/app-context.ts`:全部账号都只因预算被拦下时抛**独立错误码**
   `session_budget_exhausted`(`retryAfterMs` 沿用 `earliestCooldownMs()`),
   不再混进笼统的 `no_available_account`.
-- `src/proxy.js`:该错误码加入终态列表——预算在整个请求内不会恢复,重试只会白转一轮.
+- `src/proxy.ts`:该错误码加入终态列表——预算在整个请求内不会恢复,重试只会白转一轮.
 
 区分保留:`remaining` 是**数字**时语义不变(默认 2 = 首个账号 + 一次换号兜底,
 issue #7 的防护完整保留);只有 `null` 才恒放行.

@@ -5,8 +5,8 @@
  * 主动点下去".其中"关闭会话"是唯一会动计费会话的动作 ---- 上游按占用
  * 时长结算,主动早退 DELETE 才是"停止计费"的唯一手段,所以走严格释放.
  */
-import { sendJson } from '../../../../util/http.js'
-import { logger } from '../../../../util/log.js'
+import { sendJson } from '../../../../util/http.ts'
+import { logger } from '../../../../util/log.ts'
 import { overviewModelNames, probeErrorFields } from '../../lib/helpers.ts'
 import { denyUnlessAdmin, decodeSegment } from '../../lib/http-codes.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'

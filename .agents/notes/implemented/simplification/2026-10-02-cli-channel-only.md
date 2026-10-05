@@ -2,8 +2,8 @@
 
 Status: implemented
 
-**Affects:** `src/proxy.js`,`src/upstream/client.js`,`src/web/api.js`,
-`src/web/settings-store.js`,`test/smoke.mjs`
+**Affects:** `src/proxy.ts`,`src/upstream/client.ts`,`src/web/api.ts`,
+`src/web/settings-store.ts`,`test/smoke.mjs`
 
 ## Problem
 

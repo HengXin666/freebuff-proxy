@@ -4,10 +4,10 @@
  * 这一层只回答两个问题:这次请求从哪个出口出去,以及出口坏了换谁.
  * 它不知道任何上游协议(路径/头/签名),所以上游改 API 时这一层不用动.
  *
- * 从 src/upstream/client.js 拆出(原 1499 行单文件).
+ * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
  */
 import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from 'undici'
-import { logger } from '../../util/log.js'
+import { logger } from '../../util/log.ts'
 
 /**
  * TLS 层对齐官方 CLI:ALPN 只 offer http/1.1.
@@ -209,7 +209,7 @@ function buildFetchWithProxy(proxyRes: any, poolIndex: number): ProxyAwareFetch 
  * 优先级:账号显式 proxy(可传) > upstream.proxies(全局池) > upstream.proxy > HTTP(S)_PROXY env > 直连.
  * 池分配 key 默认 'catalog'(池内稳定固定一个出口),可传 accountId 覆盖.
  *
- * @param {import('../../config.js').ProxyConfig} config 已加载配置
+ * @param {import('../../config.ts').ProxyConfig} config 已加载配置
  * @param {{ proxy?: string | null, accountId?: string }} [opts] 覆盖项
  * @returns {{ fetch: (url: string, init?: any) => Promise<Response>, proxyUrl: string | null }}
  *   代理感知 fetch 与其生效的出口 URL

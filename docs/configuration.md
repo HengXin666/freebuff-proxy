@@ -13,7 +13,7 @@ Docker 部署时配置位于 `/data/config.yaml`（首次启动自动生成，�
 | Freebuff 登录态 | Web 控制台添加 / `npm run login` → `credentials/<账号ID>.json` |
 | Web 用户 / API Key | `/data/users.json`（控制台管理） |
 | Agent 门禁 | `server.api_keys`（可选；非 loopback 必填） |
-| 上游 API 主机 |  **不可配**。硬编码真源 = `src/config.js` 的 `UPSTREAM_API_BASE`（`https://www.codebuff.com`）；配置文件里写 `upstream.api_base` 一律被忽略，唯一例外是环境变量 `FREEBUFF_UPSTREAM_API_BASE`（仅供本地镜像对照/离线契约测试） |
+| 上游 API 主机 |  **不可配**。硬编码真源 = `src/config.ts` 的 `UPSTREAM_API_BASE`（`https://www.codebuff.com`）；配置文件里写 `upstream.api_base` 一律被忽略，唯一例外是环境变量 `FREEBUFF_UPSTREAM_API_BASE`（仅供本地镜像对照/离线契约测试） |
 | 上游登录 URL | `upstream.login_base` |
 | 出网代理 | 控制台「代理设置」→ `/data/proxies.json`（账号级 `credentials/<账号ID>.json#proxy`、`upstream.proxy`、`HTTP(S)_PROXY` 仅兜底） |
 | 运行策略 | 控制台「免费额度策略」→ `/data/settings.json`（保存后立即生效） |

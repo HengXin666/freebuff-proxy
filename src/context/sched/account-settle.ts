@@ -4,8 +4,8 @@
  * 从 account-try.ts 按职责切出. account-try 只保留"单账号承接"的编排;
  * 这里放真正产生副作用的 admit 段(它同时管会话, 预算与冷却).
  */
-import { UpstreamError } from '../../upstream/client.js'
-import { logger } from '../../util/log.js'
+import { UpstreamError } from '../../upstream/client.ts'
+import { logger } from '../../util/log.ts'
 import { PAID_WINDOW_BOUND_CODES, SLOT_BUSY_CODES } from '../state/codes.ts'
 
 /**

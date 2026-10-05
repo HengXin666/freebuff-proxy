@@ -137,14 +137,14 @@ system 开场白,官方签名工具,`base3-free-catalog`,客户端环境描述�
   "ipPrivacySignals": ["vpn", "hosting", "anonymous"], "accessTier": "limited" }
 ```
 
-代码侧同口径:`src/model.js` 的模型元信息里有 `accessTier?: 'full' | 'limited' | null`。
+代码侧同口径:`src/model.ts` 的模型元信息里有 `accessTier?: 'full' | 'limited' | null`。
 **走代理出口会被降级到 `limited`** —— 这是设计选择,不是故障。
 
 ## 附:CLI 指纹(头名与真值)
 
 - 头名:`X-Freebuff-Cli-Fingerprint`(抓包实测;全仓代码里**没有**该头的构造点,
   属于"历史观测"而非本仓契约);
-- 版本真值:`src/upstream/official-fingerprint.js:30` 的 `KNOWN_CLI_VERSION`(当前 `'0.0.178'`,
+- 版本真值:`src/upstream/official-fingerprint.ts:30` 的 `KNOWN_CLI_VERSION`(当前 `'0.0.178'`,
   且运行时会被 `refreshCliVersion()` 刷新)。
    已淘汰的那份逆向总结写的 `0.2.12` **是错的** —— 它连头名拼写(`X-Freebuff-Device-Signature`
   等)一起错,这就是它被淘汰的原因。

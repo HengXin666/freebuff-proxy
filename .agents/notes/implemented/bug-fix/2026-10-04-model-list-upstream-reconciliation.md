@@ -104,7 +104,7 @@ before initialization`,**整个控制台白屏**.
 直到用户打开页面才发现.`node --check` 只能证明"语法对",不能证明"能加载".
 
 因此新增 `test/smoke-frontend.mjs`:用最小 DOM 桩把 `dashboard/i18n.js` 与
-`dashboard/app.js` 作为**真实 ES module 完整求值**一遍,任何 TDZ /
+`dashboard/app.ts` 作为**真实 ES module 完整求值**一遍,任何 TDZ /
 未定义引用都在求值阶段抛出.已接进 `npm test`.
 
 判据函数(`isLiveUpstream`,不消费 rows)可以前置;

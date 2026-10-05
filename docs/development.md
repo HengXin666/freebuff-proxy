@@ -15,7 +15,7 @@ npm test          # 冒烟测试（mock 上游，不消耗真实额度）
 npm run typecheck
 ```
 
-可选 `node bin/serve.js --config /path/to/config.yaml`。
+可选 `node bin/serve.ts --config /path/to/config.yaml`。
 ## 发版
 
 版本真源是 `package.json` 的 `version`（CI 的 `check-version` job 会校验 tag 与它一致）。

@@ -1,12 +1,12 @@
 /**
  * 非会话端点:登录码/登录状态,agent run,裸透传,资源释放.
  *
- * 与 session.js 一样,所有闭包依赖走显式 ctx(见 http.js 的说明).
+ * 与 session.ts 一样,所有闭包依赖走显式 ctx(见 http.js 的说明).
  *
- * 从 src/upstream/client.js 拆出(原 1499 行单文件).
+ * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
  */
-import { logger } from '../../../util/log.js'
-import { freebuffAuthHeaders } from '../../../auth-store.js'
+import { logger } from '../../../util/log.ts'
+import { freebuffAuthHeaders } from '../../../auth-store.ts'
 import { UpstreamError, safeText } from '../errors.ts'
 import { apiFetch, fetchLoginUpstream } from '../http.ts'
 

@@ -88,4 +88,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.FREEBUFF_PROXY_PORT||8787)+'/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD ["node", "bin/serve.js"]
+CMD ["node", "bin/serve.ts"]

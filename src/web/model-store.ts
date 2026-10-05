@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { readJsonFileState, noteDataFile } from '../util/json-store.js'
+import { readJsonFileState, noteDataFile } from '../util/json-store.ts'
 
 /**
  * 前端管理的自定义模型列表(全局生效).
@@ -62,7 +62,7 @@ export class ModelStore {
     this.load()
   }
 
-  /** @returns {import('../util/json-store.js').JsonFileState} */
+  /** @returns {import('../util/json-store.ts').JsonFileState} */
   load() {
     const st = readJsonFileState(this.file)
     noteDataFile(this.file, st)
@@ -162,7 +162,7 @@ export class ModelStore {
     this.models = [...byId.values()]
     // 一致性:写回的模型(用户手动添加/同步上游)自动解除隐藏,
     // 避免[models 里有 + hidden 里也有]的矛盾状态(删不掉的模型).
-    // [同步上游不复活已删模型]由同步调用方负责过滤 hidden(见 api.js).
+    // [同步上游不复活已删模型]由同步调用方负责过滤 hidden(见 api.ts).
     const added = new Set(this.models.map((m) => m.id))
     if (added.size) {
       this.hiddenIds = this.hiddenIds.filter((id) => !added.has(id))

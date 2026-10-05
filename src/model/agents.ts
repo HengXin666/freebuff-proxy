@@ -4,7 +4,7 @@
  * 依赖方向:本文件只依赖 catalog-store,不反向依赖对外清单/过滤器 --
  * 否则会形成 available <-> agents 的循环 import.见 dependency-graph 文档.
  *
- * 从 src/model.js 拆出(原 758 行单文件).
+ * 从 src/model.ts 拆出(原 758 行单文件).
  */
 import { catalogModels } from './catalog-store.ts'
 export { isFreeModel, isPremiumModel } from './flags.ts'
@@ -140,7 +140,7 @@ export function deriveAgentId(modelId?: string): string | null {
 /**
  * 传进来的模型标识是不是目录标识(目录 key m-xxx / 句柄 fbm1.).
  *
- * 判据与 src/proxy.js 的 isCatalogMode(snap.model 以 m- / fbm1. 开头)
+ * 判据与 src/proxy.ts 的 isCatalogMode(snap.model 以 m- / fbm1. 开头)
  * 同源:目录模式下上游只认统一 agent,不按模型推导 agent.
  *
  * @param {string} modelId 模型标识

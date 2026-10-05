@@ -6,13 +6,13 @@
  * x-freebuff-model: fbm1.AAEAAUPe2Us...(句柄).句柄只能从目录拿(服务端签名),
  * 所以 POST 前必须先抓一次目录.
  *
- * 从 src/upstream/client.js 拆出(原 1499 行单文件).
+ * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
  */
-import { logger } from '../../../util/log.js'
-import { freebuffAuthHeaders } from '../../../auth-store.js'
-import { FREEBUFF_AVAILABLE_MODELS } from '../../../model.js'
-import { isModelHandle } from '../../catalog-protocol.js'
-import { officialSessionHeaders } from '../../official-fingerprint.js'
+import { logger } from '../../../util/log.ts'
+import { freebuffAuthHeaders } from '../../../auth-store.ts'
+import { FREEBUFF_AVAILABLE_MODELS } from '../../../model.ts'
+import { isModelHandle } from '../../catalog-protocol.ts'
+import { officialSessionHeaders } from '../../official-fingerprint.ts'
 
 /**
  * 把请求的模型解析成上线形态(目录句柄).
