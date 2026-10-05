@@ -40,6 +40,26 @@ export function buildStripToolsCard(stripAttrs: any, stripTools: any) {
   ])
 }
 
+/**
+ * 第三方工具承载卡: 无官方等价物的下游工具是否包成官方自定义工具形态.
+ * @param {any} carrierAttrs 复选框属性
+ * @param {any} carrierEnabled 当前是否开启
+ * @returns {any} 卡片元素
+ */
+export function buildToolCarrierCard(carrierAttrs: any, carrierEnabled: any) {
+  return el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
+    el('div', {}, [
+      el('h3', { style: 'margin:0 0 2px' }, t('system.toolCarrier')),
+      el('span', { class: 'muted' }, t('system.toolCarrierHint')),
+    ]),
+    el('label', { class: 'switch', for: 'tool-carrier' }, [
+      el('input', carrierAttrs),
+      el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
+      el('span', { class: 'switch-status' }, carrierEnabled ? t('common.on') : t('common.off')),
+    ]),
+  ])
+}
+
 /** 上游请求链路卡:legacy 已废弃(禁用但可见),official 是唯一有效值. */
 export function buildUpstreamChannelCard(channel: any) {
   return el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [

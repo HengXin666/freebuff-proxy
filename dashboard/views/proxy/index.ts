@@ -6,7 +6,8 @@ import { state } from '../../lib/state.ts'
 import { toast } from '../../lib/ui.ts'
 import {
   buildFreeToolSignatureCard, buildLoadBalanceCard, buildProxyPoolCard,
-  buildQuotaProtectionCard, buildStripToolsCard, buildUpstreamChannelCard,
+  buildQuotaProtectionCard, buildStripToolsCard, buildToolCarrierCard,
+  buildUpstreamChannelCard,
 } from './cards.ts'
 import { buildTunablesCard } from './tunables.ts'
 
@@ -53,6 +54,16 @@ export async function renderProxySettings(view: any) {
   }
   if (stripTools) stripAttrs.checked = ''
   if (state.me.role !== 'admin') stripAttrs.disabled = ''
+  // 第三方工具承载:默认开(无官方等价物的下游工具包成官方自定义工具形态发出).
+  const carrierEnabled = settings.toolCarrierEnabled !== false
+  const carrierAttrs: Record<string, any> = {
+    id: 'tool-carrier',
+    type: 'checkbox',
+    class: 'switch-input',
+    onchange: saveToolCarrierSetting,
+  }
+  if (carrierEnabled) carrierAttrs.checked = ''
+  if (state.me.role !== 'admin') carrierAttrs.disabled = ''
   const channel = settings.upstreamChannel === 'official' ? 'official' : 'legacy'
   const concurrency = settings.accountMaxConcurrency ?? 2
   const schedMode = settings.accountSchedulingMode === 'spread' ? 'spread' : 'sticky'
@@ -64,6 +75,7 @@ export async function renderProxySettings(view: any) {
   const advice = idleReleaseAdvice(state.accounts)
   view.append(buildFreeToolSignatureCard(toggleAttrs, signatureEnabled))
   view.append(buildStripToolsCard(stripAttrs, stripTools))
+  view.append(buildToolCarrierCard(carrierAttrs, carrierEnabled))
   view.append(buildUpstreamChannelCard(channel))
   view.append(buildLoadBalanceCard(schedMode, concurrency, overflowWaitMs))
   view.append(buildQuotaProtectionCard(advice, idleReleaseSec, lowBalanceThreshold, maxNewSessions))
@@ -138,6 +150,34 @@ export async function saveStripToolsSetting(event: any) {
     try {
       const s = await api('/api/settings')
       const actual = s.stripToolsOnSchemaRejection === true
+      input.checked = actual
+      updateSwitchLabel(input)
+    } catch { /* 忽略回读失败，仍保持可交互 */ }
+  } catch (err) {
+    input.checked = !enabled
+    toast(err.message, true)
+  }
+  input.disabled = false
+}
+
+/**
+ * 第三方工具承载开关(见 /api/settings.toolCarrierEnabled 与 tool-carrier.ts).
+ * @param {any} event 复选框 change 事件
+ * @returns {Promise<void>} 无返回值
+ */
+export async function saveToolCarrierSetting(event: any) {
+  const input = event.currentTarget
+  const enabled = input.checked
+  input.disabled = true
+  try {
+    await api('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({ toolCarrierEnabled: enabled }),
+    })
+    toast(enabled ? t('system.toolCarrierOn') : t('system.toolCarrierOff'))
+    try {
+      const s = await api('/api/settings')
+      const actual = s.toolCarrierEnabled !== false
       input.checked = actual
       updateSwitchLabel(input)
     } catch { /* 忽略回读失败，仍保持可交互 */ }

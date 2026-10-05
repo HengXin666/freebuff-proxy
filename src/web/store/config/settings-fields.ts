@@ -97,6 +97,7 @@ const oneOf = (values: string[]): LiveFieldSpec => ({
 export const LIVE_FIELDS: Record<string, LiveFieldSpec> = {
   freeToolSignatureEnabled: bool(),
   stripToolsOnSchemaRejection: bool(),
+  toolCarrierEnabled: bool(),
   cliTelemetryEnabled: bool(),
   blockPremiumModels: bool(),
   accountMaxConcurrency: intClamped(clampConcurrency, 1),

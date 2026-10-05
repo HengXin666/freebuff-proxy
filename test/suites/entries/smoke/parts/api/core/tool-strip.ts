@@ -39,11 +39,18 @@ import assert from 'node:assert/strict'
   assert.equal(chatCalls.length, 2, '应重试恰好一次')
   const first = JSON.parse(chatCalls[0].body)
   const second = JSON.parse(chatCalls[1].body)
-  // 第一次带 tools(原工具 + 签名工具 end_turn,签名开关默认开).
+  // 第一次带 tools(原工具 + 签名工具,签名开关默认开).
+  //
+  // 注意工具名: run_code 在官方工具集里没有等价物, 所以走第三方工具承载
+  // (见 src/proxy/transport/tool-carrier.ts)以 MCP 形态名发出 ---- 上游看到的
+  // 是载体名, 回程按映射表拆回 run_code. 这里断言的是"工具确实被带出去了",
+  // 名字形态由 test/suites/entries/verify/tool-carrier.ts 单独钉死.
   assert.ok(Array.isArray(first.tools), '第一次应带 tools')
   assert.ok(
-    first.tools.some((t) => t.function && t.function.name === 'run_code'),
-    '第一次应保留客户端原始工具',
+    first.tools.some(
+      (t) => t.function && t.function.name === 'proxy__run_code',
+    ),
+    '第一次应保留客户端原始工具(以承载形态发出)',
   )
   assert.equal(second.tools, undefined, '第二次必须已剥离 tools')
   assert.equal(second.tool_choice, undefined)

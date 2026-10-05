@@ -11,7 +11,7 @@
 
 import { resolveUpstreamChannel } from '../../config.ts'
 import { buildRpcCfg, rpcReuse } from '../../upstream/rpc/official-rpc.ts'
-import { unmapToolCallsInSse } from './errors/errors.ts'
+import { buildUpstreamResponseFromRpc } from './reply/rewrite.ts'
 import { ensureFreebuffSystemMessages, ensureFreebuffToolSignature } from '../../free-mode.ts'
 import { agentIdForModel } from '../../model.ts'
 import { customModels } from '../routes/catalog.ts'
@@ -36,7 +36,7 @@ import { logger } from '../../util/log.ts'
  * @returns {Promise<{ upstreamRes: object|null, upstreamErrText: string|null, rpcResponse: boolean }>} RPC 结果
  */
 export async function tryOfficialChannel(ctx: any, args: any) {
-  const { upstream, instanceId, forwardBody, schedulingDeadline, upstreamModel, requestBody } = args
+  const { upstream, instanceId, forwardBody, schedulingDeadline, upstreamModel, requestBody, carrierPlan } = args
   let upstreamRes = null
   let upstreamErrText = null
   /** RPC 是否拿到了响应(拿到则调用方跳过 raw 重试循环). */
@@ -89,25 +89,7 @@ export async function tryOfficialChannel(ctx: any, args: any) {
         })
         if (rpc.status) {
           rpcResponse = true
-          /**
-           - 上行工具名还原(与 bun 侧的下行映射配对).
-           *
-           - 下行把 bash→run_terminal_command 等换成官方等价名(否则上游
-           - 回 503,见 cli-bridge/upstream.ts 的 MAP_TOOLS 说明).
-           - 客户端拿到响应时,tool_calls[].function.name 是官方名----
-           - 下游不认识,也没法派发.所以在透传前逐行还原成它声明的名字.
-           *
-           - SSE 逐行处理:只在 data: {...} 行上做 JSON 解析 + 名字替换,
-           - 不是 JSON 的行([DONE],空行)原样保留.
-           */
-          const rawText = rpc.text || ''
-          upstreamRes = new Response(
-            unmapToolCallsInSse(rawText),
-            {
-              status: rpc.status,
-              headers: { 'content-type': 'application/json' },
-            },
-          )
+          upstreamRes = buildUpstreamResponseFromRpc(rpc, carrierPlan)
           upstreamErrText = rpc.ok ? null : (rpc.text || '')
         }
       }

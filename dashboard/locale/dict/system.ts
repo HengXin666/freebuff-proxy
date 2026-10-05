@@ -65,6 +65,23 @@ export default {
   },
   'system.toolFallbackOn': { 'zh-CN': '工具兜底重试已开启', en: 'Tool fallback retry enabled' },
   'system.toolFallbackOff': { 'zh-CN': '工具兜底重试已关闭', en: 'Tool fallback retry disabled' },
+  'system.toolCarrier': { 'zh-CN': '第三方工具承载', en: 'Third-party tool carrier' },
+  'system.toolCarrierHint': {
+    'zh-CN': '开启后：官方工具集里没有等价物的下游工具（记忆、知识库、自定义脚本等）会包成官方自定义工具的形态发出，上游返回时再拆回下游原名；下行与上行名字一一对应，客户端仍按自己的名字派发。',
+    en:
+      'Client tools with no official equivalent (memory, knowledge base, custom scripts) travel '
+      + 'upstream in the shape upstream supports for client-defined tools, then are unpacked back '
+      + 'to the original names on the way down. Names stay one-to-one in both directions, so '
+      + 'clients still dispatch on their own names.',
+  },
+  'system.toolCarrierOn': {
+    'zh-CN': '第三方工具承载已开启（无官方等价物的工具会包装发出）',
+    en: 'Third-party tool carrier enabled (tools without an official equivalent are carried upstream)',
+  },
+  'system.toolCarrierOff': {
+    'zh-CN': '第三方工具承载已关闭（下游工具原样发出）',
+    en: 'Third-party tool carrier disabled (client tools are sent as-is)',
+  },
   'system.blockPremiumOn': { 'zh-CN': '已屏蔽收费模型（列表与调度已排除）', en: 'Paid models blocked (excluded from the list and from scheduling)' },
   'system.blockPremiumOff': { 'zh-CN': '已显示收费模型', en: 'Paid models shown again' },
   'system.scheduling': { 'zh-CN': '账号调度', en: 'Account scheduling' },

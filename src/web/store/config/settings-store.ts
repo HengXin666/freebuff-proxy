@@ -7,6 +7,7 @@ import { LIVE_FIELDS } from './settings-fields.ts'
 /** 运行设置字段表; 语义逐项见 DEFAULT_SETTINGS 的注释. */
 interface Settings {
   freeToolSignatureEnabled: boolean; cliTelemetryEnabled: boolean; stripToolsOnSchemaRejection: boolean
+  toolCarrierEnabled: boolean
   upstreamChannel: 'legacy' | 'official'; accountSchedulingMode: 'sticky' | 'spread'
   accountMaxConcurrency: number; accountOverflowWaitMs: number; lowBalanceThreshold: number
   blockPremiumModels: boolean; idleReleaseSec?: number; maxNewSessionsPerRequest?: number
@@ -28,6 +29,13 @@ const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   // 明确开启时仍可回退到纯文本.见
   // .agents/notes/implemented/bug-fix/2026-10-02-tool-request-fail-closed.md
   stripToolsOnSchemaRejection: false,
+  // 第三方工具承载开关(2026-10-05 新增).
+  // 开启:下游声明而官方工具集里没有等价物的工具, 包成官方 MCP 形态名字
+  // (proxy 加双下划线加原名)随 tools 发出, 回程按映射表拆回下游原名.
+  // 官方本来就支持客户端自定义工具, 所以这是上游允许的形态.
+  // 关闭:下游工具按旧行为原样发出(上游多半回 503), 用于对照排障.
+  // 见 .agents/notes/implemented/architecture/2026-10-05-third-party-tool-carrier.md
+  toolCarrierEnabled: true,
   // 上游请求形态通道(2026-10-03 新增):
   //   'legacy'(默认)---- 沿用现有自拼形态(ensureFreebuffSystemMessages +
   //       ensureFreebuffToolSignature + CLI 世代 agent).来源为早期第三方项目
@@ -105,6 +113,11 @@ export class SettingsStore {
       }
       if (typeof raw?.stripToolsOnSchemaRejection === 'boolean') {
         this.settings.stripToolsOnSchemaRejection = raw.stripToolsOnSchemaRejection
+      }
+      // 第三方工具承载开关:不读回的话, 控制台关掉它重启后又自己打开
+      // (症状与"开关没生效"无法区分), 与上面 cliTelemetryEnabled 同一条纪律.
+      if (typeof raw?.toolCarrierEnabled === 'boolean') {
+        this.settings.toolCarrierEnabled = raw.toolCarrierEnabled
       }
       //  这个布尔开关必须在这里读回:它能经 save() 写进 settings.json,
       // 但漏读的话重启后一律回落到 DEFAULT_SETTINGS 的 false ---- 表现为

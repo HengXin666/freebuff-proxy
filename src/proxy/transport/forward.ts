@@ -33,6 +33,8 @@ import { sleep } from './stream/stream-pipe.ts'
 import { customModels, catalogModelKeys } from '../routes/catalog.ts'
 import { tryOfficialChannel } from './official.ts'
 import { normalizeUpstreamError } from './errors/normalize.ts'
+import { EMPTY_CARRIER_PLAN } from './tool-carrier.ts'
+import { prepareRewriteHeaders, rewriteUpstreamResponse } from './reply/rewrite.ts'
 
 
 export async function forwardCompletions(
@@ -43,6 +45,12 @@ export async function forwardCompletions(
   forwardBody,
   stream,
   hermesDelegateAlias,
+  /**
+   - 本次请求的第三方工具载体映射(见 ./tool-carrier.ts).
+   - 由 buildForwardBody 产出并随请求传到这里: 上游回 tool_calls 时按它把
+   - 载体名(proxy__xxx)拆回下游原名. 空表时回程整体跳过.
+   */
+  carrierPlan,
   upstream,
   sessionRemainingMs,
   /**
@@ -99,12 +107,15 @@ export async function forwardCompletions(
   let upstreamRes
   /** 非 2xx 时上游响应体的文本(在循环里读一次,避免重复消费流). */
   let upstreamErrText = null
+  /** 本次请求的工具载体映射(缺省为空表:调用方没传时按无包装处理). */
+  const plan = carrierPlan ?? EMPTY_CARRIER_PLAN
 
   // official 通道:整条请求委托给副仓库(cli-bridge)执行, 见 official.ts 的文件头.
   let rpcResponse = false
   {
     const rpc = await tryOfficialChannel(ctx, {
       upstream, instanceId, forwardBody, schedulingDeadline, upstreamModel, requestBody,
+      carrierPlan: plan,
     })
     upstreamRes = rpc.upstreamRes
     upstreamErrText = rpc.upstreamErrText
@@ -182,18 +193,11 @@ export async function forwardCompletions(
     })
   }
   const respHeaders = filterResponseHeaders(upstreamRes.headers)
-  if (hermesDelegateAlias) {
-    // 回程会改写 tool_calls 的 function.name,原 Content-Length 已不再可信.
-    delete respHeaders['content-length']
-    res.setHeader(
-      'x-freebuff-proxy-tool-alias',
-      `delegate_task=${hermesDelegateAlias}`,
-    )
-  }
-  if (toolsStripped) {
-    // 可观测性:下游能看出这次回答是在"无工具"模式下取得的.
-    res.setHeader('x-freebuff-proxy-tools-stripped', '1')
-  }
+  prepareRewriteHeaders(res, respHeaders, {
+    hermesDelegateAlias,
+    toolsStripped,
+    plan,
+  })
 
   if (!upstreamRes.ok) {
     return await normalizeUpstreamError(ctx, {
@@ -207,35 +211,21 @@ export async function forwardCompletions(
     return { ok: true, wrote: true }
   }
 
-  // 非流式 JSON 可以整体恢复工具名;流式 SSE 则逐 data 行改写首个携带
-  // function.name 的 chunk,后续 arguments 分片原样透传.
-  if (hermesDelegateAlias && !stream) {
-    const text = await upstreamRes.text()
-    let output = text
-    try {
-      const parsed = text ? JSON.parse(text) : null
-      if (parsed) {
-        output = JSON.stringify(
-          restoreHermesDelegateInResponse(parsed, hermesDelegateAlias),
-        )
-      }
-    } catch {
-      // 非 JSON 成功响应保持原样；不要为了兼容别名制造新的失败。
-    }
+  // 回程工具名改写: 非流式整体改, 流式逐 data 行改(见该函数注释).
+  const rewritten = await rewriteUpstreamResponse(upstreamRes, {
+    stream,
+    hermesDelegateAlias,
+    plan,
+  })
+  if (rewritten.handled) {
     res.writeHead(status, respHeaders)
-    res.end(output)
+    res.end(rewritten.text)
     return { ok: true, wrote: true }
   }
 
-  const responseBody =
-    hermesDelegateAlias && stream
-      ? upstreamRes.body.pipeThrough(
-          createHermesDelegateSseTransform(hermesDelegateAlias),
-        )
-      : upstreamRes.body
   res.writeHead(status, respHeaders)
   try {
-    await pipeWebStreamToNode(responseBody, res, req, {
+    await pipeWebStreamToNode(rewritten.body, res, req, {
       idleTimeoutMs: effectiveStreamIdleMs(ctx, sessionRemainingMs),
     })
     return { ok: true, wrote: true }

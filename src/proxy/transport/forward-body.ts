@@ -17,12 +17,88 @@ import {
   normalizeOutputBudget,
   stripFreebuffConversationState,
 } from '../../free-mode.ts'
-import { rewriteHermesDelegateForUpstream } from '../../tool-alias.ts'
+import { HERMES_DELEGATE_TOOL_NAME, rewriteHermesDelegateForUpstream } from '../../tool-alias.ts'
+import { EMPTY_CARRIER_PLAN, alignToolNamesForUpstream, packClientTools } from './tool-carrier.ts'
 import { logger } from '../../util/log.ts'
 
 /** 一键屏蔽收费模型开关(前端[模型管理],实时生效). */
 function blockPremiumModels(ctx: any) {
   return ctx.settingsStore?.get()?.blockPremiumModels === true
+}
+
+/**
+ * 可观测性:把[上游会怎么看这个工具集]记一行.
+ *
+ * 判定权在上游, 本地算这份只为让[正在被降级]在出问题时能被看见
+ * (上游不回明确错误, 症状只是回答变差或 404/502).
+ *
+ * isRootAgent 恒为 true: 本代理转发的一律是 root agent (见 model.agentIdForModel),
+ * 该参数只影响无工具时的只报不罚信号分类, 不影响任何降级判定.
+ *
+ * @param {any} body 出站请求体(含 tools)
+ * @param {any} upstreamModel 上游模型名(仅入日志)
+ * @returns {void} 无返回值
+ */
+function logForeignClientVerdict(body: any, upstreamModel: any) {
+  const verdict = detectForeignClient(body, true)
+  if (!verdict.signal || !ENFORCED_FOREIGN_SIGNALS.includes(verdict.signal)) return
+  logger.warn('upstream may treat request as a foreign client', {
+    signal: verdict.signal,
+    model: upstreamModel,
+    toolCount: verdict.toolCount,
+    sampleToolNames: verdict.sampleToolNames,
+    foreignToolNames: verdict.foreignToolNames,
+    hollowToolNames: verdict.hollowToolNames,
+  })
+}
+
+/**
+ * 装配上游 chat metadata 与 provider / stop 两个顶层字段(原地写 body).
+ *
+ * run_id 必须由服务端经 POST /api/v1/agent-runs (START) 下发.
+ * client_id 是 SDK 形 13 位 base36(对齐官方 CLI), 每 run 一次, 绝不用自有
+ * 前缀 ---- 上游 cf-worker-signals.ts 的 looksLikeProxyClientId 会指纹代理形态
+ * client id (见 util/http.ts generateClientId).
+ *
+ * @param {any} body 出站请求体(原地修改)
+ * @param {{ runId: any, clientId: any, instanceId: any }} ids 三个服务端指派值
+ * @returns {any} 同一个 body
+ */
+function applyOutboundMetadata(body: any, ids: any) {
+  const existingMeta =
+    body.codebuff_metadata && typeof body.codebuff_metadata === 'object'
+      ? { ...body.codebuff_metadata }
+      : {}
+  body.codebuff_metadata = {
+    ...existingMeta,
+    run_id: ids.runId,
+    client_id: ids.clientId,
+    cost_mode: 'free',
+    freebuff_instance_id: ids.instanceId,
+    // 客户端环境描述符:官方把它放进 codebuff_metadata(与 x-freebuff-env 头
+    // 同一份字符串).缺失 = 请求形态不像官方 CLI, 上游会据此判定第三方客户端.
+    [META_CLIENT_ENV]: clientEnvironment(),
+    // 官方在 CLI claim(cli: 前缀)时额外声明这两项. surface: 'cli' 就是服务端
+    // 用来区分 native CLI 与 Desktop 标签的字段.
+    ...(isCliClaim(ids.instanceId)
+      ? { freebuff_multi_session: '1', surface: 'cli' }
+      : {}),
+    ...(existingMeta.trace_session_id ? {} : { trace_session_id: randomUUID() }),
+    // 官方 chat metadata 的另三个字段(抓包确认存在):
+    // freebuff_input_profile / repo_snapshot / llm_step_number.
+    // 格式逐字对齐官方(见 chat-metadata-parity.ts).
+    ...chatMetadataParity({ messages: body.messages, stepNumber: 1 }),
+  }
+  // provider.data_collection=deny: 官方 CLI 每次 chat 都带(拒绝数据采集),
+  // 缺失反而与官方客户端不一致.客户端自带 provider 时保留其字段, 补上 deny.
+  body.provider = {
+    ...(body.provider && typeof body.provider === 'object' ? body.provider : {}),
+    data_collection: 'deny',
+  }
+  // CLI 全局停止序列:JSON 编码带引号的哨兵 "cb_easp"
+  // (agent-runtime globalStopSequence = JSON.stringify(endsAgentStepParam)).
+  if (!body.stop) body.stop = [`"cb_easp"`]
+  return body
 }
 
 export function buildForwardBody(
@@ -49,6 +125,11 @@ export function buildForwardBody(
   layerHint = 'worker',
   /** repo_snapshot 的 JSON 字符串(worker 层用真实项目统计). */
   repositorySnapshot = null,
+  /**
+   - 第三方工具承载开关(前端[工具承载], 实时生效).
+   - 关掉时下游私有工具按旧行为原样发出(上游多半回 503), 用于对照排障.
+   */
+  toolCarrierEnabled = true,
 ) {
   const { clientId: fallbackClientId } = newIds()
   const effectiveClientId = clientId || fallbackClientId
@@ -67,10 +148,32 @@ export function buildForwardBody(
     assigned,
     outgoing: outgoingModel,
   })
+  /**
+   - 第三方工具承载 (下行打包).
+   - 下游工具中[官方集里没有等价物]的那些包成官方 MCP 形态名字, 原名进映射表;
+   - 回程由 unpackCarrierToolCalls 按同一张表拆回. 见 ./tool-carrier.ts.
+   - Hermes 的 delegate_task 走另一条窄通道(tool-alias 双向别名), 这里让开它,
+   - 两条通道不得对同一个名字各改一次.
+   *
+   - 只在客户端真的声明了工具时才接管 tools 键: 无工具时若写入一个空数组,
+   - 上游与本地判据都会把它当成[带了工具] ---- 实测 mock 上游按 Array.isArray(tools)
+   - 判 tool-schema 拒, 无工具的请求会凭空变成 404; 且官方无工具时本就不发该键.
+   */
+  const clientTools = clientBody?.tools
+  const hasClientTools = Array.isArray(clientTools) && clientTools.length > 0
+  const packed =
+    toolCarrierEnabled && hasClientTools
+      ? packClientTools(clientTools, (n) => n === HERMES_DELEGATE_TOOL_NAME)
+      : null
+  const carrierPlan = packed?.plan ?? EMPTY_CARRIER_PLAN
   let body = stripFreebuffConversationState({
     ...clientBody,
+    ...(packed ? { tools: packed.tools } : {}),
     model: outgoingModel,
   })
+  // 历史消息里的下游工具名同步换成 wire 名, 否则模型看到的历史调用名
+  // 不在它拿到的 tools 清单里.
+  body.messages = alignToolNamesForUpstream(body.messages, carrierPlan)
   // Hermes 的 delegate_task 命中上游 foreign_tool_names.只在客户端实际声明
   // 该工具时做窄范围双向别名;已有 tool_calls/tool message/tool_choice 同步改名,
   // 回程再恢复原名,避免破坏 Hermes 的硬编码派发.见 issue #17 与:
@@ -121,78 +224,17 @@ export function buildForwardBody(
       freeToolSignatureEnabled,
     )
   }
-  // 可观测性:把[上游会怎么看这个工具集]算出来记进日志.判定权在上游,
-  // 本地算这份只为让[正在被降级]在出问题时能被看见(上游不回明确错误,
-  // 症状只是回答变差或 404/502).
-  //
-  // isRootAgent 恒为 true:本代理转发的一律是 root agent(base2-free* /
-  // base3-free-*,见 model.agentIdForModel),而该参数只影响[无工具]时的
-  // 只报不罚信号分类,不影响任何降级判定.
+  // 可观测性:把[上游会怎么看这个工具集]记一行(判定权在上游, 见该函数注释).
   if (Array.isArray(body.tools) && body.tools.length > 0) {
-    const verdict = detectForeignClient(body, true)
-    if (verdict.signal && ENFORCED_FOREIGN_SIGNALS.includes(verdict.signal)) {
-      logger.warn('upstream may treat request as a foreign client', {
-        signal: verdict.signal,
-        model: upstreamModel,
-        toolCount: verdict.toolCount,
-        sampleToolNames: verdict.sampleToolNames,
-        foreignToolNames: verdict.foreignToolNames,
-        hollowToolNames: verdict.hollowToolNames,
-      })
-    }
+    logForeignClientVerdict(body, upstreamModel)
   }
 
-  const existingMeta =
-    body.codebuff_metadata && typeof body.codebuff_metadata === 'object'
-      ? { ...body.codebuff_metadata }
-      : {}
-  // run_id MUST be server-issued via POST /api/v1/agent-runs (START).
-  // client_id:SDK 形 13 位 base36(对齐官方 CLI),每 run 一次,绝不用
-  // 自有前缀----上游 cf-worker-signals.ts 的 looksLikeProxyClientId 会指纹
-  // 代理形态 client id(详见 util/http.js generateClientId).
-  body.codebuff_metadata = {
-    ...existingMeta,
-    run_id: runId,
-    client_id: effectiveClientId,
-    cost_mode: 'free',
-    freebuff_instance_id: instanceId,
-    // 客户端环境描述符:官方把它放进 codebuff_metadata(与 x-freebuff-env
-    // 头同一份字符串).缺失 = 请求形态不像官方 CLI ---- 上游会据此判定
-    // 第三方客户端.常量与格式见 src/upstream/official-fingerprint.ts.
-    [META_CLIENT_ENV]: clientEnvironment(),
-    // 官方在 CLI claim(cli: 前缀)时额外声明这两项:
-    //   cli/src/utils/freebuff-session-identity.ts freebuffSessionMetadata()
-    //     { freebuff_instance_id, freebuff_multi_session: '1', surface: 'cli' }
-    // surface: 'cli' 就是服务端用来区分 native CLI 与 Desktop 标签的字段.
-    ...(isCliClaim(instanceId)
-      ? { freebuff_multi_session: '1', surface: 'cli' }
-      : {}),
-    ...(existingMeta.trace_session_id
-      ? {}
-      : { trace_session_id: randomUUID() }),
-    // 官方 chat metadata 的另三个字段(抓包确认存在):
-    //   freebuff_input_profile / repo_snapshot / llm_step_number
-    // 格式逐字对齐官方(见 chat-metadata-parity.ts).
-    ...chatMetadataParity(
-      {
-        messages: body.messages,
-        stepNumber: 1,
-      },
-    ),
-  }
-  // provider.data_collection=deny:官方 CLI 每次 chat 都带(拒绝数据采集),
-  // 缺失反而与官方客户端不一致.客户端自带 provider 时保留其字段,补上 deny.
-  body.provider = {
-    ...(body.provider && typeof body.provider === 'object'
-      ? body.provider
-      : {}),
-    data_collection: 'deny',
-  }
-  // CLI 全局停止序列:JSON 编码带引号的哨兵 "cb_easp"(agent-runtime
-  // globalStopSequence = JSON.stringify(endsAgentStepParam)),客户端没给
-  // stop 时补上,与官方 CLI 一致.
-  if (!body.stop) {
-    body.stop = [`"cb_easp"`]
-  }
-  return body
+  applyOutboundMetadata(body, {
+    runId,
+    clientId: effectiveClientId,
+    instanceId,
+  })
+  // 回程拆包要用的映射表一并返回:调用方把它传到 forwardCompletions,
+  // 上游回 tool_calls 时按同一张表把载体名还原成下游原名.
+  return { body, carrierPlan }
 }

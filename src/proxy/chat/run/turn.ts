@@ -14,7 +14,6 @@ import { chooseHermesDelegateAlias } from '../../../tool-alias.ts'
 import { buildForwardBody } from '../../transport/forward-body.ts'
 import { forwardCompletions } from '../../transport/forward.ts'
 import { startAgentRunWithFallback } from './agent-run.ts'
-
 /**
  * 准备并执行一次上游调用.
  *
@@ -41,13 +40,16 @@ export async function runUpstreamTurn(st: any, res: any) {
 
   const agentId = await startAgentRunWithFallback(st)
   const hermesDelegateAlias = chooseHermesDelegateAlias(st.body.tools)
-  const forwardBody = buildTurnBody(st, agentId, snap, hermesDelegateAlias)
+  const built = buildTurnBody(st, agentId, snap, hermesDelegateAlias)
   const result = await forwardCompletions(ctx, {
     req: st.req,
     res,
-    forwardBody,
+    forwardBody: built.body,
     stream: st.stream,
     hermesDelegateAlias,
+    // 本次请求的第三方工具载体映射:回程按它把 wire 名拆回下游原名.
+    // 没有可承载工具时是空表,回程整体跳过.
+    carrierPlan: built.carrierPlan,
     upstream: rt.upstream,
     // 会话剩余时间:用于把流 idle 超时收敛到会话过期附近,过期即掐断.
     sessionRemainingMs: snap.remainingMs,
@@ -81,7 +83,7 @@ function errorMessageOf(result: any) {
 }
 
 /**
- * 构造发往上游的 chat 请求体.
+ * 构造发往上游的 chat 请求体, 并带回本次的工具载体映射.
  *
  * 三个服务端指派值都必须逐字用会话回执里的真值, 不符合会被上游按不匹配拒绝:
  *   snap.model   服务端指派的 model(用错得到 session_model_mismatch)
@@ -91,7 +93,7 @@ function errorMessageOf(result: any) {
  * @param {any} agentId 本轮实际使用的 agent
  * @param {any} snap 会话快照
  * @param {string | null} hermesDelegateAlias 本轮的 delegate_task 别名
- * @returns {any} 转发体
+ * @returns {{ body: any, carrierPlan: any }} 转发体与工具载体映射
  */
 function buildTurnBody(st: any, agentId: any, snap: any, hermesDelegateAlias: any) {
   const { ctx, rt, body, upstreamModel } = st
@@ -109,5 +111,9 @@ function buildTurnBody(st: any, agentId: any, snap: any, hermesDelegateAlias: an
     // 目录持有者:把 m-xxx(目录 key)翻成 fbm1.xxx(句柄)----
     // 官方 chat 的 model 用的是句柄.
     rt.upstream.catalog,
+    // worker 层 / 无项目快照 / 工具承载开关(控制台实时值, 默认开).
+    'worker',
+    null,
+    ctx.settingsStore?.get?.()?.toolCarrierEnabled !== false,
   )
 }
