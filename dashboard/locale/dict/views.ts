@@ -143,4 +143,26 @@ export default {
     en: 'Click any row to expand the full fields (including raw upstream verdicts) and copy them in one click. The buffer is a bounded in-process ring, cleared on restart.',
   },
 
+
+  // ---- 日志颗粒度与事件类型(与 src/util/log-kinds.ts 的 EVENTS 一一对应)----
+  'logs.kindRequest': { 'zh-CN': '请求', en: 'Request' },
+  'logs.kindHint': { 'zh-CN': '按一次下游请求聚合（同 reqId 为一组）', en: 'Grouped by one downstream request (same reqId)' },
+  'logs.eventHint': { 'zh-CN': '独立事件（与具体请求无关）', en: 'Standalone event (not tied to a request)' },
+  'logs.event.quotaRefresh': { 'zh-CN': '额度刷新', en: 'Quota refresh' },
+  'logs.event.accountProbe': { 'zh-CN': '账号探测', en: 'Account probe' },
+  'logs.event.modelFetch': { 'zh-CN': '模型获取', en: 'Model fetch' },
+  'logs.event.catalogSync': { 'zh-CN': '目录同步', en: 'Catalog sync' },
+  'logs.event.accountImport': { 'zh-CN': '账号导入', en: 'Account import' },
+  'logs.event.accountDelete': { 'zh-CN': '账号删除', en: 'Account delete' },
+  'logs.event.loginFlow': { 'zh-CN': '登录流程', en: 'Login flow' },
+  'logs.event.sessionAdmit': { 'zh-CN': '会话建立', en: 'Session admit' },
+  'logs.event.sessionRelease': { 'zh-CN': '会话释放', en: 'Session release' },
+  'logs.event.sessionRefund': { 'zh-CN': '退款结算', en: 'Refund settle' },
+  'logs.event.sessionHeartbeat': { 'zh-CN': '会话保活', en: 'Session heartbeat' },
+  'logs.event.deviceKey': { 'zh-CN': '设备密钥', en: 'Device key' },
+  'logs.event.proxyTest': { 'zh-CN': '代理测试', en: 'Proxy test' },
+  'logs.event.settingsChange': { 'zh-CN': '设置变更', en: 'Settings change' },
+  'logs.event.dataFile': { 'zh-CN': '数据文件', en: 'Data file' },
+  'logs.event.system': { 'zh-CN': '系统', en: 'System' },
+  'logs.event.telemetry': { 'zh-CN': '遥测上报', en: 'Telemetry' },
 }

@@ -70,7 +70,7 @@ async function importAccount(req: IncomingMessage, res: ServerResponse, ctx: any
   }
   // ! 以前的"导入后自动探测"已删除(docs/reverse/20 §20.3):
   // 导入账号不该顺带发一次上游 GET.要额度/状态,用户点"检测"或"一键刷新".
-  logger.info('account imported via web', { key: saved.key, email: saved.user.email })
+  logger.event('accountImport', 'info', 'account imported via web', { key: saved.key, email: saved.user.email })
   sendJson(res, 200, {
     ok: true,
     account: saved.user.email,

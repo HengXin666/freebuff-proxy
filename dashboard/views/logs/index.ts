@@ -16,6 +16,54 @@ const logsView: any = {
   lines: [],
 }
 
+/**
+ * 颗粒度/事件类型徽标.
+ * @param {any} line 一条日志
+ * @returns {any} 徽标节点或 null
+ */
+function kindBadge(line: any) {
+  if (line.kind === 'request') {
+    return el('span', { class: 'badge', style: 'font-size:11px', title: t('logs.kindHint') },
+      t('logs.kindRequest'))
+  }
+  if (line.event) {
+    return el('span', { class: 'badge', style: 'font-size:11px', title: t('logs.eventHint') },
+      eventLabel(line.event))
+  }
+  return null
+}
+
+/** 事件类型 -> 词条 key 的显式映射(拼接写法会让 i18n 门禁看不到 key). */
+const EVENT_KEY: Record<string, string> = {
+  quotaRefresh: 'logs.event.quotaRefresh',
+  accountProbe: 'logs.event.accountProbe',
+  modelFetch: 'logs.event.modelFetch',
+  catalogSync: 'logs.event.catalogSync',
+  accountImport: 'logs.event.accountImport',
+  accountDelete: 'logs.event.accountDelete',
+  loginFlow: 'logs.event.loginFlow',
+  sessionAdmit: 'logs.event.sessionAdmit',
+  sessionRelease: 'logs.event.sessionRelease',
+  sessionRefund: 'logs.event.sessionRefund',
+  sessionHeartbeat: 'logs.event.sessionHeartbeat',
+  deviceKey: 'logs.event.deviceKey',
+  proxyTest: 'logs.event.proxyTest',
+  settingsChange: 'logs.event.settingsChange',
+  dataFile: 'logs.event.dataFile',
+  system: 'logs.event.system',
+  telemetry: 'logs.event.telemetry',
+}
+
+/**
+ * 事件类型标签.
+ * @param {string} key 事件 key
+ * @returns {string} 当前语种文案(未知 key 回落原文)
+ */
+function eventLabel(key: string) {
+  const dictKey = EVENT_KEY[key]
+  return dictKey ? t(dictKey) : key
+}
+
 function logsLevelTone(level: any) {
   if (level === 'error') return 'err'
   if (level === 'warn') return 'warn'
@@ -94,6 +142,8 @@ function buildLogRow(line: any, idx: any) {
             },
           }, '#' + line.reqId)
         : null,
+      // 颗粒度与事件类型: 请求日志显示"请求", 独立事件显示它的类型(双语).
+      kindBadge(line),
       el('span', { class: 'log-msg' }, line.msg || ''),
       hasExtra ? el('span', { class: 'muted', style: 'font-size:11px' }, open ? '▾' : '▸') : null,
     ].filter(Boolean)),

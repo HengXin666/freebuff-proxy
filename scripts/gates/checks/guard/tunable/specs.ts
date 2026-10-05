@@ -15,9 +15,9 @@
  *
  * 扫描根:无(直接 import 真源). 退出码:0 PASS / 1 FAIL / 2 用法错.
  */
-import { DEFAULTS } from '../../../../src/config/defaults.ts'
-import { NOT_TUNABLE, TUNABLES } from '../../../../src/config/tunable/specs.ts'
-import { Report } from '../../lib/text/report.ts'
+import { DEFAULTS } from '../../../../../src/config/defaults.ts'
+import { NOT_TUNABLE, TUNABLES } from '../../../../../src/config/tunable/specs.ts'
+import { Report } from '../../../lib/text/report.ts'
 
 const report = new Report('tunables')
 

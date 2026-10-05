@@ -216,7 +216,7 @@ export async function handle(
     const savedTunables = Object.keys(tunablePatch).length
       ? settingsStore.saveTunables(tunablePatch)
       : settingsStore.savedTunables()
-    logger.info('runtime settings updated via web', {
+    logger.event('settingsChange', 'info', 'runtime settings updated via web', {
       live: Object.keys(patch),
       tunables: Object.keys(tunablePatch),
     })

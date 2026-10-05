@@ -62,7 +62,7 @@ export async function handle(
   if (method === 'POST' && route === '/api/accounts/login') {
     try {
       const flow = await loginFlows.start()
-      logger.info('web login flow started', { id: flow.id })
+      logger.event('loginFlow', 'info', 'web login flow started', { id: flow.id })
       sendJson(res, 200, { ok: true, flow })
     } catch (err) {
       sendStartFailure(res, err)

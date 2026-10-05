@@ -1,3 +1,6 @@
+import type { LogEvent, LogKind } from './log-kinds.ts'
+import { LOG } from '../shared/constants.ts'
+
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 }
 
 /** @type {{ level: string }} */
@@ -17,7 +20,7 @@ let settings = { level: 'info' }
  */
 const ring: Array<Record<string, any>> = []
 /** @type {number} */
-let ringCap = 5000
+let ringCap = LOG.ringCapDefault
 
 /**
  * 日志上下文:一次下游请求的全链路标识.
@@ -90,7 +93,8 @@ export function log(level: string, msg: string, fields: any = undefined): void {
     ts: new Date().toISOString(),
     level,
     msg,
-    // 上下文优先放前面,读日志时一眼看到"谁的哪次请求"
+    // 颗粒度: 在请求上下文里 = request(带 reqId), 否则 = 独立事件.
+    kind: (ctx?.reqId ? 'request' : 'event') as LogKind,
     ...(ctx?.reqId ? { reqId: ctx.reqId } : {}),
     ...(account ? { account } : {}),
     ...(ctx?.model ? { model: ctx.model } : {}),
@@ -122,6 +126,10 @@ export interface LogQuery {
   level?: string
   q?: string
   sinceTs?: number
+  /** 颗粒度过滤: 'request'(按请求聚合) / 'event'(独立事件). */
+  kind?: LogKind
+  /** 事件类型过滤(仅 kind='event' 有意义). */
+  event?: LogEvent
 }
 
 /** 清空缓冲(及时释放内存). */
@@ -149,6 +157,8 @@ export function readLogBuffer(opts: LogQuery = {}): any[] {
     const who = String(opts.account).toLowerCase()
     out = out.filter((l) => String(l.account || '').toLowerCase().includes(who))
   }
+  if (opts.kind) out = out.filter((l) => l.kind === opts.kind)
+  if (opts.event) out = out.filter((l) => l.event === opts.event)
   if (opts.q) {
     const needle = String(opts.q).toLowerCase()
     out = out.filter((l) => JSON.stringify(l).toLowerCase().includes(needle))
@@ -166,4 +176,14 @@ export const logger = {
   info: (msg: string, fields?: any) => log('info', msg, fields),
   warn: (msg: string, fields?: any) => log('warn', msg, fields),
   error: (msg: string, fields?: any) => log('error', msg, fields),
+  /**
+   * 记一个独立事件(额度刷新 / 账号探测 / 模型获取等).
+   * @param {LogEvent} event 事件类型
+   * @param {string} level 日志级别
+   * @param {string} msg 消息
+   * @param {any} [fields] 附加字段
+   * @returns {void}
+   */
+  event: (event: LogEvent, level: string, msg: string, fields?: any) =>
+    log(level, msg, { event, ...(fields || {}) }),
 }

@@ -5,6 +5,7 @@
  * 因此与"怎么发 DELETE"分开审查更安全.
  */
 import { logger } from '../../util/log.ts'
+import { MS } from '../../shared/constants.ts'
 import { extractFreebucks, round2 } from '../inventory.ts'
 
 /**
@@ -45,11 +46,11 @@ export function recordSettledRefund(
       : null
   const expected =
     price != null && holdMs != null
-      ? Math.max(0, round2(price * (1 - holdMs / 3_600_000)))
+      ? Math.max(0, round2(price * (1 - holdMs / MS.hour)))
       : null
   const expectedUnits =
     holdMs != null
-      ? Math.max(0, round2(1 - Math.max(0.1, holdMs / 3_600_000)))
+      ? Math.max(0, round2(1 - Math.max(0.1, holdMs / MS.hour)))
       : null
   const entry = {
     instanceId,

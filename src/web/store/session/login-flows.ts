@@ -95,7 +95,7 @@ export class LoginFlowManager {
       this._polling = true
       this.pollAll()
         .catch((err) => {
-          logger.warn('login flow poller error', {
+          logger.event('loginFlow', 'warn', 'login flow poller error', {
             error: err instanceof Error ? err.message : String(err),
           })
         })
@@ -186,7 +186,7 @@ export class LoginFlowManager {
     }
     this.flows.set(flow.id, flow)
     this.save()
-    logger.info('login flow started', {
+    logger.event('loginFlow', 'info', 'login flow started', {
       id: flow.id,
       expiresAt: flow.expiresAt,
     })

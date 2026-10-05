@@ -85,7 +85,7 @@ async function saveCustomModels(req: IncomingMessage, res: ServerResponse, ctx: 
     return
   }
   const models = modelStore.save(body.models)
-  logger.info('custom models updated via web', { count: models.length })
+  logger.event('modelFetch', 'info', 'custom models updated via web', { count: models.length })
   sendJson(res, 200, {
     ok: true,
     models,
@@ -137,7 +137,7 @@ export async function handleCustom(
     const id = await requireModelId(user, ctx, req, res)
     if (!id) return true
     modelStore.hide(id)
-    logger.info('model hidden via web', { model: id })
+    logger.event('modelFetch', 'info', 'model hidden via web', { model: id })
     sendJson(res, 200, { ok: true, hidden: modelStore.hidden(), note: `已隐藏模型 ${id}` })
     return true
   }
@@ -147,7 +147,7 @@ export async function handleCustom(
     const id = await requireModelId(user, ctx, req, res)
     if (!id) return true
     modelStore.remove(id)
-    logger.info('custom model removed via web', { model: id })
+    logger.event('modelFetch', 'info', 'custom model removed via web', { model: id })
     sendJson(res, 200, {
       ok: true,
       models: modelStore.list(),
@@ -161,7 +161,7 @@ export async function handleCustom(
     const id = await requireModelId(user, ctx, req, res)
     if (!id) return true
     modelStore.unhide(id)
-    logger.info('model unhidden via web', { model: id })
+    logger.event('modelFetch', 'info', 'model unhidden via web', { model: id })
     sendJson(res, 200, { ok: true, hidden: modelStore.hidden(), note: `已恢复模型 ${id}` })
     return true
   }
