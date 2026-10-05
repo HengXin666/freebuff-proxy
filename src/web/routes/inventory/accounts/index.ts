@@ -1,9 +1,6 @@
 /**
  * accounts 域的门面:把"存储侧 / 刷新侧 / 单账号动作侧"合成一个 handle.
  *
- * ! 顺序有语义:login 前缀必须先于 :key 匹配,否则
- * /api/accounts/login 会被当成 key 为 login 的账号 ---- 这是显式返回
- * (而不是落到 404)的原因.
  */
 import { handle as handleStore } from './store.ts'
 import { probeAll, refreshAll } from './refresh.ts'

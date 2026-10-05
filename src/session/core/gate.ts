@@ -1,9 +1,7 @@
 /**
  * session 域的准入闸门: 两本账(units 与 Freebucks)与续期提前量.
  *
- * 从 session-manager.js 的 freebucksFor / sessionUnitsFor / reAdmitLeadMs 切出.
- * 这些方法只读 this.quota / this.freebucks / this.config, 不写任何会话状态,
- * 因此可以整块搬成带 this 参数的普通函数.
+ * 这些函数只读 this.quota / this.freebucks / this.config, 不写任何会话状态.
  *
  * 两本账是并行的两道闸门, 见
  * .agents/notes/implemented/architecture/2026-09-14-two-ledgers-parallel-gates.md
@@ -14,9 +12,9 @@ import { isFreeModel } from '../../model.ts'
  * session_units 闸门(与 Freebucks 并行的第二道).
  *
  * 上游一笔会话同时扣两本账: units(rateLimitsByModel[model].recentCount, 小数)
- * 与 Freebucks. 实测 deepseek-v4-flash 在 units 0.1/6 完全没超标时仍被
- * rate_limited(理由 freebucksShortfall), 所以 Freebucks 那道不能删;
- * 但 units 用尽同样会被上游拒, 不拦就等于白跑一次 admit 再换回冷却.
+ * 与 Freebucks; units 0.1/6 未超标时仍可能被 rate_limited(理由
+ * freebucksShortfall), 所以两道闸门都不能删 ---- units 用尽同样会被上游拒,
+ * 不拦等于白跑一次 admit 再换回冷却.
  *
  * 返回 {known, used, limit, remaining, exhausted, pool, poolLabel, resetAt}.
  * fail-open: 无该模型行 / limit<=0 / 非有限数 -> known:false(不拦截),
@@ -54,12 +52,12 @@ export function sessionUnitsFor(this: any, model: string): any {
  * known=false 表示还没有拿到过 freebucks 块(老上游/尚未探测) -- 此时不拦截.
  * 无 price 的模型 = 不计费(unmetered), 永远可买.
  *
- * 上游的封号判定有两条(issue #11 实测):
+ * 上游的封号判定有两条(issue #11):
  *   1. Freebucks 跑完了(今日池 daily.remaining <= 0);
  *   2. 本次请求所需 Freebucks 高于剩余余额(balance < prices[model]).
  * 命中任一条就可能直接封号, 所以 affordable === false 必须同时覆盖两者
- * -- 只判 2 会漏掉"池子跑完但 balance 还留着数字"的账号, 照样送上去撞封禁.
- * reason 标明是哪一条命中, 便于日志与前端解释(不再只报"余额不够").
+ * ---- 只判 2 会漏掉"池子跑完但 balance 还留着数字"的账号.
+ * reason 标明是哪一条命中, 便于日志与前端解释.
  * @param {any} this 会话实例(读 freebucks)
  * @param {string} model 目录 key 或上游 id
  * @returns {any} Freebucks 账目快照
@@ -67,9 +65,8 @@ export function sessionUnitsFor(this: any, model: string): any {
 export function freebucksFor(this: any, model: string): any {
   const fb = this.freebucks
   if (!fb) return { known: false, price: null, balance: null, affordable: true }
-  // 每日池重置时刻已过 -> 本地数字自认过期(太平洋午夜刷新), 不再据此
-  // 拦截选号: 让一次真实 admit 用上游的最新余额重新校准, 而不是拿冻结的
-  // 旧数字把账号一直排除在外.
+  // 每日池重置时刻已过 -> 本地数字自认过期(太平洋午夜刷新), 不再据此拦截选号:
+  // 让一次真实 admit 用上游的最新余额重新校准, 不拿冻结的旧数字把账号排除在外.
   const resetAt = fb.daily?.resetAt ? Date.parse(fb.daily.resetAt) : NaN
   if (Number.isFinite(resetAt) && resetAt <= Date.now()) {
     return {
@@ -97,9 +94,9 @@ export function freebucksFor(this: any, model: string): any {
 /**
  * 价格表查找.
  *
- * 必须走模型标识归一(2026-10-04 实测缺陷): 上游价格表(freebucks.prices)的键
+ * 走模型标识归一: 上游价格表(freebucks.prices)的键
  * 是上游模型 id(deepseek/deepseek-v4-flash), 而调度传进来的 model 通常是
- * 目录 key(m-096e75164d) -- 直接用 fb.prices[model] 查不到, 于是 price 为
+ * 目录 key(m-096e75164d) ---- 直接用 fb.prices[model] 查不到, 于是 price 为
  * null -> 走进 unmetered 分支恒放行, 额度闸门形同虚设.
  *
  * 用注入的 resolveModelAlias(同一唯一真源)把两侧都归一到目录 key 再比.
@@ -128,12 +125,11 @@ function lookupPrice(self: any, fb: any, model: string): number | null {
  *
  * 免费模型(price === 0)不受任何 Freebucks 闸门约束.
  *
- * 实测(2026-10-04 用户指出): 上游价格表里有 price: 0 的免费模型
- * (upstage/solar-mini4, stealth/space-bunny-alpha). 既然它不花钱,
- * 余额/每日池耗尽就与它无关 -- 用"没钱"去拒绝一个免费模型是纯粹的自伤.
+ * 上游价格表里有 price: 0 的免费模型(upstage/solar-mini4,
+ * stealth/space-bunny-alpha); 既然它不花钱, 余额/每日池耗尽就与它无关.
  *
- * 注意判据是 price === 0(不是"price 缺失"): 缺失在上面已走 unmetered 分支
- * 放行并明确标注, 那是"上游没给价"的未知态; 这里是"上游明确标价 0"的已知免费态.
+ * 判据是 price === 0(不是"price 缺失"): 缺失在上面已走 unmetered 分支放行并
+ * 明确标注, 那是"上游没给价"的未知态; 这里是"上游明确标价 0"的已知免费态.
  * @param {any} fb Freebucks 块
  * @param {number} price 该模型单价
  * @returns {any} 判定结果

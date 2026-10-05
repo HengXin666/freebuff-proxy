@@ -1,9 +1,6 @@
 /**
  * 场景表与单场景执行 -- 从 scripts/ci/pipeline-image-test.ts 按职责切出.
  *
- * 为什么 runScenario 要拆:它原本是 98 行的单函数, 同时管"起容器 / 判启动 /
- * 判日志 / 判健康检查 / 判接口 / 清理"六件事. 拆成 场景表 + 三个断言段之后,
- * 每条断言单独可读, 失败时能一眼定位是哪一段没过.
  *
  * 口径: 纯搬移, 不改行为, 不改任何一行 note 文案.
  */
@@ -141,9 +138,6 @@ async function assertHealthy(
 /**
  * 真实登录后逐个打需要鉴权的接口.
  *
- * 为什么必须有:只测 /healthz 会漏掉"起来了但控制台接口 500" -- 数据文件
- * 自检接口就曾因 api.js 里 const path = url.pathname 遮蔽了 node:path 模块,
- * 一路 500 到用户手里(真实故障).
  * @param {object} result 结果累加器
  * @param {string} name 容器名
  * @returns {boolean} 是否全部 200

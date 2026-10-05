@@ -9,10 +9,10 @@
  * 保留原路径与全部原有导出名,既有 import 点一处都不用改.
  *
  * 目录布局:
- *   credentials/<key>.json      key = Freebuff 用户 id(新布局)
- *   credentials/<email>.json    历史布局,读取时自动迁移到 <id>.json
+ *   credentials/<key>.json      key = Freebuff 用户 id
+ *   credentials/<email>.json    旧布局,读取时自动迁移到 <id>.json
  *
- * No "active" pointer -- runtime picks accounts by availability.
+ * 无 active 指针: 运行时按可用性挑账号.
  */
 export {
   accountCredentialsPath,

@@ -14,11 +14,11 @@ import { parseRetryAfterMsHeader, shouldSwitchAccountOnError } from './errors.ts
 import { logger } from '../../../util/log.ts'
 
 /**
- * 上游非 2xx 回执的归一化 -- 从 forward.js 搬出.
+ * 上游非 2xx 回执的归一化.
  *
  * 做三件事: 解析错误体 -> 把"因第三方客户端被封"的 403 归一成 banned 判据
  * -> 重算 errCode 并给出换号/冷却的判决. 重算那一步是必需的: 只改 parsedBody
- * 而留着旧 errCode 等于没改, 因为 shouldSwitchAccountOnError 与 markCooldown
+ * 而留着旧 errCode 等于没改, shouldSwitchAccountOnError 与 markCooldown
  * 都按 errCode 分支.
  *
  * @param {object} ctx 依赖集合
@@ -59,11 +59,9 @@ export async function normalizeUpstreamError(ctx: any, args: any) {
     error: { message: text, type: 'upstream_error' },
   }
 
-  // free_mode_capacity_deferred:免费模式瞬时容量排队(上游原话
-  // "your request will be retried automatically").不是账号级故障----
-  // 实测同一账号同一 session 立即重试即恢复(flash 尤其常见).
-  // 优先复用当前热 session 重试,但绝不冷却账号,避免为瞬时容量
-  // 无谓开启另一个计费 session;若账号另有故障,外层仍会正常切号.
+  // free_mode_capacity_deferred: 免费模式瞬时容量排队(上游原话
+  // "your request will be retried automatically").不是账号级故障:
+  // 优先复用当前热 session 重试, 不冷却账号;若账号另有故障,外层仍会正常切号.
   if (
     effectiveErrCode === 'free_mode_capacity_deferred' ||
     gateCode === 'free_mode_capacity_deferred'
@@ -96,8 +94,8 @@ export async function normalizeUpstreamError(ctx: any, args: any) {
       headers: respHeaders,
     }
   }
-  // 账号侧故障(429 限流 / 5xx / 403 账号级封禁):冷却当前账号并换号重试,
-  // 而不是把错误直接甩给用户.4xx 客户端错误(400/401/404/422 等)不换号.
+  // 账号侧故障(429 限流 / 5xx / 403 账号级封禁):冷却当前账号并换号重试.
+  // 4xx 客户端错误(400/401/404/422 等)不换号.
   const switchAccount = shouldSwitchAccountOnError(status, effectiveErrCode)
   if (switchAccount) {
     return {

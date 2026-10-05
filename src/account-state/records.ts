@@ -1,18 +1,15 @@
 /**
- * 账号账本(account-state.json)的读盘归一 ---- 从 src/account-state-store.ts 按职责切出.
+ * 账号账本(account-state.json)的读盘归一.
  *
- * 为什么单独成文件: 这一段是"磁盘上任意 JSON -> 一份合法账本状态"的完整判据
- * (字段逐个校验, 坏字段一律回落默认, 绝不抛). 它与类的生命周期无关, 放在类里
- * 会让 load() 同时承担"读文件"与"逐字段定性"两件事.
- *
- * 口径: 纯搬移, 行为零改动. 读盘永不抛 -- 账本坏了只当没有, 不影响转发.
+ * 职责: 把"磁盘上任意 JSON"转成一份合法账本状态 ---- 字段逐个校验, 坏字段一律
+ * 回落默认值, 绝不抛. 读盘永不抛: 账本坏了只当没有, 不影响转发.
  */
 
 /**
  * 把磁盘上的原始 JSON 归一成一份账本状态.
  *
  * 逐字段校验: 类型不对一律回落默认值, 结构不对的账号直接丢弃(不保留半残记录).
- * 之所以绝不抛: 账本只是可观测性, 不是计费依据, 一个损坏文件不该拖死转发.
+ * 绝不抛异常: 账本只是可观测性, 不是计费依据.
  * @param {any} raw 解析后的原始对象(可能为 null / 数组 / 任意脏数据)
  * @returns {{version: number, updatedAt: string | null, total: number,
  *   lastSuccessKey: string | null, accounts: Record<string, any>}} 归一后的状态
@@ -44,13 +41,9 @@ function round2(n: any) {
 /**
  * 追加一条退款记录(最近 100 条, 新的在前), 并累计三个对账口径.
  *
- * 为什么值得单独记: 控制台原本只有 lastRefund 一个内存里的最新值, 既看不到历史,
- * 重启就丢, 于是"退款到底成没成功 / 金额对不对"根本没法审. 记下 holdMs(实际占用)
- * 与 expected(按未用时长应付的金额)之后, "退款是不是被上游吞了 / 是不是被四舍五入
- * 成 5 的倍数"就能直接对账.
- *
- * 搬法: 原为 AccountStateStore 的私有方法, 现按本仓既有模式改为模块级函数 +
- * self 首参(this 承载 account / _schedule 两个依赖).
+ * entry 记下 holdMs(实际占用时长)与 expected(按未用时长应付的金额), 供控制台
+ * 对账用: 判断退款是否成功 / 金额是否被四舍五入.
+ * self 首参承载 account / _schedule 两个依赖.
  * @param {any} self 账本实例(AccountStateStore)
  * @param {string} key 账号 key
  * @param {any} entry 退款流水条目

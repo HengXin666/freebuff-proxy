@@ -30,11 +30,10 @@ export interface StreamPipeFailure {
 
 /**
  * 上游流式 body 透传失败的处理(幽灵连接/客户端断开):
- * - 上游卡死(idle 超时)→ 200 响应头已提交(writeHead 在 pipe 之前),无法整体
- *   重试;直接销毁连接,让客户端感知截断后自行重试.不冷却账号(session 可能
- *   正常,只是那次传输卡了),下一请求仍可复用该 session.
- * - 客户端主动断开 → 静默终止:不重试,不冷却,不写错误.
- * @param {unknown} err 管道失败原因(stalled / client_gone 等标记挂在它身上)
+ * - 上游卡死(idle 超时)-> 200 响应头已提交(writeHead 在 pipe 之前),无法整体
+ *   重试;直接销毁连接,不冷却账号.
+ * - 客户端主动断开 -> 静默终止:不重试,不冷却,不写错误.
+ * @param {unknown} err 管道失败信息(stalled / client_gone 等标记挂在它身上)
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
  * @returns {StreamPipeFailure} 交给调用方的处置结论(见该接口定义)

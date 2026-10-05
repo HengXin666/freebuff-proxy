@@ -55,7 +55,7 @@ import path from 'node:path'
   assert.equal(pool.get('b').sessions.getSnapshot().model, 'openai/gpt-5.6-luna')
   assert.equal(state.sessionPosts, 2, `second model should add one admission, got ${state.sessionPosts}`)
 
-  // a 冷却后,Flash 使用空闲的 c,而不是覆盖 b 上的 Luna.
+  // a 冷却后, Flash 使用空闲的 c, 不覆盖 b 上的 Luna.
   pool.markCooldown('a', {
     code: 'rate_limited',
     retryAfterMs: 60_000,

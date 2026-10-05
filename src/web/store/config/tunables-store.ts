@@ -1,7 +1,6 @@
 /**
  * 可调项的持久化: 读/写 settings.json 里点分路径形态的键.
  *
- * ## 为什么与 settings-store.ts 分开
  *
  * settings.json 里同时住着两套东西, 生命周期与生效方式都不同:
  *
@@ -42,7 +41,7 @@ export function readTunables(file: string): Record<string, any> {
  * 把可调项补丁写进 settings.json(与实时字段共存于同一文件).
  *
  * 必须先读后写合并: 直接覆盖会把同一文件里的 11 个实时字段抹掉 ----
- * 那正是"保存了配置项, 额度保护设置却没了"这类事故的成因.
+ * 直接把实时字段抹掉会丢失额度保护设置.
  * @param {string} file settings.json 路径
  * @param {Record<string, any>} patch 点分路径 -> 值
  * @returns {Record<string, any>} 写盘后的可调项全量

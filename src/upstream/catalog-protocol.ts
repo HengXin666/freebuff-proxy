@@ -4,16 +4,15 @@
  * 真机抓包与官方源码确认: 客户端先 GET /api/v1/freebuff/models(带
  * x-freebuff-catalog-protocol: 1)抓目录, 响应给出 fetchId; 目录里的模型不是 id
  * 而是句柄(fbm1. 前缀, 服务端签名); 之后 session / completions 都带 protocol: 1
- * 与 fetch: <fetchId>, model 用句柄. 持有有效目录句柄服务端才认作目录客户端;
- * 此前不抓目录也不用句柄, 只能按 legacy 路径处理, 受限出口下直接拒绝.
+ * 与 fetch: <fetchId>, model 用句柄. 持有有效目录句柄服务端才认作目录客户端.
  *
  * 本文件是[模型标识归一]的唯一真源:
  * - freebuffLegacyModelDigest()  上游 id 的 FNV-1a 摘要(官方算法)
  * - CatalogHolder.keyForName()   三种输入(可读名 / 上游 id / 已是 key)→ 目录 key
  *
- * 存储与只读视图已按职责搬进 catalog/holder-base.ts. 之所以不整个搬走: 真源
- * 唯一性判据(test/suites/entries/verify/model-mapping-truth.ts)按本文件路径核对
- * keyByDigest 的读写与 freebuffLegacyModelDigest 的调用, 搬走它就会变成"第二套实现".
+ * 存储与只读视图在 catalog/holder-base.ts; 本文件被
+ * test/suites/entries/verify/model-mapping-truth.ts 的真源唯一性判据按路径核对
+ * (keyByDigest 的读写与 freebuffLegacyModelDigest 的调用只允许出现在这里).
  * 见 .agents/notes/implemented/bug-fix/2026-10-01-catalog-protocol.md.
  */
 import { logger } from '../util/log.ts'
@@ -22,8 +21,8 @@ import { CatalogBase } from './catalog/holder-base.ts'
 
 /**
  * 官方常量真值与 isModelHandle 的对外导出.
- * 定义已随拆分搬进 protocol/constants.ts(为消除与 parse / fetch 之间的循环
- * import); 这里原样 re-export, 外部消费者(含 test 的真源唯一性判据)无需改动.
+ * 定义在 protocol/constants.ts(以消除与 parse / fetch 之间的循环 import);
+ * 这里原样 re-export, 外部消费者(含 test 的真源唯一性判据)无需改动.
  */
 export {
   CATALOG_FETCH_USER_AGENT, CATALOG_PATH, CATALOG_PROTOCOL_VERSION, CLIENT_DESKTOP,
@@ -33,8 +32,8 @@ export {
 
 /**
  * 目录行的 legacy 摘要 -- 把旧的模型 id 映射到目录行的唯一钥匙. 逐字对齐官方 freebuffLegacyModelDigest(): 双 FNV-1a, 命名空间字符串
- * freebuff-legacy-model:, 32 位无符号, 输出 16 位小写 hex. 官方为何用摘要而不直接列 id: 目录无需列模型 id, 因为 id 本身已公开.
- * 这不是 sha256(曾猜错一次). 真机目录逐条验证: deepseek/deepseek-v4-flash 到 1e303ac563a6f9cc(行 m-096e75164d);
+ * freebuff-legacy-model:, 32 位无符号, 输出 16 位小写 hex. 不是 sha256.
+ * 真机目录逐条验证: deepseek/deepseek-v4-flash 到 1e303ac563a6f9cc(行 m-096e75164d);
  * mimo/mimo-v2.5 到 5acfab992d88345c(行 m-00032eaeec), 均与服务端一致.
  * @param {string} modelId 上游模型 id
  * @returns {string} 16 位小写 hex
@@ -66,7 +65,7 @@ export class CatalogHolder extends CatalogBase {
    */
   constructor(opts: any) {
     super(opts)
-    // 基类不 import 摘要函数(否则它会被判成第二套实现), 两个真源钩子在这里注入.
+    // 基类不 import 摘要函数: 摘要真源只允许出现在本文件, 两个真源钩子在这里注入.
     this.digestOf = freebuffLegacyModelDigest
     this.keyOf = (name: string) => this.keyForName(name)
   }

@@ -1,13 +1,10 @@
 /**
- * 唯一的路由分发器 -- 从 src/proxy.ts 搬出.
+ * 唯一的路由分发器.
  *
  * 三张面各走各的入口: 健康检查 / 对外 LLM 面(/v1/*) / 控制台面(/api/* 由
  * 上游 dispatcher 分流). 这里只做"哪个路径交给谁", 不含业务逻辑.
  *
- * chatHandler 通过参数注入而不是 import: 它是唯一有状态的重试状态机, 放在
- * src/proxy.ts 里与 handleChatCompletions 同址; 反过来 import 会成环.
- *
- * 口径: 纯搬移, 行为零改动.
+ * chatHandler 通过参数注入: 它与 handleChatCompletions 同址, 反过来 import 会成环.
  */
 
 import { sendJson } from '../../util/http.ts'
@@ -61,14 +58,8 @@ export async function handle(ctx: any, chatHandler: any, req: any, res: any) {
     return
   }
 
-  // Chat completions 只走 CLI 通道(真正的 agent 接口:admit 会话 +
+  // Chat completions 只走 CLI 通道(agent 接口: admit 会话 +
   // startAgentRun + /api/v1/chat/completions).
-  //
-  // 此前这里有一个[网页通道]优先接管的分支(打 freebuff.com 的
-  // /api/chat/stream),它是历史遗留:不 admit 会话,不消耗 Freebucks,
-  // 但请求体只有 { threadId, content, model, reasoningEffort },没有 tools 字段
-  // ---- 工具调用在它上面根本无法工作.用户明确要求永远只走 CLI 通道,
-  // 该分支及其开关已移除.
   if (method === 'POST' && route === '/v1/chat/completions') {
     await chatHandler(req, res)
     return

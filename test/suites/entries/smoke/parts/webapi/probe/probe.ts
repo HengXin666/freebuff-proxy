@@ -114,9 +114,8 @@ assert.equal(pj.accounts[0].session.status, 'none')
     headers: { cookie },
   })
   const def = await getDefault.json()
-  // 早退 DELETE 不退 Freebucks(只回 pending,见文档 §3.7),所以默认回到
-  // 60s: 付费时段结束后尽快腾出槽位给别的模型,而不是为了省那点钱早退
-  // (早退省不下钱,只丢掉已买断的一小时).
+  // 早退 DELETE 不退 Freebucks(只回 pending, 见文档 §3.7), 所以默认回到
+  // 60s: 付费时段结束后尽快腾出槽位给别的模型(早退省不下钱, 只丢掉已买断的一小时).
   assert.equal(def.idleReleaseSec, 60, '未保存过时应回落 config.yaml 默认值')
   assert.ok(
     def.idleReleaseSec > 0 && def.idleReleaseSec <= 300,

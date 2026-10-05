@@ -1,11 +1,8 @@
 /**
- * 上游 chat 转发的重试与换号状态机 -- 从 src/proxy.ts 搬出.
+ * 上游 chat 转发的重试与换号状态机.
  *
- * 它是本仓最长的一段控制流(417 行): 发请求 -> 判账号级故障 -> 决定换号或重试
- * -> 归一化错误码 -> 写响应. 搬出来的原因是 createProxyHandler 那 1700 行闭包
- * 里, 这段独占四分之一, 而它和选号 / 会话 / 白名单的逻辑并无共享可变状态.
- *
- * 口径: 纯搬移, 行为零改动. 依赖通过 ctx 显式传入.
+ * 流程: 发请求 -> 判账号级故障 -> 决定换号或重试 -> 归一化错误码 -> 写响应.
+ * 依赖通过 ctx 显式传入.
  */
 
 import {
@@ -66,68 +63,43 @@ export async function forwardCompletions(
     ...filterRequestHeaders(req.headers),
     'content-type': 'application/json',
     // 官方 CLI chat 的 Accept 是 */* ---- Bun fetch 的默认值.
-    //
-    // 真机抓包(官方 CLI 0.2.6,流式 chat ×2)实测两条都是 */*.
-    // 此前按 trefeon 的 chat.go:105 写成 application/json, text/event-stream
-    // ---- 那是另一个第三方实现的选择,不是官方形态.真机证据优先.
     // 见 .agents/notes/implemented/bug-fix/2026-10-01-chat-ua-two-part.md
     accept: '*/*',
     // chat 头逐字对齐官方 codebuff provider 分支:只有 Authorization +
     // user-agent(+可选 x-freebuff-acting-user-id).官方 chat 不带
-    // x-codebuff-api-key ---- 那个头只出现在 session / agent-runs 等端点;多发就是
-    // 多余的指纹面.常量真源见 src/upstream/official-fingerprint.ts 与
+    // x-codebuff-api-key ---- 那个头只出现在 session / agent-runs 等端点.
+    // 常量真源见 src/upstream/official-fingerprint.ts 与
     // .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md
     //  不传 version:官方 chat UA 的版本段是 0.0.0-test(发布构建里
-    // __PACKAGE_VERSION__ 未注入而回退),不是包版本号.传 getCliVersion()
-    // 会发成 .../0.0.178/codebuff ---- 与官方不一致.用函数默认值.
+    // __PACKAGE_VERSION__ 未注入而回退).用函数默认值.
     ...officialChatHeaders(upstream.token, {
-      // 官方 chat 带 x-freebuff-acting-user-id(真机抓包 13 个头里有它,
-      // 其余 12 个是传输层).我们此前没传 → 少一个指纹面.
+      // 官方 chat 带 x-freebuff-acting-user-id(chat 头的 13 项里除传输层外的一项).
       userId: upstream.accountId || undefined,
     }),
-    //  不要带 x-freebuff-instance-id。
-    //
-    // 2026-10-03 抓包复核（docs/reverse/15-protocol-review.md）证明：
-    // 官方 chat 头部恒为 8 项，8 个样本逐个校验 diff 为空集，
-    // 没有 x-freebuff-instance-id / -client / -model /
-    // -catalog-protocol / -install-id —— 那些是 admission 用的。
-    // 实例标识只走 codebuff_metadata.freebuff_instance_id（已在）。
-    //
-    // 此前误判为"必须带"：当时补上后 428 消失，但那是巧合——
-    // 同批还改了别的。官方不带该头却正常，故不是因果。
-    // 见 docs/reverse/15-protocol-review.md P0-1。
+    // 不带 x-freebuff-instance-id: 官方 chat 头部恒为 8 项, 实例标识只走
+    // codebuff_metadata.freebuff_instance_id.
+    // 见 docs/reverse/15-protocol-review.md P0-1.
   }
 
   // 风控:chat 调用前打散节奏(随机 [0, requestJitterMs)).上游按请求
-  // 节奏指纹自动化脚本,等间隔的机器式调用是明显特征(参考项目 SAFE_MODE
-  // 默认 200ms).0 = 关闭.
+  // 节奏指纹自动化脚本,等间隔的调用是明显特征.0 = 关闭.
   const jitterMs = Number(ctx.config.limits.requestJitterMs) || 0
   if (jitterMs > 0) await sleep(Math.random() * jitterMs)
 
   const abortCtrl = reqToAbortSignal(req)
   // 工具声明被上游拒绝时,去掉 tools 再发一次(见 isToolSchemaRejection).
-  // 只对"客户端确实带了 tools"的请求生效----没有工具可去时重试毫无意义.
+  // 只对"客户端确实带了 tools"的请求生效.
   // 判据与取舍见
   // .agents/notes/implemented/bug-fix/2026-09-18-tool-schema-rejection-strip.md
-  // 注意:toolStripCapable 在 RPC 之后计算(见下),因为只有在确定
-  // 走了官方形态时才可以禁用这条退路;若 RPC 不可用而降级到 legacy,
-  // 退路必须重新生效(否则 legacy 的 404 无法恢复).
+  // 注意:toolStripCapable 在 RPC 之后计算(见下),只有在确定
+  // 走了官方形态时才可禁用这条退路;若 RPC 不可用而降级到 legacy,
+  // 退路必须重新生效.
   let requestBody = forwardBody
   let toolsStripped = false
   let upstreamRes
   /** 非 2xx 时上游响应体的文本(在循环里读一次,避免重复消费流). */
   let upstreamErrText = null
 
-  //  official 通道:整条请求委托给副仓库(cli-bridge)执行.
-  //
-  // 官方形态的实现只有一份(在 cli-bridge,bun 执行):官方 37 工具 /
-  // 官方 system 模板 / desktop 世代 agent / 分层 provider.
-  // 主服务不复制那份逻辑,而是把 instanceId + messages + tools 传过去,
-  // 由副仓库 startRun + chat,再把原始响应透传给下游 ---- 这就是 RPC 边界.
-  //
-  // 用 reuse 而不是 full:主服务已经做过 admission 并持有会话,
-  // 副仓库不需要再买一次(一次 admit = 买断一小时).
-  // 见 docs/reverse/17-current-status-and-gaps.md
   // official 通道:整条请求委托给副仓库(cli-bridge)执行, 见 official.ts 的文件头.
   let rpcResponse = false
   {

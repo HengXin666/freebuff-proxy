@@ -73,7 +73,6 @@ export async function renderProxySettings(view: any) {
   view.append(buildTunablesCard(settings.tunableSpecs, settings.tunables))
 }
 
-
 /** 保存[官方工具签名兼容]开关并即时反映状态文案. */
 export async function saveFreeToolSignatureSetting(event: any) {
   const input = event.currentTarget
@@ -188,18 +187,7 @@ function updateSwitchLabel(input: any) {
  - 这段文字是用户理解"为什么只开了一个号"的关键,措辞要直白.
  */
 /**
- - [空闲自动释放]推荐值:按当前账号池的真实模型分布算,而不是拍脑袋给个数.
  *
- - 为什么这个值需要权衡(2026-09-14 一手实测后改口径,见 docs/design/freebucks-strategy.html):
- - - 一次 admit = 买断一小时(当场扣满整小时单价).所以付费时段内闲置不花钱,
- - 释放反而是把已买的钱丢掉----钱这个维度不再支持"越早越好";
- - - 但一个账号同时只能有一条 session,且 session 绑定模型.释放之后再来的请求
- - 要重新 admit(又买一小时).所以真正的权衡只剩槽位:什么时候把这个
- - 账号让给别的模型;
- - - 因此:模型集中在少数账号(同一条热会话被反复复用)时,释放晚一点无所谓;
- - 模型种类接近账号数(几乎每个账号都在被不同模型来回抢)时,更要及时释放,
- - 否则换模型要干等,而等待本身不产生价值,还会让后续请求排队.
- - 注:本推荐值现在是付费时段结束之后的空闲释放时长(时段内一律不释放).
  *
  - 返回 { sec, why };sec 已夹在 60..600(1 分钟~10 分钟)这个保守区间内.
  */

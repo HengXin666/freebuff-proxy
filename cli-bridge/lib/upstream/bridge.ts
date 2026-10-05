@@ -1,11 +1,6 @@
 /**
  * Bridge 实例 -- 从 cli-bridge/upstream.ts 逐字搬出.
  *
- * 为什么单独成文件: bridge 只做两件事 -- 让调用方拿到 [绑定到某个账号的
- * cfg] 的对象, 并把每个端点调用转发到 lib/endpoints/**. 它与 CLI 的
- * action 分发(upstream/actions.ts)是两套不同的关注点: 前者关心 [这次请求
- * 带谁的凭据与签名], 后者关心 [这次调用的 action 名字是什么].
- * 混在一个文件里时, 读 action 分发的人必须先翻过 126 行签名/密钥逻辑.
  *
  * 口径: 纯搬移, 不改行为. HOST 常量与类体逐字保留.
  */
@@ -18,10 +13,6 @@ import {
 /**
  *  上游主机必须可注入,不能硬编码.
  *
- * 硬编码的后果(实测踩到):主服务把 api_base 指向本地镜像做对照验证时,
- * bun 侧仍直连真实 codebuff.com -- 于是"本地验证"变成了"真的打到上游",
- * 既验证不了,又白白发出请求.
- * 现在由调用方(cfg.apiHost)传入;缺省才回落到官方主机.
  */
 const HOST = process.env.FREEBUFF_API_HOST || 'https://www.codebuff.com';
 
@@ -56,11 +47,6 @@ class Bridge {
   /**
    * 确保拿到 keyId:没有就自己注册一个(惰性注册).
    *
-   * 为什么必须有这一步(2026-10-04 Docker 部署事故):
-   * 主服务的设备密钥是每个部署各自生成的(data/device-keys/<key>.json),
-   * Docker 里 /data 是全新卷 → 密钥文件有,但 registrations 为空
-   * (没注册过就没有 keyId).而 signHeaders() 见 keyId 为空直接返回 {},
-   * session GET 于是不带设备签名发出.
    *
    * 抓包真值(docs/reverse/21 §21.2):全 165 条里只有
    * /api/v1/freebuff/session 带签名(13 次).也就是说我们恰好在唯一
@@ -164,8 +150,6 @@ class Bridge {
 /**
  * Bridge 实例的对外形状(createBridge 的返回类型).
  *
- * 为什么不直接 export class: 见类上方说明. 用 interface 描述形状后,
- * actions.ts 的 action 实现仍能拿到完整的方法签名, 而类的实现细节不外泄.
  */
 export interface BridgeLike {
   cfg: any

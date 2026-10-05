@@ -84,12 +84,10 @@ export function jsonRes(obj, status = 200, extraHeaders = {}) {
 /**
  * 读整棵 dashboard/ 的源码文本(所有 .js 拼接).
  *
- * 为什么必须扫目录而不是读单个文件:前端已从单文件 app.js 拆成 views/ + lib/,
- * 写死 dashboard/app.ts 的断言会因为"读到的文件里没有那段代码"而静默失效
- * (正则不匹配,但只在被破坏时才红,平时是假绿).实测踩到 3 处(idleReleaseAdvice,
- * 局部刷新的 accounts-sections,今日池跑完判定).
+ * 扫描面是整棵 dashboard/: 写死某一个路径的断言会在
+ * "读到的文件里没有那段代码"时正则不匹配, 从而静默通过.
  *
- * 同时校验文件数下限:目录读不到时不能退化成"零违规".
+ * 同时校验文件数下限: 目录读不到时不能退化成"零违规".
  * @returns {string} 全部 dashboard 下的 .js 内容
  */
 export function readDashboardSource() {

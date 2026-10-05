@@ -1,7 +1,6 @@
 /**
  * 进程与网络小工具 -- 从 scripts/ci/pipeline-image-test.ts 按职责切出.
  *
- * 口径: 纯搬移, 不改行为. 原有的坑注释原样保留(它们记着为什么必须这么写).
  */
 import os from 'node:os'
 import net from 'node:net'

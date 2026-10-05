@@ -12,15 +12,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// (REFUND-COPY) 计费结论(2026-09-14 一手实测后重钉)不得被写回旧说法
+// (REFUND-COPY) 计费口径清扫: 全仓不得再出现"早退会退还 Freebucks"这一类说法.
 //
-// 上游 一次 admit = 买断一小时:POST 当场扣满整小时单价(实测 Freebucks
-// 5 -> 0,回执带 expiresAt).早退 DELETE 的实际结果两本账不对称:
-//   - session_units:当场按比例退(实测 1.1 -> 0.2)
-//   - Freebucks:只回 freebucksRefundPending,实测 3 次重放 DELETE,2 分钟
-//     内未到账;而 24 个[账号 × 模型]组合里 22 个是 Freebucks 先见底
-// 所以"早退会退还 Freebucks / 挂着空闲会话才花钱"是已被证伪的说法,必须
-// 钉死:用户会照着它去调 idle_release_sec,方向正好是反的.
+// 上游一次 admit = 买断一小时: POST 当场扣满整小时单价(Freebucks 5 -> 0, 回执带 expiresAt).
+// 早退 DELETE 的实际结果两本账不对称:
+//   - session_units: 当场按比例退(1.1 -> 0.2)
+//   - Freebucks: 只回 freebucksRefundPending, 3 次重放 DELETE 后 2 分钟内未到账;
+//     而 24 个[账号 × 模型]组合里 22 个是 Freebucks 先见底
+// 故"早退会退还 Freebucks / 挂着空闲会话才花钱"属于已被证伪的说法.
 // 详见 docs/design/freebucks-strategy.html 与 docs/design/account-scheduling-and-refund.md §3.
 {
   const dashSrc = readDashboardSource()
@@ -32,8 +31,8 @@ import { fileURLToPath } from 'node:url'
   )
   // 控制台样式已按加载阶段拆成 dashboard/css/*.css(见
   // .agents/notes/implemented/architecture/2026-10-05-dashboard-split-locale-and-css.md).
-  // 这里读整个目录并拼接, 而不是钉死单文件: 断言要检查的是"某条样式规则
-  // 存在", 与它落在哪个文件无关; 钉死路径会让下一次拆分再次把这条断言打红.
+  // 读整个 dashboard/css/ 目录并拼接: 断言只关心"某条样式规则存在",
+  // 与它落在哪个文件无关.
   const cssDir = new URL('../../../../../../../dashboard/css/', import.meta.url)
   const cssSrc = fs
     .readdirSync(cssDir)
@@ -45,14 +44,9 @@ import { fileURLToPath } from 'node:url'
     new URL('../../../../../../../src/web/store/config/settings-store.ts', import.meta.url),
     'utf8',
   )
-  // 覆盖整个仓库:一开始只扫了 3 个文件,结果 README / bin/pricing.ts /
-  // docs/guide/deployment.md / proxy.js 等 10+ 处漏网--其中 README 与 CLI 输出
-  // 直接给用户看,错了最误导.改为遍历全仓(排除第三方与运行时数据).
-  // 2026-09-13 的说法已被 09-14 一手实测推翻:早退 DELETE 不退 Freebucks
-  // (只回 freebuffRefundPending;文档 §3.7)
-  // 现在钉死的是"不退"这一类已被证伪的说法,防止它再被写回来.
-  // 钉死的是已被证伪的那一类说法:早退能拿回 Freebucks / 挂着空闲才花钱 /
-  // 越早释放越省.它们和实测(买断一小时,早退拿不回)正好相反.
+  // 扫描面 = 整个仓库(排除第三方与运行时数据), 包括 README / CLI 输出等直接给用户看的文本.
+  // 钉死的是"早退能拿回 Freebucks / 挂着空闲才花钱 / 越早释放越省"这一类说法
+  // (早退 DELETE 只回 freebuffRefundPending, 见文档 §3.7).
   const STALE_COPY =
     /按实际占用退还\s*Freebucks|退还未用时长|退还未用部分|停止为空转时长付费|挂着的空闲会话(在按小时计价|才是花钱)|越早释放越省|早退.{0,12}省钱/
   const SKIP_DIR = new Set(['node_modules', '.git', 'data', 'data-test'])
@@ -77,24 +71,18 @@ import { fileURLToPath } from 'node:url'
     // 本文档(§3/§7)需要引用这些旧说法来解释纠错过程,豁免;
     // smoke 自身含正则字面量,也豁免(它就是这个守卫).
     if (rel === 'docs/design/account-scheduling-and-refund.md') continue
-    // 按本文件自己的路径自我豁免, 而不是写死一个字符串:
-    // 写死时搬走文件(本轮 test/smoke.mjs -> test/suites/entries/smoke/smoke.ts)
-    // 会让豁免失效, 守卫开始扫自己注释里"钉死了哪些说法"的说明 -> 自我命中.
+    // 按本文件自己的路径自我豁免(不写死字符串): 本文件注释里要说明"钉死了哪些说法".
     if (abs === fileURLToPath(import.meta.url)) continue
-    // Agent Notes 记录的是历史决策与它的错在哪(本次反转正需要引用旧说法),豁免.
+    // Agent Notes 需要引用这些说法来说明纠错过程, 豁免.
     if (rel.startsWith('.agents/notes/')) continue
-    // docs/quality/docs-audit.md 是审计产物,它的写法就是"把错误说法原样引出来
-    // 再说明它错在哪"(实测:docs-audit.md 写 错误方向是"早退能省钱").
-    // 与 check-docs.ts 不扫该目录同源理由:参与判据会自噬.
+    // docs/quality/docs-audit.md 是审计产物, 其写法就是"把错误说法原样引出来再说明它错在哪".
+    // 与 check-docs.ts 不扫该目录同源: 参与判据会自噬.
     if (rel.startsWith('docs/quality/docs-audit')) continue
-    // AGENTS.md 是最高优先级约定,必须一起扫:它一旦写着旧口径,后来的人会直接照着做.
-    // CLAUDE.md 只是指向它的符号链接,跳过以免同一内容报两次.
+    // AGENTS.md 是最高优先级约定, 必须一起扫.
+    // CLAUDE.md 是指向它的符号链接, 跳过(同一内容不报两次).
     if (rel === 'CLAUDE.md') continue
     const src = fs.readFileSync(abs, 'utf8')
-    // 归一后再匹配:这条守卫此前能被行内格式整体绕过 -- 实测
-    // src/session-handles.ts 写的 退还未用部分 因  把词切开而匹配不上,
-    // 而它本来就是被证伪的口径;同一 commit 引入的守卫因此空转了 20 天.
-    // 去掉强调标记与反引号,让"词被格式化切开"不再是一种绕过手段.
+    // 归一后再匹配: 去掉强调标记与反引号, 使"词被行内格式切开"不构成绕过.
     const normalized = src.replace(/\*\*/g, '').replace(/`/g, '')
     const hit = normalized.match(STALE_COPY)
     assert.ok(
@@ -107,13 +95,8 @@ import { fileURLToPath } from 'node:url'
   /**
    * idleReleaseSec 的默认值必须是 60s(付费时段结束后的空闲释放).
    *
-   * 判据的真源已随配置重构改变(2026-10-05): config.yaml 只留 server.host/port,
-   * 其余项的默认值真源 = src/config/defaults.ts 的 DEFAULTS. 所以这里不能再读
-   * yaml 文本(那个键已不在 yaml 里), 而要读 DEFAULTS 的实际值 ----
-   * 不变式(默认 60s)没变, 变的是它存放在哪.
-   *
-   * 为什么读真值而不是 grep 源码文本: grep 只证明"某处写着 60", 而读 DEFAULTS
-   * 证明"运行时真的会得到 60"(默认值被改成别的数字立刻变红).
+   * 真源 = src/config/defaults.ts 的 DEFAULTS(config.yaml 只留 server.host/port).
+   * 这里读 DEFAULTS 的实际值: 默认值被改成别的数字时本断言立刻变红.
    */
   const { DEFAULTS } = await import('../../../../../../../src/config/defaults.ts')
   assert.equal(
@@ -122,12 +105,11 @@ import { fileURLToPath } from 'node:url'
     'DEFAULTS.session.idleReleaseSec 默认应为 60s(付费时段结束后的空闲释放)',
   )
   /**
-   * 并且它必须前端可调 ---- 否则"除 host/port 外全部前端可调"这条约定就被破了.
+   * 并且它必须前端可调(满足"除 host/port 外全部前端可调"这条约定).
    *
-   * 注意它走的是实时通道而不是可调项表: 这一项保存在 settings.json 的裸名键
-   * idleReleaseSec 上, 由 /api/settings 的实时字段直接读写, 保存即生效
-   * (比可调项的"保存后重启"体验更好). 因此判据要查的是"两个通道里有任一个管它",
-   * 而不是"必须出现在可调项表里" ---- 那会把更好的那条通道判成违规.
+   * 它走的是实时通道: 保存在 settings.json 的裸名键 idleReleaseSec 上, 由
+   * /api/settings 的实时字段直接读写, 保存即生效. 因此判据查的是"实时字段
+   * 或可调项表里有任一个管它".
    */
   const { TUNABLES } = await import('../../../../../../../src/config/tunable/specs.ts')
   const { LIVE_FIELDS } = await import(
@@ -137,9 +119,8 @@ import { fileURLToPath } from 'node:url'
     TUNABLES.some((t: any) => t.path === 'session.idleReleaseSec') ||
     Object.prototype.hasOwnProperty.call(LIVE_FIELDS, 'idleReleaseSec')
   assert.ok(covered, 'session.idleReleaseSec 必须前端可调(实时字段或可调项二者其一)')
-  // 退款追问仍是常驻行为:pending 期间要靠重放 DELETE 取回执.实测确认
-  // pending 在本小时内不落地(所以不能把它当成"钱会回来"来决策释放时机),
-  // 但句柄不能丢--丢了连追问的机会都没有.
+  // 退款追问是常驻行为: pending 期间靠重放 DELETE 取回执, 但句柄不能丢.
+  // (pending 在本小时内不落地, 不能据此判断释放时机.)
   const handlesSrc = fs.readFileSync(
     new URL('../../../../../../../src/session-handles.ts', import.meta.url),
     'utf8',
@@ -151,18 +132,15 @@ import { fileURLToPath } from 'node:url'
   /**
    * 判据: 入口必须周期性调用 sweepPendingRefunds(只扫一次 = 放弃那笔预扣).
    *
-   * 扫描面是整棵 bin/ 而不是 bin/serve.ts: 该判据经历过一次搬家 --
-   * 入口按职责拆进 bin/serve/boot/ 之后, 钉死单文件的断言会读不到那段代码,
-   * 正则不匹配 -> 它只在被破坏时才红, 平时是假绿(控制台那条判据踩过同样的坑,
-   * 见 ./dashboard-source.ts 的说明). 扫目录 + 校验被扫文件数下限既保住判据强度,
-   * 又不会因为下一次搬家再次失效.
+   * 扫描面是整棵 bin/: 钉死单文件的断言在入口按职责拆分后读不到那段代码,
+   * 正则不匹配会静默通过. 扫目录 + 校验被扫文件数下限(见 ./dashboard-source.ts 同款判据).
    */
   const binSrc = readBinSource()
   assert.ok(
     /sweepPendingRefunds/.test(binSrc) && /setInterval/.test(binSrc),
     'bin/ 必须周期性调用 sweepPendingRefunds--只扫一次等于放弃那笔预扣',
   )
-  // 控制台必须给出"推荐值"(按账号池实时算),而不是让用户猜
+  // 控制台必须给出推荐值(按账号池实时算)
   assert.ok(
     /function idleReleaseAdvice/.test(dashSrc),
     '控制台必须提供 idleReleaseAdvice(按账号池实时算推荐值)',
@@ -203,9 +181,8 @@ import { fileURLToPath } from 'node:url'
       /if \(fb && !inPaidWindow\)/.test(src),
       'Freebucks 耗尽判定必须在付费时段之外才生效',
     )
-    // 付费时段依据 expiresAt 必须真的传到前端,否则上面的判定永远不成立
-    // expiresAt 的装配已随 app-context 拆分搬进 src/context/ops/account-list.ts
-    // (app-context.js 只剩门面)-- 断言必须指向真正持有快照字段的那一层.
+    // 付费时段依据 expiresAt 必须真的传到前端, 该字段是判定成立的前提.
+    // 装配点在 src/context/ops/account-list.ts(app-context 只剩门面).
     const ctxSrc = fs.readFileSync(
       new URL('../../../../../../../src/context/ops/account-list.ts', import.meta.url),
       'utf8',

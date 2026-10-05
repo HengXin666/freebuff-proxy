@@ -5,12 +5,6 @@
 /**
  * 客户端工具名 → 官方工具名的映射表(下行方向).
  *
- *  为什么必须映射而不是直接追加(2026-10-04 定性):
- * 上游的官方工具集是固定 37 个(docs/reverse/captures/official-tools.json),
- * 里面没有 bash / edit / read / write / skill 这些下游 harness 的
- * 常用名.实测(远程 15:02)把 55 个第三方工具原样追加后,上游回
- * 503 {"message":"The model is temporarily unavailable."} ---- 而同会话,
- * 同模型,不带工具时是 200.唯一变量就是工具集.
  *
  * 所以:能映射的映射到官方等价物(模型看到的是官方名字,调用的也是官方
  * 语义),映射不了的丢弃(宁可让该工具在此链路不可用,也不能让整条链路
@@ -96,16 +90,8 @@ export function mergeOfficialTools(official, clientTools) {
     const n = t?.function?.name;
     if (!n) continue;
     /**
-     *  映射不到时[原样保留],不是丢弃 ---- 这是实测结论,不是推断.
      *
-     * 2026-10-05 单变量实测:声明 8 个官方完全不存在的工具名
-     * (memory_save / git_status / subagent / send_message /
-     * job_list / list_agents / git_diff / memory_search),
-     * 出站 45 个工具(官方 37 + 这 8 个),上游回 HTTP 200.
      *
-     * 即:上游并不因为"工具名官方没有"就拒绝请求.早期版本"映射不到即丢弃"
-     * 是错的 ---- 实测 dsh 的 44 个工具里 30 个(68%)会被静默丢弃,
-     * 用户以为声明了能调,实际根本没发出去(模型永远不会调用它们).
      *
      * 保留的意义:模型至少看得见这个工具,能按它的 schema 生成 tool_call,
      * 由客户端自己执行(本代理不执行工具,只转发).

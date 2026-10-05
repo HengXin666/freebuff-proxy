@@ -3,7 +3,6 @@
  *
  * 这条链路的关键词是自证:导入与查看凭据都回显"落盘证据"(写到哪个文件,
  * token 的短指纹与末 6 位).没有它,用户在控制台上无法区分"导入没生效"
- * 与"token 真被上游吊销",只能反复重登(2026-10-04 实测踩过).
  */
 import { sendJson } from '../../../../util/http.ts'
 import { logger } from '../../../../util/log.ts'
@@ -68,8 +67,6 @@ async function importAccount(req: IncomingMessage, res: ServerResponse, ctx: any
   } catch {
     // 缓存丢弃失败不影响导入结果；下次请求会自然重建
   }
-  // ! 以前的"导入后自动探测"已删除(docs/reverse/20 §20.3):
-  // 导入账号不该顺带发一次上游 GET.要额度/状态,用户点"检测"或"一键刷新".
   logger.event('accountImport', 'info', 'account imported via web', { key: saved.key, email: saved.user.email })
   sendJson(res, 200, {
     ok: true,
@@ -114,7 +111,7 @@ function readCredential(key: any, res: ServerResponse, ctx: any) {
   /**
    * 与 /api/accounts/import 同源的落盘证据:path + token 短指纹 + 末 6 位.
    * "查看凭证"是核对"控制台里这个号到底挂着哪一份 token"的唯一入口
-   * (多 id 同邮箱时尤其如此),必须能自证,否则只能靠猜.
+   * (多 id 同邮箱时尤其如此),必须能自证.
    */
   sendJson(res, 200, {
     ok: true,
@@ -181,7 +178,7 @@ async function deleteAccount(key: any, res: ServerResponse, ctx: any) {
     return
   }
   // 账号没了,账本里的记录(请求数/冷却/退款流水)也一并清掉,
-  // 否则文件会随删号无限增长,控制台还会读出幽灵账号的历史.
+  // 文件不随删号无限增长, 控制台不读出幽灵账号.
   runtimes.forgetAccount(key)
   sendJson(res, 200, { ok: true, key })
 }

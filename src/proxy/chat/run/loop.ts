@@ -1,21 +1,15 @@
 /**
- * chat 请求的选号-重试主循环 ---- 从 src/proxy.ts 的 handleChatCompletionsInner 提出.
+ * chat 请求的选号-重试主循环.
  *
- * ## 为什么单独成文件
- *
- * 它是本仓最长的一段控制流(原 722 行函数的主体). 拆成四段读:
+ * 控制流分四段:
  *   ./acquire.ts 选号 + 拿账号锁(可能 continue 下一轮)
  *   ./turn.ts    发一次上游并回收结果
  *   本文件       失败归类 -> 决定换号/同号重试/收场
  *
- * ## 每请求独立语义(并发安全)
- *
- * 全部可变状态都在 st(每请求一份, 见 ./state.ts): attempt / lastKey /
- * pendingGateCode / pendingSwitchAccount / skipKeys / sameAccountRetries /
- * rt / releaseChat / releaseReserved / agentOverride. 本模块不持有任何模块级
- * 可变绑定 ---- 这是这次拆分不许破的底线(见 state.ts 的文件头).
- *
- * 口径: 纯搬移, 行为零改动.
+ * 每请求独立语义(并发安全): 全部可变状态都在 st(每请求一份, 见 ./state.ts):
+ * attempt / lastKey / pendingGateCode / pendingSwitchAccount / skipKeys /
+ * sameAccountRetries / rt / releaseChat / releaseReserved / agentOverride.
+ * 本模块不持有任何模块级可变绑定.
  */
 import { UpstreamError } from '../../../upstream/client.ts'
 import { logger } from '../../../util/log.ts'
@@ -63,9 +57,8 @@ export async function runChatLoop(st: any, res: any) {
 /**
  * 幽灵连接(流 idle 超时被掐断)的短暂冷却.
  *
- * 响应头已提交, 无法整体重试, 但该账号刚被掐断过一条卡死的链路 ---- 上游/网络对
- * 该会话不稳定. 给账号一个短暂冷却(stallCooldownSec, 默认 30s), 让后续新请求优先
- * 去别的账号, 避免反复撞上同一条卡死链路(实测: 一个账号 3/3 满了还在持续接收请求).
+ * 响应头已提交, 无法整体重试; 给账号一个短暂冷却(stallCooldownSec, 默认 30s),
+ * 让后续新请求优先去别的账号.
  * @param {any} st 请求级状态(见 ./state.ts)
  * @param {any} result forwardCompletions 的结果
  * @returns {void} 无返回
@@ -145,8 +138,8 @@ async function settleTurnResult(st: any, res: any, result: any) {
 /**
  * 最后一次尝试也失败时的收场: 冷却账号 + 释放会话 + 把上游错误原样下发.
  *
- * 顺序与条件都有事故背书: 付费时段内绝不能释放(早退 DELETE 不退 Freebucks),
- * 4xx 客户端错误不冷却, 且只有 switchAccount 且非 noCooldown 才冷却.
+ * 顺序与条件: 付费时段内不释放; 4xx 客户端错误不冷却; 只有 switchAccount 且
+ * 非 noCooldown 才冷却.
  * @param {any} st 请求级状态(见 ./state.ts)
  * @param {any} res 下游响应
  * @param {any} result forwardCompletions 的结果

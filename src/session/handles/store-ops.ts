@@ -1,11 +1,10 @@
 /**
- * 句柄库的本地账本操作 ---- 从 src/session-handles.ts 按职责切出.
+ * 句柄库的本地账本操作.
  *
- * 为什么单独成文件: 事件归类 / 列表 / 落盘 / 删除接口都是"改内存里的三张表
- * 再落盘", 与"启动时怎么从磁盘装回来"(load)和"怎么打上游追退款"(sweeps)是三种
- * 不同时机. 拆开后本文件 80 行, 可以整段读完.
+ * 事件归类 / 列表 / 落盘 / 删除接口都是"改内存里的三张表再落盘";
+ * "启动时怎么从磁盘装回来"在 load.ts, "怎么打上游追退款"在 sweeps.ts.
  *
- * 口径: 纯搬移, 行为零改动. 本模块不持有状态: 全部读写都发生在 self 上.
+ * 本模块不持有状态: 全部读写都发生在 self 上.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -93,8 +92,8 @@ export function notePendingRefund(self: any, key: any, instanceId: any, model = 
 /**
  * 出队(只在拿到终态回执后调用----含退款 0).
  *
- * 绝不因为"问了好几次还是 pending"就出队:pending 的语义是"最终用量还没算完",
- * 出队 = 主动放弃这笔已经预扣的 Freebucks.
+ * 只在拿到终态回执后出队: pending 的语义是"最终用量还没算完", 提前出队等于主动
+ * 放弃这笔已经预扣的 Freebucks.
  * @param {any} self 句柄库实例(SessionHandleStore)
  * @param {any} key 账号 key
  * @param {any} instanceId 会话实例 id

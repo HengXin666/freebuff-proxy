@@ -1,15 +1,15 @@
 /**
  * 选号与重试的加锁入口 ---- 从 src/app-context.ts 按职责切出.
  *
- * 为什么单独成文件: 这三段(冷启动串行化的选号 / 换号或同号重试 / 同号重试的
- * 两本账闸门)是"拿到 runtime"的完整流程, 与候选排序(candidates)分开读:
- * 排序回答"先试谁", 这里回答"怎么试, 失败后怎么接着试".
+ * 本模块是"拿到 runtime"的完整流程: 冷启动串行化的选号 / 换号或同号重试 /
+ * 同号重试的两本账闸门. 候选排序(candidates)回答"先试谁", 这里回答
+ * "怎么试, 失败后怎么接着试".
  *
- * 口径: 纯搬移, 行为零改动. 按本仓既有模式改为模块级函数 + self/this 首参,
- * 并由 src/context/methods.ts 的 CONTEXT_METHODS 装配回原型(名字即契约).
+ * 模块级函数 + self/this 首参, 由 src/context/methods.ts 的 CONTEXT_METHODS
+ * 装配回原型(名字即契约).
  *
- * 两本账是并行的两道闸门(units 与 Freebucks 各自独立扣费), 428 必须排在它们
- * 之前 ---- 续用不花钱, 用"买不起"把它拦下等于把刚付过款的那一小时白扔掉.
+ * 两本账是并行的两道闸门(units 与 Freebucks 各自独立扣费); 428 排在两道闸门
+ * 之前 ---- 续用不花钱.
  */
 import { listAccounts } from '../../auth-store.ts'
 import { UpstreamError, isSessionRecoverableGate } from '../../upstream/client.ts'
@@ -27,8 +27,8 @@ import { countReasons } from '../ops/round-handlers.ts'
 /**
  * 冷启动串行化下的选号: 遍历候选, 逐个尝试, 汇总失败明细.
  *
- * 全池额度耗尽 / 出口级封锁都在这里收敛成可操作的错误码, 而不是笼统的
- * no_available_account.
+ * 全池额度耗尽 / 出口级封锁在这里收敛成可操作的具名错误码, 未命中时才落到
+ * 笼统的 no_available_account.
  * @param {any} this 账号池(runtimes)
  * @param {string} model 请求模型
  * @param {any} [opts] 选号选项(skipKeys / sessionBudget)
@@ -75,14 +75,14 @@ export async function _acquireForModelUnlocked(this: any, model: any, opts: any 
     }
   }
 
-  // 全部账号都是"余额买不起"时给出独立错误码:这跟"账号都在冷却/没号"
-  // 是完全不同的处境(前者等每日池刷新就好,后者要加号/等冷却),调用方与
-  // 控制台不该看到同一个笼统的 no_available_account.
+  // 全部账号都是"余额买不起"时给出独立错误码: 与"账号都在冷却/没号"是不同处境
+  // (前者等每日池刷新, 后者要加号/等冷却), 不给调用方与控制台同一个笼统的
+  // no_available_account.
   // 两本账任一耗尽都算"额度用尽"(与分开的闸门一一对应):
   //   freebucks_exhausted = 货币预算不够(上游真正的拒付判据)
   //   units_exhausted     = 时长预算用尽
-  // 出口级故障(地理封锁):它是出口属性不是账号属性,换号无意义.
-  // 必须原样抛出(带 countryCode),让用户知道该换代理而不是去查账号.
+  // 出口级故障(地理封锁): 它是出口属性不是账号属性, 换号无意义.
+  // 原样抛出(带 countryCode), 让用户知道该换代理.
   // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
   if (fatalFailure) {
     throw new UpstreamError(
@@ -90,8 +90,8 @@ export async function _acquireForModelUnlocked(this: any, model: any, opts: any 
       {
         status: 403,
         code: fatalFailure.code,
-        // 出口级故障:原因要让用户看懂(该换代理而非换号),但仍不给
-        // 账号标识 ---- 它是出口的属性,与具体哪个账号无关.
+        // 出口级故障: 给出可读的失败说明与 egress 标记, 但不给账号标识
+        // ---- 它是出口的属性, 与具体哪个账号无关.
         body: {
           model,
           failures: [{ code: fatalFailure.code }],
@@ -123,7 +123,9 @@ export async function _reacquireAfterGateUnlocked(this: any, model: any, opts: a
       opts.switchAccount ||
       (opts.gateCode && SWITCHABLE_CODES.has(opts.gateCode))
     ) {
-      // 槽位占用类不冷却:它不是账号故障,只是"槽位正在被用", 等它空出即可.冷却会把可用账号钉死(实测:干净账号仅因上一次会话 未释放就拿到 purchase_claim_released,随即被冷却 → 立刻不可用). 与
+      // 槽位占用类不冷却: 它不是账号故障, 只是"槽位正在被用", 等它空出即可.
+      // 冷却会把可用账号钉死. 见
+      // .agents/notes/implemented/bug-fix/2026-10-01-admission-handle-and-403.md
       if (
         !opts.noCooldown &&
         !SLOT_BUSY_CODES.has(String(opts.gateCode)) &&
@@ -174,9 +176,8 @@ export async function _reacquireAfterGateUnlocked(this: any, model: any, opts: a
 /**
  * 同号重试: 非账号级故障(5xx / 网络抖动 / gate)时在原账号上重试.
  *
- * 从 _reacquireAfterGateUnlocked 抽出. 关键约束: 会新买一条计费会话的路径
- * (forceReadmit)必须先过两本额度账; 428 必须排在两道闸门之前 -- 续用不花钱,
- * 用"买不起"把它拦下等于把刚付过款的那一小时白扔掉.
+ * 关键约束: 会新买一条计费会话的路径(forceReadmit)必须先过两本额度账;
+ * 428 排在两道闸门之前 ---- 续用不花钱.
  * @param {any} this 账号池(runtimes)
  * @param {string} model 请求模型
  * @param {any} opts 换号/重试选项
@@ -195,10 +196,9 @@ export async function _retrySameAccount(this: any, model: any, opts: any) {
       this._setLastSuccessKey(opts.preferredKey)
       return rt
     }
-    // 同账号 gate 重试时,调用方(chat 流程)已持有该账号的串行化锁, 不会与另一个
+    // 同账号 gate 重试时, 调用方(chat 流程)已持有该账号的串行化锁, 不会与另一个
     // 在途 chat 冲突, 可直接 forceReadmit. 但 forceReadmit 会新买一条计费会话.
-    // 428 必须排在两道额度闸门之前(2026-10-05 真实事故修正, 二次修复):
-    // 这道判断原本写在两个闸门之后, 与它自己的注释自相矛盾.
+    // 428 排在两道额度闸门之前: 续用不花钱, 被"买不起"拦下会白扔掉已付款的那一小时.
     if (opts.gateCode === 'waiting_room_required') {
       const cont = await rt.sessions.readmitToContinue(model)
       if (cont.continued) {
@@ -242,8 +242,8 @@ export async function _retrySameAccount(this: any, model: any, opts: any) {
         { status: 429, code: 'freebucks_exhausted' },
       )
     }
-    // 428 已在上方先行处理(续用不花钱, 必须先于额度闸门). 走到这里的是其它需换号
-    // 的 gate: forceReadmit 先 DELETE 再 admit, 会新买一条计费会话.
+    // 428 已在上方先行处理. 走到这里的是其它需换号的 gate:
+    // forceReadmit 先 DELETE 再 admit, 会新买一条计费会话.
     await rt.sessions.forceReadmit(model)
     this.clearCooldown(opts.preferredKey, model)
     this._setLastSuccessKey(opts.preferredKey)

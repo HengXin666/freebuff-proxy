@@ -1,10 +1,10 @@
 /**
  * session 域的纯函数层: 常量, 上游回执解析, 标量工具.
  *
- * 从 session-manager.js 按职责切出. 这里只放无状态函数, 不持有会话状态,
- * 因此可以被 admit / lease / observe 三个子域共同引用而不形成环.
+ * 只放无状态函数, 不持有会话状态, 因此可被 admit / lease / observe 三个子域
+ * 共同引用而不形成环.
  *
- * 注释规范: 只写为什么, 标点用 ASCII.
+ * 注释规范: 只写这段代码做什么, 标点用 ASCII.
  */
 
 /**
@@ -77,9 +77,9 @@ export function extractQuota(body: any): any {
  * 上游把[计费货币]放在每个 session 响应的 freebucks 字段里:
  *   { balance, daily:{limit,spent,remaining,resetAt}, wallet:{...},
  *     prices:{ modelId: price }, quotaExempt, planId, monthly, peak, priceChanges }
- * admit 按整小时单价预扣, 提前 DELETE 不退(2026-09-13 实测), 所以本地必须知道
- * [每个模型多少钱]和[这个账号还买不买得起], 否则会白白 admit 一堆计费会话.
- * 老上游/未登录状态没有该字段 -> 返回 null, 调度退回旧行为(不拦截).
+ * admit 按整小时单价预扣, 提前 DELETE 不退, 所以本地需要知道
+ * [每个模型多少钱]和[这个账号还买不买得起].
+ * 老上游/未登录状态没有该字段 -> 返回 null, 调度不拦截.
  * @param {any} body 上游回执
  * @returns {any} 归一后的 Freebucks 块; 没有则 null
  */
@@ -148,7 +148,7 @@ export function round2(n: number): number {
 }
 
 /**
- * 有界等待(毫秒), 定时器 unref 以免阻止进程退出.
+ * 有界等待(毫秒), 定时器 unref 使其不阻止进程退出.
  * @param {number} ms 等待毫秒
  * @returns {Promise<void>} 计时结束即 resolve
  */

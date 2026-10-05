@@ -14,11 +14,11 @@ import assert from 'node:assert/strict'
    ================================================================ */
 {
   /**
-   * - 上游 GET /session 回执里带会话清单(实测字段):
+   * - 上游 GET /session 回执里带会话清单:
    * "desktopPurchases": [{"model":"mimo/mimo-v2.5",
    * "expiresAt":"...","holderInstanceId":"6c5b0c7e-..."}]
    * - 官方据此实现 knownHolder(model)(orchestrator.js:208639),
-   * - 在发请求之前就知道槽位被谁占着 ---- 而这是跨部署可见的:
+   * - 在发请求之前就知道槽位被谁占着 ---- 该信息跨部署可见:
    * 真值在上游,本地/远程各建过会话时上游回执会把全部持有者列出来.
    *
    * - 反向探针:删掉 _apply 里的 desktopPurchases 解析后本用例必须变红.

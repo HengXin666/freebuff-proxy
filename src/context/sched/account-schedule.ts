@@ -1,8 +1,8 @@
 /**
  * 账号调度: 并发上限, 调度模式, 计数, 互斥, 选号入口.
  *
- * 从 app-context.js 按职责切出. 选号排序的完整依据见 account-try / account-gates;
- * 这里放它周边的状态读写与两个加锁入口.
+ * 选号排序的完整依据见 account-try / account-gates; 这里放它周边的状态读写与两个
+ * 加锁入口.
  */
 import { logger } from '../../util/log.ts'
 
@@ -31,13 +31,10 @@ export function schedulingMode(this: any) {
 }
 
 /**
- * 更新"最后成功账号"(粘性调度核心输入)并落盘.
- * 集中一处:原先有 4 个赋值点,只有 1 个写了账本,重启后粘性就跑了.
+ * 更新"最后成功账号"(粘性调度核心输入)并落盘. 全部赋值点集中在这里.
  * @param {any} this 账号池(runtimes)
- * @param {any} this 账号池(runtimes)
- * @param {any} this 账号池(runtimes)
- * @param {string} key
- * @returns {any} 见实现
+ * @param {string} key 账号 key
+ * @returns {void} 无返回
  */
 export function _setLastSuccessKey(this: any, key: any) {
   if (!key) return
@@ -48,9 +45,6 @@ export function _setLastSuccessKey(this: any, key: any) {
 
 /**
  * 记一次成功调度: 计数, 最近使用时间, 并落盘.
- *
- * 重启后[用过没有 / 最近什么时候用的]不该归零, 否则粘性调度会把已经打过废的
- * 账号当成全新账号重新启用一遍.
  * @param {any} this 账号池(runtimes)
  * @param {string} key 账号 key
  * @returns {void}
@@ -59,8 +53,7 @@ export function _recordSuccess(this: any, key: any) {
   this.stats.total += 1
   this.stats.byKey.set(key, (this.stats.byKey.get(key) || 0) + 1)
   this._lastUsedAt.set(key, Date.now())
-  // 请求计数/最近使用落盘:重启后[用过没有 / 最近什么时候用的]不该归零,
-  // 否则粘性调度会把已经打过废的账号当成全新账号重新启用一遍.
+  // 请求计数/最近使用落盘, 让粘性调度在重启后仍能区分"已用过"与"全新"账号.
   this.accountState.patch(key, {
     requests: this.stats.byKey.get(key) || 0,
     lastUsedAt: new Date(this._lastUsedAt.get(key)).toISOString(),
@@ -91,13 +84,13 @@ export async function _withAcquireLock(this: any, fn: any) {
 }
 
 /**
- * 该账号是否"被使用过":有过 admit / 有活跃 session / 发过请求.
- * 从未用过的账号在选号里排最后----只在已用账号都不可用(冷却/额度耗尽/
- * 满员排队超时)时才启用,避免把每个账号都摸一遍(账号农场特征).
+ * 该账号是否"被使用过": 有过 admit / 有活跃 session / 发过请求.
+ * 从未用过的账号在选号里排最后: 只在已用账号都不可用(冷却/额度耗尽/满员排队超时)
+ * 时才启用.
  * @param {any} this 账号池(runtimes)
- * @param {string} key
- * @param {import('../../session-manager.ts').SessionManager} [sessions]
- * @returns {any} 见实现
+ * @param {string} key 账号 key
+ * @param {import('../../session-manager.ts').SessionManager} [sessions] 可选的会话管理器
+ * @returns {boolean} 是否用过
  */
 export function everUsed(this: any, key: any, sessions: any) {
   const s = sessions || this.byKey.get(key)?.sessions
@@ -118,7 +111,7 @@ export function everUsed(this: any, key: any, sessions: any) {
  *   remaining 为 null 表示不限额(控制台预算设为 0 = 不限),恒放行且不递减.
  *   复用已有热 session 不消耗预算;预算耗尽后只允许复用,不再 admit.
  *   skipKeys: 本次请求已排队超时过的账号,不再重复选中.
- * @returns {any} 见实现
+ * @returns {Promise<any>} 承接的 runtime
  */
 export async function acquireForModel(this: any, model: any, opts: any = {}) {
   return this._withAcquireLock(() =>
@@ -136,7 +129,7 @@ export async function acquireForModel(this: any, model: any, opts: any = {}) {
  * @param {string} model
  * @param {any} [opts] 换号/重试选项
  *   preferredKey / gateCode / retryAfterMs / switchAccount / noCooldown
- * @returns {any} 见实现
+ * @returns {Promise<any>} 承接的 runtime
  */
 export async function reacquireAfterGate(this: any, model: any, opts: any = {}) {
   return this._withAcquireLock(() =>

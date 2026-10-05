@@ -57,7 +57,7 @@ function claimReleasedReply(headers, model) {
    *
    * 这样测的是官方语义(orchestrator.js:208166-208176):
    * 收到该码 → DELETE 作废 claim → 换全新 instanceId → 重试一次
-   * 若实现没有换 ID(旧行为:当"槽位忙"跳过),第二次仍带旧 ID →
+   * 若实现不换 ID(当"槽位忙"跳过),第二次仍带旧 ID →
    * - mock 继续返回该码 → 断言 sessionPosts 与最终状态会红.
    */
   const inst =
@@ -135,12 +135,8 @@ function activeAdmission(model) {
     rateLimit,
     rateLimitsByModel: { [model]: rateLimit },
     /**
-     * - waiting_room_once:admit 回执带扣费后的余额(25 - 15 = 10).
-     *
-     * 这是真机的真实形态(远程日志 2026-10-04T18:52:34Z):admit 200 当场扣
-     * 整小时单价 15,回执里余额剩 10;紧接着 chat 回 428.此时若把 428 排在
-     * - 额度闸门之后,freebucksFor() 会判"10 < 15 买不起"→ 续用被拦死.
-     * - 测试必须复现这个扣费后的余额,否则闸门不会命中,断言变成假绿.
+     * waiting_room_once 模式下 admit 回执带扣费后的余额: 余额 10, 今日池已花 15.
+     * 该形态让后续 chat 的 428 落在"买不起下一个小时"的判据上.
      */
     ...(state.mockFreebucks
       ? {

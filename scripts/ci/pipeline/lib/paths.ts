@@ -1,9 +1,6 @@
 /**
  * 路径与常量真源 -- 供 scripts/ci/pipeline/** 共用.
  *
- * 为什么要单独一个文件: ROOT 是从本文件位置往上推的. 实现搬进子目录后
- * 每个文件离仓库根的层数都变了, 各处各推一次必然有两处算错(而且症状是
- * "fixture 复制不到文件"这类间接失败). 只允许一处推.
  */
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'

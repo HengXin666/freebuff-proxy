@@ -1,27 +1,25 @@
 /**
  - 上游[外来客户端]判据的本地镜像 ---- 单一真源.
  *
- - 为什么需要它:上游按[请求形态是否来自官方客户端]决定降级(把请求改投一个小模型,
- - 或在该 slug 不可路由时以 404 失败),而判据的公开出处只剩源码:
- - common/src/constants/foreign-client-signals.ts
- - (2026-09-19 取,sha256 505f9b42af1758b5403233737251b231a9369a312dbe4dcde6ceeed538589da9)
- - 上游已把文档化的 docs/freebuff-abuse-detection.md 从仓库撤下.上游改规则后必须回来重对;
- - 取舍与实测见 .agents/notes/implemented/bug-fix/2026-09-19-genuine-tool-signature.md.
+ - 内容取自上游源码 common/src/constants/foreign-client-signals.ts
+ - (2026-09-19 取, sha256 505f9b42af1758b5403233737251b231a9369a312dbe4dcde6ceeed538589da9).
+ - 上游改规则后必须回来重对.
+ - 取舍见 .agents/notes/implemented/bug-fix/2026-09-19-genuine-tool-signature.md.
  *
- - 本地只把它用于可观测性与[该注入什么签名工具]----判定权永远在上游.
+ - 本地只把它用于可观测性与[该注入什么签名工具]; 判定权永远在上游.
  *
  - 差分验证方法:把上游那份源码与本模块并排加载(node --import <ts-loader> + zod@4),
  - 逐用例比对 detectForeignClient 的 signal 与 evidence,并比常量集与参数名表.
  */
 
-/** 判据源码 sha256:上游改动后这里必须一起更新(对照实验的版本锚点). */
+/** 判据源码 sha256:上游改动后这里必须一起更新. */
 export const FOREIGN_CLIENT_SIGNALS_SOURCE_SHA256 =
   '505f9b42af1758b5403233737251b231a9369a312dbe4dcde6ceeed538589da9'
 
 /**
- - 降级目标模型.上游原话:OpenRouter 的 :free 变体,降级请求不花上游的推理预算.
- - 它不是错误响应 ---- 上游不回 4xx,而是把请求送给这个小模型;该 slug 不可路由时
- - (实测经 OpenRouter 回 404)才以 404 形式失败,下游桥接层再把那个 404 崩成 502 空体.
+ - 降级目标模型.上游原话:OpenRouter 的 :free 变体.
+ - 它不是错误响应 ---- 上游把请求送给这个小模型;该 slug 不可路由时
+ - (经 OpenRouter 回 404)才以 404 形式失败,下游桥接层再把那个 404 崩成 502 空体.
  */
 export const FREEBUFF_DOWNGRADE_MODEL_ID = 'inclusionai/ling-3.0-tiny:free'
 
@@ -30,7 +28,7 @@ export const FREEBUFF_CUSTOM_TOOL_NAMES = ['decide']
 
 /**
  - 我们定义,但其它 agent harness 也发的工具名 ---- 上游的排除表:
- - 这些名字不构成签名(否则会把 opencode / Cline / Codex 自己人判成第三方).
+ - 这些名字不构成签名.
  */
 export const GENERIC_TOOL_NAMES = ['write_file', 'web_search', 'glob', 'skill', 'apply_patch']
 
@@ -126,10 +124,9 @@ export const OFFICIAL_TOOL_PARAMETER_KEYS: any = Object.freeze({
 /**
  - 官方零参数工具的描述原文(2026-09-19 取自上游 toolParams,逐字).
  *
- - 为什么单独存:零参数工具没有结构可校验(复制的名字加 {} 与真货逐字节相同),
+ - 零参数工具没有结构可校验(复制的名字加 {} 与真货逐字节相同),
  - 上游 isGenuineSignatureTool 因此永不认可它们;只有在 isHollowSignatureTool
- - 里退而比对描述 ---- 而那一条官方明说[只喂日志,不强制],所以描述改动不会罚到
- - 落后一个版本的官方客户端.这里存它,只为让本地日志与上游日志说同一件事.
+ - 里退而比对描述.这里存它,只为让本地日志与上游日志说同一件事.
  */
 export const OFFICIAL_ZERO_PARAM_TOOL_DESCRIPTIONS: any = Object.freeze({
   end_turn: "Only use this tool to hand control back to the user.\n\n- When to use: after you have completed a meaningful chunk of work and you are either (a) fully done, or (b) explicitly waiting for the user's next message.\n- Do NOT use: as a stop token mid-work, to pause between tool calls, to wait for tool results, or to \"check in\" unnecessarily.\n- Before calling: finish all pending steps, resolve tool results, and include any outputs the user needs to review.\n- Effect: Signals the UI to wait for the user's reply; any pending tool results will be ignored.\n\n*INCORRECT USAGE*:\n<some_tool_that_produces_results_params_example>\n{\n  \"query\": \"some example search term\"\n}\n</some_tool_that_produces_results_params_example>\n\n<end_turn_params_example>\n{}\n</end_turn_params_example>\n\n*CORRECT USAGE*:\nAll done! Would you like some more help with xyz?\n\n<end_turn_params_example>\n{}\n</end_turn_params_example>",
@@ -137,9 +134,9 @@ export const OFFICIAL_ZERO_PARAM_TOOL_DESCRIPTIONS: any = Object.freeze({
 })
 
 /**
- - 判定的实现(schema 校验 / detectForeignClient / 注入的签名工具定义)已按职责
- - 搬进 signals/detect.ts. 这里原样 re-export, 外部消费者与 test 的 import 点
- - 一处都不用改; 本文件只保留上游那份判据源码的[本地镜像]常量.
+ - 判定的实现(schema 校验 / detectForeignClient / 注入的签名工具定义)在 signals/detect.ts.
+ - 这里原样 re-export, 外部消费者与 test 的 import 点不变; 本文件只保留上游那份判据
+ - 源码的[本地镜像]常量.
  */
 export {
   ENFORCED_FOREIGN_SIGNALS,
@@ -159,9 +156,8 @@ export {
  - bun 侧做下行映射发请求,Node 侧据它做上行还原).
  - 两侧一致性由 test/verify-tool-name-mapping.mjs 扫描校验.
  *
- - 为什么需要:上游官方工具集是固定 37 个,里面没有 bash/edit/read/
- - write/skill 这些下游 harness 的常用名.实测把第三方工具原样追加后,
- - 上游回 503(同会话同模型不带工具则是 200).
+ - 上游官方工具集是固定 37 个,里面没有 bash/edit/read/write/skill 这些下游 harness
+ - 的常用名, 所以下游工具名必须先映射再发.
  */
 export const CLIENT_TO_OFFICIAL_TOOL = Object.freeze({
   bash: 'run_terminal_command',
@@ -206,7 +202,7 @@ export const CLIENT_TO_OFFICIAL_TOOL = Object.freeze({
  - 与下行映射配对:下行把 bash→run_terminal_command,上行就还原回 bash,
  - 使下游拿到的工具名与它自己声明的完全一致,可直接派发.
  *
- - 官方原生名(下游没声明过)原样保留 ---- 不猜,不丢.
+ - 官方原生名(下游没声明过)原样保留.
  *
  - @param {any} body 上游响应体(chat.completion,含 choices[].message.tool_calls)
  - @returns {any} 原地修改后的 body(同时返回,便于链式使用)
@@ -220,12 +216,11 @@ export function unmapToolCallsInBody(body: any) {
   const choices = Array.isArray(body.choices) ? body.choices : []
   for (const ch of choices) {
     /**
-     - 必须同时处理两种形态(实测踩到):
+     - 处理两种形态:
      - - 非流式:choices[].message.tool_calls[].function.name
      - - SSE 流式:choices[].delta.tool_calls[].function.name
      - (首片给 name,后续片只给 arguments)
-     - 只处理 message 会让流式响应一条都不还原(实测 changed:false),
-     - 下游拿到官方名 write_file 而不是它声明的 write.
+     - 只处理 message 会让流式响应一条都不还原.
      */
     for (const holder of [ch?.message, ch?.delta]) {
       const tc = holder?.tool_calls

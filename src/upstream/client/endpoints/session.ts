@@ -1,10 +1,7 @@
 /**
  * 会话端点:/api/v1/freebuff/session 的 GET / POST(admission) / DELETE.
  *
- * 拆分为三个文件(本文件 + session-headers.ts + session-result.ts),
- * 但保持一条请求的线性顺序可读:取头 → 发送(含 legacy 回落)→ 归一.
- *
- * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
+ * 三个文件保持一条请求的线性顺序可读: 取头 → 发送(含 legacy 回落)→ 归一.
  */
 import { logger } from '../../../util/log.ts'
 import { SESSION_ADMISSION_ENDPOINT, SESSION_ENDPOINT } from '../../fingerprint/official-fingerprint.ts'
@@ -17,8 +14,8 @@ import { sessionHeaders } from './session-headers.ts'
  * 发一次 session 请求,POST 命中 404/405 时回落 legacy /session.
  *
  * 官方 POST 打 .../session/admission,GET/DELETE 打 .../session.优先用官方
- * 端点对齐指纹;老部署没有 /admission 时回落 legacy  --  绝不因为"对齐"丢掉
- * 可用性(官方自己把 404/405 当作 session_admission_unavailable,我们回落即可).
+ * 端点对齐指纹;老部署没有 /admission 时回落 legacy 端点(官方自己把 404/405
+ * 当作 session_admission_unavailable).
  *
  * @param {object} ctx 出站依赖
  * @param {'GET'|'POST'|'DELETE'} method 方法
@@ -56,15 +53,14 @@ export async function freebuffSession(ctx: any, method: string, opts: any = {}):
   /**
    * 只读查询(GET)优先交给 bun 通道执行.
    *
-   * 为什么:Node 的内置 fetch 强制带 accept-language 与 sec-fetch-mode
-   * (forbidden header,设不掉),客户端(bun)不带  --  在主服务里补头/删头
-   * 永远补不到一致,只能换运行时.官方形态的实现只有一份(cli-bridge),
+   * Node 的内置 fetch 强制带 accept-language 与 sec-fetch-mode
+   * (forbidden header,设不掉), 客户端(bun)不带  --  在主服务里补头/删头
+   * 到不了一致, 只能换运行时.官方形态的实现只有一份(cli-bridge),
    * 这里只做端口调用.见 docs/reverse/21 §21.5.
    */
   if (method === 'GET') {
     // sessionViaBun() 已直接返回会话体(或 null),不是 {ok,body} 包装.
-    //  必须透传 instanceId/heartbeat  --  否则 bun 侧 GET /session 永远不带
-    // 实例标识,也永远不发持有心跳(admission 后 25 秒被退款的事故根因).
+    // 透传 instanceId/heartbeat, 让 bun 侧 GET /session 带上实例标识并发持有心跳.
     const viaBun = await sessionViaBun({
       instanceId: opts.instanceId || null,
       heartbeat: opts.heartbeat === true,
@@ -72,7 +68,7 @@ export async function freebuffSession(ctx: any, method: string, opts: any = {}):
     if (viaBun && typeof viaBun === 'object') return viaBun
   }
   /**
-   * DELETE 同样走 bun:它必须带 x-freebuff-instance-id,否则上游 400
+   * DELETE 同样走 bun:它需要 x-freebuff-instance-id, 缺该头时上游回 400
    * instance_required,槽位退不掉(账号会一直被占).
    */
   if (method === 'DELETE' && opts.instanceId) {

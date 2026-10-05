@@ -1,10 +1,6 @@
 /**
  * 上游相关的启动工作 -- 从 bin/serve.ts 按职责切出.
  *
- * 为什么切出来: 这段是四条互不相干的"后台预热/扫尾"(CLI 版本对齐 / 会话句柄
- * 扫尾 / 退款追问 / 账号就绪日志), 原来挤在一个 99 行的函数里. 它们的共同点
- * 只有一条纪律, 见下方 startUpstreamWarmup 的说明; 逐条拆成子函数后,
- * 每条都能被单独阅读与判断"该不该 await".
  *
  * 口径: 纯搬移 + 按职责抽子函数, 不改任何时序与判据.
  */
@@ -17,7 +13,7 @@ import { logger } from '../../../src/util/log.ts'
  *
  * 启动时的 npm 版本拉取已停用(零自动探测, docs/reverse/20 §20.3):它会在每次
  * 启动自动打 registry.npmjs.org,属于"我们不请自来的外部请求".
- * CLI 版本号改用仓库内的已知值(getCliVersion() 的默认值, 抓包实测 0.2.12);
+ * CLI 版本号用仓库内的已知值(getCliVersion() 的默认值);
  * 要跟进官方发版由维护者显式触发, 或打开设置里的开关(见下). 功能保留, 默认不动.
  * @param {any} settingsStore 控制台设置
  * @returns {void} 只登记异步任务, 不等待
@@ -122,9 +118,6 @@ function armRefundSweeper(ctx: any): void {
 /**
  * 账号就绪日志(启动路径不发任何上游请求).
  *
- * 用户裁决,见 docs/reverse/20-upstream-endpoint-whitelist.md §20.3:以前的
- * /api/v1/me 自检已删除 ---- 客户端 165 条抓包里它出现 0 次, 是我们凭空多出来的
- * 流量, 本身就是"非客户端"信号.
  * @param {any} ctx 应用上下文
  * @returns {void} 只写日志, 无返回值
  */
@@ -144,11 +137,6 @@ function logUpstreamAuthReady(ctx: any): void {
 /**
  * 上游相关的启动工作(一律不 await).
  *
- * 为什么:这些动作全都依赖"上游此刻可达",而对服务本身能不能用毫无影响
- * --控制台,账号/额度查看,代理设置都不需要它们成功.把它们放在监听之前等待,
- * 等于让一个不可达的上游决定"服务起不起来":实测(真实数据 + 黑洞上游)v1.13.3
- * 要 54s 才监听,期间 Docker HEALTHCHECK 一直失败,restart 策略就会把还在启动
- * 中的容器反复杀掉重来--用户看到的就是"反复重启".
  *
  * @param {any} ctx 应用上下文(含 runtimes)
  * @param {any} settingsStore 控制台设置(cliVersionAutoRefresh / cliTelemetryEnabled)

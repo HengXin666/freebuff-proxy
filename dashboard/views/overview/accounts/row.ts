@@ -59,7 +59,6 @@ export function buildAccountRow(a: any, i: any) {
   const cd = a.cooldownUntil ? new Date(a.cooldownUntil).toLocaleString() : null
   // Session 列同时回答两件事:(1) 这条会话还能白用多久;(2) 这个号
   // 到现在为止买过几条 / 复用了几次----后者是"我们在省钱"的直接证据,
-  // 因为复用发生在已买断的一小时内,边际成本为 0.
   const admits = Number(a.admitCount) || 0
   const reuses = Number(a.reuseCount) || 0
   const reuseRate =
@@ -71,10 +70,6 @@ export function buildAccountRow(a: any, i: any) {
   /**
    - [这一小时已买给模型 X]必须显示出来(issue #24).
    *
-   - 此前这条会话显示成 MiMo 2.6 Flash . 50 分钟----看着完全正常,但它
-   - 只服务这一个模型:此时请求任何别的模型都会被上游拒(实测
-   - purchase_claim_released,且 DELETE 之后接不回来),而面板仍写 status=ok.
-   - 用户对着"正常"去查一个根本没坏的账号,排障只能翻日志.
    *
    - 后端已给 session.inPaidWindow,这里据此加一行标注,把"还能用多久,
    - 只能用哪个模型,什么时候能换"讲清楚.
@@ -110,14 +105,10 @@ export function buildAccountRow(a: any, i: any) {
      - 数据来自上游 GET /session 回执的 desktopPurchases----每次 admit/一键刷新
      - 都会随回执更新,所以刷新即可看到别的部署建的会话.
      *
-     - 为什么要显示:槽位 slotLimit:1,被别处占着时请求会撞
-     - purchase_capacity,而本地账本显示"没有会话" ---- 用户完全无从判断.
-     - 这里如实列出占用者与到期时间,并标出是不是本机建的.
      */
     ...renderUpstreamInventory(a),
   ])
   const sess = sessNode
-  // 探测失败原因(country_blocked 强风控 / rate_limited / banned / 凭证无效...)
   const probeFail = a.lastProbe && a.lastProbe.ok === false ? a.lastProbe : null
   const probe = probeFail ? probeReason(probeFail.code, probeFail.message) : null
   /**
@@ -140,7 +131,6 @@ export function buildAccountRow(a: any, i: any) {
       ? t('account.statusTipUnavailable')
       : t('account.statusTipOk')
   let statusCls = banned ? 'badge err' : unavailable ? 'badge warn' : 'badge ok'
-  // 探测失败的具体原因比笼统的"不可用"更有信息量,覆盖之(但 ban 优先级最高).
   if (!banned && probe) {
     statusLabel = probe.label
     statusTip = probe.tip
@@ -188,11 +178,6 @@ export function buildAccountRow(a: any, i: any) {
   ])
 }
 
-
-/**
- - 探测失败原因 → 可读文案(强风控国家封锁 / 限流 / 封禁 / 凭证无效等).
- - label 用于徽章短标签,tip 是 tooltip 完整原因.
- */
 export function probeReason(code: any, message: any) {
   const c = String(code || '').toLowerCase()
   const msg = message || c || t('account.unknownReason')
@@ -211,10 +196,6 @@ export function probeReason(code: any, message: any) {
   /**
    - 401 单独判,且只认真正的鉴权失败.
    *
-   - 此前写成 c.includes('unauthorized') || c.includes('invalid') || c.includes('401')
-   - ---- 宽匹配把任何含这些子串的 code 都判成[凭证无效],而[凭证无效]
-   - 在控制台上的含义是"这个号要重新登录",处置成本最高(要用户去浏览器重登
-   - 再导入).真因若是别的,用户就照着错的提示白折腾一遍.
    *
    - 现在:后端已把 session 401 归一成 auth_unauthorized(见
    - upstream/client.js 的 401 分支),这里按精确 code 命中,并把上游原文

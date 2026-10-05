@@ -7,7 +7,7 @@
  *
  * 官方分层取值:line 14(manager)fileCount 0;
  * line 38(worker)fileCount 69,testFileCount 5.
- * 我们此前统一硬编码 0 ---- worker 层会成为不一致点.
+ * worker 层必须与主服务取同一份值.
  *
  * 只做轻量统计:受 .gitignore 影响的文件不逐个读内容,
  * 仅统计数量并识别测试文件,超时/失败即回落到全 0.

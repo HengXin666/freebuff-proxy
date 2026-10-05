@@ -51,9 +51,9 @@ import path from 'node:path'
 
   // 付费模型:会话剩余 4 分钟(> 60s lead)→ 仍可复用(不浪费已付费会话)
   //
-  //  这里必须用同一个模型续期,不能换到别的模型:一次 admit 买断一小时
-  // 且绑定模型,付费时段内换模型上游必然拒(issue #24 实测 0s/45s/90s 全部
-  // purchase_claim_released 且接不回来).换模型路径由下面的用例单独覆盖.
+  //  这里必须用同一个模型续期, 不能换到别的模型: 一次 admit 买断一小时
+  // 且绑定模型, 付费时段内换模型上游会回 purchase_claim_released 且接不回来.
+  // 换模型路径由下面的用例单独覆盖.
   // 先验"绑在 flash 上时换 pro 会被拦",再释放,用 pro 重新 admit 验 lead.
   state.sessionExpiryMs = 4 * 60_000
   await assert.rejects(

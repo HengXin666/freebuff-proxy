@@ -1,7 +1,7 @@
 /**
  * api: 请求指纹稳定性
  *
- * 同一请求头的指纹必须稳定, 否则上游会当成新客户端.
+ * 同一请求头的指纹必须稳定(上游据此识别客户端是否同一个).
  *
  * 由 test/suites/entries/smoke/smoke.ts 按职责机械切出. 口径: 纯搬移.
  */
@@ -16,12 +16,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-// 指纹对齐:chat 请求必须与官方 CLI 的形态一致.
-// 依据(全部静态提取自官方 freebuff@0.0.178 二进制,见
-// src/upstream/official-fingerprint.ts):
-//   chat UA = ai-sdk/openai-compatible/<真版本>/codebuff(旧实现硬编码 1.0.0);
-//   POST 准入走 .../session/admission,不是 .../session.
-// 用独立全新账号目录起服务:热 session 复用不会发 POST,断言不到准入形状.
+// 本用例断言 chat 请求与官方 CLI 形态一致, 依据 src/upstream/official-fingerprint.ts:
+//   chat UA = ai-sdk/openai-compatible/<真版本>/codebuff;
+//   POST 准入走 .../session/admission, 不走 .../session.
+// 起服务用独立全新账号目录: 冷启动才会发 POST 准入, 热 session 复用不发.
 {
   const fpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-fp-'))
   saveAccountUser(fpDir, { id: 'fp', email: 'fp@example.com', authToken: 'token-fp' })
@@ -61,18 +59,11 @@ import path from 'node:path'
   assert.ok(chatCall, '应发出 chat 请求')
   const ua = chatCall.headers['user-agent'] || chatCall.headers['User-Agent']
   assert.ok(ua, 'chat 必须带 user-agent')
-  // chat UA 是两段式,逐字对齐真机抓包.
-  // 版本段是 0.0.0-test 而不是包版本号 ---- 官方发布构建里 __PACKAGE_VERSION__
-  // 未注入,回退到该字面量(二进制原文:
-  //   Qo=typeof __PACKAGE_VERSION__<"u"?__PACKAGE_VERSION__:"0.0.0-test"
-  // ).第二段我们此前整段漏了.见
-  // .agents/notes/implemented/bug-fix/2026-10-01-chat-ua-two-part.md
-  //
-  //  第三段随客户端路线而异,两条都是真机实测值:
-  //   CLI     0.2.6 → runtime/browser
-  //   desktop 0.0.156 → runtime/bun/1.4.2(orchestrator 是 bun 跑的)
-  // 本仓库走 desktop 路线,故断言取 bun 形态.
-  // 见 docs/reverse/14-captured-diff.md
+  // chat UA 为两段式, 逐字对齐真机抓包.
+  // 版本段固定是 0.0.0-test: 官方发布构建未注入 __PACKAGE_VERSION__ 时回退到该字面量.
+  // 第三段随客户端路线而异: CLI 为 runtime/browser, desktop 为 runtime/bun/<版本>.
+  // 本仓库走 desktop 路线, 故断言取 bun 形态.
+  // 见 .agents/notes/implemented/bug-fix/2026-10-01-chat-ua-two-part.md
   assert.equal(
     ua,
     'ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.25 runtime/bun/1.4.2',
@@ -80,12 +71,8 @@ import path from 'node:path'
   )
   assert.ok(!ua.includes('/1.0.0/'), 'UA 不得再是硬编码的 1.0.0（与真 CLI 版本不符）')
   /**
-   * - x-codebuff-api-key 已删除,断言不再带.
-   *
-   * 旧注释说"删它有打死全部认证的风险(只带 Bearer 会 401)"---- 那是
-   * - 未做单变量对照的结论:当时同时换了 token 来源与出口,401 的真实
-   * 原因从未被证实是这个头.客户端 165 条抓包里它出现 0 次
-   * (docs/reverse/20 §20.4),故按官方形态只发 Bearer.
+   * - x-codebuff-api-key 断言不存在: 客户端抓包里它出现 0 次
+   * (docs/reverse/20 §20.4), 按官方形态只发 Bearer.
    */
   assert.ok(
     !chatCall.headers['x-codebuff-api-key'],
@@ -135,16 +122,9 @@ import path from 'node:path'
     ],
     '描述符字段与顺序必须与官方一致, got ' + JSON.stringify(envKeys),
   )
-  //  instanceId 形态随路线而异,两条都是真机实测值:
-  //   CLI     抓包 → cli:<uuid>(官方 newFreebuffCliInstanceId,
-  //                   服务端据此认出 CLI 而非 Desktop 标签)
-  //   desktop 抓包 → 裸 UUID 且整场复用
-  //                  (line 8/34/54 三次 admission 同为 e1be7199-...,
-  //                   line 38 的 metadata 也是它)
-  //
-  // 本仓库走 desktop 路线,故用裸 UUID.且必须复用同一个值:
-  // 每次 admission 新建会让每次购买被全额退款作废
-  // (官方回执里 desktopRefunds 从未出现,而我们此前每次都退).
+  //  instanceId 形态随路线而异: CLI 为 cli:<uuid>, desktop 为裸 UUID.
+  // 本仓库走 desktop 路线, 故断言裸 UUID; 且整场必须复用同一个值(每次 admission
+  // 新建会让那次购买作废).
   // 见 docs/reverse/15-protocol-review.md P0-2 与 E.1.
   const admitInstance = admitCall.headers['x-freebuff-instance-id']
   assert.ok(

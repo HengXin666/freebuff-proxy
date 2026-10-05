@@ -42,9 +42,8 @@ function applyEnvOverrides(merged: Record<string, any>): void {
  * @returns {void}
  */
 function sanitizeProxies(merged: Record<string, any>): void {
-  // 代理列表:只留"能当 URL 用"的非空字符串.脏值(null/数字/对象/畸形 URL)
-  // 原样留下会在构造出网 agent 时抛 ERR_INVALID_URL  --  那是启动路径上的崩溃.
-  // 兼容历史写法 { url: "http://..." }.
+  // 代理列表:只留"能当 URL 用"的非空字符串. 兼容 { url: "http://..." } 写法.
+  // 脏值(null/数字/对象/畸形 URL)会让构造出网 agent 抛 ERR_INVALID_URL.
   if (!Array.isArray(merged.upstream.proxies)) merged.upstream.proxies = []
   merged.upstream.proxies = sanitizeProxyList(
     merged.upstream.proxies.map((u: any) =>
@@ -108,14 +107,9 @@ export function loadConfig(configPath?: string): Record<string, any> {
   applyEnvOverrides(merged)
 
   /**
-   *  api_base 不接受配置文件覆盖:一律以硬编码真源为准.
-   *
-   * 老配置文件(含全新容器从 config.example.yaml 生成的那份)里可能写着
-   * https://codebuff.com(主机名少了 w 前缀),那会让所有上游请求 401,控制台显示
-   * [凭证失效].这里无条件纠正,而不是"用户没配才用默认值".
-   * 详见 defaults.ts 里 UPSTREAM_API_BASE 的注释.
-   *
-   * 唯一可覆盖口是环境变量 FREEBUFF_UPSTREAM_API_BASE(本地镜像对照用).
+   * api_base 一律以硬编码真源为准, 配置文件里的值被无条件覆盖:
+   * 值取自 FREEBUFF_UPSTREAM_API_BASE 环境变量(本地镜像对照用), 未设时取常量.
+   * 见 .agents/notes/implemented/bug-fix/2026-10-04-upstream-apibase-hardcoded.md
    */
   merged.upstream.apiBase = stripTrailingSlash(
     process.env.FREEBUFF_UPSTREAM_API_BASE || UPSTREAM_API_BASE,

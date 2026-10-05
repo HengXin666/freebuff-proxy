@@ -5,8 +5,6 @@
  - 被正确修改,它同时是"改一处坏一片"的结构性根源,也是本仓最长那条链
  - (createProxyHandler 2109 行)的成因.
  *
- - 为什么必须用 AST 而不是正则:正则数不清箭头函数,方法,嵌套闭包的边界,
- - 也分不清字符串里的 function.误报会让人把整条门禁关掉.
  *
  - 注释规范(导出 JSDoc / @param 一致性)不在这里 ---- 那属于 check-notes.
  - 一个判据只在一个脚本里存在,否则两边各改一半就会漂移.
@@ -26,7 +24,6 @@ const BASELINE = 'functions-baseline.json'
 const report = new Report('functions')
 const wl = loadWhitelist()
 
-/** 实测所有超限函数:key = 文件::函数名 → 行数. */
 function survey() {
   const over = {}
   let total = 0

@@ -64,13 +64,11 @@ import path from 'node:path'
   assert.equal(last.email, 'sp-c@example.com', '最后一个账号才启用 c')
 
   /**
-   * 只剩 c 可用:换模型请求复用同一账号(释放旧 session 后 admit 新模型).
+   * 只剩 c 可用: 换模型请求复用同一账号(释放旧 session 后 admit 新模型).
    *
-   * - 前提必须是付费时段已结束.一次 admit 买断一小时且绑定模型,
-   * 付费时段内换模型上游必然拒(issue #24:0s/45s/90s 三次重试全部
-   * purchase_claim_released,且 DELETE 之后接不回来).所以"同一小时内跨模型
-   * 可用"在生产上不成立----此前这段能过,是因为 mock 无条件放行 admission.
-   * 这里先把 c 的会话置为已过期,测的才是真实成立的换模型路径.
+   * - 前提必须是付费时段已结束: 一次 admit 买断一小时且绑定模型, 付费时段内
+   * 换模型会得到 purchase_claim_released 且 DELETE 之后接不回来. mock 上游
+   * 默认无条件放行 admission, 所以这里先把 c 的会话置为已过期.
    */
   const cRt = pool.get('c')
   cRt.sessions.session = {

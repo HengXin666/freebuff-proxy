@@ -7,27 +7,21 @@ import { normalizeAccountState, recordRefund, refundsOf } from './account-state/
 /**
  - 账号运行状态的持久化账本(/data/account-state.json).
  *
- - 为什么必须有它:账号的"人生履历"原本全在内存里,一次重启就全丢----
- - - 什么时候进来的(firstSeenAt),什么时候被封的(bannedAt)
- - - 发过多少请求(requests),最近一次使用(lastUsedAt)
- - - 冷却(cooldowns),Freebucks 余额/单价,每日额度,最近一次探测结果
- - 丢了以后控制台分不出"从未用过的干净号"和"已经被打废的号",重启后还会
- - 立刻去重试已封禁的号;更糟的是 freebucks 归零让"余额买不起就别
- - admit"这道闸门直接失效(freebucksFor 只能 fail-open),等于重启后第一个
- - 请求就去撞已知余额不足的账号.
- *
- - 所以这里把上述状态落盘,启动时回灌.文件形如:
+ - 落盘的字段: 加入时间(firstSeenAt), 封禁时间(bannedAt), 请求数(requests),
+ - 最近使用时间(lastUsedAt), 冷却(cooldowns), Freebucks 余额与单价, 每日额度,
+ - 最近一次探测结果; 启动时回灌进内存.
+ - 文件形如:
  - { version:1, updatedAt, total, lastSuccessKey,
  - accounts: { <accountKey>: {
  - email, firstSeenAt, bannedAt, requests, lastUsedAt,
  - cooldowns: { <cooldownKey>: { until, code, model? } },
  - freebucks, quota, lastProbe } } }
  *
- - 设计取舍:
- - - 写盘是去抖 + 原子(tmp+rename, 0o600):调度热路径上每发一个请求
- - 都同步写文件会拖慢吞吐,所以合并成一次延迟写;进程退出前 flush.
- - - 读盘永不抛:账本坏了也只当没有(控制台少显示点历史,但不影响转发).
- - - 账号被删除时同步清掉记录,避免文件无限增长与幽灵账号.
+ - 行为要点:
+ - - 写盘是去抖 + 原子(tmp+rename, 0o600): 热路径上的多次改动合并成一次延迟写,
+ - 进程退出前 flush.
+ - - 读盘永不抛: 账本坏了也只当没有(控制台少显示点, 但不影响转发).
+ - - 账号被删除时同步清掉记录, 避免文件无限增长与幽灵账号.
  *
  - 读盘的逐字段归一在 ./account-state/records.ts, 本类只保留状态机与落盘.
  */
@@ -46,8 +40,7 @@ export class AccountStateStore {
     this._timer = null
     /** @type {{ version: number, updatedAt: string | null, total: number, lastSuccessKey: string | null, accounts: Record<string, any> }} */
     this.state = normalizeAccountState(null)
-    /** 装载结果('ok' | 'missing' | 'invalid'):损坏 = 账号履历与
-     - "余额买不起就别 admit"闸门失效(重启后可能去撞已知余额不足的号). */
+    /** 装载结果('ok' | 'missing' | 'invalid'):损坏即视为空账本. */
     this.loadStatus = 'missing'
     this.loadReason = null
     this.load()
@@ -161,8 +154,7 @@ export class AccountStateStore {
     let removed = 0
     for (const key of Object.keys(accounts)) {
       if (keep.has(key)) continue
-      // 旧布局的邮箱 key 迁移:同一账号换 key 时把"加入时间/封禁时间"带过去,
-      // 否则控制台会把老号重新显示成"从未使用".
+      // 邮箱 key 的旧布局记录:把"加入时间/封禁时间"迁移给同邮箱的新 key 记录后删除.
       const rec = accounts[key]
       const email = String(rec?.email || '').toLowerCase()
       const successor = email

@@ -1,9 +1,6 @@
 /**
  * views 域的词条表 -- 从 dashboard/i18n.js 的 DICT 按域切出.
  *
- * 为什么按域切: DICT 原本 815 行单文件(超前端每文件 500 行上限), 而它全部是
- * "key -> { 'zh-CN': ..., en: ... }" 的数据行, 没有任何逻辑. 按域切之后
- * 每种语言的新增文案只改一个文件, 而不是在 800 行里定位.
  *
  * 口径: 纯切分, key 与文案逐字节不变.
  */
@@ -142,7 +139,6 @@ export default {
     'zh-CN': '点任意一行展开完整字段（含上游原始判据），可一键复制。缓冲为进程内有界环形队列，重启即清空。',
     en: 'Click any row to expand the full fields (including raw upstream verdicts) and copy them in one click. The buffer is a bounded in-process ring, cleared on restart.',
   },
-
 
   // ---- 日志颗粒度与事件类型(与 src/util/log-kinds.ts 的 EVENTS 一一对应)----
   'logs.kindRequest': { 'zh-CN': '请求', en: 'Request' },

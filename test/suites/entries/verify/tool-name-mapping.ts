@@ -52,9 +52,9 @@ const ok = (cond, msg) => {
 }
 
 // ── ① 两侧映射表一致 ──────────────────────────────────────────────
-//  MAP_TOOLS / UNMAP_TOOLS 的实现已随 cli-bridge 拆分搬进
-// cli-bridge/lib/tool-map.ts(upstream.mjs 只剩 import 与委派)----
-// 判据必须指向真正持有那张表的那一层, 否则读到的文件里没有它, 正则不匹配.
+// MAP_TOOLS / UNMAP_TOOLS 的实现位于
+// cli-bridge/lib/tool-map.ts ----
+// 判据必须指向真正持有那张表的那一层, 指向别处读到的文件里没有它, 正则不匹配.
 const bunSrc = fs.readFileSync(path.join(ROOT, 'cli-bridge/lib/tool-map.ts'), 'utf8')
 const m = bunSrc.match(/const MAP_TOOLS = Object\.freeze\(\{([\s\S]*?)\}\)/m)
 ok(m, 'bun 侧必须有 MAP_TOOLS 表')
@@ -121,8 +121,8 @@ for (const bad of [null, undefined, 'x', 42, {}, { choices: 'no' }, { choices: [
 }
 
 // ── ④ 关键回归:官方里确实没有这些下游名 ──────────────────────────
-//  skill 不在此列 ---- 实测它在官方清单里(40 个),是官方工具,
-// 不属于"需要映射的下游名".此处只列真正缺失的那些(测试自己抓到过这个错误).
+//  skill 不在此列 ---- 它在官方清单里(40 个),是官方工具,
+// 不属于"需要映射的下游名".此处只列真正缺失的那些.
 for (const name of ['bash', 'edit', 'read', 'write']) {
   ok(
     !official.has(name),
@@ -142,13 +142,13 @@ for (const name of [
 
 // ── ⑥ 映射不到的客户端工具必须原样保留(不得丢弃)────────────────
 //
-// 2026-10-05 单变量实测证伪了"丢弃"策略:8 个官方不存在的工具名(memory_save /
-// git_status / subagent / send_message / job_list / list_agents / git_diff /
-// memory_search)出站后上游回 HTTP 200.而"丢弃"会让 dsh 的 44 个工具里
-// 30 个(68%)静默消失 ---- 用户以为声明了能调,模型永远看不到.
+// 丢弃策略会使 dsh 的 44 个工具里 30 个(68%)静默消失 ---- 用户以为声明了能调,
+// 模型永远看不到.8 个官方不存在的工具名(memory_save / git_status / subagent /
+// send_message / job_list / list_agents / git_diff / memory_search)出站后
+// 上游回 HTTP 200, 支持原样保留.
 //
-// 判据用源码级检查(cli-bridge 是 bun 的 CLI 入口,不是可导入模块,
-// 用正则抽函数再 _compile 太脆弱,已实测会在抽取处炸).检查的是
+// 判据用源码级检查(cli-bridge 是 bun 的 CLI 入口, 不是可导入模块,
+// 用正则抽函数再 _compile 会在抽取处炸).检查的是
 // if (!mapped) 分支里不得出现 continue 丢弃,且必须 list.push.
 {
   const src = fs.readFileSync(path.join(ROOT, 'cli-bridge/lib/tool-map.ts'), 'utf8')
@@ -177,16 +177,11 @@ for (const name of [
 
 // ── ⑦ mergeOfficialTools 必须可执行(不得再出现未声明变量)────────
 //
-// 2026-10-05 真实回归:882de20 重写 if (!mapped) 分支时把
+// 回归:882de20 重写 if (!mapped) 分支时把
 // const mapped = MAP_TOOLS[n] || null; 整行删掉了 ---- 分支代码却还在用
 // mapped.node --check 只做语法检查,抓不到 ReferenceError,
-// 于是这个致命错误一路进了远程镜像:
-//
-//   远程实测(2026-10-04T18:52:34Z):55 个工具一进来,
-//   mergeOfficialTools 在第一轮循环就抛
-//     ReferenceError: mapped is not defined
-//   → cli-bridge 的 bun 进程整轮失败 → 上层 official channel rpc failed
-//     → 降级 legacy → chat 428/503 → 用户看到"花了 15 点,一次没用上"
+// 于是这个错误一路进了远程镜像, mergeOfficialTools 在第一轮循环就抛
+//   ReferenceError: mapped is not defined
 //
 // 上面的 ⑥ 只是源码正则检查(能过),所以它漏掉了这个错误.这里补一条
 // 真执行断言:把 MAP_TOOLS + mergeOfficialTools 抽出来跑,任何未声明变量
@@ -227,7 +222,7 @@ for (const name of [
     [{ function: { name: 'bash' } }],
   )
   assert.equal(dedup.length, 1, '官方优先，重复不追加')
-  // 空工具集:不进入循环(这条以前能过,因为提前 return,掩盖了 bug)
+  // 空工具集:不进入循环(提前 return 会掩盖该分支)
   assert.equal(merge([{ function: { name: 'x' } }], []).length, 1, '空客户端工具直接返回官方集')
   console.log('mergeOfficialTools 真执行验证通过（4 条）')
 }

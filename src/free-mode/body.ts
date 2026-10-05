@@ -1,11 +1,8 @@
 /**
- * 请求体字段归一 ---- 从 src/free-mode.ts 按职责切出.
+ * 请求体字段归一.
  *
- * 为什么单独成文件: 这三件(剥会话标识 / 推理字段归一 / 输出预算归一)都是
- * "把下游任意形态的 body 收成上游能接的一种写法", 与工具签名和 system 门禁
- * 是两条独立的线. 放在一起时, 改一条归一规则要读完整份 340 行.
- *
- * 口径: 纯搬移, 行为零改动.
+ * 三件事: 剥会话标识 / 推理字段归一 / 输出预算归一, 目标是把下游任意形态的
+ * body 收成上游能接的一种写法.
  */
 
 /**
@@ -88,8 +85,8 @@ export function normalizeReasoningFields(body: any) {
   // Prefer explicit top-level if both present (caller's curl-style field)
   if (fromTop) effort = fromTop
 
-  // 官方 efforts 表:deepseek-v4-flash = [low, high, max],v4-pro = [high, max],
-  // 因此 max 是合法档位,不降档(旧实现 max→high 会压制思考深度/智力).
+  // 官方 efforts 表: deepseek-v4-flash = [low, high, max], v4-pro = [high, max],
+  // 因此 max 是合法档位, 不降档.
   const mapped = effort
   delete out.reasoning_effort
   out.reasoning = {

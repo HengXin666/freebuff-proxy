@@ -9,9 +9,8 @@
 import assert from 'node:assert/strict'
 
 // 设备签名(x-freebuff-device-{key,ts,sig}):上游判定[是不是注册过的真客户端]
-// 的核心判据.真机抓包确认官方每个 catalog/session/completions 请求都带这三头,
-// 而我们此前一个都没有.算法逐字对齐官方公开源码,并用抓到的真机样本做过
-// 逐字节重现验证(MATCH: true).见
+// 的核心判据.官方每个 catalog/session/completions 请求都带这三头.
+// 算法逐字对齐官方公开源码, 并用真机样本做过逐字节重现验证(MATCH: true).见
 // .agents/notes/implemented/bug-fix/2026-10-01-device-signing.md
 {
   const {
@@ -85,7 +84,7 @@ import assert from 'node:assert/strict'
   assert.ok(s1[HEADER_DEVICE_SIGNATURE].length > 60, '签名是 base64url')
   assert.ok(!s1[HEADER_DEVICE_SIGNATURE].includes('='), 'base64url 不带 padding')
 
-  // 不同 path / body / fetchId 必须得出不同签名(否则签名形同虚设)
+  // 不同 path / body / fetchId 必须得出不同签名
   const s3 = signDeviceRequest({ ...args, url: 'https://www.codebuff.com/other' })
   assert.notEqual(s1[HEADER_DEVICE_SIGNATURE], s3[HEADER_DEVICE_SIGNATURE], 'path 变了签名必须变')
   const s4 = signDeviceRequest({ ...args, body: '{}' })

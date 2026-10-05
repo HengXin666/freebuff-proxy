@@ -1,8 +1,6 @@
 /**
  * models 域的门面:把"清单侧"与"自定义侧"两个文件合成一个 handle.
  *
- * 为什么还要这一层:dispatcher 只跟"域"打交道(一个域名一个入口),
- * 域内部再按职责分文件.这样 dispatcher 不会长成一张 20 行的 import 表.
  */
 import { handleList } from './list.ts'
 import { handleCustom } from './custom.ts'

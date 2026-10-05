@@ -1,15 +1,12 @@
 /**
- * 目录响应体的纯解析 -- 从 CatalogHolder._apply 按职责抽出.
+ * 目录响应体的纯解析 -- CatalogHolder._apply 的实现.
  *
- * 为什么抽出来: 原 _apply 是 99 行的单方法, 混合了"取 fetchId / 建索引 /
- * 记版本字段"三件事. 抽成纯函数后, 它不碰 this, 可以被单独喂样本断言.
+ * 只做"取 fetchId / 建索引 / 记版本字段"三件事, 不碰 this, 可被单独喂样本断言.
  *
- * 注意边界: 只搬"非摘要"的那部分. legacy 摘要索引(摘要到 key / 摘要到句柄)
- * 与 keyForName 一起留在真源文件 catalog-protocol.js -- 真源唯一性判据要求
- * 上游 id 到目录 key 的实现只存在于真源, 搬走会被判成第二套实现.
+ * 边界: legacy 摘要索引(摘要到 key / 摘要到句柄)与 keyForName 留在真源文件
+ * catalog-protocol.js -- 真源唯一性判据要求上游 id 到目录 key 的实现只存在于真源.
  *
- * 口径: 纯搬移, 不改行为. 解析顺序与覆盖规则逐字保留(顺序会影响"同名不同 key
- * 时谁生效", 属行为).
+ * 解析顺序与覆盖规则逐字保留(顺序会影响"同名不同 key 时谁生效", 属行为).
  */
 import { isModelHandle } from './constants.ts'
 
@@ -25,7 +22,7 @@ function rowsOf(body: any): any[] {
 /**
  * 建 key 到句柄 / 目录行原文 / 显示名的三张表.
  *
- * 目录行全量留档的理由: 模型清单的权威就是 rows(实测 13 行), 而会话回执的
+ * 目录行全量留档: 模型清单的权威是 rows(13 行), 而会话回执的
  * rateLimitsByModel 只有 6 个键 -- 用后者当清单会漏掉一半以上模型.
  * @param {any[]} rows 目录行
  * @returns {{handles: Map<string,string>, displayNames: Map<string,string>,
@@ -47,7 +44,7 @@ function indexRows(rows: any[]) {
     if (typeof key === 'string' && typeof m.displayName === 'string' && m.displayName) {
       displayNames.set(key, m.displayName)
       // 反向: 显示名到 key. 下游照着 display_name 填 model 时用它落回服务端
-      // 认的口径(key), 否则裸显示名发给上游必然被拒.
+      // 认的口径(key); 裸显示名发给上游会被拒.
       const name = m.displayName.trim()
       if (name && !keyByName.has(name)) keyByName.set(name, key)
       if (name && !keyByName.has(name.toLowerCase())) {

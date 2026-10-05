@@ -54,10 +54,8 @@ function buildLoginEndpoints(ctx: any): Record<string, Function> {
      * @returns {Promise<any>} 上游登录码回执
      */
     async loginCode(fingerprintId: string) {
-      // 用 apiFetch(带超时 + 代理池回落)而不是裸 fetchWithProxy:
-      // freebuff.com 网络波动/被墙时裸 fetch 会永远挂起,轮询/弹窗
-      // 无限堆积 socket,把整个服务拖死(前台表现为[系统崩溃,只能重启]).
-      // 无代理部署(kind:'none')下 apiFetch 没有池内回落,靠
+      // 走 apiFetch(带超时 + 代理池回落), 不用裸 fetchWithProxy:
+      // 无代理部署(kind:'none')下 apiFetch 没有池内回落, 由
       // fetchLoginUpstream 补一次重试 -- 见 .agents/notes/implemented/
       // bug-fix/2026-10-03-login-transient-retry.md
       const res = await fetchLoginUpstream(
@@ -230,10 +228,9 @@ function buildMiscEndpoints(ctx: any): Record<string, Function> {
      * 释放本 client 持有的出网资源(undici ProxyAgent / EnvHttpProxyAgent).
      *
      * 必须显式调用:每个账号 runtime 在构造时都会 new ProxyAgent(...),
-     * 而 agent 自带 keep-alive 连接池.更新凭证,导入账号,切换代理池都会
-     * 重建 runtime 并丢弃旧的 -- 若旧 agent 不被 close,它的 socket 会一直
-     * 挂着,随"更新账号"的次数单调累积(实测每轮凭证更新留下 1 个常驻
-     * socket),表现为运行越久越慢,连接越难建立.
+     * 而 agent 自带 keep-alive 连接池.更新凭证/导入账号/切换代理池都会
+     * 重建 runtime 并丢弃旧的;不 close 旧 agent, 它的 socket 会一直挂着,
+     * 随"更新账号"的次数累积.
      *
      * @returns {Promise<void>} 全部 agent 关闭完成
      */

@@ -1,20 +1,12 @@
 /**
- * 注释精简器: 把"为什么/决策/历史/教训"类内容从注释里剥离, 只留"做什么".
+ * 注释精简器: 按段落剥离注释里的解释性内容, 只留"这段代码做什么".
  *
- * 用法: node scripts/gates/meta/trim-comments.ts [--dry-run] [<file> ...]
+ * 用法: node scripts/gates/meta/comment/trim.ts [--dry-run] <file> ...
  *
- * 处置规则(按块注释为单位):
- *   - 一个注释块里, 保留首行(描述职责)+ 仍然描述"做什么"的行(JSDoc 标签、
- *     参数/返回值说明、行为列举);
- *   - 丢弃: 含"为什么/因为/原因/决策/历史/教训/曾经/此前/旧实现/踩过/事故/
- *     实测/否决/权衡/代价/而不是/以免/否则"的句子及其续行;
- *   - 块里若只剩 JSDoc 标签, 保留标签; 若整块只讲原因, 整块删除.
+ * 处置单位是段落(连续的非空行), 不是单行 ---- 逐行删会留下断句.
+ * 同时处理块注释与连续行注释.
  *
- * 输出:
- *   - 每个文件改写后立刻再平衡(避免留下连续空行);
- *   - 汇总"删了多少块/多少行".
- *
- * 退出码: 0 = 成功(含无改动) / 2 = 用法错.
+ * 退出码: 0 = 成功 / 2 = 用法错.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -23,43 +15,98 @@ const ROOT = process.cwd()
 const DRY = process.argv.includes('--dry-run')
 const targets = process.argv.slice(2).filter((a) => !a.startsWith('-'))
 
-/** 命中即视为"解释性内容"的词. */
-const WHY = /为什么|因为|原因|决策|历史|教训|曾经|此前|旧实现|踩过|事故|实测|否决|权衡|代价|而不是|以免|否则|以前|当初|源于|动机/
+/** 解释性内容词元(与 check-comments 一致). */
+const WHY_TOKENS = [
+  '为什么', '原因', '决策', '历史', '教训', '曾经', '此前', '旧实现',
+  '踩过', '事故', '实测', '否决', '权衡', '代价', '动机', '源于', '之所以',
+]
+
+/** 注释里出现 note 路径 = 指针, 整块保留. */
+const NOTE_POINTER = /\.agents\/notes\//
 
 /**
- * 判断一行注释是否必须丢弃.
- * @param {string} line 注释原文行
- * @returns {boolean} 是否丢弃
+ * 去掉注释定界符与前导星号.
+ * @param {string} line 原始行
+ * @returns {string} 正文
  */
-function dropLine(line) {
-  return WHY.test(line)
+function body(line) {
+  return line.replace(/^\s*\/?\*+\/?/, '').trim()
 }
 
 /**
- * 精简一个注释块.
+ * 精简一个块注释.
  * @param {string} block 含定界符的块注释
- * @returns {string} 精简后的块(可能为空串表示整块删除)
+ * @returns {string} 精简结果(空串 = 整块删除)
  */
 function trimBlock(block) {
+  if (NOTE_POINTER.test(block)) return block
   const lines = block.split('\n')
-  const kept = []
-  for (const l of lines) {
-    if (!dropLine(l)) kept.push(l)
+  const keep = []
+  let para = []
+  const flush = () => {
+    if (para.length) {
+      const head = body(para[0])
+      if (!WHY_TOKENS.some((t) => head.includes(t))) keep.push(...para)
+    }
+    para = []
   }
-  // 全是定界符/空行时整块删除
-  const body = kept
-    .map((l) => l.replace(/^\s*\/?\*+\/?/, '').trim())
-    .filter(Boolean)
-  if (!body.length) return ''
-  // 收掉"只剩定界符"的碎块
-  if (body.length === 1 && !/^@/.test(body[0])) return kept.join('\n')
-  return kept.join('\n')
+  for (const line of lines) {
+    const b = body(line)
+    if (!b || /^\s*\/?\*+\/?\s*$/.test(line)) {
+      flush()
+      keep.push(line)
+      continue
+    }
+    if (b.startsWith('@')) {
+      flush()
+      keep.push(line)
+      continue
+    }
+    para.push(line)
+  }
+  flush()
+  if (!keep.map(body).filter(Boolean).length) return ''
+  return keep.join('\n').replace(/\n{3,}/g, '\n\n')
 }
 
-let blocksTrimmed = 0
-let linesRemoved = 0
-let filesChanged = 0
+/**
+ * 精简一串连续的行注释.
+ * @param {string[]} lines 文件所有行
+ * @returns {string[]} 处理后
+ */
+function trimLineComments(lines) {
+  const out = []
+  let i = 0
+  while (i < lines.length) {
+    if (!lines[i].trim().startsWith('//')) {
+      out.push(lines[i])
+      i++
+      continue
+    }
+    const start = i
+    const group = []
+    while (i < lines.length && lines[i].trim().startsWith('//')) {
+      group.push(lines[i])
+      i++
+    }
+    if (i === start) {
+      out.push(lines[i])
+      i++
+      continue
+    }
+    if (NOTE_POINTER.test(group.join('\n'))) {
+      out.push(...group)
+      continue
+    }
+    const head = group[0].replace(/^\s*\/\//, '').trim()
+    if (WHY_TOKENS.some((t) => head.includes(t))) continue
+    out.push(...group)
+  }
+  return out
+}
 
+let blocks = 0
+let files = 0
 for (const rel of targets) {
   const full = path.join(ROOT, rel)
   if (!fs.existsSync(full)) continue
@@ -83,18 +130,20 @@ for (const rel of targets) {
     const trimmed = trimBlock(block)
     if (trimmed !== block) {
       changed = true
-      blocksTrimmed++
-      linesRemoved += block.split('\n').length - (trimmed ? trimmed.split('\n').length : 0)
+      blocks++
     }
     out += trimmed || ''
     i = end + 2
   }
+  const lines = trimLineComments(out.split('\n'))
+  const out2 = lines.join('\n')
+  if (out2 !== out) {
+    changed = true
+    blocks++
+  }
   if (changed) {
-    // 收敛连续空行: 删除产生"三个以上连续换行"
-    out = out.replace(/\n{3,}/g, '\n\n')
-    if (!DRY) fs.writeFileSync(full, out)
-    filesChanged++
+    if (!DRY) fs.writeFileSync(full, out2.replace(/\n{3,}/g, '\n\n'))
+    files++
   }
 }
-
-console.log(`${DRY ? '[dry-run] ' : ''}块 ${blocksTrimmed} 个 / 行 ${linesRemoved} / 文件 ${filesChanged}`)
+console.log(`${DRY ? '[dry-run] ' : ''}块 ${blocks} / 文件 ${files}`)

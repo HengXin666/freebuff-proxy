@@ -151,9 +151,8 @@ export function startCatalogSync(cachePath: any, opts: any = {}) {
         const catalog = await fetchCatalogFromUpstream(opts)
         const wrote = writeCatalogCache(cachePath, catalog)
         if (!wrote.ok) {
-          // 拉到新 catalog 但落盘失败:内存态已是新的,缓存保留旧值.
-          // 必须与"拉取失败"分开报----否则用户看到 refresh failed 会去查网络,
-          // 实际是目录权限(issue #9).
+          // 拉到新 catalog 但落盘失败: 内存态已是新的, 缓存保留旧值.
+          // 与"拉取失败"分开报错, 便于区分缓存目录不可写的情况(issue #9).
           log(`catalog cache not writable, using in-memory catalog: ${wrote.error}`)
           return { ok: false, error: `cache write failed: ${wrote.error}`, models: catalog.models.length }
         }

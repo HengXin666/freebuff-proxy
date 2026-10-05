@@ -1,9 +1,6 @@
 /**
  - 受控文件集合的唯一来源:git ls-files 减去豁免档.
  *
- - 为什么不用 fs.readdir 递归:门禁要判的是"仓库里受控的东西",未跟踪的
- - 产物,node_modules,临时夹具都不该进入判据.git ls-files 同时也是
- - lane 覆盖率检查(每个顶层条目都必须被认领)的输入.
  *
  - 扫描根可被 CHECK_ROOT 覆盖,探针据此把夹具放进临时目录并 git init.
  */
@@ -16,7 +13,6 @@ import { ROOT, isAstFile, isCodeFile, tierOf } from '../../rules.ts'
 /**
  - 仓库内受控文件列表(相对路径,正斜杠).
  *
- * ## 为什么必须包含未跟踪文件(实测踩到, 这是本门禁体系最大的盲区)
  *
  * 只用 git ls-files 时, 未跟踪文件对全部门禁完全隐形:
  *
@@ -26,14 +22,13 @@ import { ROOT, isAstFile, isCodeFile, tierOf } from '../../rules.ts'
  *     $ node scripts/gates/checks/size/sizes.ts | grep -c _probe   -> FAIL (400 行)
  *
  * 后果比"漏一个文件"严重得多: 并行重构期间新拆出来的文件全都是未跟踪的
- * (实测当时有 45 个), 于是
  *   1. sizes / dirs / functions / notes / style 对它们一律零命中;
  *   2. fingerprint 的接线指纹输入同样来自这里, 门禁文件没 add 时改它不会被发现
  *      -- 管门禁还跑不跑这条兜底被直接削弱;
  *   3. 综合起来, 门禁全绿在 git add 之前恒真.
  *
  * 因此这里用 --cached --others --exclude-standard(已跟踪 + 未跟踪但不含
- * .gitignore 忽略项). 忽略项仍被排除, 因为它们是产物/数据, 不属于受控代码.
+ * .gitignore 忽略项). 忽略项是产物/数据, 不属于受控代码, 予以排除.
  * @param {string} [root] 扫描根(探针用)
  * @returns {string[]} 相对路径列表
  */

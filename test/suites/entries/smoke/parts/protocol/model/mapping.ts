@@ -8,10 +8,10 @@
 
 import assert from 'node:assert/strict'
 
-// 模型映射用 legacyDigests(双 FNV-1a),不是 sha256,不是 recommendedKey.
-// 官方目录不直接列模型 id,只给每行的 legacyDigests;这是把
-// deepseek/deepseek-v4-flash 这类 id 映射到服务端行的唯一正确途径.
-// 用错会静默映射到别的模型(实测曾把 deepseek 映射到 MiMo),导致 chat 503.
+// 模型映射用 legacyDigests(双 FNV-1a), 不用 sha256, 不用 recommendedKey.
+// 官方目录不直接列模型 id, 只给每行的 legacyDigests; 这是把
+// deepseek/deepseek-v4-flash 这类 id 映射到服务端行的唯一途径.
+// 用错会静默映射到别的模型, 导致 chat 503.
 // 见 .agents/notes/implemented/bug-fix/2026-10-01-legacy-model-digest-mapping.md
 {
   const { freebuffLegacyModelDigest, CatalogHolder } = await import(

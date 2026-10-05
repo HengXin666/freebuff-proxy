@@ -2,8 +2,7 @@
 
  * mock 上游的安装入口与路由
  *
- * 原 smoke.ts 用一句 globalThis.fetch 装了 619 行的 mock; 这里只留路由, 各端点实现搬进同目录模块. 必须在 harness/runtime.ts 之前调用, 否则建 server
-  * 时会打向真实上游.
+ * 只留路由, 各端点实现搬进同目录模块. 调用顺序: 必须先于 harness/runtime.ts, 使被测 server 走这份 mock.
  *
  * 由 test/suites/entries/smoke/smoke.ts 按职责机械切出. 口径: 纯搬移.
  */

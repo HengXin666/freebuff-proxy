@@ -1,23 +1,19 @@
 /**
  * 账号级 chat 并发信号量(公平 FIFO + 有界等待).
  *
- * 从 app-context.js 按职责切出. 它是纯并发原语, 不碰账号池状态, 因此单独
- * 成文件后可以独立测(见 test 里对 account_busy 的用例).
+ * 纯并发原语, 不碰账号池状态, 可独立测.
  *
- * 默认容量 1(一个账号同一时间只处理一个 chat, 避免上游会话不稳定时
- * 并发互相干扰/顶号); 可在控制台[负载均衡]调大(一个账号可同时转发多个
- * SSE 响应流, 实测同一 instanceId 支持并发 chat). timeoutMs=0 表示无限等待;
- * 持锁者受 streamIdleTimeoutSec / 各 HTTP 阶段超时约束, 无限等待在实际运行中
- * 是有上界的.
+ * 默认容量 1(一个账号同一时间只处理一个 chat); 可在控制台[负载均衡]调大
+ * (一个账号可同时转发多个 SSE 响应流). timeoutMs=0 表示无限等待;
+ * 持锁者受 streamIdleTimeoutSec / 各 HTTP 阶段超时约束.
  */
 import { UpstreamError } from '../../upstream/client.ts'
 
 /**
  * 账号级 chat 并发信号量(公平 FIFO + 有界等待).
  *
- * 默认容量 1(一个账号同一时间只处理一个 chat, 避免上游会话不稳定时并发互相
- * 干扰/顶号); 可在控制台[负载均衡]调大. timeoutMs=0 表示无限等待; 持锁者受
- * streamIdleTimeoutSec 约束, 无限等待在实际运行中是有上界的.
+ * 默认容量 1(一个账号同一时间只处理一个 chat); 可在控制台[负载均衡]调大.
+ * timeoutMs=0 表示无限等待; 持锁者受 streamIdleTimeoutSec 约束.
  */
 export class ChatMutex {
   /** 同一账号最大并发 chat 数(>=1). */

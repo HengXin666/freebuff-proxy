@@ -4,7 +4,7 @@
  *
  * 按 state.mockMode 复刻上游的各类拒绝(停摆 / 闸门 / 限流 / 封禁 / 容量 / 等候室 / 网络错)与流式回执.
  *
- * 按模式族拆成五个子函数, 因为原实现是单个 215 行的分支串, 超过函数长度上限.
+ * 按模式族拆成五个子函数.
  *
  * 由 test/suites/entries/smoke/smoke.ts 按职责机械切出. 口径: 纯搬移.
  */
@@ -96,8 +96,8 @@ if (
     { 'retry-after': '60' },
   )
 }
-// 上游 tool-schema 指纹拒:带 tools 一律 404 "No endpoints found"
-// (2026-09-18 线上实测原样复刻).去掉 tools 后放行 → 验证剥离重试.
+// 上游 tool-schema 指纹拒: 原样复刻线上回执, 带 tools 一律 404 "No endpoints found",
+// 去掉 tools 后放行.
 if (state.mockMode === 'tool_schema_reject' && Array.isArray(body.tools)) {
   return jsonRes(
     {
@@ -160,26 +160,17 @@ if (state.mockMode === 'capacity_all') {
 
 /** 等候室类: 428 等候室与同账号连续 gate 失败 / 网络层错误. */
 function waitingReply(body, headers) {
-  // compAuth 原本声明在 chat 分支的公共前缀里; 拆成子函数后必须在本函数内重建,
-  // 否则 gate_twice_a / network_err_a 两条分支会 ReferenceError.
+  // compAuth 在本函数内重建, gate_twice_a / network_err_a 两条分支都要用它.
   const compAuth =
     headers.Authorization ||
     headers.authorization ||
     headers['x-codebuff-api-key'] ||
     ''
 /**
- * - 428 waiting_room_required:首次 completion 返回它(其后放行).
+ * waiting_room_required(428): 首次 completion 返回它, 其后放行.
  *
- * 真实事故(远程 2026-10-04T18:52:34Z):
- * admit 200 扣 15 FB(余额 25→10)
- * chat  428 waiting_room_required
- * skip re-admit: freebucks cannot afford model  balance 10 < price 15  ← 卡在这
- * account cooling down  code=freebucks_exhausted
- * → 客户端 429
- *
- * 428 的正确处置是"带同一 instanceId 续用那一小时"(不产生新购买),
- * - 所以不得被"买不起下一个小时"拦下.这里顺带把余额扣到 10
- * (模拟 admit 已收费),让闸门在续用时必然判"买不起".
+ * 回执形态: admit 200 扣 15 余额 25→10, 紧接着 chat 428.
+ * 余额 10 < 单价 15, 让"买不起下一个小时"这道闸门在续用时必然命中.
  */
 if (state.mockMode === 'waiting_room_once' && state.completionAttempts === 1) {
   return jsonRes(

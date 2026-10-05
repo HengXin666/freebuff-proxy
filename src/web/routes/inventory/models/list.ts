@@ -2,7 +2,6 @@
  * models 域(清单侧):/api/models 与 /api/models/upstream.
  *
  * ! 这两个端点与 /v1/models(src/proxy.ts)必须同源:清单以上游
- * 目录行为准,额度/单价挂上去.此前这里从 rateLimitsByModel 反推清单
  * (只有 6 个键),于是额度满,未封禁的账号照样报"上游暂无可用模型".
  * 见 docs/reverse/19-catalog-is-the-model-list.md.
  *
@@ -41,7 +40,7 @@ function modelRow(row: any, quota: any, runtimes: any) {
     displayName: name,
     // catalogId 保留字段(旧消费方读它做反查);目录新增的模型没有
     // legacyDigests(如 Ling 3.1 Flash / Laguna S 2.1),此处为 null,
-    // 前端回落到 id 即可 ---- 不要因为它为空就丢掉整行.
+    // 前端回落到 id 即可, 不得因此丢掉整行.
     catalogId: catalogIdForKey(runtimes, key) || null,
     premium: row.premium === true,
     access: row.access ?? null,

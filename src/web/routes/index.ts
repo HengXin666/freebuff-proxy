@@ -2,7 +2,7 @@
  * 控制面路由总装.
  *
  * src/web/api.ts 只保留一个薄门面(export { createWebApi }),真正的
- * 实现搬到这里.为什么这样切:src/server.ts 只 import web/api.js 一处,
+ * 实现搬到这里(src/server.ts 只 import web/api.js 一处),
  * 门面能把"拆文件"这件事对外的契约面完全隐藏 ---- 不做的话,拆一次就得
  * 同步改 bin/,test/,文档三处引用.
  *
@@ -13,9 +13,6 @@
  *   4. 已认证域按域组顺序尝试,各自返回"是否已处理";
  *   5. 全不认 -> 404.
  *
- * 为什么用"域返回 boolean"而不是一张路由表:每条路由都有自己的 body 解析,
- * 权限,错误分支,硬塞进表里只会把每个域写成 switch.域内部自己判断更清楚,
- * 且"未处理"是显式的(返回 false),不会出现"以为注册了其实没接上".
  */
 import { sendJson, parseCookies } from '../../util/http.ts'
 import { requestSlotStats } from '../../proxy.ts'
@@ -32,10 +29,6 @@ const DOMAIN_GROUPS = [CONTROL_DOMAINS, INVENTORY_DOMAINS]
 /**
  * 组装路由上下文 ---- 把实现里用到的一切依赖收成一个对象.
  *
- * 显式列出(而不是把 deps 整个摊开)的理由:域文件里出现 ctx.xxx 时,
- * 必须能在这张表里找到它;反过来,一个域偷偷用上没登记的依赖会立刻报
- * undefined,而不是等到运行时才发现.只登记真被消费的项 ----
- * 登记了没人用与用了没登记是同一类错误(前者让读者以为存在这条依赖).
  *
  * @param {any} deps createWebApi 的依赖
  * @returns {any} 路由上下文
@@ -52,7 +45,6 @@ function buildContext(deps: any) {
     settingsStore: deps.settingsStore,
     modelStore: deps.modelStore,
     restart: deps.restart,
-    // 通用工具靠注入(而不是各域自己 import 一份),域测试可以换实现
     readJson,
     parseCookies,
     requestSlotStats,

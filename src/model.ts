@@ -11,20 +11,17 @@
  * Wire ids match Freebuff/Codebuff clients (no local aliases).
  *
  * 本文件是薄门面(barrel):实现已按职责拆进 ./model/ --
- *   catalog-store.js  内置/缓存 catalog 载入与合并(唯一有磁盘 IO 的一层)
- *   agents.js         agent 推导 + agent 索引 + 目录名单一真源
- *   flags.js          isFreeModel / isPremiumModel(档位判定)
- *   list-response.js  /v1/models 清单构建 + isModelAllowed
- *   sync.js           运行时 catalog 自动同步入口
+ *   catalog-store.ts  内置/缓存 catalog 载入与合并(唯一有磁盘 IO 的一层)
+ *   agents.ts         agent 推导 + agent 索引 + 目录名单一真源
+ *   flags.ts          isFreeModel / isPremiumModel(档位判定)
+ *   list-response.ts  /v1/models 清单构建 + isModelAllowed
+ *   sync.ts           运行时 catalog 自动同步入口
  *
  * 依赖方向严格单向:catalog-store <- agents <- list-response,无环.
  * 保留原路径与全部原有导出名,既有 import 点一处都不用改.
  *
- * 惰性加载的必要性(实测,Node v26.10.0):本模块若在顶层读 catalog 缓存并建
- * 多张索引表,同进程内 catalog-models.ts 产出的对象会静默丢字段
- * (freebucks_per_hour 等变 null,连 JSON.stringify 都拿不到),而单独导入
- * catalog-models.ts 则完全正常 -- 与导入顺序无关,只要本模块被求值就会触发.
- * 改成惰性后两种模块共存时行为一致.
+ * catalog 缓存按需惰性读取: 不在模块顶层读盘并建索引表, 避免与
+ * catalog-models.ts 共存时后者产出对象的字段丢失.
  */
 export {
   CATALOG_CACHE_FILENAME,

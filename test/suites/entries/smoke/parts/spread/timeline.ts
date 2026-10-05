@@ -55,7 +55,7 @@ import path from 'node:path'
   assert.ok(tsRow4.scheduledMs >= 1000, `重启后累计调度时长应保留, got ${tsRow4.scheduledMs}`)
   assert.ok(tsRow4.importedAt, '重启后导入时间应保留')
   assert.ok(tsRow4.credentialUpdatedAt, '重启后凭证更新时间应保留')
-  // 起算点必须被清掉(上一进程已死,否则会显示假的"本轮运行 3 天")
+  // 起算点必须被清掉: 上一进程的起算点会让界面显示假的"本轮运行 3 天"
   assert.equal(tsRow4.schedulingSince, null, '重启后不应残留本轮起算点')
   await tsRuntimes2.shutdown()
   await tsRuntimes.shutdown()
@@ -105,7 +105,7 @@ import path from 'node:path'
   assert.equal(e1.status, 200, await e1.clone().text())
   assert.equal(state.sessionPosts, 1)
   assert.equal(e1.headers.get('x-freebuff-proxy-account'), 'ea@example.com')
-  // 多账号场景:近过期会话在同一账号 re-admit 续期,而不是换到 eb 新建 session
+  // 多账号场景: 近过期会话在同一账号 re-admit 续期, 不换到 eb 新建 session
   const e2 = await expChat()
   assert.equal(e2.status, 200, await e2.clone().text())
   assert.equal(state.sessionPosts, 2, `近过期会话应提前 re-admit, got ${state.sessionPosts}`)

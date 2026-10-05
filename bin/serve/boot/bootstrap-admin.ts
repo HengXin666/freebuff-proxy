@@ -1,9 +1,6 @@
 /**
  * 首次启动的管理员引导(或 env 驱动的密码轮换) -- 从 bin/serve.ts 按职责切出.
  *
- * 为什么切出来: 这段有 56 行的分支与文案(密码来源判定 / 三种日志形态 /
- * 找回提示), 占满了启动编排的阅读窗口, 而它与启动流程的其它部分零耦合.
- * 单独成文件后, "管理员密码从哪来, 怎么找回" 这份说明可以独立阅读.
  *
  * 口径: 纯搬移, 不改行为, 不改任何一行用户可见文案.
  */
@@ -17,7 +14,7 @@ import { logger } from '../../../src/util/log.ts'
  * 密码来源:env(ADMIN_PASSWORD) / users.default_admin_password(config.yaml) /
  * generated(随机,仅首次启动打印一次).issue #9:旧日志只说
  * "password from env",用户既不知道密码是什么,也分不清是不是 env 生效,
- * 只能干瞪眼看不出"管理员无法登录"的原因--这里必须把来源和找回方式写清楚.
+ * 这里必须写清凭据来源与找回方式.
  * @param {any} userStore 用户库
  * @param {any} config 配置
  * @param {string} dataDir 数据目录

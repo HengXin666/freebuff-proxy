@@ -1,12 +1,9 @@
 /**
  * 由 src/proxy.ts 搬出的路由处理器 -- 见 docs/code-quality 的拆分记录.
  *
- * 为什么搬出来: createProxyHandler 原本是 2109 行的单函数闭包, 读它的人得同时
- * 装下选号 / 会话 / 流式 / 错误映射 / 白名单五套逻辑. 这些处理器之间没有共享的
- * 可变状态, 只有对 config / runtimes / userStore / settingsStore 的读取,
- * 所以它们可以整体搬出, 用显式的 ctx 参数接依赖.
- *
- * 口径: 搬移是纯搬移, 不改任何行为. 每个函数的 JSDoc 原样保留.
+ * 这些处理器之间无共享可变状态, 只有对 config / runtimes / userStore /
+ * settingsStore 的读取, 依赖通过显式 ctx 参数传入.
+ * 每个函数的 JSDoc 原样保留.
  */
 
 import { buildCatalogDrivenModelsResponse } from '../../catalog-models.ts'
@@ -106,11 +103,7 @@ export async function handleModels(ctx: any, res: any) {
 }
 
 /**
- * /v1/freebuff/status -- 纯本地快照, 不发任何上游请求.
- *
- * 以前这里会 GET /api/v1/me: 客户端 165 条抓包里该端点出现 0 次
- * (见 docs/reverse/20 20.2), 是我们凭空多出来的流量. 删掉后,
- * 状态接口只读本地账号/会话快照.
+ * /v1/freebuff/status -- 纯本地快照, 不发任何上游请求(见 docs/reverse/20 §20.2).
  * @param {object} ctx 依赖集合
  * @param {object} res 响应对象
  * @returns {Promise<void>} 无返回
@@ -139,9 +132,8 @@ export async function handleStatus(ctx: any, res: any) {
  * 目录行的全部可寻址口径(目录 key + 可读显示名),供白名单判定.
  *
  * 客户端可能照着 /v1/models 的可读名填,也可能用我们透出的 freebuff_key.
- * 两个都收.不设缓存 ---- 此前这里有 60s 缓存,制造过一个真实事故:
- * 服务刚启动时目录尚未加载,那一刻缓存了空数组,于是 60 秒内所有模型都被
- * model_not_allowed 拒掉(用户客户端配的是目录 key,直接报 400).
+ * 两个都收, 不设缓存: 启动时目录尚未加载, 缓存空数组会让一段时间内所有模型
+ * 都被 model_not_allowed 拒掉.
  *
  * @param {object} ctx 依赖集合(含 runtimes)
  * @returns {string[]} 可寻址的模型标识

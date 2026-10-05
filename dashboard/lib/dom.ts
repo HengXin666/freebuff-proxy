@@ -1,9 +1,6 @@
 /**
  - DOM 小工具 + SVG 图标库(零依赖,不用文本 emoji).
  *
- - 为什么单独成文件:el() 是整个前端被调用最多的函数(500+ 次),而它里面
- - 有一条踩过事故的判据(HTML 片段会吞掉兄弟节点,见函数内注释).把这种
- - 带血泪的规则和控制器代码混在一个 4000 行文件里,下一个人一定会绕过它.
  */
 export const $ = (sel: string, root: any = document): any => root.querySelector(sel)
 export const el = (tag: string, attrs: Record<string, any> = {}, children: any = []) => {
@@ -21,11 +18,9 @@ export const el = (tag: string, attrs: Record<string, any> = {}, children: any =
     } else if (typeof c === 'string' && c.trimStart().startsWith('<')) {
       // 字符串以 < 开头视为 HTML 片段(图标 SVG 等内部受控内容)直接注入;
       // 其余字符串一律 createTextNode 安全转义(用户输入/API 返回不会以 < 开头).
-      //
       // 警告:现成节点请直接塞进 children,不要这里拼 HTML 字符串.
       // 该分支走的是 HTML 片段解析(insertAdjacentHTML),会把手写的 SVG 片段
       // 当成 HTML 解析:没写自闭合斜杠的形状标签(<circle ...>)会吞掉后面的
-      // 兄弟节点,多个图标因此并成一个,后续内容整段不渲染(历史故障).
       // 图标请一律用 icon(),它已经统一补好自闭合斜杠.
       // 新增图标若忘了写斜杠,这里给开发者留一条可见的线索.
       if (/<(rect|circle|ellipse|line|polyline|polygon)[^<>]*[^/]>/i.test(c)) {

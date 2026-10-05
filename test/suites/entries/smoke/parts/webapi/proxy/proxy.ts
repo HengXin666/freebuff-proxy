@@ -91,7 +91,7 @@ assert.ok(ptj2.results[0].error)
   assert.equal(j.interrupted, false, '无在途流时不应标记为中断')
   assert.equal(sm.getSnapshot().status, 'none', '关闭后该账号应无活跃会话')
 
-  // 上游一直删不掉 → ok=false + 带原因,且句柄保留(不得静默丢弃)
+  // 上游一直删不掉 → ok=false + 带错误码, 且句柄保留(不静默丢弃)
   await sm.ensureSession('deepseek/deepseek-v4-flash')
   state.deleteFailuresLeft = 99
   const bad = await fetch(`http://127.0.0.1:${wport}/api/accounts/w/session`, {

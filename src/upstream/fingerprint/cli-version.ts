@@ -1,10 +1,8 @@
 /**
  - 进程内生效的 CLI 版本号  --  启动时兜底值, 在线对齐 npm 最新版.
  *
- * 为什么单独成文件: 原 official-fingerprint.ts 569 行超 300 红线. 这里是一个
- * 可变的进程级状态(activeCliVersion)加一个 best-effort 网络刷新, 与其余全是
- * 常量的指纹内容性质不同: 它是少数会随时间自己变化的东西, 单独放着才不会让
- * "哪些值会漂"变得难查.
+ * 内容: 可变的进程级状态(activeCliVersion)加一个 best-effort 网络刷新----
+ * 它是少数会随时间自己变化的指纹值, 单独放着便于查"哪些值会漂".
  */
 import { KNOWN_CLI_VERSION } from './ua.ts'
 
@@ -37,9 +35,8 @@ export function setCliVersion(version: any) {
 /**
  * 从 npm registry 对齐官方 CLI 的最新版本号(best-effort).
  *
- * 为什么值得做:UA 里的版本号是上游判断[这是不是官方客户端]的一部分指纹,写死一个
- * 过时值(旧实现是 1.0.0)长期看本身就是破绽.拿不到就保留现值 ---- 绝不因为一次
- * 网络失败影响代理可用性.
+ * UA 里的版本号是上游判断[这是不是官方客户端]的一部分指纹, 写死一个过时值
+ * 长期看本身就是破绽.拿不到就保留现值, 网络失败不影响代理可用性.
  *
  * @param {{ fetchImpl?: typeof fetch, timeoutMs?: number }} [opts]
  * @returns {Promise<string>} 生效的版本号

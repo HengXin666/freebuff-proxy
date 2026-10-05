@@ -1,7 +1,7 @@
 /**
  * refund: 上游 401 的真值
  *
- * 401 的原始回执与映射后的原因码.
+ * 401 的真值回执与映射后的错误码.
  *
  * 由 test/suites/entries/smoke/smoke.ts 按职责机械切出. 口径: 纯搬移.
  */
@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 {
   const origFetch = globalThis.fetch
   /**
-   * 上游 401 的真值(2026-10-04 单变量对照实测):
+   * 上游 401 的真值:
    * 无效 token → 401 {"error":"unauthorized","message":"Invalid API key"}
    * 无 token   → 401 {"error":"unauthorized","message":"Missing or invalid Authorization header"}
    */
@@ -37,9 +37,9 @@ import assert from 'node:assert/strict'
   assert.ok(caught, '401 必须抛出（不得被当成成功回执吞掉）')
   assert.equal(caught.status, 401)
   /**
-   * - 以前 code 直接取 body.error = unauthorized.控制台 probeReason()
-   * - 用宽匹配 includes('unauthorized') 命中[凭证无效],把网络/出口类 401
-   * 也判成凭证失效.归一成 auth_unauthorized 后前端才能精确命中并给出处置.
+   * - code 必须归一成 auth_unauthorized: 直接取 body.error = unauthorized 时,
+   * - 前端 probeReason() 的宽匹配 includes('unauthorized') 会把网络/出口类 401
+   * 也判成凭证失效.
    */
   assert.equal(
     caught.code,

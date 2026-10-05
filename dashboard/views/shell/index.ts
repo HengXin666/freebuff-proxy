@@ -11,7 +11,6 @@ import { renderSystem } from '../system/index.ts'
 import { renderUsers } from '../users/index.ts'
 import { need } from '../../lib/boot/hooks.ts'
 
-
 /* ---------------- render ---------------- */
 /**
  - 路由渲染(标准 SPA):
@@ -28,7 +27,6 @@ export async function render(opts = {}) {
   }
   const route = (location.hash || '#overview').slice(1) || 'overview'
   // 骨架已存在且登录态没变 → 只更新内容区(标准 SPA 行为)
-  //
   //  force=true(切换语言时用):连 header / nav 一起重建.
   // 否则顶栏与导航会保留切换前的语言(它们不在这次重渲染范围内),
   // 表现就是"内容变了,顶栏没变",用户只能手动刷新页面.
@@ -120,12 +118,7 @@ function renderHeader() {
 
 /** 版本号徽章 + GitHub 仓库链接(版本号由发版流水线硬编码进 version.json) */
 /**
- - 顶栏语言切换器:下拉菜单(select),显式限宽以免撑开顶栏.
  *
- - 为什么必须限宽:原生 select 未显式设 width 时会按最长 option 撑开
- - ("简体中文" 远比 "EN" 宽),实测能把顶栏顶出一条 780px 的宽条 ----
- - 与相邻 56px 的按钮完全不协调(用户反馈过"选项栏变得非常宽").
- - 这里用 .locale-select { width: 72px } 钉死.
  *
  - 切换后 render({ force: true }) 连 header/nav 一起重建:只更新内容区的话
  - 顶栏与导航会留着切换前的语言(表现为"内容变了,顶栏没变",只能手动刷新).

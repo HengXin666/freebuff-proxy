@@ -1,7 +1,7 @@
 /**
  * refund: 突发请求与全池买不起
  *
- * 13 个并发请求的真实事故; 全池买不起时不得白轮 maxAttempts.
+ * 13 个并发请求的场景; 全池买不起时不得白轮 maxAttempts.
  *
  * 由 test/suites/entries/smoke/smoke.ts 按职责机械切出. 口径: 纯搬移.
  */
@@ -19,16 +19,10 @@ import path from 'node:path'
    ================================================================ */
 {
   /**
-   * 真实事故(远程日志 2026-10-04 14:01:47-14:02:00):
-   * 13 个客户端请求,每个都白轮 3 次(maxAttempts),每次都要遍历全部账号查额度.
-   * 每轮都刷几十条日志 ---- 13 个请求就把 500 条环形缓冲冲爆,
-   * - 用户事后查不到更早的排障记录.
+   * 场景: 13 个客户端请求, 每个都要遍历全部账号查额度, 每轮刷数十条日志.
    *
-   * - 根因:所有账号都买不起时抛的是单账号级 freebucks_exhausted,
-   * - 而 429 被 shouldSwitchAccountOnError 判成"该换号" → 再轮一遍.
-   * - 但"全池都买不起"是遍历完才得出的聚合结论,换号不可能改变它.
-   *
-   * - 反向探针:去掉 terminalExhausted: true 后本用例必须变红.
+   * - 判据: 单位级断言 freebucksFor 对"余额 0 + 单价 15"判买不起, 且 reason
+   * - 是 daily_exhausted(聚合终态的判据来源).
    */
   const calls = []
   const up = {
@@ -54,14 +48,8 @@ import path from 'node:path'
    ================================================================ */
 {
   /**
-   * 这是对"为什么白轮 maxAttempts 轮"的直接回归:
-   *
-   * - 旧行为:全池都买不起时抛单账号级 freebucks_exhausted,外层
-   * - shouldSwitchAccountOnError(429, ...) 判成"该换号" → 再轮一遍全部账号.
-   * 实测远程 13 个请求各白轮 3 次,日志被冲爆(用户事后查不到更早记录).
-   *
-   * - 修复:这种"遍历完才得出的聚合结论"带 terminalExhausted: true,
-   * - 外层 isTerminal 立即返回.
+   * 本用例断言: 全池都买不起时抛出的错误带 terminalExhausted(外层据此一次收场),
+   * 不按"该换号"再轮一遍全部账号.
    *
    * - 反向探针:删掉 app-context 里的 terminalExhausted: true → 本断言必须红.
    */

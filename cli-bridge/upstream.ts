@@ -1,11 +1,6 @@
 /**
  * upstream.ts -- 在 bun 里执行的上游请求层(入口).
  *
- * 为什么必须跑在 bun 里:TLS 指纹.
- * 官方客户端的 orchestrator 就是 bun 跑的(resources/bun/bun 1.4.2),
- * 用同一个运行时发请求,Client Hello 与官方同源 -- 这是对齐而不是伪装.
- * (实测 Node 52 ciphers / bun 17 ciphers,JA3 可区分,见
- *   ../freebuff-proxy/docs/reverse/11-tls-fingerprint.md)
  *
  * 协议件全部逐字对齐官方 orchestrator.js:
  *   设备签名 Ed25519 / catalog 协议 / base3-free-catalog /

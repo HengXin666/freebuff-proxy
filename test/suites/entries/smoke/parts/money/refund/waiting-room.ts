@@ -13,20 +13,11 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 
 /**
- * - (8) 最终失败时不再早退释放(2026-10-04 按真实计费机制改写).
+ * - (8) 最终失败时也不早退释放: 断言 sessionDeletes === 0.
  *
- * 旧断言:[最终失败也必须早退释放会话(不再等空闲释放 / 挂到过期白扣时长)]
- * - → sessionDeletes >= 1.
- *
- * - 前提已被实测证伪:Freebucks 是买断制(POST 当场扣整小时单价),
- * - 早退 DELETE 不退钱(只回 freebucksRefundPending,观察 2 分钟未到账).
- * - 所以"早退"不是"省时长",而是把已付的那一小时直接扔掉.
- *
- * 真实事故:远程 428 后 re-admit(先 DELETE 再 admit)→ 钱花了,货退了,
- * 新的买不起 → 用户看到[请求完积分变零还失败].
- *
- * - 新行为:付费时段内保留会话(下一跳还能续用).本段 mock 的会话是
- * - +1 小时,所以 sessionDeletes === 0.
+ * Freebucks 是买断制(POST 当场扣整小时单价), 早退 DELETE 不退钱
+ * (只回 freebucksRefundPending). 付费时段内保留的会话下一跳还能续用.
+ * 本段 mock 的会话是 +1 小时.
  */
 state.mockFreebucks = null
 for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
@@ -56,14 +47,7 @@ state.completionAttempts = 0
    全池额度耗尽 = 终态(单元级:直接验 _acquireForModelUnlocked 的抛出物)
    --------------------------------------------------------------- */
 /**
- * 真实事故(远程日志 2026-10-04 14:01:47-14:02:00):13 个客户端请求,
- * 每个都白轮 3 次(maxAttempts),每次都要遍历全部账号查额度 ----
- * 每轮刷几十条日志,13 个请求就把 500 条环形缓冲冲爆,
- * - 用户事后查不到更早的排障记录.
- *
- * - 根因:全池都买不起时抛的是单账号级 freebucks_exhausted,
- * - 而 429 被 shouldSwitchAccountOnError 判成"该换号" → 再轮一遍.
- * - 但"全池都买不起"是遍历完才得出的聚合结论,换号不可能改变它.
+ * 判据: 全池都买不起时外层必须一次收场, 不反复换号重试(每轮都要遍历全部账号查额度).
  *
  * 判据(单元级,直接看抛出的错误对象):
  * - err.terminalExhausted === true → 外层 isTerminal 会立即返回.
@@ -90,31 +74,21 @@ state.completionAttempts = 0
 
 state.mockMode = 'ok'
 state.mockFreebucks = null
-// (3.4) 428 waiting_room_required 不得被额度闸门拦死(2026-10-05 真实事故)
+// (3.4) 428 waiting_room_required 不得被额度闸门拦死
 //
-// 远程日志(2026-10-04T18:52:34Z, 账号 llh282000500):
-//   admit        200   active  扣 15 FB(余额 25→10)
-//   agent-runs   200
-//   chat         428   waiting_room_required
-//   skip re-admit: freebucks cannot afford model   balance 10 < price 15
-//   account cooling down  code=freebucks_exhausted
-//   随后每个请求都 429 → 客户端 dsh 拿到[Upstream rate limit exceeded]
-//
-// 根因:waiting_room_required 的正确处置是 readmitToContinue()
-// (带同一 instanceId + purchase-continuity 续用已买断的那一小时,
-// 不产生任何新的购买).既然不花钱,"余额买不起下一个小时"就与它无关.
-// 而代码里 428 的判断排在两道额度闸门之后 → 续用被"买不起"拦死 →
-// 冷却该号 + 已付的一小时白扔.
+// 该回执形态: admit 200 active 扣 15 FB(余额 25→10), agent-runs 200,
+// 紧接着 chat 428. 428 的正确处置是 readmitToContinue() ----
+// 带同一 instanceId + purchase-continuity 续用已买断的那一小时, 不产生任何
+// 新的购买, 所以"余额买不起下一个小时"这道闸门不适用于它.
 //
 // 判据(可证伪):
 //   ① 客户端最终拿到 200,且始终由同一个账号承接(没被换号);
 //   ② 续用绝不 DELETE 已买断的那一小时(sessionDeletes === 0);
-//   ③ 参与本次请求的账号没有被冷却(旧行为在此冷却成 freebucks_exhausted).
+//   ③ 参与本次请求的账号没有被冷却.
 //
-//  反向探针(已实测):把 app-context 里 428 那段挪回两道闸门之后 →
-//    ③ 立即变红(a 不得因 428 续用被冷却(旧行为:code=freebucks_exhausted)).
-//    ①里的"同一账号"断言是配套的护栏:旧顺序下客户端靠换号仍可能拿到
-//    200,只看状态码会把"钱花了 + 号被冷却"整个漏掉.
+//  反向探针:把 app-context 里 428 那段挪到两道闸门之后 →
+//    ③ 立即变红(a 不得因 428 续用被冷却).①里的"同一账号"断言是配套护栏:
+//    只换号的情况下客户端仍可能拿到 200, 只看状态码会漏掉"号被冷却".
 for (const key of ['a', 'b', 'c']) fbRuntimes.clearCooldown(key)
 for (const key of ['a', 'b', 'c']) {
   await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})
@@ -124,7 +98,7 @@ state.mockFreebucks = {
   daily: { limit: 25, spent: 0, remaining: 25, resetAt: new Date(Date.now() + 6 * 3600_000).toISOString() },
   wallet: { balance: 0, monthlyBonus: 0, nextBonusAt: null },
   // 单价 15:admit 后余额被扣到 10(mock 在 428 分支里同步),
-  // 于是续用时两道闸门必然判"买不起"----这正是旧顺序被拦死的条件.
+  // 于是续用时两道闸门必然判"买不起".
   prices: { 'deepseek/deepseek-v4-flash': 15 },
 }
 state.mockMode = 'waiting_room_once'

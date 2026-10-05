@@ -94,7 +94,7 @@ export const RETIRED_HEADERS = [
 ]
 
 // ── 常量值 ──────────────────────────────────────────────────────────────
-/** 官方客户端 bun 的 UA(抓包实测,勿用 CLI 侧历史值 1.3.14). */
+/** 官方客户端 bun 的 UA(抓包真值;CLI 侧的 1.3.14 是另一条通道的值). */
 export const OFFICIAL_BUN_UA = 'Bun/1.4.2'
 export const CATALOG_PROTOCOL_VERSION = '1'
 export const CLIENT_DESKTOP = 'desktop'

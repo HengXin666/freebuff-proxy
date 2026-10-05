@@ -1,12 +1,11 @@
 /**
  * 目录协议的常量与头名真值 -- 从 catalog-protocol.js 按职责切出.
  *
- * 为什么单独成文件: 真源文件 catalog-protocol.js 里的 CatalogHolder 与本目录
- * 下的 parse / fetch / views 都要用这些常量. 如果它们留在真源文件里, 就会
- * 形成 catalog-protocol.js 到 parse.ts 再到 catalog-protocol.js 的循环 import.
- * 切出来之后依赖是单向的: constants <- {parse, fetch, views} <- catalog-protocol.
+ * 真源文件 catalog-protocol.js 里的 CatalogHolder 与本目录下的 parse / fetch /
+ * views 都要用这些常量. 切出来之后依赖是单向的:
+ * constants <- {parse, fetch, views} <- catalog-protocol.
  *
- * 口径: 纯搬移. 真源文件仍然 re-export 这些名字, 外部消费者无需改动.
+ * 真源文件仍 re-export 这些名字, 外部消费者无需改动.
  */
 
 /** 官方常量真值(common/src/types/freebuff-model-catalog.ts). */

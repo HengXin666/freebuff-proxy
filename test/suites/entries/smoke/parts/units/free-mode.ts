@@ -90,13 +90,13 @@ import assert from 'node:assert/strict'
   assert.equal(signedTools.length, 1 + FREEBUFF_SIGNATURE_TOOL_NAMES.length)
   assert.ok(signedTools[1].function.name === FREEBUFF_SIGNATURE_TOOL_NAME)
   // 主签名工具必须带非空 schema ---- 上游判据要求签名工具[名字 + 真实参数]双真,
-  // 零参数工具永远不算签名(旧实现注入空心 end_turn 正是被上游点名的洗白形态).
+  // 零参数工具不算签名(注入空心 end_turn 正是被上游点名的洗白形态).
   assert.ok(
     signedTools[1].function.parameters &&
       Object.keys(signedTools[1].function.parameters.properties || {}).length > 0,
     '主签名工具必须带非空参数 schema',
   )
-  // 每个注入的工具都必须被上游判据认可为[货真价实],否则等于没注入.
+  // 每个注入的工具都必须被上游判据认可为[货真价实].
   for (const def of FREEBUFF_SIGNATURE_TOOL_DEFINITIONS) {
     assert.ok(
       isGenuineSignatureTool({

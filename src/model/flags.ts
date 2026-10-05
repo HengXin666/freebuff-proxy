@@ -1,11 +1,9 @@
 /**
  * 模型计费档位判定(免费 / 收费).
  *
- * 依赖方向:本文件 -> catalog-store.ts.刻意不依赖 list-response.ts,
- * 否则 list-response(需要 isPremiumModel)会与本文件形成循环 import.
+ * 依赖方向:本文件 -> catalog-store.ts.不依赖 list-response.ts,
+ * 避免与需要 isPremiumModel 的 list-response 形成循环 import.
  * 判据与 FREEBUFF_AVAILABLE_MODELS 的投影等价(catalog 行缺失时 pool 默认 daily).
- *
- * 从 src/model.ts 拆出(原 758 行单文件).
  */
 import { catalogModels } from './catalog-store.ts'
 

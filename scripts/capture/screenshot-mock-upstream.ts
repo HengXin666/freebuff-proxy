@@ -69,7 +69,6 @@ const ACCOUNTS = {
     name: 'alice',
     active: true,
     session: { model: 'deepseek/deepseek-v4-flash', remainingMs: 41 * 60_000 },
-    // 余额 >= flash 单价(25) → 买得起,归[正在调度]而不是[额度不足]
     freebucks: { dailyRemaining: 25, dailyLimit: 25, balance: 25 },
   },
   'tok-bob': {
@@ -134,8 +133,6 @@ function sessionPayload(acct) {
       resetTimeZone: 'America/Los_Angeles',
       prices: PRICES,
     },
-    //  用目录 key(m-demo000x)而不是可读 id ---- 真实上游回执就是这个口径.
-    // 控制台必须靠目录把它换算成模型名,否则渲染成裸 key(这正是要展示的修复点).
     rateLimitsByModel: {
       'm-demo0001': rateLimitFor('deepseek/deepseek-v4-flash'),
       'm-demo0002': rateLimitFor('mimo/mimo-v2.5'),

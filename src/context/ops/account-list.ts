@@ -2,9 +2,9 @@
  * 控制台账号列表: 每行把账本(生命周期/时间轴/退款), 运行时(会话/额度),
  * 调度状态(负载/预留)合成一份只读视图.
  *
- * 从 app-context.js 按职责切出. 它与 candidateKeys 是同一个账号池的两种视角:
- * 这边给人看, 那边给调度用. 两边必须用同一套判据(available / banned /
- * unavailable), 因此分档逻辑集中在这里, 调度侧只取冷却状态.
+ * 它与 candidateKeys 是同一个账号池的两种视角: 这边给人看, 那边给调度用.
+ * 两边使用同一套判据(available / banned / unavailable), 因此分档逻辑集中在这里,
+ * 调度侧只取冷却状态.
  */
 import { listAccounts } from '../../auth-store.ts'
 import {
@@ -15,9 +15,8 @@ import {
 /**
  * 该账号当前会话的展示视图(控制台账号行的 session 字段).
  *
- * 从 buildAccountRow 抽出(原对象字面量里的 session 段 42 行). 这一段的每个字段
- * 都对应一个前端判定: expiresAt 供付费时段判定, inPaidWindow 供"这一小时已买给
- * 哪个模型"标注, inventory 供跨部署可见的会话清单.
+ * 每个字段都对应一个前端判定: expiresAt 供付费时段判定, inPaidWindow 供"这一小时
+ * 已买给哪个模型"标注, inventory 供跨部署可见的会话清单.
  * @param {any} self 账号池(runtimes)
  * @param {any} rt 账号 runtime(可能未创建)
  * @param {any} snap 会话快照(getSnapshot 的结果)
@@ -43,24 +42,19 @@ function sessionViewOf(self: any, rt: any, snap: any): any {
     expiresAt: snap.expiresAt || null,
     admittedAt: snap.admittedAt || null,
     /**
-     *  仍在这一小时已付费时段内.
+     * 仍在这一小时已付费时段内.
      *
-     * 控制台此前只暴露 status/live/expiresAt,于是这条会话显示成
-     * "正常" ---- 但它只服务于它绑定的那个模型,换任何别的模型
-     * 都会被拒(实测 purchase_claim_released,且接不回来).
-     *
-     * 带上这个布尔,前端才能在账号行上如实标注"这一小时已买给
-     * 模型 X",而不是让用户对着 status=ok 去查一个根本没坏的东西.
+     * 这条会话只服务于它绑定的那个模型, 换任何别的模型都会被拒.
+     * 带上这个布尔, 前端才能在账号行上如实标注"这一小时已买给模型 X".
      * 判不出来的会话(无 expiresAt)返回 false = 不标注.
      */
     inPaidWindow: rt?.sessions?.inPaidWindow?.() === true,
     /**
-     *  上游的会话清单(跨部署可见)---- 用户诉求:[即便分布式部署,
-     * 你在本地建的会话,我在远程也能读到].
+     * 上游的会话清单(跨部署可见).
      *
      * 数据来自 GET /session 回执的 desktopPurchases /
      * desktopSessionCounts(每次 admit/refresh 都会随回执刷新).
-     * 前端据此显示"哪个模型被谁占着,什么时候到期".
+     * 前端据此显示"哪个模型被谁占着, 什么时候到期".
      */
     inventory: snap.inventory || null,
   }
@@ -70,8 +64,7 @@ function sessionViewOf(self: any, rt: any, snap: any): any {
 /**
  * 把单个账号的账本/运行时/调度状态合成列表行.
  *
- * 从 list 的 map 回调抽出(原回调 131 行): 一行要合并三处来源(持久化账本,
- * 运行时快照, 调度锁), 抽出来之后 list 只剩"取账号 -> 逐行构建".
+ * 一行要合并三处来源(持久化账本, 运行时快照, 调度锁).
  * @param {any} this 账号池(runtimes)
  * @param {any} self 账号池(runtimes)
  * @param {any} a 凭据行({ key, email, ... })
@@ -136,7 +129,7 @@ reserved: self.reservedCount(a.key),
 effectiveLoad: (chatLock?.inFlight || 0) + self.reservedCount(a.key),
 concurrency: chatLock?.capacity || self._accountConcurrency(),
 effectiveProxy: rt?.effectiveProxy || null,
-// 最近一次探测结果(为什么刷新失败).
+// 最近一次探测结果.
 lastProbe: snap?.lastProbe || null,
     session: sessionViewOf(self, rt, snap),
 quota: snap?.quota || null,

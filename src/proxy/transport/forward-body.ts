@@ -1,11 +1,7 @@
 /**
- * 构造发往上游的 chat 请求体 -- 从 src/proxy.ts 搬出.
+ * 构造发往上游的 chat 请求体.
  *
- * 它是一个纯函数式的组装器: 输入客户端体与一批上下文值, 输出上游形态的 body.
- * 搬出来的原因是它 171 行, 而 createProxyHandler 那 2000 行闭包读起来时
- * "客户端体怎么变成上游体"这段总是要单独跳出去看.
- *
- * 口径: 纯搬移, 行为零改动.
+ * 纯函数式组装器: 输入客户端体与一批上下文值, 输出上游形态的 body.
  */
 
 import { generateClientId, newIds } from '../../util/http.ts'
@@ -76,7 +72,7 @@ export function buildForwardBody(
     model: outgoingModel,
   })
   // Hermes 的 delegate_task 命中上游 foreign_tool_names.只在客户端实际声明
-  // 该工具时做窄范围双向别名;历史 tool_calls/tool message/tool_choice 同步改名,
+  // 该工具时做窄范围双向别名;已有 tool_calls/tool message/tool_choice 同步改名,
   // 回程再恢复原名,避免破坏 Hermes 的硬编码派发.见 issue #17 与:
   // .agents/notes/implemented/bug-fix/2026-09-19-hermes-delegate-task-alias.md
   body = rewriteHermesDelegateForUpstream(body, hermesDelegateAlias)
@@ -110,10 +106,9 @@ export function buildForwardBody(
     // 用 base3 规范开场(对齐 trefeon PR #207).
     body.messages = ensureFreebuffSystemMessages(body.messages, agentId)
   }
-  // 补齐官方真签名工具(名字 + 真实参数 schema),否则上游把请求判成
-  // 第三方客户端并降级到 inclusionai/ling-3.0-tiny:free ---- 其 slug 不可路由时
-  // 以 404 失败,下游桥接层再崩成 502 空体,即 issue#15[所有模型空响应].
-  // 判据与实测见
+  // 补齐官方真签名工具(名字 + 真实参数 schema): 缺它上游会把请求判成
+  // 第三方客户端并降级, 其 slug 不可路由时以 404 失败.
+  // 判据与对照见
   // .agents/notes/implemented/bug-fix/2026-09-19-genuine-tool-signature.md
   //  必须 ?.get()?.:只写 ?.get(). 时,ctx.settingsStore 存在而 get() 返回
   // undefined(store 尚未就绪/读盘降级)会抛 TypeError,直接打断带工具的
@@ -126,9 +121,9 @@ export function buildForwardBody(
       freeToolSignatureEnabled,
     )
   }
-  // 可观测性:把[上游会怎么看这个工具集]算出来记进日志.判定权永远在上游,
+  // 可观测性:把[上游会怎么看这个工具集]算出来记进日志.判定权在上游,
   // 本地算这份只为让[正在被降级]在出问题时能被看见(上游不回明确错误,
-  // 症状只是回答变差或 404/502,不主动暴露原因).
+  // 症状只是回答变差或 404/502).
   //
   // isRootAgent 恒为 true:本代理转发的一律是 root agent(base2-free* /
   // base3-free-*,见 model.agentIdForModel),而该参数只影响[无工具]时的
@@ -175,9 +170,9 @@ export function buildForwardBody(
     ...(existingMeta.trace_session_id
       ? {}
       : { trace_session_id: randomUUID() }),
-    // 官方 chat metadata 的另三个字段(真机抓包确认存在):
+    // 官方 chat metadata 的另三个字段(抓包确认存在):
     //   freebuff_input_profile / repo_snapshot / llm_step_number
-    // 我们此前一个都没有.格式逐字对齐官方(见 chat-metadata-parity.js).
+    // 格式逐字对齐官方(见 chat-metadata-parity.ts).
     ...chatMetadataParity(
       {
         messages: body.messages,

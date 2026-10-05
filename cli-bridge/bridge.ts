@@ -1,9 +1,6 @@
 /**
  - bridge.ts -- Node 侧封装:把上游请求交给 bun 子进程执行.
  *
- - 动机见 README.md:chat 端点可能做 TLS 指纹分级检测,
- - Node(OpenSSL 3.6.5 / undici)与官方 bun 的 Client Hello 可区分
- - (52 vs 17 ciphers).与其伪装,不如用官方同一个运行时发请求.
  *
  - 这不是绕过检测:我们照常带真实登录态,真实设备签名,真实 catalog,
  - 只是让承载它们的 TLS 栈与官方客户端同源.
@@ -37,7 +34,6 @@ function resolveBun() {
 export const BUN_BIN = resolveBun();
 export const UPSTREAM = join(HERE, 'upstream.ts');
 
-/** bun 是否可用(缺失时上层应给出明确错误而不是 fetch 失败). */
 export function hasBun() {
   if (BUN_BIN !== 'bun') return existsSync(BUN_BIN);
   return spawnSync('bun', ['--version'], { stdio: 'ignore' }).status === 0;

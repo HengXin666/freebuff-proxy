@@ -59,7 +59,7 @@ import path from 'node:path'
     }),
   })
   assert.equal(res.status, 200, await res.clone().text())
-  // 实测同一 session 立即重试可恢复,无需为瞬时容量再开一个 session.
+  // 同一 session 立即重试即可恢复, 不为瞬时容量再开一个 session.
   assert.equal(res.headers.get('x-freebuff-proxy-account'), 'a@example.com')
   assert.equal(state.sessionPosts, 1, `capacity retry should reuse session, got ${state.sessionPosts}`)
   const capAccounts = capRuntimes.list()

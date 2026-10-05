@@ -12,10 +12,7 @@ import { denyUnlessAdmin } from '../../lib/http-codes.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 const CUSTOM_PREFIX = '/api/models/custom'
-/**
- * 逐字常量而不是模板串:路由对账门禁(check-docs)与源码级自检都靠
- * route === '<字面量>' 抽注册表,拼出来的路径会让它看不见这条路由.
- */
+
 const CUSTOM_ROUTES = new Set([
   CUSTOM_PREFIX,
   `${CUSTOM_PREFIX}/hide`,

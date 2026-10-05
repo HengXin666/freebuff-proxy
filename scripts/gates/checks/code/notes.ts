@@ -8,9 +8,6 @@
  - 3. 真实参数没有被 @param 覆盖;
  - 4. 导出函数有值返回却没有 @returns.
  *
- - 为什么不强制内部函数:那只会产出 // 设置 x 那类复述代码的注释,而本仓
- - 明确反对这种注释("注释讲为什么,代码讲怎么做").一条规范若与它自身的
- - 价值主张冲突,它就会被绕开.
  *
  - 存量:写于本门禁之前的导出符号按 文件::符号名 → 未清问题数 登记在
  - .gates/jsdoc-baseline.json,只许降不许涨;基线外的新符号一律必须合规.
@@ -40,7 +37,6 @@ const BASELINE = 'jsdoc-baseline.json'
 const report = new Report('notes')
 const wl = loadWhitelist()
 
-/** 收集一个文件里所有导出函数 / 类(类方法不单独要求,否则大类会刷屏). */
 function exportsOf(rel) {
   const sf = parseFile(rel)
   const list = []

@@ -1,11 +1,7 @@
 /**
  * 租约与工时计量: 在途计数, 互斥锁, 已付费时段, 空闲释放计时.
  *
- * 从 session-manager.js 的 beginRequest / endRequest / _settleScheduling /
- * _emitScheduling / _notifyScheduleChange / idleReleaseMs / paidWindowRemainingMs /
- * inPaidWindow / _armIdleRelease / _clearIdleRelease / _waitForIdle / withLock 切出.
- *
- * 这一层的共同点是"只碰计时与计数, 不碰上游网络". 上游交互在 observe 与 admit.
+ * 这一层只碰计时与计数, 不碰上游网络(上游交互在 observe 与 admit).
  */
 import { logger, runWithLogContext } from '../../util/log.ts'
 
@@ -42,7 +38,7 @@ export function endRequest(this: any): void {
 }
 
 /**
- * 本轮调度时长(毫秒). 有在途请求时 = now - 起算点; 否则 0.
+ * 本轮调度时长(毫秒). 有在途请求时 = now - 起算点; 无在途请求时为 0.
  * 控制台用它显示"本轮已运行 ..."(实时增长).
  * @returns {number} 本轮已运行毫秒
  * @param {any} this 会话实例
@@ -121,10 +117,10 @@ export function idleReleaseMs(this: any): number {
 /**
  * 距离本会话[已付费时段]结束还有多少毫秒; 无法判定时返回 null.
  *
- * 上游一次 admit 就是买断一小时(一手实测 2026-09-14): POST 当场扣满
- * 整小时单价(Freebucks 5 -> 0), 回执带 admittedAt / expiresAt. 因此在这
- * 一小时之内, 继续发请求的边际成本是 0; 而 DELETE 之后那一小时就作废,
- * 重开 = 重新买一整小时.
+ * 上游一次 admit 就是买断一小时: POST 当场扣满整小时单价(Freebucks 5 -> 0),
+ * 回执带 admittedAt / expiresAt. 这一小时之内继续发请求的边际成本是 0;
+ * DELETE 之后那一小时作废, 重开 = 重新买一整小时.
+ * 见 .agents/notes/implemented/architecture/2026-09-14-paid-hour-hold.md
  *
  * expiresAt 优先; 上游只回 remainingMs 时用它兜底(admit 时的快照).
  * @param {any} this 会话实例
@@ -161,26 +157,21 @@ export function inPaidWindow(this: any, session: any = this.session): boolean {
 /**
  * 空闲自动释放: 在途归零后空闲超过 session.idleReleaseSec 就早退 DELETE.
  *
- * 已付费时段内不释放(2026-09-14 一手实测后改).
- *
- * 上游一次 admit 就是买断一小时: POST 当场扣满整小时单价, 回执带
- * expiresAt. 实测(账号 lolid8faw4er, 模型 solar-pro4, 该模型无 units 行
- * -> 纯 Freebucks 计费):
+ * 已付费时段内不释放. 上游一次 admit 就是买断一小时: POST 当场扣满整小时
+ * 单价, 回执带 expiresAt; 早退 DELETE 只回 freebucksRefundPending, 不退款:
  *
  *     admit      rem 5 -> 0      (当场扣满)
  *     25s 后 DELETE -> {status:"ended", freebucksRefundPending:true}
  *     +20/+40/+60/+120s          rem 仍为 0, 未到账
  *     重放 DELETE x2             仍然只有 pending, 无金额
  *
- * 而 session_units 那本账早退是当场按比例退的(实测 1.1 -> 0.2).
- * 关键是不对称: 实测 24 个[账号 x 模型]组合, 22 个是 Freebucks 先见底
- * (Freebucks 才是上游真正的拒付判据 freebucksShortfall). 所以早退等于
- * 拿稀缺的账去省不稀缺的账 -- 已付费的这一小时内继续用, 边际成本为 0.
+ * 而 session_units 那本账早退是当场按比例退的(1.1 -> 0.2). 24 个
+ * [账号 x 模型]组合里 22 个是 Freebucks 先见底, 所以早退等于拿稀缺的账去省
+ * 不稀缺的账.
  *
- * 因此: 付费时段内不因空闲而释放(见
- * .agents/notes/implemented/architecture/2026-09-14-paid-hour-hold.md).
  * 腾槽位给别的模型由上层显式 release 负责, 不走这条空闲路径.
- * idleReleaseSec 仍然有效: 它是付费时段结束之后的空闲释放时长.
+ * idleReleaseSec 是付费时段结束之后的空闲释放时长.
+ * 见 .agents/notes/implemented/architecture/2026-09-14-paid-hour-hold.md
  * @returns {void}
  * @param {any} this 会话实例
  */

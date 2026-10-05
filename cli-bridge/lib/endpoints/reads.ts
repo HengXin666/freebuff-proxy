@@ -33,7 +33,6 @@ export async function fetchCatalog(bridge) {
    *   Accept: * / *               ← bun 默认,天然一致
    *
    * 两处修正(见 docs/reverse/19 §19.10):
-   *   - 补 x-freebuff-client: desktop(此前缺);
    *   - 去掉设备签名:官方这一跳不签(只有 session 才签),
    *     带了会让目录行数从 13 变成 53 ---- 那是形态偏离换来的另一份响应.
    *

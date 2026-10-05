@@ -21,16 +21,15 @@ import { logger } from '../../util/log.ts'
  * official 通道委派 -- 整条请求交给副仓库(cli-bridge)执行, 拿到响应就返回.
  *
  * 官方形态的实现只有一份(在 cli-bridge, bun 执行): 官方 37 工具 / 官方 system
- * 模板 / desktop 世代 agent / 分层 provider. 主服务不复制那份逻辑, 而是把
+ * 模板 / desktop 世代 agent / 分层 provider. 主服务把
  * instanceId + messages + tools 传过去, 由副仓库 startRun + chat, 再把原始响应
  * 透传给下游 -- 这就是 RPC 边界.
  *
- * 用 reuse 而不是 full: 主服务已经做过 admission 并持有会话, 副仓库不需要再买
- * 一次(一次 admit = 买断一小时).
+ * 用 reuse 模式: 主服务已经做过 admission 并持有会话, 副仓库复用该会话
+ * (一次 admit = 买断一小时).
  *
  * RPC 不可用 / 失败 / 无凭据时返回 upstreamRes = null, 调用方据此走 legacy 路径
- * 并补上官方 system 与签名工具(否则会发出一个既没有官方 system 也没有签名工具的
- * 畸形请求).
+ * 并补上官方 system 与签名工具.
  *
  * @param {object} ctx 依赖集合(config / settingsStore)
  * @param {object} args 本次转发所需的上游上下文
@@ -118,8 +117,7 @@ export async function tryOfficialChannel(ctx: any, args: any) {
       })
     }
     //  降级:RPC 没拿到响应(不可用/失败/无凭据)时,
-    // 请求体必须补成 legacy 形态再走原 raw 路径 ----
-    // 否则会发出一个"既没有官方 system,也没有签名工具"的畸形请求.
+    // 请求体必须补成 legacy 形态再走原 raw 路径.
     if (!upstreamRes) {
       requestBody.messages = ensureFreebuffSystemMessages(
         requestBody.messages,

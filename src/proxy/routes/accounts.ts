@@ -1,12 +1,9 @@
 /**
  * 由 src/proxy.ts 搬出的路由处理器 -- 见 docs/code-quality 的拆分记录.
  *
- * 为什么搬出来: createProxyHandler 原本是 2109 行的单函数闭包, 读它的人得同时
- * 装下选号 / 会话 / 流式 / 错误映射 / 白名单五套逻辑. 这些处理器之间没有共享的
- * 可变状态, 只有对 config / runtimes / userStore / settingsStore 的读取,
- * 所以它们可以整体搬出, 用显式的 ctx 参数接依赖.
- *
- * 口径: 搬移是纯搬移, 不改任何行为. 每个函数的 JSDoc 原样保留.
+ * 这些处理器之间无共享可变状态, 只有对 config / runtimes / userStore /
+ * settingsStore 的读取, 依赖通过显式 ctx 参数传入.
+ * 每个函数的 JSDoc 原样保留.
  */
 
 import { coerceUser, deleteAccountUser, saveAccountUser } from '../../auth-store.ts'
@@ -36,9 +33,8 @@ export async function handleAccountsImport(ctx: any, req: any, res: any) {
       // 凭证更新时间落盘(前端[更新]列的数据源).
       ctx.runtimes.markCredentialUpdated(saved.key)
       await ctx.runtimes.invalidate(saved.key).catch(() => {})
-      //  以前的[导入后自动探测]已删除(docs/reverse/20 §20.3):
-      // 导入账号不该顺带发一次上游 GET.额度/状态等用户点[检测]或
-      // [一键刷新]时再取.
+      //  导入账号不发上游 GET;额度/状态等在用户点[检测]或[一键刷新]时再取
+      //  (见 docs/reverse/20 §20.3).
       imported.push({
         key: saved.key,
         email: saved.user.email,

@@ -61,7 +61,7 @@ export function handleSessionGet(headers) {
       accessTier: 'limited',
       instanceId: inst,
       // 服务端指派的 model(目录 key),不是客户端请求的模型名.
-      // chat 必须回用这个值,否则上游报 session_model_mismatch.
+      // chat 必须回用这个值: 回用错值会命中上游的 session_model_mismatch 拒绝.
       model: 'm-00032eaeec',
       admittedAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + state.sessionExpiryMs).toISOString(),

@@ -1,9 +1,8 @@
 /**
  * smoke 的模块级可变状态 -- 用例树拆分后, 这是这些绑定的唯一真源.
  *
- * 为什么集中在一处: 它们被 604 处引用, 且读写在用例块之间穿插(不是集中在
- * 某个共用 harness). 集中到本模块后每个用例 import state, 引用点从裸变量
- * 变成 state.x, 语义不变且可机械核对.
+ * 这些绑定被 604 处引用, 且读写在用例块之间穿插(不集中在某个共用 harness).
+ * 集中到本模块后每个用例 import state, 引用点从裸变量变成 state.x.
  *
  * 口径: 纯搬移. 初值与类型注释逐字保留.
  */
@@ -15,7 +14,7 @@ let mockMode = 'ok'
 let sessionPosts = 0
 /**
  * - claim_released 场景用:记录已经作废过的 instanceId.
- * - 同一个 id 第二次出现就放行 ---- 用来验证实现确实换了新 id(而不是原地重试).
+ * - 同一个 id 第二次出现就放行 ---- 用来验证实现确实换了新 id(不是原地重试).
  */
 const claimReleasedSeen = new Set()
 let sessionDeletes = 0
@@ -51,8 +50,8 @@ let mockPaidTakeover = null
 let mockRefund = 1.5
 /**
  * 上游"结算未完成"标志 (vendor af898dc freebucksRefundPending).true 时 DELETE
- * - 回执只带 pending,不带 freebucksRefund----2026-09 实测提前结束的会话会
- * 持续挂起数分钟.用于验证"挂起 ≠ 退款 0".
+ * - 回执只带 pending,不带 freebucksRefund ---- 提前结束的会话会持续挂起数分钟.
+ * 用于验证"挂起 ≠ 退款 0".
  */
 let mockRefundPending = false
 /** DELETE 收到过的 x-freebuff-instance-id(回归:不带会被上游 400). */

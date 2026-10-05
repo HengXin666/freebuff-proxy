@@ -17,9 +17,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-// --- regression: spread 关 + 并发上限 3 → 满了换号,不把并发钉死在一个账号 ---
-// 用户场景:关闭免费模型分散(模型实际已收费),上限设 3;并发超出 3 时必须
-// 换到下一个有空闲槽位的账号,而不是在满员账号上无限排队.
+// --- regression: spread 关 + 并发上限 3 → 满了换号, 不把并发钉死在一个账号 ---
+// 场景: 关闭免费模型分散(模型实际已收费), 上限设 3; 并发超出 3 时必须
+// 换到下一个有空闲槽位的账号.
 {
   const capDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-capspill-'))
   saveAccountUser(capDir, { id: 'cpa', email: 'cpa@example.com', authToken: 'token-cpa' })
@@ -32,11 +32,7 @@ import path from 'node:path'
   capConfig.session.pollIntervalSec = 3600
   capConfig.limits.maxConcurrentRequests = 12
   /**
-   * - 必须显式把单账号并发上限设成 3.
-   *
-   * - 以前这里不设,用默认(config.js 的 accountMaxConcurrency: 2),
-   * 却断言"上游并发峰值应为 3" ---- 测试假设与配置不一致,于是稳定失败
-   * (got 2).实现按上限 2 跑是对的,错的只是用例没把前置条件写全.
+   * - 必须显式把单账号并发上限设成 3(与下面"上游并发峰值应为 3"的断言一致).
    */
   capConfig.limits.accountMaxConcurrency = 3
   const capRuntimes = new AccountRuntimes(capConfig, {

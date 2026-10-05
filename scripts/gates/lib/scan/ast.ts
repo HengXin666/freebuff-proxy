@@ -1,9 +1,6 @@
 /**
  - AST 薄封装 ---- 用 TypeScript 编译器 API 解析 JS/TS.
  *
- - 为什么不用正则:字符串里的 fetch(,注释里的示例代码,模板串里的
- - function 都会变成误报,而门禁一旦误报就会被整条关掉.正则只允许出现在
- - "词法边界明确"的场景(如扫 x-freebuff-* 头名).
  *
  - 解析器从本仓 devDependency 取(版本与 npm run typecheck 完全一致),
  - 不引入新依赖 ---- 本仓的"超级轻量"铁律不允许为一个门禁加运行时依赖.
@@ -131,14 +128,7 @@ export function jsdocOf(sf, node) {
 /**
  * 去掉注释行的前导装饰, 留下正文.
  *
- * 必须同时接受 * 与 - 两种前导符. 原因是一次真实事故: 本仓曾被一个
- * "去 markdown 标记"的自动修复器把 JSDoc 的  *  前导批量改成了  -
- * (那是我写的修复器的缺陷), 于是几百个文件的 @param / @returns 从
- *  * @param 变成  - @param. 而本函数当时只剥 *, 导致 tagsOf 认不出这些
- * 标签 -- 门禁开始对注释内容完全正确的导出符号稳定报"缺 @param".
  *
- * 也就是说: 判据比它要守的规范更窄时, 会把一次格式事故放大成几百条假红.
- * 现在 - 与 * 等价处理, 两种风格都能被正确解析.
  * @param {string} line 注释原文的一行
  * @returns {string} 去掉前导装饰后的正文
  */
@@ -214,7 +204,6 @@ export function tagsOf(docText) {
 export function paramTagName(rest) {
   const first = (rest.split(/\s+/)[0] ?? '').replace(/^\[/, '').replace(/\]$/, '')
   // 保留点号路径: 解构参数的文档写法是 opts.retries, 去掉 .retries 就会
-  // 变成 opts -- 于是三个不同的 @param 全被当成同一个名字(实测: opts.retries /
   // opts.name / opts 三条标签的 paramTagName 都返回 opts), 比对必然错乱.
   // 只剥方括号,默认值与剩余参数省略号, 不动点号.
   return first.split('=')[0].replace(/^\.\.\./, '').replace(/\?$/, '').trim()
@@ -229,12 +218,11 @@ export function paramTagName(rest) {
 /**
  * 参数名列表.
  *
- * 解构参数取它的键名, 不取整段模式文本. 这是一次真实误报的修法: 门禁原来
+ * 解构参数取它的键名, 不取整段模式文本. 门禁
  * 返回 { retries = 0, name = '' } 这样一整段, 于是 @param 永远对不上 --
  * 因为文档里不可能写 @param {number} { retries = 0, name = '' }, 只会写
  * @param {number} opts.retries. 结果是"解构参数根本无法用 @param 覆盖",
  * 只能把签名改成普通参数 opts = {} 才能过门禁 -- 那是判据倒逼代码变形,
- * 而不是代码违反规范.
  *
  * 现在: 解构参数展开成它绑定的键名(retries / name), 与 @param opts.retries
  * 的末段比对得上; 其余(标识符/带默认值)照旧.

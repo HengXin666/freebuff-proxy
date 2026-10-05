@@ -23,9 +23,10 @@ const report = new Report('comments')
 
 /** 解释性内容词元(判据真源). */
 const WHY_TOKENS = [
-  '为什么', '因为', '原因', '决策', '历史', '教训', '曾经', '此前',
-  '旧实现', '踩过', '事故', '实测', '否决', '权衡', '代价', '而不是',
-  '以免', '否则', '以前', '当初', '源于', '动机',
+  // 解释动机 / 记录历史: 属于 notes 与 docs.
+  '为什么', '原因', '决策', '历史', '教训', '曾经', '此前', '旧实现',
+  '踩过', '事故', '实测', '否决', '权衡', '代价', '动机', '源于',
+  '旧行为', '原来', '之所以',
 ]
 
 /** 注释里出现 note 路径 = 指针, 不是解释本身. */
@@ -56,6 +57,8 @@ for (const rel of files) {
     scannedComments++
     if (NOTE_POINTER.test(text)) continue
     for (const tok of WHY_TOKENS) {
+      // "说明原因/给出原因" 是功能描述(把原因写清楚), 不是解释动机.
+      if (text.includes('说明原因') || text.includes('给出原因')) continue
       if (text.includes(tok)) {
         report.add(
           rel,

@@ -1,10 +1,8 @@
 /**
  * 账号 / 模型的冷却账: 记冷却, 查冷却, 落盘.
  *
- * 从 app-context.js 按职责切出. 冷却分两档(账号级 key, 模型级 key + NUL + model),
- * 判据码表在 ./codes.ts. 这里只碰冷却表与账本, 不碰会话与网络.
- * @param {any} this 账号池(runtimes)
- * @returns {any} 见实现
+ * 冷却分两档(账号级 key, 模型级 key + NUL + model), 判据码表在 ./codes.ts.
+ * 这里只碰冷却表与账本, 不碰会话与网络.
  */
 import { logger } from '../../util/log.ts'
 import {
@@ -17,7 +15,7 @@ import {
 /**
  * 冷却表的键: 账号级用 key, 模型级用 key + NUL + model.
  *
- * 用 NUL 而不是其他分隔符: 账号 key 可能是邮箱, 任何可见字符都可能出现在里面.
+ * 分隔符取 NUL: 账号 key 可能是邮箱, 任何可见字符都可能出现在里面.
  * @param {any} this 账号池(runtimes)
  * @param {string} key 账号 key
  * @param {string | null} model 模型(为真时返回模型级键)
@@ -28,12 +26,11 @@ export function _cooldownKey(this: any, key: any, model: any) {
 }
 
 /**
- * Account-level OR (if model given) model-level cooldown blocks selection.
+ * 账号级冷却, 或(给定 model 时)模型级冷却, 任一存在即视为冷却中.
  * @param {any} this 账号池(runtimes)
- * @param {any} this 账号池(runtimes)
- * @param {string} key
- * @param {string | null} [model]
- * @returns {any} 见实现
+ * @param {string} key 账号 key
+ * @param {string | null} [model] 模型
+ * @returns {boolean} 是否冷却中
  */
 export function isCoolingDown(this: any, key: any, model: any = null) {
   this._pruneCooldown(key)
@@ -58,11 +55,13 @@ export function _pruneCooldown(this: any, key: any) {
 }
 
 /**
+ * 记一条冷却(账号级默认; model_unavailable 只冷却该模型), 落盘并记日志.
+ * 冷却是封禁类错误时同时记下 bannedAt(账号生命周期终点).
  * @param {any} this 账号池(runtimes)
- * @param {any} this 账号池(runtimes)
- * @param {string} key
- * @param {import('../../upstream/client.ts').UpstreamError | { code?: string, retryAfterMs?: number }} err
- * @param {string | null} [model]
+ * @param {string} key 账号 key
+ * @param {import('../../upstream/client.ts').UpstreamError | { code?: string, retryAfterMs?: number }} err 触发冷却的错误
+ * @param {string | null} [model] 模型
+ * @returns {void} 无返回
  */
 export function markCooldown(this: any, key: any, err: any, model: any = null) {
   const code = err?.code
@@ -73,8 +72,8 @@ export function markCooldown(this: any, key: any, err: any, model: any = null) {
 
   if (code === 'banned') {
     ms = Math.max(ms, BANNED_COOLDOWN_MS)
-    // 封禁是账号生命周期的终点:不只冷却,还要记下"什么时候开始被封的"
-    // (chat 阶段撞到 banned 与探测发现 banned 同等重要,控制台分区靠它).
+    // 封禁是账号生命周期的终点: 不只冷却, 还要记下开始被封的时间
+    // (chat 阶段撞到 banned 与探测发现 banned 同等重要, 控制台分区靠它).
     const rec = this.accountState.account(key, this._importedAtHint(key))
     if (rec && !rec.bannedAt) {
       this.accountState.patch(key, { bannedAt: new Date().toISOString() })
@@ -120,9 +119,8 @@ export function clearCooldown(this: any, key: any, model: any = null) {
  *   - _persistAccountState(key, snap):freebucks / quota / lastProbe
  * 都在热路径上调用,落盘本身由 AccountStateStore 去抖合并,不阻塞转发.
  * @param {any} this 账号池(runtimes)
- * @param {any} this 账号池(runtimes)
- * @param {string} key
- * @returns {any} 见实现
+ * @param {string} key 账号 key
+ * @returns {void} 无返回
  */
 export function _persistCooldowns(this: any, key: any) {
   if (!key) return

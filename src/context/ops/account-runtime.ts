@@ -1,10 +1,9 @@
 /**
  * 账号 runtime 的懒创建与凭据变更重建.
  *
- * 从 app-context.js 按职责切出. 为什么必须懒创建: 启动时不去碰任何上游
- * (零自动探测), 只有在真实请求需要一个账号时才建它的 upstream 与
- * SessionManager. 凭据(token/代理)变更时旧 runtime 立即让位 -- 但会话要等
- * 在途请求结束后再优雅释放, 绝不掐断正在传输的 SSE.
+ * 懒创建: 启动时不碰任何上游(零自动探测), 只有真实请求需要一个账号时才建它的
+ * upstream 与 SessionManager. 凭据(token/代理)变更时旧 runtime 立即让位, 会话
+ * 则在在途请求结束后释放.
  */
 import path from 'node:path'
 import { accountKeyOf, readAccountUser } from '../../auth-store.ts'
@@ -15,16 +14,8 @@ import { _disposeRuntime } from './account-ops.ts'
 import { _hydrateRuntime } from '../state/account-lifecycle.ts'
 
 /**
-   * @param {string} key 账号 key(id 或历史邮箱)
-   */
-/**
  * 建这个账号的上游客户端, 并把创建期的日志归到该账号名下.
  *
- * 从 get 抽出. 为什么整段要包在 runWithLogContext 里: 创建期的日志
- * (createUpstreamClient called / DeviceSigner constructed / device key
- * registered ...)发生在 SessionManager 存在之前, 此前没有账号归属 -- 控制台上
- * 就是一批无主的"createUpstreamClient called"(用户报的"奇奇怪怪的东西").
- * @param {any} this 账号池(runtimes)
  * @param {any} self 账号池(runtimes)
  * @param {any} user 账号凭据记录
  * @param {string} accountKey 账号 key(凭据文件名: 可能是邮箱)
@@ -38,7 +29,7 @@ function buildUpstream(self: any, user: any, accountKey: string): any {
       //  accountId 用于两处,语义不同但都需要账号 user id:
       //   1) 代理池稳定分配(同一账号固定出口)
       //   2) 官方 chat 的 x-freebuff-acting-user-id(真机抓包确认是 user id)
-      // 用 user.id 而不是 accountKey ---- accountKey 是凭据文件名(可能是邮箱).
+      // 取自 user.id (accountKey 是凭据文件名, 可能是邮箱).
       accountId: user.id || accountKey,
       // 设备签名密钥落盘位置:与上游官方 CLI 同款(每账号一个文件).
       // 上游据此判定[是不是注册过的真客户端]----见 src/upstream/device-signing.ts
@@ -54,11 +45,10 @@ function buildUpstream(self: any, user: any, accountKey: string): any {
 /**
  * 取(必要时懒创建)某账号的 runtime.
  *
- * 凭据(token/代理)变更时旧 runtime 立即让位: 先优雅释放它的会话, 再关出网
- * agent. 新 runtime 会从账本回灌 freebucks/quota/lastProbe/冷却, 让
- * "买不起就别 admit" 的闸门在重启后依然生效.
+ * 凭据(token/代理)变更时旧 runtime 立即让位: 先释放它的会话, 再关出网
+ * agent. 新 runtime 会从账本回灌 freebucks/quota/lastProbe/冷却.
  * @param {any} this 账号池(runtimes)
- * @param {string} key 账号 key(id 或历史邮箱)
+ * @param {string} key 账号 key(id 或旧布局的邮箱)
  * @returns {any} 账号 runtime
  */
 export function get(this: any, key: any) {
@@ -80,24 +70,22 @@ export function get(this: any, key: any) {
       return existing
     }
     if (existing) {
-      // 账号信息变更(token/代理):旧 runtime 立即让位,session 等在途
-      // 请求结束后再优雅释放(避免掐断正在传输的 SSE;等待方会在 chat
-      // 流程通过 isCurrentRuntime 检测到已被顶替并重新选号).
+      // 账号信息变更(token/代理): 旧 runtime 让位, 其会话等在途请求结束后释放;
+      // 等待方会在 chat 流程通过 isCurrentRuntime 检测到已被顶替并重新选号.
       this._disposeRuntime(existing, 'account credentials/proxy changed')
       this.byKey.delete(accountKey)
     }
 
-  // runtime 创建期间的日志(createUpstreamClient called / DeviceSigner constructed / device key registered ...)此前没有账号 归属:它们发生在
     const upstream = buildUpstream(this, user, accountKey)
     const sessions = new SessionManager({
       upstream,
       config: this.config,
       accountKey,
-  // 日志上下文的 account 字段在这里按账号固定注入.  此前只有 proxy.js 在 chat 路径上 patchLogContext({ account }), 于是探测/刷新/选号/空闲释放这些路径产生的日志 accou
+      // 日志上下文的 account 字段按账号固定注入, 覆盖探测/刷新/选号/空闲释放等路径.
       logContext: { account: user.email || accountKey, key: accountKey },
       // 句柄变更落盘(track/clear/orphan)----见 SessionHandleStore.
       onSessionChange: (ev: any) => this.handleStore.handleEvent(ev),
-  // 模型标识归一(目录 key / 上游 id / 可读名 → 目录 key).  上游会话清单里的 model 是上游 id(deepseek/deepseek-v4-flash), 而调度内部用目录 key(m-096e75164
+      // 模型标识归一(目录 key / 上游 id / 可读名 → 目录 key).
       resolveModelAlias: (m: any) => this.resolveModelAlias(m),
       // 账号账目落盘(freebucks/quota/lastProbe)----见 AccountStateStore.
       onStateChange: (snap: any) => this._persistAccountState(accountKey, snap),
@@ -122,9 +110,8 @@ export function get(this: any, key: any) {
       source: `credentials:${accountKey}`,
     }
     this.byKey.set(accountKey, runtime)
-    // 账本回灌(freebucks/quota/lastProbe/冷却):必须在这里做,不能只在构造
-    // 函数里做----runtime 是懒创建的,构造函数执行时 byKey 还是空的.
-    // freebucks 尤其关键:它让"余额买不起就别 admit"的闸门在重启后依然生效.
+    // 账本回灌(freebucks/quota/lastProbe/冷却)在 runtime 建好之后做:
+    // runtime 是懒创建的, 构造函数执行时 byKey 还是空的.
     this._hydrateRuntime(runtime)
     this.accountState.patch(accountKey, { email: user.email })
     return runtime

@@ -1,10 +1,8 @@
 /**
  * 出网传输层:代理解析 + 带[池内回落 + 单次尝试超时]的 fetch.
  *
- * 这一层只回答两个问题:这次请求从哪个出口出去,以及出口坏了换谁.
- * 它不知道任何上游协议(路径/头/签名),所以上游改 API 时这一层不用动.
- *
- * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
+ * 这一层只回答两个问题:这次请求从哪个出口出去, 以及出口坏了换谁.
+ * 它不知道任何上游协议(路径/头/签名).
  */
 import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from 'undici'
 import { logger } from '../../util/log.ts'
@@ -17,9 +15,8 @@ import { logger } from '../../util/log.ts'
  * 而 undici 默认会同时 offer h2 与 http/1.1  --  与官方客户端不同,
  * 是一个可检测的 TLS 层差异.
  *
- * 注:Node 与 Bun 都用系统 OpenSSL 栈,cipher 本就一致(实测两侧都是
- * TLS_AES_256_GCM_SHA384).所以[Node 无法对齐指纹]只成立于浏览器
- * 目标(GREASE 是保留数值,OpenSSL 名字字符串表达不了);对齐 Bun 完全可行.
+ * Node 与 Bun 都用系统 OpenSSL 栈, cipher 一致
+ * (TLS_AES_256_GCM_SHA384).
  */
 const ALPN_TLS = Object.freeze({
   requestTls: { ALPNProtocols: ['http/1.1'] },
@@ -42,7 +39,7 @@ async function fetchWithAttemptTimeout(url: string, init: Record<string, any>, t
   const onParentAbort = () => controller.abort()
   if (init.signal?.aborted) {
     // 父 signal 已中止(客户端断开/全局超时已发生):本次尝试立即失败,
-    // 不要等 20s 超时 -- 否则池内每个代理都要空等一轮.
+    // 不等 20s 超时, 免得池内每个代理都空等一轮.
     controller.abort()
   } else {
     init.signal?.addEventListener('abort', onParentAbort, { once: true })
@@ -156,7 +153,7 @@ interface ProxyFetchOpts {
  *  - 无代理 / 单代理 / env:直接走对应 dispatcher
  *  - 全局池:优先分配到的代理,连接级失败(fetch 抛错)时依次回落到池内下一个;
  *    单次尝试带超时(fetchWithAttemptTimeout) -- 代理"连接成功但永不响应"
- *    (网络波动/黑洞)也会被视为失败并回落下一个,而不是干等到全局 timeoutMs.
+ *    (网络波动/黑洞)也会被视为失败并回落下一个, 可少于全局 timeoutMs 就放弃本次.
  *
  * 重要:单代理池也必须走 pool 分支.resolveProxy 的 pool 分支只返回 agents
  * 数组,没有 agent 字段;若把 <=1 的池当"非池"处理,agent 恒为 undefined →

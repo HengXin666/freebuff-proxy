@@ -1,13 +1,8 @@
 /**
  * 路径解析:仓库根 / 凭据目录 / 默认凭据目录.
  *
- *  projectRootFromModule() 靠 import.meta.url 数层级定位仓库根.本文件
- * 从 src/config.ts(src/ 下一层)搬到 src/config/(src/ 下两层),
- * 所以上跳层数必须是 ../..  --  写错会让整个仓库的默认 dataDir /
- * credentials 目录指到 src/ 下,且只在运行时表现为找不到数据.
- * 这正是"搬家式重构最典型的静默故障",已用 node -e 实测目录值.
- *
- * 从 src/config.ts 拆出(原 446 行单文件).
+ *  projectRootFromModule() 靠 import.meta.url 数层级定位仓库根;
+ * 本文件位于 src/config/, 所以上跳两层到仓库根.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -23,7 +18,7 @@ export function projectRootFromModule(): string {
 }
 
 /**
- * 传统凭据目录(<root>/credentials,pre-/data 安装留下的).
+ * 旧式凭据目录(<root>/credentials).
  *
  * @returns {string} 绝对路径
  */
@@ -32,9 +27,8 @@ export function credentialsDir(): string {
 }
 
 /**
- * Default credentials dir: <dataDir>/credentials, unless a legacy
- * <projectRoot>/credentials with account files still exists and the new one
- * is empty (keeps pre-/data installs working).
+ * 默认凭据目录: <dataDir>/credentials; 当旧式 <root>/credentials 里还有
+ * 账号文件而新目录不存在时, 返回旧式目录.
  *
  * @param {string} dataDir 已解析为绝对路径的数据目录
  * @returns {string} 实际使用的凭据目录

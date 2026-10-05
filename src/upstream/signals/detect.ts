@@ -1,16 +1,11 @@
 /**
  - 外来客户端判据的判定实现  --  schema 校验与 detectForeignClient.
  *
- * 为什么单独成文件: 原 foreign-client-signals.ts 465 行超 300 红线. 它里有两类
- * 东西: 上游那份判据源码的[本地镜像](一大柜常量: 工具名分组, 官方参数名表,
- * 零参数工具描述, 双向映射表)与基于这些常量做的判定实现. 前者是照抄上游的
- * 数据, 后者是本仓的逻辑; 两者的审查方式完全不同(前者要逐字对账, 后者要跑用例).
- *
- * 边界: 常量仍留在 ../foreign-client-signals.ts  --  那里同时是外部消费者与
+ * 常量仍留在 ../foreign-client-signals.ts  --  那里同时是外部消费者与
  * test/suites/entries/verify/tool-name-mapping.ts 的 import 点, 且它的逐字对账
  * 判据按该路径核对. 本文件只 import, 不复制任何常量.
  *
- * 本地只把它用于可观测性与[该注入什么签名工具]----判定权永远在上游.
+ * 本地只把它用于可观测性与[该注入什么签名工具]; 判定权永远在上游.
  */
 import {
   FOREIGN_HARNESS_PROMPT_MARKERS,
@@ -54,8 +49,8 @@ export function schemaPropertyKeys(schema: any) {
  - 三种情形:
  - - 自定义名(decide):官方没有 schema 可比,按名字放行.
  - - 官方定义且有参数:schema 非空,且顶层参数名是官方参数名的子集.
- - - 官方定义但无参数(end_turn / task_completed):永远不算 ---- 复制的名字
- - 加 {} 与真货逐字节相同,没有结构可验证,官方不接受,我们也别指望它能过.
+ - - 官方定义但无参数的工具(end_turn / task_completed)永远不算签名:
+ - 复制的名字加 {} 与真货逐字节相同, 没有结构可验证.
  *
  - @param {{ name?: unknown, parameters?: unknown }} tool 待判工具
  - @returns {boolean} 是真签名工具为真
@@ -211,20 +206,17 @@ export const ENFORCED_FOREIGN_SIGNALS = Object.freeze([
 /**
  - 我们注入的官方签名工具 ---- 按上游判据逐字构造.
  *
- - 为什么不是补一个空心 end_turn:上游 2026-09-17 起要求签名工具[名字 + 真实参数
- - schema]双真,零参数工具永远不算签名;上游还把[往 tools 末尾补空心 end_turn]
- - 这种形态逐字收进测试夹具(PROXY_HOLLOW_END_TURN)并在注释里点名 freebuff-proxy.
+ - 签名工具必须[名字 + 真实参数 schema]双真: 零参数工具永远不算签名.
  *
  - 两个都带,任一通过即可(上游是 some()):decide 走自定义名放行,
- - lookup_agent_info 走真实 schema 子集 ---- 任一条规则变化,都还有另一条兜住.
+ - lookup_agent_info 走真实 schema 子集.
  *
- - description 故意写成[别调用]:上游对有参数的工具只比对 schema,不比对描述
- - (描述只在零参数工具上用于日志),所以这里可以自由取舍;而一个真诚邀请模型调用的
- - 描述,会让模型真的去调一个下游客户端根本不认识的名字.
+ - description 写成[别调用]:上游对有参数的工具只比对 schema,不比对描述
+ - (描述只在零参数工具上用于日志), 避免模型真的去调一个下游客户端不认识的名字.
  */
 export const FREEBUFF_SIGNATURE_TOOL_DEFINITIONS = Object.freeze([
   // 首位 = 主签名:带真实参数 schema,走上游的[schema 子集]判定.
-  // 排在首位是因为它承载结构证据,而 decide 只是名字层面的兜底.
+  // decide 是名字层面的兜底, 排在它之后.
   Object.freeze({
     type: 'function',
     function: Object.freeze({

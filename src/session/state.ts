@@ -1,13 +1,10 @@
 /**
  * session 域的共享类型与状态容器创建.
  *
- * 为什么要有这个文件: 原 SessionManager 的 49 个方法全部闭包在同一个类里,
- * 搬出去之后每个方法都要引用同一批字段(_inFlight, _refundRetryStartedAt
- * ...). 把"状态"与"行为"分开之后, 构造函数与各子模块共用这一份类型定义,
- * 而不是给每个子模块各写一份.
+ * 状态与行为分开: 构造函数与各子模块共用这一份类型定义, 不必各写一份.
  *
- * 字段名逐字保留原实现的下划线前缀: test/smoke.mjs 直接读 sm._releasePending
- * 与调 sm._armIdleRelease(), 改名会静默打断既有判据.
+ * 字段名保留原实现的下划线前缀: test/smoke.mjs 直接读 sm._releasePending
+ * 与调 sm._armIdleRelease(), 改名会打断既有判据.
  */
 
 /** 上游会话句柄(本地账本里的一条已付费会话). */
@@ -129,9 +126,8 @@ export interface SessionState {
 /**
  * 建一份空的会话状态.
  *
- * 为什么集中在这里建: 原实现把 30 多个字段塞进构造函数, 构造函数因此 196 行.
- * 抽出来之后构造函数只剩"注入依赖 + 建状态"两件事, 每个字段的类型与初值
- * 仍集中在一处, 改字段时不会漏掉某一处赋值.
+ * 集中在这里建: 三十多个字段一次列全, 构造函数只剩"注入依赖 + 建状态";
+ * 改字段时不会漏掉某一处赋值.
  * @param {object} opts 构造参数(见 SessionManager 的 constructor)
  * @returns {SessionState} 初始状态
  */

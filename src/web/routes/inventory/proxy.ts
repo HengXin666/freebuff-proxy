@@ -31,7 +31,6 @@ interface ProxyTestResult {
 }
 
 /**
- * 从任意抛出物里取底层原因码(undici 把 ENOTFOUND 这类挂在 err.cause.code).
  *
  * catch 到的值在 strict 下是 unknown,直接读 .cause/.code 会被拒;
  * 这里收成一个窄接口再判,顺便把"非对象/无 cause"的情形一次挡掉.
@@ -164,7 +163,7 @@ function listProxies(res: ServerResponse, ctx: any) {
  * POST /api/proxy ---- 保存代理池并立即生效.
  *
  * 除了落盘,还要更新运行配置并重建缓存 runtime(释放旧 session,走新出口)
- * ---- 否则"保存了但要重启才生效"会回到前端点了没反应的观感.
+ * .
  *
  * @param {IncomingMessage} req
  * @param {ServerResponse} res

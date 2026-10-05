@@ -8,10 +8,6 @@
  - 合成一份 project 会让前端满屏 "document is not defined" ---- 那是环境声明
  - 缺失而不是类型问题,混进基线只会把数字灌成噪音.
  *
- - 为什么用棘轮而不是"全绿":tsconfig.json 此前是 checkJs: false,
- - 等于解析 JS 但不检查 ---- "配置已存在但从不执行"是最常见的伪红线形态
- - (不是"没有配置",因此更难发现).存量近千条 implicit any,全仓清零是
- - 一个巨大的独立工程,会淹没真正的重构;棘轮让"新增即红"今天就生效.
  *
  - 扫描根:CHECK_ROOT(决定两份 tsconfig 的位置).退出码:0 PASS / 1 FAIL / 2 用法错.
  */
@@ -74,11 +70,6 @@ for (const p of PROJECTS) {
 
 const { entries } = readBaseline(BASELINE)
 //  按总数棘轮,不按文件路径(与 sizes/dirs 的逐文件水位刻意不同).
-//
-// 为什么:拆分一个文件会把它的 checkJs 错误原样搬到新文件路径上.逐文件
-// 棘轮于是把这种"搬家"判成 fresh → FAIL,而真实债务一条没多.实测踩到过:
-// 前端并行拆分期间,dashboard/views/system/index.ts 的 10 条被当成新债.
-//
 // 总数棘轮正好守住要守的那条线:不许新增类型错误."修掉 A 的 10 条,在 B
 // 新增 10 条"确实能保持总数不变,但那不是绕过 ---- 净债务没变,且位置移动本身
 // 在 diff 里可见.

@@ -18,7 +18,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
  * GET /api/overview ---- 控制台首页快照.
  *
  * slots 是全局请求闸门的实时占用:inFlight 长期贴着 limit 不降 = 槽位泄漏,
- * 这种"不接单"故障以前完全不可观测(只能靠体感发现并重启).
+ * 不接单类故障必须可观测.
  *
  * @param {import('node:http').ServerResponse} res
  * @param {any} ctx
@@ -63,10 +63,6 @@ const CRITICAL_DATA_FILES = new Set(['users.json', 'sessions.json'])
 /**
  * 清空进程内日志缓冲(控制台"日志"页的"清空"按钮).
  *
- * 为什么需要:缓冲是环形且只保留最近 N 条,自动丢弃最旧的 ----
- * 但用户想"从这一刻起只看新的"时,旧条目仍然占着整页(尤其一次故障
- * 刷出几百条后,新日志被挤到最底下很难找).没有手动清空就只能重启
- * 进程,而重启会连带丢掉热会话现场.
  *
  * 只清内存缓冲,不碰落盘数据(data/ 与 sessions.json 都不动),
  * 也不影响正在进行的请求.
@@ -133,7 +129,6 @@ function listLogs(req: IncomingMessage, res: ServerResponse) {
  * 数据文件自检:把 data/ 下每个 JSON 的装载状态(ok/missing/invalid)
  * 连同处置建议返回.起因是真实故障----镜像升级后起不来,日志里只有
  * 一行 warn,用户靠"删几个 json"试错;这里让控制台能一眼看到是哪个文件
- * 坏了,为什么,该怎么办.
  *
  * @param {import('node:http').ServerResponse} res
  * @param {any} ctx 路由上下文

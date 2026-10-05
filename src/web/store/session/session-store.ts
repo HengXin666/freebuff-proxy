@@ -90,7 +90,6 @@ export class WebSessionStore {
     this.loadStatus = st.status
     this.loadReason = st.status === 'invalid' ? st.reason : null
     // 损坏时不能静默当"没人登录":这只影响控制台登录态(用户重新登录即可),
-    // 但要让它出现在启动横幅/自检卡片里,而不是无声无息.
     if (st.status !== 'ok') this.sessions = []
     return st
   }

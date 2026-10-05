@@ -8,11 +8,9 @@
    严禁写入本文件.本文件只保留开发约定.
 3. 本文件目标 ≤150 行; 新增约定需先征得用户同意, 并压缩替换旧内容.
 ## 项目定位
-OpenAI 兼容的 Freebuff/Codebuff **免费额度反向代理**.卖点: **超级轻量** + **一键 Docker 部署**
-+ **一切管理都在前端页面**.
+OpenAI 兼容的 Freebuff 免费额度反向代理
 ### 定位红线(用户明确裁决, 永久有效)
-- **BYOK 永久禁止**: 不得实现自备 key 通道(provider=`openrouter`/`openai-compatible`), 代码/提案/
-  文档里都不得把它当出路重提(官方源码里存在 `normalizeByokBaseUrl` 也不得据此提出).
+- **BYOK 永久禁止**: 不得实现自备 key 通道(provider=`openrouter`/`openai-compatible`), 代码/提案/文档里都不得把它当出路重提(官方源码里存在 `normalizeByokBaseUrl` 也不得据此提出).
 - **只做免费链路**, 不绕道第三方 provider. **只做用户当前要求的任务**, 不顺带提替代方案.
 ## 语言与运行时(2026-10-05 起)
 - **全仓 TypeScript, 零 `.js`/`.mjs`/`.cjs`**: 受控文件全是 `.ts`, Node 22 原生直跑, 不引入打包器/

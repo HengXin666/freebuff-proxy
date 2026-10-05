@@ -1,11 +1,8 @@
 /**
  * 会话现场的写入与上报: _apply(回执 -> 本地句柄)与四类回调.
  *
- * 从 session-manager.js 的 _apply / _notifySessionChange / _emitSessionEvent /
- * _emitRefund / _notifyStateChange 切出.
- *
  * _apply 是所有路径(admit / refresh / probe)唯一改写本地会话的入口, 因此
- * 它与"通知上层落盘"的四个回调放在一起, 便于审查"句柄会不会被谁抹掉".
+ * 它与"通知上层落盘"的四个回调放在一起.
  */
 import { logger } from '../../util/log.ts'
 import { extractFreebucks, extractQuota } from '../inventory.ts'
@@ -18,7 +15,7 @@ import { extractFreebucks, extractQuota } from '../inventory.ts'
  * 分布式部署下彼此看不见: 我在本地建了一条会话, 远程读不到 -> 远程拿同一账号
  * 请求就撞 purchase_capacity, 而本地面板显示 status: none, 两边各说各话.
  *
- * 上游其实把答案直接给了我们(GET /session 回执, 实测字段):
+ * 上游把答案放在 GET /session 回执里:
  *   desktopSessionCounts: {premium, unlimited, nextExpiryAt}
  *   desktopPurchases: [{model, expiresAt, holderInstanceId}]
  * 官方据此实现 knownHolder(model), 我们据此实现 holderFor(model).
@@ -32,9 +29,9 @@ export function _apply(this: any, body: any): void {
     return
   }
   const prev = this.session
-  // 旧的 handle 还没删掉(DELETE 一直失败)而现在要换成新会话: 不能就这么
-  // 覆盖丢掉 instanceId -- 把它作为[待清理]交给上层落盘持久化, 之后仍会
-  // 继续尝试 DELETE(否则它就成了无法寻址的孤儿, 一直占着上游会话槽位).
+  // 旧的 handle 还没删掉(DELETE 一直失败)而现在要换成新会话: 不能覆盖丢掉
+  // instanceId -- 把它作为[待清理]交给上层落盘持久化, 之后仍会继续尝试
+  // DELETE, 避免它成为无法寻址的孤儿而一直占着上游会话槽位.
   if (
     this._releasePending &&
     this.hasLiveSlot(prev) &&
@@ -67,7 +64,7 @@ export function _apply(this: any, body: any): void {
   this._absorbInventory(body)
   if (quota || freebucks) this._notifyStateChange()
   // admit 可能发生在没有任何在途请求时(选号阶段就 admit, 随后才拿 chat
-  // 锁): 这里兜底起空闲计时, 否则会话会一直挂到过期.
+  // 锁): 这里兜底起空闲计时, 避免会话一直挂到过期.
   if (this._inFlight === 0) this._armIdleRelease()
   // 句柄落盘: 进程退出/换容器后仍能凭 instanceId 去 DELETE 释放上游会话槽位.
   this._notifySessionChange()
@@ -75,7 +72,7 @@ export function _apply(this: any, body: any): void {
 
 /**
  * 通知上层把会话句柄落盘(/data/sessions.json). 进程退出/换容器后仍能
- * 凭 instanceId 去 DELETE 退款, 而不是留下无法寻址的孤儿会话.
+ * 凭 instanceId 去 DELETE 退款.
  * @returns {void}
  * @param {any} this 会话实例
  */

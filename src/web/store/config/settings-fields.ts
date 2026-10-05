@@ -1,7 +1,6 @@
 /**
  * 运行设置(实时字段)的字段声明与校验.
  *
- * ## 为什么单独成文件
  *
  * SettingsStore.save() 原先是一段 ~100 行的 if 链: 每个字段都写三遍
  * (判 undefined / 判类型 / 赋值). 新增一个字段要改三处, 而**漏掉"判 undefined"
@@ -94,8 +93,6 @@ const oneOf = (values: string[]): LiveFieldSpec => ({
 /**
  * 实时字段表(与 Settings 接口一一对应).
  *
- * 校验失败时抛 TypeError(保持与旧实现一致: 调用方按异常处理), 文案逐字沿用
- * 旧实现, 因此既有测试与前端提示不受影响.
  */
 export const LIVE_FIELDS: Record<string, LiveFieldSpec> = {
   freeToolSignatureEnabled: bool(),

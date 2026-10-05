@@ -17,10 +17,9 @@ import os from 'node:os'
 import path from 'node:path'
 
 // account_suspended(403,error 为字符串)必须归一为 banned:
-// 冷却该账号并换号重试,绝不能当客户端 4xx 把错误甩给用户.
-// 背景(2026-09-18 线上实测):上游对第三方客户端的封禁回的是
-// 403 {"error":"account_suspended"}(error 是字符串,没有 code 字段);
-// 不归一它就会落进"4xx 客户端错误不换号"分支,于是每个被封账号被反复复用.
+// 冷却该账号并换号重试, 不能当客户端 4xx 把错误甩给用户.
+// 该回执形态: 403 {"error":"account_suspended"}(error 是字符串, 没有 code 字段);
+// 不归一它就会落进"4xx 客户端错误不换号"分支, 于是每个被封账号被反复复用.
 {
   const banDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-ban-'))
   saveAccountUser(banDir, { id: 'a', email: 'a@example.com', authToken: 'token-a' })
@@ -62,7 +61,7 @@ import path from 'node:path'
       messages: [{ role: 'user', content: 'hello' }],
     }),
   })
-  // token-a 被封 → 必须换到 token-b 成功,而不是把 403 甩给下游.
+  // token-a 被封 → 必须换到 token-b 成功, 不把 403 甩给下游.
   assert.equal(res.status, 200, await res.clone().text())
   assert.ok(
     state.calls.filter((c) => c.url.includes('/chat/completions')).length >= 2,

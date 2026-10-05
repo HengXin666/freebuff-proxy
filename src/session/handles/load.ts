@@ -1,15 +1,12 @@
 /**
- * 句柄索引文件的装载 ---- 从 src/session-handles.ts 按职责切出.
+ * 句柄索引文件的装载.
  *
- * 为什么单独成文件: 这一段是"磁盘上那个 sessions.json 到底能不能用"的完整
- * 判据(三态 + 逐条丢弃记账), 与 store 的常规操作(记事件 / 保存)是两种时机.
- * 放在类里会让 491 行的类同时承担启动期的容错策略与稳态的账本操作.
- *
- * 口径: 纯搬移, 行为零改动.
+ * 这一段是"磁盘上那个 sessions.json 到底能不能用"的完整判据(三态 + 逐条丢弃
+ * 记账), 与 store 的常规操作(记事件 / 保存)是两种时机.
  *
  * 上次进程遗留的 sessions 一律视为孤儿: 本进程还没 admit 过任何会话, 这些句柄
  * 要么还有效(需要 DELETE 退款)要么已过期(DELETE 无害). 逐条口径: 只取用得上
- * 的记录, 绝不为一条脏数据拒绝启动.
+ * 的记录, 不为一条脏数据拒绝启动.
  */
 import { logger } from '../../util/log.ts'
 import {
@@ -26,7 +23,7 @@ import { normalize, refundKey } from './records.ts'
  *
  * sessions.json 是"重启后还能寻址 DELETE"的索引, 丢了只是槽位回收变慢,
  * 不值得让整个服务停摆 ---- 它与 users.json(凭据真源, 坏了必须拒绝启动)不同.
- * 但"丢了几条"必须记账: 否则文件里明明有东西, 控制台却说一切正常.
+ * 但"丢了几条"必须记账: 文件里明明有东西时不能报"一切正常".
  * @param {any} self 句柄库实例(SessionHandleStore)
  * @returns {any} 读盘三态(含 status 与 data)
  */
@@ -98,7 +95,7 @@ export function loadHandles(self: any) {
     noteOpenHandles(self.file, self.orphans.length)
   } catch (err) {
     // 已经解析成 JSON 了:这里只可能是字段结构问题(Array.isArray 之后基本
-    // 不会抛).保留原来的兜底,不让启动流程被一个索引文件拖死.
+    // 不会抛).保留兜底,不让启动流程被一个索引文件拖死.
     logger.warn('session handle store load failed', {
       file: self.file,
       error: err instanceof Error ? err.message : String(err),

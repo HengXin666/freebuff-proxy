@@ -20,9 +20,8 @@ import assert from 'node:assert/strict'
    * - - 形态 = GET /session + x-freebuff-instance-id + x-freebuff-heartbeat: 1,
    * - 且不带时区(...!heartbeat ? freebuffTimeZoneHeaders() : {}).
    *
-   * 抓包实证:admission(line 8)→ 首个心跳(line 17)间隔 20.5 秒.
-   * 而真实事故里 admission 后 25 秒就被上游退款 ---- 缺心跳是"上游认为这条
-   * 会话无人持有"的最强候选.
+   * 抓包实证: admission(line 8)→ 首个心跳(line 17)间隔 20.5 秒.
+   * 缺心跳时上游会认为这条会话无人持有.
    *
    * - 反向探针:删掉 _sendHoldHeartbeat(...) 调用后本用例必须变红.
    */

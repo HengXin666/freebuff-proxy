@@ -9,26 +9,19 @@ let settings = { level: 'info' }
 /**
  * 进程内环形缓冲:最近 N 条日志留一份在内存,供控制台[日志]页查看.
  *
- * 为什么需要:上游的故障判据(例如 countryBlockReason)以往只写进 stdout,
- * 用户在容器里看不到,也不想 docker logs ---- 于是只能看到一串 503 却不知道
- * 为什么.控制台要能直接读到完整字段才能排障.
- *
- * 有界是硬要求:不带上限会让长期运行的实例被日志吃光内存.超容量丢最旧的
- * (及时清理:默认 5000 条,由 logging.ring_cap 配置 ---- 见 src/config.ts
- * 的说明;configureLogger() 在 serve.js 启动时接线;0 = 不保留).
+ * 有界:超容量丢最旧的(默认 5000 条,由 logging.ring_cap 决定;
+ * configureLogger() 启动时接线;0 = 不保留).
  * @type {Array<Record<string, any>>}
  */
 const ring: Array<Record<string, any>> = []
 /** @type {number} */
-let ringCap = LOG.ringCapDefault
+let ringCap: number = LOG.ringCapDefault
 
 /**
  * 日志上下文:一次下游请求的全链路标识.
  *
- * 为什么需要:此前每条日志只有 ts/level/msg/fields,
- * 看不出是哪个账号的哪一次请求 ---- 多账号池并发时日志完全交织,
- * 排障只能靠猜.现在用 AsyncLocalStorage 把上下文透传进所有下游调用,
- * logger 自动带上 reqId / account / model,前端再按 reqId 聚合.
+ * 用 AsyncLocalStorage 把上下文透传进所有下游调用, logger 自动带上
+ * reqId / account / model, 前端按 reqId 聚合.
  */
 let als: any = null
 try {
@@ -73,27 +66,15 @@ export function log(level: string, msg: string, fields: any = undefined): void {
   const ctx = currentLogContext()
   const f = fields && typeof fields === 'object' ? fields : {}
   /**
-   * email 自动补成 account(2026-10-04 用户报[日志里显示的是
-   * #84441506e 这种奇怪东西,能不能显示邮箱]).
-   *
-   * 根因:account 只从日志上下文(als)取,而很多日志点是手写
-   * email: ... 字段 ---- 两者不互通.于是选号阶段(还没 patchLogContext)
-   * 与跳过账号那几行只有 email,没有 account,前端 line.account
-   * 读到 undefined,那一行就只剩 #reqId(用户看到的"奇怪东西").
-   *
-   * 实测:60 条日志里 7 条缺 account,集中在
-   * selected account for model(4)与 skip account: ...(3)----
-   * 恰恰是最需要知道"哪个号"的行.
-   *
-   * 这里统一兜底:只要 fields 里有 email 而上下文没给 account,就用 email.
-   * 改一处,全站受益(不必逐个日志点补 patchLogContext).
+   * account 兜底: fields 里有 email 而上下文没给 account 时用 email.
+   * 选号阶段(还没 patchLogContext)的日志点只带 email.
    */
   const account = ctx?.account || f.email || undefined
   const line = {
     ts: new Date().toISOString(),
     level,
     msg,
-    // 颗粒度: 在请求上下文里 = request(带 reqId), 否则 = 独立事件.
+    // 颗粒度: 在请求上下文里 = request(带 reqId), 其余 = 独立事件.
     kind: (ctx?.reqId ? 'request' : 'event') as LogKind,
     ...(ctx?.reqId ? { reqId: ctx.reqId } : {}),
     ...(account ? { account } : {}),

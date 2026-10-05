@@ -4,7 +4,7 @@
  * 本文件曾是一个 9329 行的单文件用例树; 现已按语义域拆进 harness/ 与 parts/.
  * 入口只保留三件事: 环境变量, 装 mock 上游, 以及按原顺序逐个 await import().
  *
- * 为什么必须顺序 await import(): ESM 会把静态兄弟 import 的顶层 await 交错执行,
+ * 顺序 await import(): ESM 会把静态兄弟 import 的顶层 await 交错执行,
  * 那样"装 mock fetch"(原 stmt 33)与"startServer"(原 stmt 50)之间就没有先后保证,
  * 建 server 时的请求会直接打到真实上游.
  */

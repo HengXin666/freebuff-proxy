@@ -4,9 +4,8 @@
  * 方法实现按域放在 src/session/{core,observe,admit,release}/ 下, 这里只做
  * 三件事: 生成会话实例 id, 建状态容器, 把方法挂到原型上.
  *
- * 为什么用"原型装配"而不是 import 49 个方法逐个赋值: 逐个赋值会在
- * 类里再写一遍名字, 而重复的名字正是本仓出过事故的地方. 装配表
- * (./methods.ts)是唯一清单, 与调用点同名.
+ * 用"原型装配"而非 import 49 个方法逐个赋值: 逐个赋值要在类里重复一遍名字.
+ * 装配表(./methods.ts)是唯一清单, 与调用点同名.
  *
  * 构造函数的口径必须逐字保留: test/verify-model-mapping-truth.mjs 与
  * test/smoke.mjs 都直接 new SessionManager({...}) 并断言解构到的参数

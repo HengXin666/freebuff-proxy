@@ -38,10 +38,7 @@ import assert from 'node:assert/strict'
   /**
    * 占位符替换.
    *
-   * - 断言的 key 从 model.syncDone 换成 model.syncReportAligned:
-   * 同步结果改成[按上游目录三向对账]的弹窗后,syncDone 被删(i18n 门禁
-   * 会把它判成死词条),这里必须跟着换,否则断言打在一个不存在的 key 上,
-   * 中英两语都回落到 key 原文 → notEqual 失败.
+   * 本段断言的 key 是 model.syncReportAligned(同步结果弹窗用的词条).
    */
   setLocale('zh-CN')
   assert.equal(getLocale(), 'zh-CN')
@@ -59,7 +56,7 @@ import assert from 'node:assert/strict'
   assert.equal(setLocale('en-US'), 'en')
   assert.equal(setLocale('ja-JP'), DEFAULT_LOCALE, '不支持的语种回落到默认')
 
-  // 缺 key 返回 key 本身(界面露出可读 key,而不是空白)
+  // 缺 key 返回 key 本身(界面露出可读 key)
   assert.equal(t('nope.missing.key'), 'nope.missing.key')
 
   // 各语种文案都不该是空串

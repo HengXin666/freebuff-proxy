@@ -1,15 +1,12 @@
 /**
  * 凭据文件的路径与文件名规则.
  *
- * 账号唯一标识(key)优先用 Freebuff 用户 id:GitHub / Google 登录即使邮箱相同,
- * Freebuff 也会分配不同的 id,用邮箱做 key 会让同邮箱账号互相覆盖(bug),
- * 用 id 则可并存.老数据 / 手工导入无 id 的账号回落用邮箱做 key.
+ * 账号唯一标识(key)优先用 Freebuff 用户 id:同邮箱的 GitHub / Google 登录
+ * 各有独立 id,用 id 做 key 可并存.老数据 / 手工导入无 id 的账号回落用邮箱做 key.
  *
  * 目录布局:
- *   credentials/<key>.json      key = Freebuff 用户 id(新布局)
- *   credentials/<email>.json    历史布局,读取时自动迁移到 <id>.json
- *
- * 从 src/auth-store.ts 拆出(原 392 行单文件).
+ *   credentials/<key>.json      key = Freebuff 用户 id
+ *   credentials/<email>.json    旧布局,读取时自动迁移到 <id>.json
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -17,7 +14,7 @@ import { credentialsDir, projectRootFromModule } from '../config.ts'
 import { logger } from '../util/log.ts'
 
 /**
- * 解析凭据目录(配置显式值优先,否则仓库默认).
+ * 解析凭据目录: 优先取配置里的 upstream.credentialsDir, 未配置时用仓库默认值.
  *
  * @param {any} config 已加载配置
  * @returns {string} 凭据目录绝对路径
@@ -34,7 +31,7 @@ export function resolveCredentialsDir(config: any): string {
 
 /**
  * 账号唯一标识:优先 Freebuff 用户 id(GitHub/Google 同邮箱不互斥),
- * 无 id(历史数据/手工导入)回落小写邮箱.
+ * 无 id 的账号回落小写邮箱.
  *
  * @param {any} user 账号对象
  * @returns {string} 账号 key
@@ -85,7 +82,7 @@ export function accountCredentialsPath(dir: string, key: any): string {
 }
 
 /**
- * 邮箱 -> 历史布局文件名(规范化 + 防目录穿越).
+ * 邮箱 -> <email>.json 文件名(规范化 + 防目录穿越).
  *
  * @param {any} email 账号邮箱
  * @returns {string} 文件名

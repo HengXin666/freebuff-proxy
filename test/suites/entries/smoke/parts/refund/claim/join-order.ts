@@ -22,9 +22,8 @@ import assert from 'node:assert/strict'
    * }
    * - 即:同一条 instanceId 上有未结清的会话时,先结束它再 admission.
    *
-   * - 不这么做的后果(实测):上游认为槽位仍被占 → purchase_capacity;
-   * - 而本地 _apply 已把 session 覆盖成 none → 面板说"没有会话",
-   * 两边各说各话,用户完全无法判断.
+   * - 该顺序不到位时: 上游认为槽位仍被占 → purchase_capacity;
+   * - 而本地 _apply 已把 session 覆盖成 none → 面板说"没有会话", 两边不一致.
    *
    * - 反向探针:删掉 admit 里那段 if (this._releasePending ...) 后本用例必须变红.
    */

@@ -1,14 +1,10 @@
 /**
  * 副仓库(cli-bridge)RPC 端口  --  主服务侧不复制任何协议代码, 只委托.
  *
- * 为什么单独成文件: 原 official-rpc.ts 397 行超 300 红线. 它里有两类东西:
- * 一个是装配用的 buildRpcCfg(读本机密钥文件, 把凭据归一成副仓库形态),
- * 一个是这六个"端口"(把请求委托给副仓库执行, 再把回执透传给下游). 后者全是
- * 极薄的转发, 变更节奏只跟副仓库的 action 名走, 与凭据装配无关.
+ * 六个端口把请求委托给副仓库执行, 再把回执透传给下游. 极薄的转发, 变更节奏只跟
+ * 副仓库的 action 名走. 凭据装配(buildRpcCfg)在 official-rpc.ts.
  *
- * 设计原则不变: 上游请求的协议实现只有一份, 在 cli-bridge/(bun 执行).
- * 主服务(Node)不复制那套逻辑, 而是把请求委托给它执行, 再把结果透传给下游.
- * 这就是用户要的[主侧请求到副侧, 副侧直接透传自己逻辑, 相当于一个 RPC].
+ * 上游请求的协议实现只有一份, 在 cli-bridge/(bun 执行); 主服务(Node)只委托.
  *
  * 见 docs/reverse/17-current-status-and-gaps.md.
  */
@@ -119,11 +115,10 @@ export async function rpcChat(params: any) {
 /**
  * 会话读取(端口):GET /api/v1/freebuff/session.
  *
- * 为什么必须走这个端口而不是在主服务里自己拼头:
- * Node 的内置 fetch 会强制带上 accept-language 与 sec-fetch-mode
- * (后者是 forbidden header,设不掉),而客户端(bun)不带 ----
- * 在主服务里"补头/删头"永远补不到完全一致,只有让请求跑在 bun 上才行.
- * 官方形态的实现只有一份,在 cli-bridge/;本文件不复制它.
+ * 走这个端口而非在主服务里自己拼头: Node 的内置 fetch 会强制带上
+ * accept-language 与 sec-fetch-mode(后者是 forbidden header, 设不掉), 而客户端
+ * (bun)不带 ---- 在主服务里"补头/删头"补不到完全一致, 只有让请求跑在 bun 上.
+ * 官方形态的实现只有一份, 在 cli-bridge/.
  *
  * 见 docs/reverse/21 §21.3(客户端真值)与 §21.5(对齐状态).
  *
@@ -186,8 +181,8 @@ export async function rpcRegisterDeviceKey(params: any) {
 /**
  * 释放会话(端口):DELETE /api/v1/freebuff/session.
  *
- *  必须带 x-freebuff-instance-id,否则上游 400 instance_required,
- * 槽位退不掉 → 账号一直被占(会拿到 purchase_claim_released / purchase_in_use).
+ * 带 x-freebuff-instance-id: 缺该头时上游回 400 instance_required,
+ * 槽位退不掉(账号会一直被占, 拿到 purchase_claim_released / purchase_in_use).
  * 头与签名一律交给 bun 侧官方形态实现.
  *
  * @param {{ cfg: object, instanceId: string, timeoutMs?: number }} params

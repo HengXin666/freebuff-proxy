@@ -11,11 +11,9 @@ import { freebuffLegacyModelDigest } from '../../upstream/catalog-protocol.ts'
 import { FREEBUFF_AVAILABLE_MODELS } from '../../model.ts'
 
 /**
- * 在所有已知 runtime 的目录持有者上依次尝试解析,返回第一个非空结果.
+ * 在所有已知 runtime 的目录持有者上依次尝试解析, 返回第一个非空结果.
  *
- * 为什么抽出来:目录表要双向用(key → 显示名 / key → 可读 id /
- * 显示名 → key),每种都各写一遍遍历会分成三份几乎相同的代码 ----
- * 而它们的失效条件完全一样(没抓过目录 / 该行不在这份目录里).
+ * 目录表要双向用(key → 显示名 / key → 可读 id / 显示名 → key), 集中在一处遍历.
  * 单个 runtime 抛错不影响其它账号(多账号池里目录是逐账号持有的).
  * @param {any} this 账号池(runtimes)
  * @param {(catalog: any) => string | null | undefined} fn
@@ -36,15 +34,15 @@ export function _fromCatalogs(this: any, fn: any) {
 /**
  * 目录 key / 上游 legacy id / 可读名 → 人类可读显示名.
  *
- * 这是展示侧的公开入口(web 层要显示模型名时用它,不要自己遍历
- * runtime 的 catalog ---- 那是重复实现,曾出现过两份口径不一致).
+ * 这是展示侧的公开入口(web 层要显示模型名时用它, 不要自己遍历
+ * runtime 的 catalog).
  *
  * 上游回执侧(session.model / rateLimitsByModel / prices)用的全是目录 key,
  * 而会话清单(desktopPurchases[].model)用的是上游 legacy id,
  * 两种形式都要能显示成人能认的名字 ---- 所以内部先做归一(keyForName
  * 已支持三种形式),再查 displayName.
  *
- * 取不到就返回 null(调用方回落原值,绝不因为取不到名字就让整行渲染失败).
+ * 取不到就返回 null(调用方回落原值).
  * @param {any} this 账号池(runtimes)
  * @param {string} key
  * @returns {string | null}
@@ -59,8 +57,7 @@ export function displayNameFor(this: any, key: any) {
  *
  * 上游回执侧(session.model / rateLimitsByModel / prices)用的全是目录 key,
  * 控制台要显示人能认的名字.目录行自带 displayName,抓目录时就缓存在
- * CatalogHolder.displayNames 里;取不到就返回 null(调用方回落原 key,
- * 绝不因为取不到名字就让整行渲染失败).
+ * CatalogHolder.displayNames 里;取不到就返回 null(调用方回落原 key).
  * @param {any} this 账号池(runtimes)
  * @param {string} key
  * @returns {string | null}
@@ -69,12 +66,8 @@ export function _modelDisplayName(this: any, key: any) {
   if (typeof key !== 'string' || !key) return null
   const fromCatalog = this._fromCatalogs((cat: any) => cat?.displayNameForKey?.(key))
   if (fromCatalog) return fromCatalog
-  //  兜底:实时目录未抓取时(服务刚启动,或该 runtime 的 catalog 尚未
-  // fetch),displayNameForKey 一律返回 null ---- 于是总览的额度列,模型列
-  // 会渲染成裸目录 key(m-096e75164d),用户根本认不出是哪个模型.
-  //
-  // 实测(2026-10-03):账号池额度键全是 m-xxx,而 /api/overview 的
-  // modelNames 为 null,界面显示裸 key.
+  // 兜底:实时目录未抓取时(服务刚启动,或该 runtime 的 catalog 尚未 fetch),
+  // displayNameForKey 一律返回 null, 总览的额度列/模型列会渲染成裸目录 key.
   //
   // 兜底手法与 _modelCatalogId 一致:用目录 key 的 legacyDigest 反查内置
   // 静态表,命中则取其 displayName.不做模糊匹配.
@@ -156,8 +149,8 @@ export function modelAliases(this: any, keys: any) {
  *
  *   - 目录 key(m-096e75164d)---- 老客户端/我们自己下发的 freebuff_key,原样保留;
  *   - 人类可读 id(deepseek/deepseek-v4-flash)---- 原样保留(调度与句柄映射都认它);
- *   - 显示名('Solar Pro 4')---- 内置 catalog 里没有这个写法,必须落回目录 key,
- *     否则白名单会拒,会话也会绑错模型.
+ *   - 显示名('Solar Pro 4')---- 内置 catalog 里没有这个写法,必须落回目录 key:
+ *     白名单会拒, 会话也会绑错模型.
  *
  * 查不到映射时原样返回:宁可让它照旧走白名单报错,也不猜一个模型出来.
  * @param {any} this 账号池(runtimes)

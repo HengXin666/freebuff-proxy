@@ -39,8 +39,8 @@ import assert from 'node:assert/strict'
     ['web_search', ...FREEBUFF_SIGNATURE_TOOL_NAMES],
   )
   // 决定性断言:这整个工具集送进上游判据必须判自己人.
-  // 旧实现注入空心 end_turn,上游判 foreign_toolset 并把请求降级到
-  // inclusionai/ling-3.0-tiny:free ---- 那正是 issue#15[所有模型空响应]的根因.
+  // 注入空心 end_turn 会被上游判 foreign_toolset 并把请求降级到
+  // inclusionai/ling-3.0-tiny:free.
   const verdict = detectForeignClient(
     { tools: enabledBody.tools, messages: enabledBody.messages },
     true,

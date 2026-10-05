@@ -1,7 +1,7 @@
 /**
  * scheduling: 强制新建会话路径
  *
- * 释放会话后必须真的重走 admit, 而不是复用内存里的旧句柄.
+ * 释放会话后必须真的重走 admit, 不复用内存里的旧句柄.
  *
  * 由 test/suites/entries/smoke/smoke.ts 按职责机械切出. 口径: 纯搬移.
  */
@@ -54,7 +54,7 @@ import assert from 'node:assert/strict'
   // 模拟"会话即将过期需要 re-admit":让 isUsableForModel 返回 false 后触发 ensureSession
   sm.session.expiresAt = new Date(Date.now() - 1000).toISOString()
   const ensurePromise = sm.ensureSession('deepseek/deepseek-v4-flash')
-  // 等待一小段:ensureSession 应等待在途流结束,而不是立刻 DELETE 旧 session
+  // 等待一小段: ensureSession 应等待在途流结束, 期间不 DELETE 旧 session
   await new Promise((r) => setTimeout(r, 150))
   assert.equal(state.sessionDeletes, 0, 're-admit 不得在流在途时删除旧 session')
   assert.equal(sm.inFlightCount(), 1)

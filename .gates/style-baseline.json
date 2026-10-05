@@ -85,6 +85,7 @@
     ".agents/notes/implemented/feature/2026-10-03-upstream-channel-switch.md": 10,
     ".agents/notes/implemented/process/2026-10-05-code-quality-redlines.md": 213,
     ".agents/notes/implemented/process/2026-10-05-docs-taxonomy-and-index-rewrite.md": 150,
+    ".agents/notes/implemented/process/2026-10-05-log-granularity-constants-and-comment-policy.md": 227,
     ".agents/notes/implemented/process/2026-10-05-parallel-workstream-write-scopes.md": 85,
     ".agents/notes/implemented/simplification/2026-10-02-cli-channel-only.md": 9,
     ".agents/notes/NOTE-EXEMPT.md": 2,
@@ -132,7 +133,6 @@
     "docs/reverse/20-upstream-endpoint-whitelist.md": 10,
     "docs/reverse/21-client-request-reference.md": 244,
     "scripts/gates/checks/guard/tunable/literals.ts": 2,
-    "scripts/gates/meta/comment/trim.ts": 2,
     "scripts/gates/undeclared-allow.txt": 7,
     "src/web/store/config/settings-store.ts": 1
   }

@@ -1,20 +1,13 @@
 /**
- * 一次上游调用(run)的准备与执行 ---- 从 src/proxy.ts 的 handleChatCompletionsInner 提出.
+ * 一次上游调用(run)的准备与执行.
  *
- * ## 为什么单独成文件
+ * 回答"拿到账号锁之后, 判定失败之前, 这一轮往上发什么": 会话快照校验, agent 选择与
+ * 回退, 请求体构造, 转发, FINISH 上报. 读 st 上的本轮状态
+ * (rt / runId / clientId / agentOverride); 重试分支在 ./errors.ts.
  *
- * 这一段回答"拿到账号锁之后, 判定失败之前, 这一轮到底往上发什么": 会话快照校验, agent 选择与回退, 请求体构造, 转发, FINISH 上报. 它读 st 上的本轮状态
- * (rt / runId / clientId / agentOverride), 但不参与重试决策 ---- 重试决策在
- * ./errors.ts. 拆开后"发什么"与"失败后怎么办"可以分别读.
- *
- * ## 每请求独立语义
- *
- * 全部可变状态都在 st(每请求一份, 见 ../state/state.ts), 本模块不持有任何模块级
- * 可变绑定: agentOverride / runId / clientId 都写回 st, 换号时由
- * ../acquire/acquire.ts 清空 ---- 上一账号被拒的 agent 覆盖泄漏到新账号会让新账号
- * 跳过主 agent. 这是并发安全的前提.
- *
- * 口径: 纯搬移, 行为零改动.
+ * 每请求独立语义: 全部可变状态都在 st(每请求一份, 见 ../state/state.ts);
+ * agentOverride / runId / clientId 都写回 st, 换号时由 ../acquire/acquire.ts 清空.
+ * 本模块不持有任何模块级可变绑定.
  */
 import { UpstreamError } from '../../../upstream/client.ts'
 import { chooseHermesDelegateAlias } from '../../../tool-alias.ts'
@@ -58,7 +51,7 @@ export async function runUpstreamTurn(st: any, res: any) {
     upstream: rt.upstream,
     // 会话剩余时间:用于把流 idle 超时收敛到会话过期附近,过期即掐断.
     sessionRemainingMs: snap.remainingMs,
-    // chat 必须带会话实例 id,否则上游 428(见 forwardCompletions)
+    // chat 必须带会话实例 id(见 forwardCompletions)
     instanceId: snap.instanceId,
     schedulingDeadline: st.schedulingDeadline,
     upstreamModel: st.upstreamModel,
@@ -76,12 +69,12 @@ export async function runUpstreamTurn(st: any, res: any) {
 }
 
 /**
- * 取 FINISH 上报要用的失败原因码.
+ * 取 FINISH 上报要用的失败码.
  *
  * 结果对象的形状是三选一(成功 / 管道失败 / 分类失败), 只有后面两种带 gateCode;
- * 用 Reflect 读而不是直接点号, 是为了不让整条链因为联合类型收窄而失去检查.
+ * 用 Reflect 读取以保留联合类型检查.
  * @param {any} result forwardCompletions 的结果
- * @returns {string} 失败原因码(取不到时退回 completions_failed)
+ * @returns {string} 失败码(取不到时退回 completions_failed)
  */
 function errorMessageOf(result: any) {
   return String(Reflect.get(result, 'gateCode') || 'completions_failed')
@@ -90,10 +83,10 @@ function errorMessageOf(result: any) {
 /**
  * 构造发往上游的 chat 请求体.
  *
- * 三个服务端指派值都必须逐字用会话回执里的真值, 否则上游按不匹配拒绝:
- *   snap.model   服务端指派的 model(用错得到 session_model_mismatch, 实测踩过)
+ * 三个服务端指派值都必须逐字用会话回执里的真值, 不符合会被上游按不匹配拒绝:
+ *   snap.model   服务端指派的 model(用错得到 session_model_mismatch)
  *   runId        本 run 的身份(FINISH 上报与 RPC 回落都要用)
- *   clientId     绑定 run 生命周期, 同一 run 的多次 chat 复用它, 绝不 fanout
+ *   clientId     绑定 run 生命周期, 同一 run 的多次 chat 复用它
  * @param {any} st 请求级状态
  * @param {any} agentId 本轮实际使用的 agent
  * @param {any} snap 会话快照
@@ -111,10 +104,10 @@ function buildTurnBody(st: any, agentId: any, snap: any, hermesDelegateAlias: an
     st.clientId,
     hermesDelegateAlias,
     // 服务端指派的 model(会话回执里的 m-xxx / fbm1.xxx).
-    // 用错会得到 session_model_mismatch ---- 实测踩过.
+    // 用错会得到 session_model_mismatch.
     snap.model,
     // 目录持有者:把 m-xxx(目录 key)翻成 fbm1.xxx(句柄)----
-    // 官方 chat 的 model 用的就是句柄(真机抓包确认).
+    // 官方 chat 的 model 用的是句柄.
     rt.upstream.catalog,
   )
 }

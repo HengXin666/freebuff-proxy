@@ -1,9 +1,6 @@
 /**
  * settings 域:运行设置(GET 快照 / POST 热更新)+ 只读配置视图.
  *
- * ! 为什么 GET 与 POST 必须同一个文件:这个端点的读口径与写口径是同一张
- * 字段表.分开放最容易出现的漂移是"写进去的字段 GET 没回显",于是前端
- * 保存后刷新一次设置就变回旧值 ---- 用户看到的现象是"设置保存不了".
  */
 import { sendJson } from '../../../util/http.ts'
 import { TUNABLES } from '../../../config/tunable/specs.ts'
@@ -48,7 +45,7 @@ function readSettings(config: any, settingsStore: any) {
      * 与上面 11 个实时字段是两套东西, 不要混:
      *   - 实时字段: 保存即生效(走 getter);
      *   - 可调项:   保存后需重启才生效(启动时合并进 config).
-     * 前端必须把这两类分开渲染并分别提示, 否则用户会以为可调项"保存了没反应".
+     * 前端必须把这两类分开渲染并分别提示.
      *
      * 值来自 config 现值(已含启动时合并进的可调项), 所以这里回显的就是"当前生效值".
      */
@@ -62,7 +59,7 @@ function readSettings(config: any, settingsStore: any) {
  * 字段校验表:[字段, 校验失败文案, 归一化].
  *
  * 每条都先判类型再判范围,且必须显式区分"没传"(跳过)与"传了非法值"
- * (400)---- 把 undefined 当"要清零"是这类接口最典型的事故.
+ * (400); undefined 表示"没传", 不是"要清零".
  *
  * 元组必须显式标注:不标的话 TS 会把每一行推成 (string | 函数)[],
  * 解构出来的 ok 就不可调用(buildPatch 里的 ok(...) 直接报 TS2349),
@@ -224,7 +221,6 @@ export async function handle(
       ok: true,
       ...settings,
       tunables: savedTunables,
-      // 显式告诉前端: 可调项是否要重启 ---- 前端据此弹提示, 而不是自己猜.
       restartRequired: Object.keys(tunablePatch).length > 0,
     })
     return true

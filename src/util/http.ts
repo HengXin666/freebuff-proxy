@@ -32,7 +32,7 @@ export async function readRequestBody(
   if (timeoutMs > 0) {
     timer = setTimeout(() => {
       timedOut = true
-      // 摧毁连接,让 for-await 立刻以 'aborted'/'error' 结束,而不是继续干等.
+      // 摧毁连接,让 for-await 立刻以 'aborted'/'error' 结束,不再干等.
       req.destroy(new Error('request body read timeout'))
     }, timeoutMs)
     if (timer.unref) timer.unref()

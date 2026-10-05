@@ -16,13 +16,10 @@ const TRUTH_SOURCE = join('src', 'upstream', 'catalog-protocol.ts')
 const FORBIDDEN = [
   { re: /freebuffLegacyModelDigest\s*\(/, what: '调用 freebuffLegacyModelDigest()（上游 legacy id 的摘要）' },
   /**
-   * 判据的意图是"不得拿真源的索引去另建一套映射", 因此只拦读写该索引的
-   * 行, 不拦"声明/初始化存储"那一行.
+   * 判据意图: 只拦读写该索引的行, 不拦"声明/初始化存储"那一行.
    *
-   * 收窄原因(实测 2026-10-05): 原正则 /keyByDigest/ 把
-   * this.keyByDigest = new Map() 也判成第二套实现 ---- 而那只是真源自己的存储
-   * 初始化(基类拆分后落在 src/upstream/catalog/holder-base.ts), 没有任何映射语义.
-   * 过宽的判据会把"合法的存储声明"和"真的第二套实现"混为一谈, 逼人去加例外清单.
+   * 因此正则限定为访问形态: this.keyByDigest = new Map() 这类存储初始化
+   * (基类拆分后落在 src/upstream/catalog/holder-base.ts)不命中, 它没有映射语义.
    */
   {
     re: /keyByDigest(?:\s*\?\.[A-Za-z_$]|\s*\[)/,
@@ -49,8 +46,7 @@ const IMPORT_DIGEST = /import\s*\{[^}]*\bfreebuffLegacyModelDigest\b[^}]*\}\s*fr
  * 真源桶, 不产生第二张"上游 id → 目录 key"表. 它们是债务不是许可: 新增的行不在
  * 此列即 FAIL, 本表里任一条未被命中(被删/改写)也 FAIL ---- 免得例外清单腐烂成后门.
  *
- * 只比对文件名而不比对整条路径: 本仓已实测三次目录重组, 每次都要改判据常量;
- * 按文件名比对让"搬进子目录"不再需要同步改常量.
+ * 只比对文件名而不比对整条路径: 按文件名比对让"搬进子目录"不需要同步改判据常量.
  */
 const KNOWN_NEIGHBOURS = new Map([
   [
@@ -64,9 +60,8 @@ const KNOWN_NEIGHBOURS = new Map([
 ])
 
 /**
- * 迁移期必须同时扫两种后缀: 只扫一种时, 一旦某文件换了后缀它就整体退出判据面
- * ---- 实测 src/web 转 .ts 后 4 个授权邻接点全部不再被扫, 而"例外清单未被命中"
- * 又会把它们报成 stale, 看起来像"债务清完了".
+ * 迁移期必须同时扫两种后缀: 只扫一种时, 一旦某文件换了后缀它就整体退出判据面,
+ * 而"例外清单未被命中"又会把它报成 stale, 看起来像"债务清完了".
  */
 const SCAN_EXT = ['.ts']
 
@@ -89,7 +84,7 @@ function listSourceFiles(dir) {
 }
 
 /**
- * 整行注释不计(注释里的提及不是实现; 不做行内剥离以免误切字符串里的 //).
+ * 整行注释不计(注释里的提及不是实现; 不做行内剥离, 那样会误切字符串里的 //).
  * @param {string} text 已完成 trim 的一行
  * @returns {boolean} 是否整行注释
  */

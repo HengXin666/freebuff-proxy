@@ -5,8 +5,6 @@
  * 真机抓包(从零建会话)确认官方 POST /session/admission 带
  * x-freebuff-model: fbm1.AAEAAUPe2Us...(句柄).句柄只能从目录拿(服务端签名),
  * 所以 POST 前必须先抓一次目录.
- *
- * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
  */
 import { logger } from '../../../util/log.ts'
 import { freebuffAuthHeaders } from '../../../auth-store.ts'
@@ -33,12 +31,11 @@ async function resolveModelForWire(requested: any, displayName: any, catalog: an
     displayName ||
     (FREEBUFF_AVAILABLE_MODELS.find((m) => m?.id === requested)?.displayName ?? null)
   const resolved = catalog.handleForModel(requested, name)
-  //  这里不要用 recommendedKey 兜底(曾用,已证伪):它会把
-  // deepseek/deepseek-v4-flash 静默映射到服务端"推荐"的 m-00032eaeec
-  // (MiMo 2.6 Flash) --  会话绑 MiMo,agent 却是 deepseek,chat 必然 503
-  // (实测踩过).正确的映射是 legacyDigests(FNV-1a),已在
-  // catalog.handleFor 里实现.若请求的模型不在本次目录里,就如实保持原值
-  //  --  让上游返回它自己的判据(模型不可用),而不是我们替它猜一个.
+  // 不用 recommendedKey 兜底: 它会把 deepseek/deepseek-v4-flash 静默映射到
+  // 服务端"推荐"的 m-00032eaeec(MiMo 2.6 Flash), 于是会话绑 MiMo 而 agent
+  // 是 deepseek, chat 必然 503. 映射只走 legacyDigests(FNV-1a), 已在
+  // catalog.handleFor 里实现. 请求的模型不在本次目录里时就保持原值, 让上游
+  // 返回它自己的判据.
   if (resolved === requested) {
     logger.warn('requested model not present in this catalog', {
       requested,
@@ -87,10 +84,7 @@ export async function sessionHeaders(ctx: any, method: string, opts: any): Promi
     ...freebuffAuthHeaders(token),
   }
   // 调试:FB_DEBUG_SESSION_HEADERS=1 时打印完整的 admission/session 头部.
-  //
-  //  这里曾用 url(未在该作用域定义)→ ReferenceError,导致每次
-  // admission 抛异常,全部失败(2026-10-03 实测踩到).调试代码必须只用
-  // 确定存在的变量,且开关默认关闭.
+  // 只引用确定存在的变量, 且开关默认关闭.
   if (process.env.FB_DEBUG_SESSION_HEADERS === '1') {
     logger.info('session request headers', {
       method,

@@ -88,7 +88,7 @@ import assert from 'node:assert/strict'
   assert.equal(hdrs[HEADER_CATALOG_FETCH], 'fbf1.AAGZWM32cR3rz9Ux042')
 
   // 回执侧(session.model / rateLimitsByModel / prices)用的是目录 key,
-  // 控制台必须能把 key 显示成人能认的名字 ---- 否则前端只会裸显示
+  // 控制台必须能把 key 显示成人能认的名字, 直接把 key 露给前端只会显示
   // m-00032eaeec 10 FB/h(服务端不透明标识).
   assert.equal(
     h2.displayNameForKey('m-00032eaeec'),
@@ -105,9 +105,8 @@ import assert from 'node:assert/strict'
 }
 
 // 目录 key ↔ 人类可读 id 的桥接(legacyDigests 反查).
-// [同步上游模型]此前不生效的根因:回执只有 key(m-096e75164d),而 catalog /
-// 自定义模型用人类可读 id(deepseek/deepseek-v4-flash),两侧对不上,
-// 同步写进去的条目永远匹配不到实际模型.
+// [同步上游模型]的回执只有 key(m-096e75164d),而 catalog / 自定义模型用
+// 人类可读 id(deepseek/deepseek-v4-flash),两侧必须能对上.
 {
   const { CatalogHolder, freebuffLegacyModelDigest } = await import(
     '../../../../../../../src/upstream/catalog-protocol.ts'
@@ -157,9 +156,9 @@ import assert from 'node:assert/strict'
 /**
  * /v1/models 不得把目录 key(m-00032eaeec)当模型名返回给下游.
  *
- * - 真实故障(用户反馈):/v1/models 里有 5 条 {id:'m-00032eaeec', source:'session'},
- * 下游 Agent 拿它当模型表,看到的是一串不透明标识 ----[返回的也应该是模型名称,
- * 而不是 ID].extraIds 现在带 displayName / catalogId,按
+ * - 场景(用户反馈): /v1/models 里有 5 条 {id:'m-00032eaeec', source:'session'},
+ * 下游 Agent 拿它当模型表, 看到的是一串不透明标识. 因此 extraIds 带
+ * displayName / catalogId 时按
  * - catalogId || displayName || key 取 id.
  */
 {
@@ -199,7 +198,7 @@ import assert from 'node:assert/strict'
 }
 
 // 会话模型绑定:chat 的 model 必须用会话回执里服务端指派的值
-// (m-xxxx 目录 key / fbm1.xxx 句柄),不能用自己的模型名 ----
-// 否则上游报 session_model_mismatch(实测踩过).契约见
+// (m-xxxx 目录 key / fbm1.xxx 句柄), 不用自己的模型名(用错会得到上游
+// session_model_mismatch 拒绝).契约见
 // .agents/notes/implemented/bug-fix/2026-10-01-session-model-binding.md
 {}

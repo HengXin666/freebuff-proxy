@@ -3,7 +3,6 @@ import { $, el } from '../../../lib/dom.ts'
 import { state } from '../../../lib/state.ts'
 import { buildAccountRow } from './row.ts'
 
-
 /**
  - 账号分区(用户口径):按"这个号现在处于什么处境"分组,默认只展开"正在调度",
  - 其余折叠----避免一屏全是已经被打废的号,把真正在干活的号淹掉.
@@ -11,8 +10,6 @@ import { buildAccountRow } from './row.ts'
  - 顺序即优先级:封禁 > 额度不足 > 警告 > 正在调度 > 从未使用.判定按"最坏优先",
  - 一个号只出现在一个分区里(否则"已封禁"还会同时出现在"额度不足"里,看着像有救).
  *
- - label/hint 用 getter 而不是求值好的字面量:这个常量在模块加载时就定型,
- - 若此刻取文案,切换语言后分区标题会一直停在旧语种(要刷新页面才变).
  */
 export const ACCOUNT_SECTIONS = [
   { id: 'banned', tone: 'err',
@@ -74,7 +71,6 @@ export function classifyAccount(a: any) {
   //    ② session_units:该模型时长额度用尽(recentCount >= limit,小数).
   //    前端先于后端修好过这条,而当时后端只判 ②,于是出现"控制台显示已用尽,
   //    调度器却仍把请求送上去"的错位;两处必须保持一致.
-  //     两本账是并行的两道闸门(一笔会话两本账都扣,一手实测见
   //    docs/evidence/ledger-session-units-vs-freebucks.json),所以任一用尽都要归到这里.
   //     付费时段内不算[额度不足]:一次 admit 买断一小时,池子当场扣到 0
   //    之后这个小时仍然完全可用(rem=0 是"已付款"的正常状态,不是"用不了").
@@ -186,10 +182,6 @@ export function buildAccountsTable(accounts: any) {
 /**
  - 账号分区定点更新(局部刷新的唯一入口).
  *
- - 为什么不能像以前那样 wrap.innerHTML = '' 再整块重建:那等于把整个列表
- - 换成一批全新的 <details>,一切纯 UI 状态随之归零 ---- 用户手动摊开的分区
- - 被折回去,滚动位置跳回顶部,正在看的行闪烁.用户明确要求刷新不得重置
- - 分组的展开/折叠状态.
  *
  - 做法:复用现有的 <details> 外壳(连同它的 open 状态),只替换 <tbody> 的行;
  - 用 append 移动节点来校正分区顺序(移动同一元素不会重置它的展开状态).

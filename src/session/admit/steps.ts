@@ -1,8 +1,7 @@
 /**
  * admission 的各步骤实现: 探测 claim, 回落后 POST, 以及回执的四种终态处置.
  *
- * 从 session-manager.js 的 _admitUnlocked 切出(原函数 366 行). 编排留在
- * ./turn.ts, 这里只放"拿到回执之后怎么办"的每一支.
+ * 编排在 ./turn.ts, 这里只放"拿到回执之后怎么办"的每一支.
  *
  * 官方行为依据(2026-10-01 真机抓包 + orchestrator.js 208130-208176):
  * 建会话路径是 GET /session(带 cli claim) -> POST /session/admission,
@@ -14,16 +13,13 @@ import { newRawInstanceId } from '../../upstream/fingerprint/official-fingerprin
 import { logger } from '../../util/log.ts'
 
 /**
- * 把"待结束的会话"结清再 admission(官方行为, 2026-10-04 逆向后补).
+ * 把"待结束的会话"结清再 admission.
  *
  * 官方 orchestrator.js:208130-208136: 同一条 instanceId 上有未结清的会话时,
- * 先把它结束掉再 admission. 否则上游会认为该账号的槽位仍被占
- * (purchase_capacity) -- 而本地账本却显示 status: none(因为 _apply 早把它
- * 覆盖成 none 了), 面板与上游各说各话, 正是用户看到的"明明没会话却说槽位被占".
+ * 先把它结束掉再 admission; 不清会让上游认为该账号的槽位仍被占
+ * (purchase_capacity), 而本地账本显示 status: none, 面板与上游各说各话.
  *
- * 实测(2026-10-04 远程 12:52:18): 账号直连上游 status: none, balance 15,
- * 但远程 admission 一直 purchase_capacity. 只在确实处于待结束状态时做,
- * 正常路径零开销.
+ * 只在确实处于待结束状态时做, 正常路径零开销.
  * @param {any} this 会话实例
  * @param {string} model 请求模型
  * @returns {Promise<void>} 结清或无事发生即返回
@@ -65,8 +61,7 @@ export async function probeClaim(this: any, claimId: string): Promise<any> {
     logger.warn('GET-claim admit failed; falling back to POST admission', {
       code: err?.code,
       status: err?.status,
-      // 没有这两个字段时(网络层异常)必须留 message, 否则日志里
-      // 只剩一句"失败"而看不出原因(实测排障时就卡在这里).
+      // 这两个字段在日志里保留 message, 网络层异常时不至于只剩一句"失败".
       message: err instanceof Error ? err.message : String(err),
       cause: err?.cause ? String(err.cause).slice(0, 200) : undefined,
       claimId,
@@ -83,8 +78,7 @@ export async function probeClaim(this: any, claimId: string): Promise<any> {
  *   -> POST /session/admission(带 fbm1. 句柄的 x-freebuff-model) -> 200 active
  * 已知占用者时首次 POST 就带 takeover(官方 knownHolder 的用法): 官方在发请求
  * 之前就从 desktopPurchases 读出持有者, 直接带 x-freebuff-takeover-instance-id
- * 接管; 而不是先撞一次 purchase_capacity 再从错误回执里捡 id. 好处是少一次
- * 必然失败的请求, 且跨部署可见.
+ * 接管, 少一次必然失败的请求, 且跨部署可见.
  * @param {any} this 会话实例
  * @param {string} model 请求模型
  * @param {string} claimId 本进程复用的 instanceId
@@ -124,10 +118,9 @@ export async function postAdmission(
  * 拿到 active 回执时的收尾: 记账, 落现场, 起轮询, 立刻发一次持有心跳.
  *
  * 官方 syncHeartbeatTimer 在有会话时立即执行一次 heartbeat(), 之后每 45 秒
- * 一次(常量 FREEBUFF_SESSION_HEARTBEAT_INTERVAL_MS = 45000).
- * 抓包实证: admission(line 8) -> 首个心跳(line 17)间隔 20.5 秒. 而真实事故里
- * 我们在 admission 后 25 秒就被退款 -- 时间尺度吻合, 这是"上游认为这条会话
- * 无人持有"的最强候选. 心跳是 fire-and-forget, 失败不影响 admit 返回值.
+ * 一次(常量 FREEBUFF_SESSION_HEARTBEAT_INTERVAL_MS = 45000). 抓包实证:
+ * admission(line 8) -> 首个心跳(line 17)间隔 20.5 秒. 心跳是 fire-and-forget,
+ * 失败不影响 admit 返回值.
  * @param {any} this 会话实例
  * @param {any} body active 回执
  * @param {string} model 请求模型
@@ -150,14 +143,13 @@ export function activateSession(this: any, body: any, model: string): any {
 /**
  * 回执说出口地区被终态封锁, 但仍给了 instanceId: 会话照常可用.
  *
- * 2026-10-01 真机抓包修正: 官方 CLI 在完全相同的出口(countryCode: JP,
+ * 2026-10-01 真机抓包: 官方 CLI 在完全相同的出口(countryCode: JP,
  * countryBlockReason: 'country_not_allowed', verificationReason: 'region_locked')
- * 下, 服务端返回的是 status: "active" -- 会话照常建立, 照常可用. 也就是说
- * countryBlockReason 是说明性字段(告诉客户端为什么模型集变小了), 而不是
- * 拒绝信号. 此前我们把它当拒绝信号 -> 明明拿到了可用会话却主动抛错.
+ * 下, 服务端返回的是 status: "active" ---- countryBlockReason 是说明性字段
+ * (告诉客户端模型集变小了), 不是拒绝信号.
  *
- * 但钱已经花了: 保持这条已付费会话(落现场 + 起轮询), 然后才抛出, 让上层
- * 立即终止选号并把原因交给用户(出路是换代理, 不是换号).
+ * 钱已经花了: 保持这条已付费会话(落现场 + 起轮询), 然后抛出, 让上层立即终止
+ * 选号并把这条说明交给用户.
  * @param {any} this 会话实例
  * @param {any} body 回执
  * @param {string} model 请求模型

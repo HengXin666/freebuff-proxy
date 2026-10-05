@@ -3,7 +3,6 @@ import { el } from '../dom.ts'
 import { modelNameFor, poolLabel } from './models.ts'
 import { firstReset, firstResetTz, fmtCountdown, fmtDuration, fmtReset } from './time.ts'
 
-
 export function fmtNum(n: any) {
   const v = Number(n)
   if (!Number.isFinite(v)) return '0'
@@ -137,9 +136,6 @@ export function fmtQuota(quota: any, fb: any) {
       style: 'margin:2px 4px 2px 0',
       title: tip,
     }, [
-      //  这里以前是 shortModel(model) ---- 对目录 key(m-00032eaeec)来说
-      // "去 provider 前缀"是无效操作(它压根没有 /),于是裸 key 直接上屏.
-      // 用户截图里那串 m-00032eaeec 10 FB/h 就是这么来的.改走统一的可读名.
       el('span', { class: 'muted' }, `${name} `),
       label,
       exhausted

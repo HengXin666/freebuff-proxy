@@ -1,11 +1,6 @@
 /**
  * 身份解析 ---- cookie 会话 或 API Key,两条路都认.
  *
- * ! 为什么必须让 API Key 也能进控制面(2026-10-04 用户实测):
- * 用户在远程部署上想读日志排障,手上只有控制台发给他下游 Agent 的 API Key
- * (sk-fb-...).旧实现只认 fb_session cookie,于是
- * GET /api/logs 一律 401"未登录或会话已过期"----
- * 不是权限不足,是这条路根本没接.用户拿不到日志,排障全靠猜.
  *
  * 而 /v1/* 那条路认 API Key(由 server.js 的 apiKeys / userStore 校验),
  * 同一个 key 在 /v1/models 上是 200,在 /api/logs 上是 401 ----

@@ -19,7 +19,7 @@ import {
 } from './settle.ts'
 
 /**
- * 释放会话(早退 DELETE; Freebucks 侧只回 pending, 实测未到账).
+ * 释放会话(早退 DELETE; Freebucks 侧只回 pending, 未到账).
  * @returns {Promise<boolean>} true = 上游已确认结束
  * @param {any} this 会话实例
  */
@@ -126,10 +126,9 @@ export async function _releaseUnlocked(
 /**
  * 结算未完成时用同一个 instance 重放 DELETE 取回执(有界重放两次).
  *
- * 2026-09 实测: 上游对"提前结束"的会话会持续回 freebucksRefundPending,
- * 1.5s / 7s / 17s / 37s / 67s 五次重放全部仍为 pending. 所以这里既不能
- * 让挂起的回执冒充"退款 0"(那是把"没结算完"错读成"退了 0 元"),
- * 也不能无限重放.
+ * 上游对"提前结束"的会话会持续回 freebucksRefundPending,
+ * 1.5s / 7s / 17s / 37s / 67s 五次重放全部仍为 pending. 所以这里既不把
+ * 挂起的回执读成"退款 0", 也不无限重放.
  * @param {any} this 会话实例
  * @param {string} instanceId 目标会话实例 id
  * @param {any} first 首次 DELETE 的回执

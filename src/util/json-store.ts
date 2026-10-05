@@ -85,8 +85,8 @@ export function invalidShape(reason: string): JsonFileState {
 export function noteDataFile(file: string, state: JsonFileState): void {
   const abs = path.resolve(String(file))
   const prev = audit.get(abs)
-  // "因损坏而被挪走"不能再记成 missing:派生缓存修好后原地重建,第二次读到的
-  // 是 ENOENT,但它确实坏过----控制台自检要说的是这件事,而不是"尚未生成".
+  // "因损坏而被挪走"不记成 missing:派生缓存修好后原地重建,第二次读到的
+  // 是 ENOENT,但该文件确实坏过, 控制台自检要报告这件事.
   if (prev?.status === 'invalid' && state.status === 'missing') return
   audit.set(abs, {
     // 保留条目级信息(noteDroppedEntries 可能先于/晚于本函数调用).

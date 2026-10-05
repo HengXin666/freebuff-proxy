@@ -33,9 +33,8 @@ export async function registerDeviceKey(signer: any, scope: any, key: any) {
         },
         body: JSON.stringify({
           publicKey: key.publicKey,
-          //  官方抓包 body 是 client: "desktop"(二进制
-          // orchestrator.js:216629 同源).此前写 'freebuff-proxy' ---- 那是
-          // 自报家门的第三方特征.
+          // 官方抓包 body 是 client: "desktop"
+          // (二进制 orchestrator.js:216629 同源).
           client: 'desktop',
         }),
         signal: controller.signal

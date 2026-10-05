@@ -23,14 +23,9 @@ import assert from 'node:assert/strict'
   const j = await res.json()
   assert.equal(j.object, 'list')
   /**
-   * - 目录未抓取时返回空清单 + notProbed,不再回落静态 catalog.
-   *
-   * 以前这里断言"至少有内置 60 条模型".但:
-   * 1. 内置 catalog 是 2026-08 快照(13 行实时目录只命中 3 行),
-   * 拿它当清单等于给下游一份错的模型表;
-   * - 2. 服务改为零自动探测后,首访不再补抓目录.
-   * 现在正确行为是:空 + notProbed,由用户点[一键刷新]拉取.
-   * 清单本身的正确性由 test/verify-catalog-models.mjs 用真机目录钉住.
+   * - 目录未抓取时返回空清单 + notProbed, 由用户点[一键刷新]拉取.
+   * 不回落内置静态 catalog: 它是快照, 与实时目录不符.
+   * 清单本身的正确性由 verify 侧 catalog-models 套件用真机目录钉住.
    */
   assert.equal(j.data.length, 0, '未探测时清单应为空（不回落陈旧静态表）')
   assert.equal(j.notProbed, true, '未探测时必须带 notProbed 让前端提示刷新')

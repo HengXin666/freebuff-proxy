@@ -2,17 +2,12 @@ import { t } from '../../locale/index.ts'
 import { el } from '../dom.ts'
 import { state } from '../state.ts'
 
-
 export function fmtMs(ms: any) {
   if (ms == null) return t('common.none')
   const m = Math.floor(ms / 60000)
   return t('dur.minutes', { n: m })
 }
 
-/**
- - 时长(毫秒)→ 人类可读:<1 分钟显示秒,<1 小时显示 m/s,否则 h/m.
- - 调度时长经常只有几十秒(短批量),fmtMs 一律显示 "0 分钟" 会看不出差别.
- */
 export function fmtDurationMs(ms: any) {
   const n = Number(ms)
   if (!Number.isFinite(n) || n <= 0) return '0'
@@ -65,7 +60,6 @@ export function accountTimeCell(a: any) {
   ])
 }
 
-/** 把分钟数渲染成人读时长:<1 分钟给秒,否则给[X 分][X 小时 Y 分]. */
 export function fmtDuration(minutes: any) {
   const m = Number(minutes)
   if (!Number.isFinite(m) || m <= 0) return t('dur.minutes', { n: 0 })

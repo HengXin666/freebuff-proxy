@@ -61,8 +61,8 @@ globalThis.fetch = async (url, init = {}) => {
   if (u.includes('/api/v1/agent-runs') && method === 'POST') {
     const body = JSON.parse(init.body || '{}')
     // START 在首字节之前(阻塞);FINISH 是 best-effort,不阻塞首字节
-    // (proxy.js 里是 void finishAgentRun(...)),必须分开统计,否则会
-    // 误以为上游被调了两次.
+    // (proxy.ts 里是 void finishAgentRun(...)),必须分开统计 ----
+    // 合并统计会误以为上游被调了两次.
     calls.push({ t: Date.now(), kind: 'agent-runs:' + (body.action || '?') })
     if (body.action === 'START') return jsonRes({ runId: '00000000-0000-4000-8000-000000000001' })
     return jsonRes({ ok: true })

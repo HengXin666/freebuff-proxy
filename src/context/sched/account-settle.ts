@@ -1,8 +1,7 @@
 /**
  * admit 的执行与结算: 建/接管会话, 扣预算, 失败归类与冷却.
  *
- * 从 account-try.ts 按职责切出. account-try 只保留"单账号承接"的编排;
- * 这里放真正产生副作用的 admit 段(它同时管会话, 预算与冷却).
+ * account-try 负责"单账号承接"的编排; 这里放真正产生副作用的 admit 段.
  */
 import { UpstreamError } from '../../upstream/client.ts'
 import { logger } from '../../util/log.ts'
@@ -11,9 +10,8 @@ import { PAID_WINDOW_BOUND_CODES, SLOT_BUSY_CODES } from '../state/codes.ts'
 /**
  * admit 成功后的结算: 扣预算, 清冷却, 记成功, 预留槽位.
  *
- * 从 admitAndSettle 抽出. 顺序有约束: 只有真的新建了计费会话才扣预算
- * (复用热 session / 被拒绝的 admit 不扣); _rr 要推进到"被选中账号"的下一位,
- * 否则跳过冷却账号时列表末尾的账号会被选中两次.
+ * 顺序有约束: 只有真的新建了计费会话才扣预算(复用热 session / 被拒绝的 admit 不扣);
+ * _rr 推进到"被选中账号"的下一位, 保证跳过冷却账号时列表末尾的账号不会被选中两次.
  * @param {any} self 账号池(runtimes)
  * @param {any} rt 账号 runtime
  * @param {string} key 账号 key
@@ -47,12 +45,12 @@ async function settleAdmitSuccess(
     self.clearCooldown(key, model)
     self._setLastSuccessKey(key)
     // 指针推进到"被选中账号"的下一位:冷却账号被跳过时依然保持公平轮询
-    // (若只按 +1 推进,跳过冷却账号会让列表末尾的账号被选中两次).
+    // (只按 +1 推进会让列表末尾的账号被选中两次).
     const all = self.allKeys()
     self._rr = (all.indexOf(key) + 1) % Math.max(all.length, 1)
     self._recordSuccess(key)
-    // 预留一个槽位意向:选号发生在拿 chat 锁之前,"刚被选中,正在拿锁"
-    // 的请求必须被后续并发请求看见,否则 spread 模式会全部挤到同一个账号上.
+    // 预留一个槽位意向: 选号发生在拿 chat 锁之前, "刚被选中, 正在拿锁"
+    // 的请求必须被后续并发请求看见, 避免 spread 模式全部挤到同一个账号上.
     // 调用方拿到 chat 锁(或请求失败)后必须调用 rt.releaseReservedSlot().
     rt.releaseReservedSlot = self.reserveSlot(key)
     logger.info('selected account for model', {
@@ -68,8 +66,7 @@ async function settleAdmitSuccess(
 /**
  * admit 该模型并结算本次请求的[新会话预算].
  *
- * 从 _tryAccountForModel 抽出(原 admit 段 112 行). 为什么单独成函数: 这里同时管
- * 三件事 -- 真正建/接管会话, 预算扣减(只有新建了计费会话才扣), 以及失败后的
+ * 这里管三件事: 真正建/接管会话, 预算扣减(只有新建了计费会话才扣), 以及失败后的
  * 冷却归类(含出口级故障与槽位忙两类不冷却的例外).
  *
  * 返回:
@@ -127,13 +124,10 @@ export async function admitAndSettle(
         })
       } else if (SLOT_BUSY_CODES.has(String(err?.code))) {
         /**
-         *  必须把上游回执的细节记下来(2026-10-04 教训).
-         *
+         * 把上游回执的细节记下来:
          * purchase_capacity / purchase_in_use / premium_slot_taken 的
          * 回执里带 currentInstanceId / nextExpiryAt / slotLimit ----
-         * 那是定位"槽位被谁占"的唯一线索.此前只记 code,于是用户遇到
-         * [上游说 status:none,balance 15,本地却一直 slot busy]时
-         * 完全查不出是谁占的(我为此白查了一轮).
+         * 那是定位"槽位被谁占"的唯一线索.
          */
         const b = err?.body && typeof err.body === 'object' ? err.body : {}
         logger.warn('account session slot busy; not cooling', {

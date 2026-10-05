@@ -26,19 +26,11 @@ const _waitQueue: SlotWaiter[] = []
 /**
  * 全局 chat 请求并发闸门(进程内信号量).
  *
- * 绝不允许无界排队:旧实现把超限请求 push 进一个没有任何超时的
- * _waitQueue,此后永不 reject.只要有几个请求在"占着槽位却永久挂起"
- * (最典型:客户端/SDK 声明了 Content-Length 却不再发完请求体,readRequestBody
- * 的 for await (const chunk of req) 就永远不返回),槽位就被永久吃掉,
- * 后续所有请求都排进那个队列再也出不来----进程 CPU/日志/控制台一切正常,
- * 但完全不接单,只有重启才恢复(已用真实 server 复现,见 test/smoke.mjs).
- *
- * 现在的语义:
- *   - 有空位 → 立即占用;
- *   - 排满 → 有界等待(slotWaitMs),超时抛 429 server_busy 让客户端稍后
- *     重试(客户端可重试远好于整个服务静默停摆);
- *   - 释放函数幂等(与 ChatMutex._makeRelease 一致):finally 与任何
- *     兜底路径重复调用都只归还一次,绝不让计数被多减.
+ * 语义:
+ *   - 有空位 -> 立即占用;
+ *   - 排满 -> 有界等待(slotWaitMs),超时抛 429 server_busy 让客户端稍后重试;
+ *   - 释放函数幂等:finally 与兜底路径重复调用都只归还一次.
+ * 排队有界:槽位不会被永久挂起的请求吃掉.
  * @param {number} max
  * @param {number} [waitMs] 排队上限;<=0 表示不等待,直接拒绝
  * @returns {Promise<() => void>}
@@ -99,8 +91,7 @@ function releaseRequestSlot() {
 }
 
 /**
- * 当前在途/排队的 chat 请求数:暴露到控制台,槽位泄漏时能立刻看出来
- * (旧实现完全不可观测,泄漏后只能靠"不接单"这个体感发现).
+ * 当前在途/排队的 chat 请求数:暴露到控制台,用于观察槽位占用.
  * @returns {{inFlight: number, queued: number, limit: number}} 槽位快照
  */
 export function requestSlotStats() {

@@ -1,9 +1,6 @@
 /**
  * 上游探测: refresh(带/不带持有心跳)与轮询计时器.
  *
- * 从 session-manager.js 的 refresh / _setLastProbe / _sendHoldHeartbeat /
- * _armPoll / _clearPoll 切出.
- *
  * 官方两种 GET 形态的唯一差别就是几个头:
  *   heartbeat=true  = 持有心跳(每 45s 一次保活)
  *   默认            = 普通探测(能拿回额度/单价)
@@ -25,10 +22,9 @@ import { accountLevelSessionStatus } from '../inventory.ts'
 export async function refresh(this: any, opts: any = {}): Promise<any> {
   return this.withLock(async () => {
     if (this._inFlight > 0) return this.session
-    // 2026-10-01 真机对比修正: 官方 CLI 每个 GET 都带自生成的 cli claim
+    // 官方 CLI 每个 GET 都带自生成的 cli claim
     // (含 x-freebuff-multi-session / -purchase-continuity / -heartbeat),
-    // 即使当时没有活跃会话. 我们此前只在"已有会话"时才带 instanceId,
-    // 没有会话就裸发 -- 抓包对比一栏就看出少了整整 5 个头.
+    // 即使当时没有活跃会话; 没有会话时用本进程复用的那个.
     // 见 .agents/notes/implemented/bug-fix/2026-10-01-cli-get-session-path.md
     const reqOpts = {
       // 裸 UUID(desktop 形态); 没有会话时用本进程复用的那个
@@ -42,16 +38,15 @@ export async function refresh(this: any, opts: any = {}): Promise<any> {
       const accountLevel = accountLevelSessionStatus(body?.status)
       if (accountLevel) {
         /**
-         * 上游对账号级故障的 GET 回执也是 200 + {status:'banned'} 这种
-         * 形态(见 upstream/client.js 里 403 的 country_blocked/banned 直通).
-         * 以前这里无条件 this._apply(body), 于是控制台点一次[刷新]就会:
-         *   1) 把 session 覆盖成 {status:'banned', instanceId: undefined} --
-         *      活着的 instanceId 被抹掉, 那条已付费一小时的会话从此无法寻址,
-         *      既 DELETE 不掉(腾不出上游槽位)也追不回钱(退款的唯一凭据就是它);
-         *   2) 记成 lastProbe.ok = true -- 探测明明失败了却显示成功;
-         *   3) 把健康判定从"账号是否封禁"退化成"还有没有本地会话".
-         * 所以账号级错误回执只当探测结果: 保留会话现场, 不入 _apply,
-         * 落 lastProbe 原因后抛出(调用方据此区分 ban / 风控 / IP 上限).
+         * 上游对账号级故障的 GET 回执也是 200 + {status:'banned'} 形态
+         * (见 upstream/client.js 里 403 的 country_blocked/banned 直通).
+         * 账号级错误回执只当探测结果, 不做 _apply:
+         *   1) _apply 会把 session 覆盖成 {status:'banned', instanceId: undefined},
+         *      抹掉活着的 instanceId, 那条已付费一小时的会话从此无法寻址
+         *      (既 DELETE 不掉也追不回钱, 退款的唯一凭据就是它);
+         *   2) 会记成 lastProbe.ok = true;
+         *   3) 会把健康判定退化成"还有没有本地会话".
+         * 这里保留会话现场, 落 lastProbe 并抛出, 调用方据此区分 ban / 风控 / IP 上限.
          */
         this._setLastProbe({
           ok: false,
@@ -84,7 +79,7 @@ export async function refresh(this: any, opts: any = {}): Promise<any> {
 }
 
 /**
- * 记录最近一次探测结果(成功清空原因码).
+ * 记录最近一次探测结果(成功清空错误码).
  * @param {any} this 会话实例
  * @param {{ ok: boolean, code?: any, status?: any, message?: any }} patch 探测结果
  * @returns {void}
@@ -108,8 +103,7 @@ export function _setLastProbe(this: any, patch: any): void {
 /**
  * 发一次持有心跳(官方形态): GET /session + instance-id + -heartbeat: 1.
  *
- * 官方在 admission 后立刻发一次, 之后每 45s 一次; 我们此前一次都没发
- * (makeSessionViaBun 丢弃 opts). 失败只记日志, 绝不影响调用方(可用性优先).
+ * 官方在 admission 后立刻发一次, 之后每 45s 一次. 失败只记日志, 不影响调用方.
  * @param {any} this 会话实例
  * @param {string} instanceId 目标会话实例 id
  * @returns {void}

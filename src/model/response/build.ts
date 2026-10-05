@@ -1,11 +1,8 @@
 /**
- * /v1/models 清单构建 ---- 从 src/model/list-response.ts 按职责切出.
+ * /v1/models 清单构建.
  *
- * 为什么单独成文件: 它只做"遍历三张来源表 -> 按 id 收敛 -> 输出清单",
- * 与 isModelAllowed(白名单判据)无共享状态. 拆开后 chat 入口的模型校验
- * 不再需要连带加载清单构建的三段铺表逻辑.
- *
- * 口径: 纯搬移, 行为零改动. 依赖方向: rows -> catalog-response 单向无环.
+ * 只做"遍历三张来源表 -> 按 id 收敛 -> 输出清单", 与 isModelAllowed 无共享状态.
+ * 依赖方向: rows -> catalog-response 单向无环.
  */
 import { addCatalogEntries, addCustomEntries, addSessionEntries, skipFnOf } from './rows.ts'
 

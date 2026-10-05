@@ -16,10 +16,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-// --- regression: 调度模式 spread(并发优先)→ 满员立刻换号,启用第二个账号 ---
-// 用户场景:设了[每账号并发 2]却看到 4 个在途全挤在一个账号上.spread 模式下
-// 排序把"有空闲槽位"提到最前,满员账号不再压住空闲账号;且 busy 必须排在
-// used 之前(否则"已用但满员"会一直压住"空闲但从未用过"的号).
+// --- regression: 调度模式 spread(并发优先)→ 满员立刻换号, 启用第二个账号 ---
+// 场景: 设了[每账号并发 2]时 4 个在途不应全挤在一个账号上. spread 模式下
+// 排序把"有空闲槽位"提到最前, 满员账号不再压住空闲账号; 且 busy 必须排在
+// used 之前("已用但满员"不能压住"空闲但从未用过"的号).
 {
   const sdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-spread-'))
   saveAccountUser(sdDir, { id: 'sda', email: 'sda@example.com', authToken: 'token-sda' })
@@ -52,8 +52,8 @@ import path from 'node:path'
   })
   const sdPort = sdServer.address().port
 
-  // 按账号分别统计并发峰值:断言的是"单账号不超过上限",而不是全局并发
-  // (全局 4 路是预期的,两个账号各 2 路).
+  // 按账号分别统计并发峰值: 断言的是"单账号不超过上限"(全局 4 路是预期的,
+  // 两个账号各 2 路).
   const sdActiveByToken = new Map()
   const sdPeakByToken = new Map()
   const sdOrigFetch = globalThis.fetch

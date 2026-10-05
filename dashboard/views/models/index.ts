@@ -43,8 +43,6 @@ export async function renderModelSettings(view: any) {
   const known: Map<string, any> = new Map()
   // catalog 先行:agent/兜底 agent 以 catalog 为准(内置目录是 agent 映射的权威源)
   for (const m of data.catalog || []) known.set(m.id, { ...m, source: 'catalog' })
-  // 上游只补充额度/实时信息,不覆盖 agent(否则表格显示的 agent 与调度实际用
-  // 的不一致----调度是[自定义 > catalog],上游探测的 agentId 只是参考值)
   for (const m of upstream.models || []) {
     const prev = known.get(m.id)
     if (prev) {

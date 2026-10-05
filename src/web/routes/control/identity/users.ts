@@ -12,7 +12,6 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 const USER_RE = /^\/api\/users\/([^/]+)(?:\/([^/]+))?$/
 
 /**
- * 建号(POST /api/users)---- 校验失败统一回 400 带原因.
  *
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res

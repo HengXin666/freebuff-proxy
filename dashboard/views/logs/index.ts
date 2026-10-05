@@ -4,7 +4,6 @@ import { el, icon } from '../../lib/dom.ts'
 import { state } from '../../lib/state.ts'
 import { copyText, toast } from '../../lib/ui.ts'
 
-
 /** 日志页的视图状态(切走再回来保持筛选条件). */
 const logsView: any = {
   level: 'all',
@@ -108,12 +107,6 @@ function buildLogRow(line: any, idx: any) {
     }, [
       el('span', { class: 'log-ts' }, ts),
       el('span', { class: 'badge ' + logsLevelTone(line.level) }, line.level),
-      //  账号 + 请求 id:此前日志里没有这两个维度,多账号池并发时几十条
-      // 无主记录交织,排障只能靠猜.reqId 同时是聚合键(可用它筛选整条链路).
-      //
-      // 账号显示完整邮箱:此前写成 split('@')0,
-      // 于是 a@gmail.com 与 a@outlook.com 在日志页上长得一模一样 ----
-      // 多账号池里这直接把"哪个号出的问题"变成了猜谜.用户要的就是邮箱.
       line.account
         ? el('span', {
             class: 'badge',
@@ -186,10 +179,6 @@ function renderLogsList() {
 /**
  - 导出当前筛选结果(.jsonl 下载).
  *
- - 为什么(用户实测诉求):排障要把日志交给别人分析,而进程内缓冲只有一个
- - 可滚动页面 ---- 复制几行就丢上下文(多账号池并发时几十条交织).导出把
- - 当前筛选条件下的完整条目一次性落成文件:按账号筛完再导出,
- - 就得到那个账号的独立日志.
  *
  - 导出的是 logsView.lines(当前已加载的),与页面所见严格一致;
  - 每行一个 JSON 对象(jsonl),人能读,jq 也能直接消费.
@@ -224,7 +213,7 @@ async function refreshLogs() {
   const q = new URLSearchParams({ level: logsView.level, limit: '300' })
   if (logsView.q.trim()) q.set('q', logsView.q.trim())
   // 账号维度:后端已支持 account= 过滤(src/util/log.ts readLogBuffer),
-  // 此前前端从未传过 ---- 多账号池下"只看某个号"只能靠在搜索框里手打邮箱.
+  // 多账号池下"只看某个号"靠 account 过滤.
   if (logsView.account) q.set('account', logsView.account)
   let data = null
   try { data = await api('/api/logs?' + q.toString()) } catch { return }
@@ -279,10 +268,6 @@ export async function renderLogs(view: any) {
       /**
        - 导出当前筛选结果(.jsonl 下载).
        *
-       - 为什么必须有(用户实测诉求):排障需要把日志交给别人分析,而
-       - 进程内缓冲只有一个可滚动的页面 ---- 复制几行就丢上下文(多账号池
-       - 并发时几十条交织).导出把当前筛选条件下的完整条目一次性落成
-       - 文件:按账号筛完再导出,就是那个账号的独立日志.
        *
        - 导出的是 logsView.lines(当前已加载的),与页面所见严格一致 ----
        - 不用"导出全部"这种会让用户意外的东西.每行一个 JSON 对象(jsonl),
@@ -333,10 +318,6 @@ export async function renderLogs(view: any) {
   /**
    - 账号筛选下拉:选项直接取账号池的邮箱.
    *
-   - 为什么不是"填关键词":日志里的 account 字段就是邮箱,但用户得先知道
-   - 拼法才能搜;而账号池是他自己导入的,下拉里点一下即可.
-   - 还额外并入缓冲里出现过的账号 ---- 有些日志来自已删除/尚未刷进
-   - state.accounts 的号,只按账号池建选项会漏掉它们.
    */
   const accountOptions = [['', t('logs.accountAll')]]
   const seen = new Set()

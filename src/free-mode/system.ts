@@ -1,11 +1,8 @@
 /**
- * free-mode 的系统消息门禁 ---- 从 src/free-mode.ts 按职责切出.
+ * free-mode 的系统消息门禁.
  *
- * 为什么单独成文件: 上游对 system 消息的第一句做 opening 前缀校验(any-of-5
- * trimmed prefix), 这条判据与工具签名, 请求体归一互不相关, 却各自要读一大段
- * 背景. 拆开后"开场白该长什么样"只在这一个文件里.
- *
- * 口径: 纯搬移, 行为零改动.
+ * 上游对 system 消息的第一句做 opening 前缀校验(any-of-5 trimmed prefix),
+ * 本模块负责生成通过该校验的开场白.
  */
 
 /** Canonical opening the free-mode gate requires at the start of a system message. */

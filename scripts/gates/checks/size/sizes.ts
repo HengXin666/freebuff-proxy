@@ -7,8 +7,6 @@
  - 因此不按 p90 调整.存量用逐文件棘轮(.gates/sizes-baseline.json)过渡:
  - 已超限的文件以当前行数为上限,只拦继续增长;拆完后跑 --update 把水位降下来.
  *
- - 为什么不做成"全仓立刻清零":那会变成一个几万行的重构 PR,没人能审,
- - 真正的重构也会被淹没.棘轮让"新增即红"今天就生效.
  *
  - 扫描根:CHECK_ROOT.退出码:0 PASS / 1 FAIL / 2 用法错.
  */
@@ -21,7 +19,6 @@ const BASELINE = 'sizes-baseline.json'
 const report = new Report('sizes')
 const wl = loadWhitelist()
 
-/** 实测每个受控文件的原始行数. */
 function survey() {
   const lines = {}
   for (const rel of codeFiles()) lines[rel] = lineCount(readText(rel))

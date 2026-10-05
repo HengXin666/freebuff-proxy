@@ -1,12 +1,8 @@
 /**
  * 上游客户端装配:把传输,签名,目录,端点接成一个对象.
  *
- * 本文件是旧 createUpstreamClient(798 行单函数)的拆分产物.原实现把 7 个依赖
- * 藏在闭包里,任何一处拼错名字只在运行时抛 ReferenceError(node --check 与旧
- * typecheck 都抓不到,本仓 mapped is not defined 进过生产镜像).现在所有依赖
- * 显式声明并显式传参.
- *
- * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
+ * 所有依赖显式声明并显式传参, 不用闭包捕获(拼错名字只在运行时抛
+ * ReferenceError,静态检查抓不到).
  */
 import { logger } from '../../util/log.ts'
 import { DeviceSigner } from '../device/device-signing.ts'
@@ -41,10 +37,8 @@ interface SignerDeps {
  * 见 .agents/notes/implemented/bug-fix/2026-10-01-catalog-protocol.md
  *
  * catalog 这一跳不带设备签名:抓包真值(2026-10-03,165 条)显示客户端只有
- * /session 带签名三头(13 次),/models 与 /device-keys 都不带.以前给 catalog
- * 也签名,后果是拿到的行数不一样:同一账号同一时刻,不签名 13 行(与客户端
- * UI 菜单逐项一致),带签名 53 行 -- 53 行是"多带了一个客户端没有的特征"换来
- * 的另一份响应,不能当真值.见 docs/reverse/19 19.2.
+ * /session 带签名三头(13 次),/models 与 /device-keys 都不带;给 catalog
+ * 也签名会换成另一份响应.见 docs/reverse/19 19.2.
  *
  * @param {{ apiBase: string, token: string, fetchWithProxy: Function }} deps 依赖
  * @returns {any} 目录持有者
@@ -68,8 +62,7 @@ function makeCatalog({ apiBase, token, fetchWithProxy }: { apiBase: string, toke
  * 构造设备签名器(上游判定"是不是注册过的真客户端"的核心判据).
  *
  * 真机抓包确认官方每个 catalog / session / completions 请求都带
- * x-freebuff-device-{key,ts,sig} 三头;我们此前一个都没有.best-effort:
- * 拿不到签名就原样发(绝不阻塞请求).
+ * x-freebuff-device-{key,ts,sig} 三头.best-effort:拿不到签名就原样发(不阻塞请求).
  * 见 .agents/notes/implemented/bug-fix/2026-10-01-device-signing.md
  *
  * 注册请求本身不能依赖签名(鸡蛋问题),但必须经过代理.

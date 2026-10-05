@@ -74,14 +74,13 @@ runTruthSource()
 
 // ── ⑥ SessionManager 必须真的接收并启用 resolveModelAlias ──────────────
 //
-//  实测缺陷(2026-10-05):SessionManager 的构造函数解构列表里漏了
-// resolveModelAlias ---- 而 app-context 一直在传.JS 解构不会因为"多传了参数"
+//  缺陷形态: SessionManager 的构造函数解构列表里少传了
+// resolveModelAlias ---- 而 app-context 一直在传.JS 解构不会因"多传了参数"
 // 报错,于是 this.resolveModelAlias 恒为 undefined,
-// holderFor() / freebucksFor() 的归一静默退化成严格相等.
+// holderFor() / freebucksFor() 的归一退化成严格相等.
 //
-// 后果正是要修的那个 bug:上游清单用上游 id,调度内部用目录 key →
-// 永远匹配不上 → 面板能显示已付费会话,调度却看不见 → 白花钱重买.
-// 而既有用例都用同形态标识,把这个缺陷掩盖了.
+// 后果: 上游清单用上游 id, 调度内部用目录 key → 匹配不上 → 面板能显示已付费
+// 会话, 调度却看不见 → 白花钱重买.本用例防止该参数被再次漏传.
 {
   const { SessionManager } = await import('../../../../src/session-manager.ts')
   const marker = (v) => 'K:' + v

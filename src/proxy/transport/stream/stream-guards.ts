@@ -1,12 +1,9 @@
 /**
- * 流管道的守卫与失败判决 ---- 从 stream-pipe.ts 抽出,纯粹因为体量红线(文件 <=300 行).
+ * 流管道的守卫与失败判决.
  *
- * 这里放两类与"数据搬运"无关的东西:
+ * 两类内容:
  *   1. 守卫集合:一个反复武装的 idle 计时器 + 一个一次性的 client-gone 通道;
  *   2. 失败判决:把管道异常归一成"值得上报的那一个".
- *
- * 拆出去的判据是"主循环在做什么"能否一眼读出来 ---- 五个互相耦合的可变状态混在
- * 主循环里时,读代码的人会先被状态机淹没,看不到那五行核心动作.
  */
 import type { ServerResponse } from 'node:http'
 
@@ -15,9 +12,7 @@ import { ClientGoneError, StreamStallError } from '../errors/respond.ts'
 /**
  * 建一个流管道的守卫集合:一个反复武装的 idle 计时器 + 一个一次性的 client-gone 通道.
  *
- * 抽成独立函数的原因:这段状态机有 5 个互相耦合的可变状态(计时器,两个 reject 通道,
- * 两个守卫 Promise),混在 pipe 主循环里会让"主循环在做什么"读不出来.抽走后主循环只剩
- * 5 行核心动作.
+ * 集合内含 5 个互相耦合的可变状态:计时器,两个 reject 通道,两个守卫 Promise.
  * @param reader 上游响应体的 reader(cancel 用于中断卡死的读取)
  * @param idleTimeoutMs idle 超时(毫秒;<=0 表示不设)
  * @returns 守卫集合
@@ -90,8 +85,7 @@ export function createStreamGuards(
 /**
  * 把管道异常归一成"值得上报的那一个",补上已下发字节数,并销毁下游连接.
  *
- * 为什么单独抽:三个归一分支(卡死优先于断开,断开优先于其他,附加 wroteBytes)
- * 是纯判决逻辑,和主循环的数据搬运没有关系.
+ * 三个归一分支:卡死优先于断开,断开优先于其他,附加 wroteBytes.
  * @param nodeRes 下游响应
  * @param caught catch 到的原始抛出物(TS 里是 unknown)
  * @param stats 判决所需的本轮统计

@@ -100,8 +100,8 @@ export function makeHolder() {
   })
   check(ok === true, '对照前提：CatalogHolder._apply 必须接受测试目录行')
   check(holder.ready === true, '对照前提：目录必须有 fetchId（否则 ready=false）')
-  // 反查前提:真源桶确实被填上了.破坏 keyForName 后这条仍绿,
-  // 所以[变红的是 keyForName 而不是桶为空]这件事可分辨.
+  // 反查前提:真源桶确实被填上了, 这样"变红的是 keyForName"与"变红的是桶为空"
+  // 这件事可分辨.
   checkEqual(
     holder.keyByDigest.get(DIGEST),
     KEY,

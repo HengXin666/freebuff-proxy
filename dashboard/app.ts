@@ -4,7 +4,7 @@
  * 具体视图在 views/,通用工具在 lib/,文案在 locale/.
  * 拆分前这里是 4000 行的单文件(用户硬标准:单文件 <=500 行).
  *
- * 为什么需要 registerHooks 这一步:视图之间不能互相 import(会成环,环里
+ * registerHooks: 视图之间不互相 import(会成环);
  * 顶层求值读到对方 const 会命中 TDZ 白屏).谁提供实现只有装配层知道,
  * 所以由这里一次性登记;视图侧用 need(name) 取.详见 dashboard/lib/boot/hooks.ts.
  *
@@ -74,8 +74,6 @@ registerHooks({
 
 /* ---------------- boot ---------------- */
 
-// 401 由 api() 层回调:整壳重建(回登录页).回调注入而不是在 lib 里 import
-// 视图,否则 lib -> views -> lib 成环.
 setUnauthorizedHandler(render)
 
 window.addEventListener('hashchange', render)

@@ -32,9 +32,8 @@ export const CATALOG_CACHE_FILENAME = 'catalog-cache.json'
 
 /**
  * 运行时 catalog 缓存的默认路径(仓库根 ./data/catalog-cache.json).
- * 仅作裸机默认值;Docker 等 dataDir 可配置的场景必须显式传 dataDir
- * (见 catalogCachePath / configureCatalogCache),否则会写到只读的
- * 安装目录(旧行为写死 /app/data,容器里降权后 EACCES,见 issue #9).
+ * 仅作裸机默认值;dataDir 可配置的场景(Docker 等)必须显式传 dataDir
+ * (见 catalogCachePath / configureCatalogCache).
  */
 export const DEFAULT_CATALOG_CACHE_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

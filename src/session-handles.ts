@@ -12,30 +12,18 @@ import { cleanupOrphans, sweepRefunds } from './session/handles/sweeps.ts'
 /**
  * 上游会话句柄的持久化索引(/data/sessions.json).
  *
- * 为什么必须有它:Freebuff 的 session 按整小时单价预扣.现行真值(一手实测,
- * 见 docs/design/account-scheduling-and-refund.md §3.7):
- *   session_units 当场按实际占用比例退;Freebucks 不退.
- *   回执里的 freebucksRefundPending 表示"结算未完成",不等于"会退钱";
- *   重开同一模型会吃 rate_limited + freebucksShortfall.
- * 所以策略是:付费时段内绝不为空闲释放 -- 那一小时已经买断,提前释放只是白扔.
- * 句柄(instanceId)只存在内存里时,一次进程重启 / 换容器 / /data 重挂,活着的会话
- * 就变成无法寻址的孤儿:既删不掉(腾不出槽位),那笔已预扣的钱也永远取不回来
- * (回执必须用同一个 instanceId 重放 DELETE 才能拿到).所以每次 admit/释放都把句柄
- * 落盘,启动时按这份索引扫尾 DELETE 取回执,平时释放失败的句柄也留在里面等下次机会.
+ * 句柄(instanceId)每次 admit / 释放都落盘, 启动时按这份索引扫尾 DELETE 取回执;
+ * 释放失败的句柄留在文件里等下次机会. 付费时段内不为空闲释放(那一小时已买断).
  *
  * 文件形如:
  * { version:1, updatedAt, sessions:[{key,instanceId,model,admittedAt,expiresAt}],
  * orphans:[{key,instanceId,model,admittedAt,expiresAt,note}] }
- * sessions = 本进程当前持有的活会话;orphans = DELETE 一直失败,暂时失联但仍
- * 需要继续尝试清理的句柄(绝不静默丢弃).
+ * sessions = 本进程当前持有的活会话;orphans = DELETE 一直失败,仍需要继续尝试
+ * 清理的句柄.
  *
- * 待结算退款(pendingRefunds)的完整决策与证据见
- * .agents/notes/implemented/bug-fix/2026-09-13-refund-reversed.md.
- *
- * 启动扫尾是有界的:总预算与单次 DELETE 上限在 ./session/handles/sweeps.ts,
- * 超预算的句柄原样留下(信息不丢,只是不挡启动).别把预算删掉"图省事"----
- * 启动被清孤儿卡住是"服务起不来,删 sessions.json 就好"的真实成因
- * (见 .agents/notes/implemented/bug-fix/2026-09-13-startup-path-bounded.md).
+ * 退款结算与启动扫尾预算的完整说明见
+ * .agents/notes/implemented/bug-fix/2026-09-13-refund-reversed.md 与
+ * .agents/notes/implemented/bug-fix/2026-09-13-startup-path-bounded.md.
  *
  * 本文件保留原路径与全部原有导出名(SessionHandleStore), 实现按职责拆进
  * ./session/handles/**: records(键与归一) / load(装载) / sweeps(两段扫尾).

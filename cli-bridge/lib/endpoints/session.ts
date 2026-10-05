@@ -18,7 +18,7 @@ export async function admit(bridge, row, opts = {}) {
   const { retries = 4, takeoverInstanceId = null } = opts;
   const url = `${bridge.host}/api/v1/freebuff/session/admission`;
   //  官方是裸 UUID且整场复用(抓包 line 8/34/54 三次 admission
-  // 同为 e1be7199-...,line 38 metadata 也是它).我们此前用 cli:<uuid>
+  // 同为 e1be7199-...,line 38 metadata 也是它). 这里用 cli:<uuid>
   // 且每次新建 ---- review 指出这可能就是"购买全额退款作废"的诱因:
   // 官方回执里 desktopRefunds 从未出现,我们每次都退.
   // 见 docs/reverse/15-protocol-review.md E.1
@@ -38,9 +38,6 @@ export async function admit(bridge, row, opts = {}) {
         'x-freebuff-model': row.handle,
         'x-freebuff-wallet-spend-limit': '0',
         'x-freebuff-first-tab-discount': '0',
-        //  官方 admission 有而我们此前缺失的两个头(抓包真值):
-        //   x-fb-timezone: Asia/Shanghai
-        //   x-freebuff-desktop-attempt-id: <uuid>
         'x-fb-timezone': bridge.cfg.timeZone
           || (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'),
         'x-freebuff-desktop-attempt-id': crypto.randomUUID(),

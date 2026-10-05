@@ -119,7 +119,6 @@ export async function refreshAll(res: ServerResponse, ctx: any) {
   let modelIds: string[] = []
   /**
    * "一键刷新"= 用户主动 -> 允许探测,且目录与会话一起刷新.
-   * 以前这里只跑 probeAllAccountsSession()(session GET),不抓目录;
    * 而"同步上游模型"又只抓目录 ---- 用户必须点两个按钮才凑得齐数据.
    * 目录失败不拖累账号刷新(两者的失败是独立的).
    */

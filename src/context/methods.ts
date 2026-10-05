@@ -1,9 +1,8 @@
 /**
  * context 子模块的原型装配表: 方法名 -> 实现.
  *
- * 为什么要有这张表: AccountRuntimes 的方法搬出类之后必须显式挂回原型,
- * 否则调用点会在运行时才炸(x is not a function), 静态检查只看得到
- * "this 上有这个方法"(check-declared 抓不到 this.x 为 undefined).
+ * AccountRuntimes 的方法搬出类之后必须显式挂回原型: 漏挂一个, 调用点会在运行时
+ * 才炸(x is not a function), 而 check-declared 抓不到 this.x 为 undefined.
  * 装配表是这条契约的唯一清单, 名字与调用点逐字一致.
  *
  * 只登记"以 this 为第一参数"的函数; 纯函数(如 buildAppContext)不走这里.

@@ -1,10 +1,8 @@
 /**
  - 客户端环境描述符  --  x-freebuff-env / codebuff_metadata.freebuff_client_env 的取值.
  *
- * 为什么单独成文件: 原 official-fingerprint.ts 569 行超 300 红线. 这是一份
- * 分号分隔的键值汇总(v1;in=..;out=..;...), 与头部常量, UA, 实例 id 都不相干;
- * 而且它有一条硬约束(绝不放路径/进程名/环境变量原文), 单独成文件才便于对照
- * 官方 cli/src/utils/client-environment.ts 逐项核对.
+ * 这是一份分号分隔的键值汇总(v1;in=..;out=..;...). 硬约束: 不放路径/进程名/
+ * 环境变量原文; 与官方 cli/src/utils/client-environment.ts 逐项对照.
  */
 
 /**

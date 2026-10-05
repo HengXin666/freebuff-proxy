@@ -43,13 +43,8 @@ export function coerceUser(raw: any): FreebuffUser | null {
 }
 
 /**
- * 上游鉴权头 -- 只发 Bearer.
- *
- * x-codebuff-api-key 已移除:客户端 165 条抓包里它出现 0 次
- * (docs/reverse/20 20.4).我们此前在 session / agent-runs / chat /
- * device-keys 上全都多发它 -- 那是"官方客户端没有的特征".
- *
- * 保留本函数是为了让调用点不必逐个改签名,语义变为"官方形态的鉴权头".
+ * 上游鉴权头 -- 只发 Bearer(x-codebuff-api-key 不作为官方形态的一部分).
+ * 调用点统一走本函数, 不必各自拼头.
  *
  * @param {string} token 上游 token
  * @returns {{ Authorization: string }} 鉴权头

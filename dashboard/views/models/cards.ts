@@ -8,9 +8,6 @@ import { state } from '../../lib/state.ts'
 /**
  * 模型管理页的六张卡片(纯渲染,无副作用).
  *
- * 为什么单独成文件:六张卡合计 160 行节点树,与[同步/清理/自定义增删]的控制
- * 逻辑挤在一起会双双超限.这里只保留[给数据 -> 出节点];事件回调一律走
- * need(name) 或本目录的构建函数,不直接引用控制逻辑.
  *
  * 本文件所有函数都只做 DOM 构造:不发请求,不写 state,不弹提示.
  */
@@ -98,7 +95,6 @@ export function buildModelsTable(rows: any, isLiveUpstream: any, isAdmin: any) {
         el('tbody', {}, rows.map((m: any) => el('tr', {
           'data-key': m.key || m.id,
           // 上游目录里没有的行整体淡化:它在列表里只是占位,调用必然失败.
-          // 视觉上必须与可用模型区分开,否则用户仍会一个个去试.
           style: isLiveUpstream(m) ? null : 'opacity:.45',
         }, [
           // 首列是对外模型名(口径 displayName || key,与 /v1/models 的 id 同源);

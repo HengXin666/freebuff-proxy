@@ -1,12 +1,8 @@
 /**
- * 内置模型的对外信息行 ---- 从 src/model/list-response.ts 按职责切出.
+ * 内置模型的对外信息行.
  *
- * 为什么单独成文件: 这里是"目录 -> 对外模型信息"的投影, 与"清单里该有谁"
- * (rows / isModelAllowed)是两个不同的判据. 放在一起时, 改一行投影字段要
- * 读完整份合并逻辑.
- *
- * 口径: 纯搬移, 行为零改动. 惰性 Proxy 的必要性见 FREEBUFF_AVAILABLE_MODELS
- * 的注释(模块顶层读盘会与 catalog-models.ts 的静态加载互相干扰).
+ * 这里是"目录 -> 对外模型信息"的投影, 与"清单里该有谁"(rows / isModelAllowed)
+ * 是两个不同的判据. 惰性 Proxy 的行为约束见 FREEBUFF_AVAILABLE_MODELS 的注释.
  */
 import { catalogModels } from '../catalog-store.ts'
 

@@ -185,9 +185,8 @@ state.deleteFailuresLeft = 0
 
 
 // (7.5) 结算挂起 ≠ 退款 0:上游回 freebucksRefundPending 时必须保留句柄
-//       并继续重放,绝不能在 1.5s 后就把 instanceId 丢掉,把 pending 读成
-//       "退款 0".这是 2026-09 实测到的真 bug(旧代码只重放一次就 drop,
-//       而实测上游 1.5s/7s/17s/37s/67s 全是 pending).
+//       并继续重放,不能在 1.5s 后就把 instanceId 丢掉,把 pending 读成
+//       "退款 0".上游在 1.5s/7s/17s/37s/67s 各档位都仍回 pending.
 {
   const sm = fbRuntimes.get('b').sessions
   const storeFile = fbRuntimes.handleStore.file
@@ -206,7 +205,7 @@ state.deleteFailuresLeft = 0
 
     await sm.release()
 
-    // 必须重放(>1 次)而不是试一次就放弃
+    // 必须重放(>1 次)
     assert.ok(
       state.sessionDeletes >= 2,
       '挂起时必须继续重放 DELETE，实际只发了 ' + state.sessionDeletes + ' 次',

@@ -6,10 +6,6 @@ import { state } from '../../lib/state.ts'
 /**
  * 代理设置页的六张卡片(纯渲染,无副作用).
  *
- * 为什么单独成文件:这六张卡合计 240 行节点树,与[保存/校验/读设置]的控制逻辑
- * 挤在同一文件会双双超过 500 行硬标准.这里只保留[给数据 -> 出节点],所有事件
- * 回调仍然直接引用同目录 index.ts 的保存函数 ---- 那是模块内的正常引用,不存在
- * 循环依赖(index.ts 只引用本文件的构建函数,本文件不引用它).
  *
  * 本文件所有函数都只做 DOM 构造:不发请求,不写 state,不弹提示.
  */
@@ -58,8 +54,6 @@ export function buildUpstreamChannelCard(channel: any) {
         onchange: need('saveUpstreamChannelSetting'),
         ...(state.me.role === 'admin' ? {} : { disabled: '' }),
       }, [
-        // legacy 已废弃:保留选项但禁用,让用户看得见"曾经有过,现在不能用",
-        // 而不是凭空消失造成困惑.
         el('option', { value: 'legacy', disabled: '' }, t('system.upstreamChannelLegacy')),
         el('option', { value: 'official', ...(channel === 'official' ? { selected: '' } : {}) }, t('system.upstreamChannelOfficial')),
       ]),

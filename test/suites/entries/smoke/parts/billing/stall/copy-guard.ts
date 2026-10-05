@@ -1,7 +1,7 @@
 /**
  * billing: 全局请求闸门
  *
- * (STALL) 闸门绝不允许无界排队, 否则进程正常却不接单.
+ * (STALL) 闸门绝不允许无界排队(无界排队下进程正常却不接单).
  *
  * 由 test/suites/entries/smoke/smoke.ts 按职责机械切出. 口径: 纯搬移.
  */
@@ -22,16 +22,12 @@ import path from 'node:path'
 // ===========================================================================
 // (STALL) 全局请求闸门绝不允许无界排队
 //
-// 线上故障:进程一切正常(CPU/日志/控制台都对)却"一段时间完全不接单",
-// 只有重启才恢复.根因是旧 acquireRequestSlot 把超限请求 push 进一个没有任何
-// 超时的 _waitQueue:只要有几个请求"占着槽位却永久挂起"(客户端声明了
-// Content-Length 却不再发完请求体 → readRequestBody 的 for-await 永不返回),
-// 槽位被永久吃掉,后续所有请求排进队列再也出不来.
+// 场景: 有几个请求"占着槽位却永久挂起"(客户端声明了 Content-Length 却不再发完
+// 请求体, readRequestBody 的 for-await 永不返回), 槽位被永久吃掉.
 //
-// 本用例用真实 server + 真实半开 socket 复现该场景,断言:
-//   1. 排满时后续请求有界返回 429 server_busy(而不是永久挂起);
-//   2. 半开请求被 bodyReadTimeoutMs 掐掉后,槽位与队列都回到 0.
-// 旧实现下第 1 条会永久挂起 → 用例超时失败(真实红灯).
+// 本用例用真实 server + 真实半开 socket 复现该场景, 断言:
+//   1. 排满时后续请求有界返回 429 server_busy(不永久挂起);
+//   2. 半开请求被 bodyReadTimeoutMs 掐掉后, 槽位与队列都回到 0.
 {
   const stallDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-stall-'))
   saveAccountUser(stallDir, {
@@ -121,13 +117,12 @@ import path from 'node:path'
 }
 
 // ===========================================================================
-// (FBGATE) 封号判定的两条条件都必须拦(issue #11 实测)
+// (FBGATE) 封号判定的两条条件都必须拦
 //
 // 上游对"余额不够"的封号判定有两条:
 //   ① Freebucks 跑完了(今日池 daily.remaining <= 0)
 //   ② 本次请求所需 Freebucks 高于剩余余额(balance < prices[model])
-// 曾经的实现只判 ②,于是"池子跑完但 balance 还留着数字"的账号会被放行,
-// 照样送去撞封禁.本用例锁死两条都拦,并断言 reason 能区分是哪一条.
+// 本用例锁死两条都拦, 并断言 reason 能区分是哪一条.
 {
   const sm = new SessionManager({
     config: loadConfig(),
@@ -138,7 +133,7 @@ import path from 'node:path'
   const price = 25
   const model = 'deepseek/deepseek-v4-flash'
 
-  // ① 今日池跑完,但余额看着还够 ---- 必须拦(这正是以前漏掉的那条)
+  // ① 今日池跑完但余额看着还够 ---- 也必须拦
   sm.freebucks = {
     balance: 100,
     daily: { limit: 85, spent: 85, remaining: 0, resetAt: null },

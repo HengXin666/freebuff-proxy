@@ -104,8 +104,8 @@ import path from 'node:path'
     'GET 路径成功时不得再打 POST admission; sessionPosts=' + state.sessionPosts,
   )
   // 会话模型绑定:chat 的 model 必须用会话回执里服务端指派的值
-  // (mock 给的是 m-00032eaeec),而不是客户端请求的模型名 ----
-  // 用错会得到 session_model_mismatch.见
+  // (mock 给的是 m-00032eaeec), 不用客户端请求的模型名(用错会得到
+  // session_model_mismatch).见
   // .agents/notes/implemented/bug-fix/2026-10-01-session-model-binding.md
   const chatCall = state.calls.find((c) => c.url.includes('/chat/completions'))
   assert.ok(chatCall, '应发出 chat 请求')
@@ -131,25 +131,22 @@ import path from 'node:path'
    ================================================================ */
 {
   /**
-   * - 用户明确要求的能力(2026-10-04 铁律):余额为 0 不等于账号不可用.
+   * - 判据: 余额为 0 不等于账号不可用.
    * - [一次 admit = 买断一小时],这一小时内继续发请求边际成本为 0;
    * - balance: 0 只说明"再买一条买不起",不代表已付过钱的那一小时不能用.
    *
-   * - 真实故障:面板显示 DeepSeek V4.1 Flash . 49 分钟 的已付费会话
-   * - (上游 desktopPurchases 里 deepseek/deepseek-v4-flash 带
-   * - holderInstanceId,别的部署建的),而调度因余额闸门跳过该账号 →
-   * 用户看到[有会话却一直 429],那一小时的钱白扔.
+   * - 场景: 上游 desktopPurchases 里有一条别的部署建的, 带 holderInstanceId
+   * - 的同模型已付费会话, 而本地余额闸门判该账号买不起.
    *
    * - 本用例走完整下游链路(POST /v1/chat/completions → 选号 → 闸门 →
    * 只读探测 → takeover → chat),并让 mock 遵守上游真实槽位语义:
-   * - 不带占用者 id 的 POST admission 一律回 purchase_capacity ----
-   * 所以"最后 200"无法由"照常新开一条会话"伪造出来(那次 POST 会被拒).
+   * - 不带占用者 id 的 POST admission 一律回 purchase_capacity,
+   * - 所以"最后 200"无法由"照常新开一条会话"伪造出来.
    *
-   * - 两处刻意用上游 id 形式(deepseek/deepseek-v4-flash),而不是
-   * - 目录 key:清单侧与请求侧都走 keyForName/legacy 摘要归一,映射不生效时
-   * 本用例直接变红.
+   * - 两处刻意用上游 id 形式(deepseek/deepseek-v4-flash), 不用目录 key:
+   * - 清单侧与请求侧都走 keyForName/legacy 摘要归一, 映射不生效时本用例变红.
    *
-   * - 反向探针(已实测):把 src/app-context.ts 里 quotaLooksBlocked &&
+   * - 反向探针: 把 src/app-context.ts 里 quotaLooksBlocked &&
    * - (await checkPaidUpstream()) 短路掉 → 本用例红在
    * - res.status === 429(freebucks_exhausted);把 holderFor 的
    * - resolveModelAlias 归一退回严格相等 → 同样红(两侧标识不同).
@@ -184,7 +181,7 @@ import path from 'node:path'
   const upPort = upServer.address().port
 
   const HOLDER = 'other-deploy-inst'
-  /** 请求侧与清单侧都用上游 legacy id(不是目录 key m-xxx). */
+  /** 请求侧与清单侧都用上游 legacy id(不用目录 key m-xxx). */
   const MODEL_ID = 'deepseek/deepseek-v4-flash'
   state.mockPaidTakeover = {
     holderInstanceId: HOLDER,
@@ -197,13 +194,12 @@ import path from 'node:path'
   state.completionAttempts = 0
   state.calls = []
   /**
-   * - 必须先对一次账(等价于控制台点过[刷新],或本进程此前建过会话).
+   * - 必须先对一次账(等价于控制台点过[刷新]).
    *
-   * - 否则本账号在调度眼里是"余额未知"(freebucksFor().known === false),
-   * 额度闸门恒放行 ---- 用例就变成"无闸门时能不能建会话",测不到本用例的主旨,
-   * - 而且不可证伪(短路掉 paidUpstream 逻辑后仍然全绿,实测踩到过).
+   * - 未对账时本账号在调度眼里是"余额未知"(freebucksFor().known === false),
+   * 额度闸门恒放行, 用例变成"无闸门时能不能建会话", 测不到本用例的主旨.
    *
-   * - 对账后:balance 0 / 每日池 0/25 已知 → 闸门即将拒绝 →
+   * - 对账后: balance 0 / 每日池 0/25 已知 → 闸门即将拒绝 →
    * 只有"清单里那条能接管的已付费会话"能救它.
    */
   await upRuntimes.get('paid').sessions.refresh()

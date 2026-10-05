@@ -80,7 +80,7 @@ export class UserStore {
      * @type {'ok' | 'missing' | 'invalid'}
      */
     this.loadStatus = 'missing'
-    /** 损坏原因(loadStatus === 'invalid' 时). */
+    
     this.loadReason = null
     /** 被丢弃的非法条目数 + 留证文件(users.json 的脏条目 = 有人丢了登录凭据). */
     this.droppedEntries = 0
@@ -117,7 +117,7 @@ export class UserStore {
             (this.droppedBackup ? `（原文已留证: ${this.droppedBackup}）` : ''),
         )
         // 全部条目都是脏的 = 实质上没人能用这份文件引导 → 按损坏处理,
-        // 交给启动流程拒绝启动(否则会静默重建 admin,用户以为账号全丢).
+        // 交给启动流程拒绝启动.
         if (this.users.length === 0) {
           st = invalidShape(`users 数组的 ${checked.dropped} 条记录全部非法`)
         }
@@ -267,7 +267,6 @@ export class UserStore {
           this.setPassword(name, password)
           return { created: false, username: name, rotated: true }
         } catch (err) {
-          // 密码不合法(<6 位):不能静默当作"已同步",否则日志会撒谎
           return {
             created: false,
             username: name,

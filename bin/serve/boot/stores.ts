@@ -1,9 +1,6 @@
 /**
  * 启动期的控制面装配与准入判定 -- 从 bin/serve.ts 的 main() 按职责切出.
  *
- * 为什么切出来: main() 原来是 177 行, 里面混着五件事(参数/装配/准入/监听/信号).
- * 这里收走"装配哪几个 store"与三条"该不该继续启动"的判定, 让 main() 只剩
- * 编排顺序 -- 而这几条判定各自都有一份必须保留的理由(见下), 值得独立成文.
  *
  * 口径: 纯搬移, 不改判据, 不改任何一行用户可见文案.
  */
@@ -20,7 +17,6 @@ import { SettingsStore } from '../../../src/web/store/config/settings-store.ts'
 import { ModelStore } from '../../../src/web/store/config/model-store.ts'
 
 /**
- * 建用户库(启动装配的第一件事, 因为下面两条准入判定都要读它).
  * @param {string} dataDir 数据目录
  * @returns {any} UserStore 实例
  */
@@ -76,8 +72,7 @@ export function openConsoleStores(dataDir: string, config: any) {
  * 绝不能"当成还没有账号"继续跑:ensureDefaultAdmin 会立刻新建一个 admin,
  * 用户看到的是"我的账号和密码全没了";而实际上文件还在盘上(多半是被写坏/
  * 版本不兼容),把旧文件挪开就能重新引导.数据目录里的其它文件坏了都只是降级
- * (各自有兜底),只有这一份是登录凭据真源,静默重建的代价远大于"暂停启动并
- * 把原因写清楚".
+ * (各自有兜底),只有这一份是登录凭据真源.
  * @param {any} userStore 用户库
  * @returns {boolean} true 表示必须中止启动
  */
@@ -131,7 +126,7 @@ export function isLoopbackHost(host: any) {
  * 预载 catalog 运行时缓存.
  *
  * catalog 运行时缓存是懒加载的(第一次用到模型才读).这里先按 dataDir 切路径
- * 并读一次,一是保证 /v1/models 与内置目录一致(原来由 startServer 里的异步
+ * 并读一次, 保证 /v1/models 与内置目录一致(不再依赖 startServer 里的异步
  * 分支兜底,容器里可能晚于首个请求),二是让"缓存损坏"能出现在下面的自检里.
  * @param {string} dataDir 数据目录
  * @returns {Promise<void>} 无返回值

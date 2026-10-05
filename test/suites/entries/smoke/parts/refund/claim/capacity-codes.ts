@@ -18,9 +18,8 @@ import assert from 'node:assert/strict'
    * - 且回执带 currentInstanceId 时,带 x-freebuff-takeover-instance-id 重发一次,
    * 把剩余时长移过来(官方文案:"move the remaining time here without another charge").
    *
-   * 缺这一步的后果(实测 2026-10-04):账号上游 status:none,balance 15,
-   * 但每个请求都 purchase_capacity(回执 currentInstanceId 指向别人),
-   * 用户看到[明明有额度却永远说槽位被占].
+   * 该场景: 账号上游 status:none, balance 15, 但每个请求都回
+   * purchase_capacity(回执 currentInstanceId 指向别人), 即"有额度却槽位被占".
    *
    * - 反向探针:删掉 admit 里的 takeover 分支后本用例必须变红.
    */

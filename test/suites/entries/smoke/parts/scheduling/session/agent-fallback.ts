@@ -110,12 +110,9 @@ import assert from 'node:assert/strict'
   )
   // luna-es 同样强制 base3(base3-free-luna-es,绝无 base2)
   //
-  //  换模型前必须显式释放上一条会话.这不是测试在迁就实现,而是生产
-  // 语义:一次 admit 买断一小时且绑定模型(issue #24 实测----付费时段内换
-  // 模型必然把那一小时作废,且 DELETE 之后 0s/45s/90s 三次重试全部
-  // purchase_claim_released,接不回来).所以[同一小时内跨模型可用]在生产
-  // 上不成立;此前这段测试能过,是因为 mock 上游无条件放行 admission.
-  // 这里显式释放 = 模拟"时段结束/用户主动关闭后再换模型"的真实路径.
+  //  换模型前必须显式释放上一条会话: 一次 admit 买断一小时且绑定模型,
+  // 付费时段内换模型会把那一小时作废且接不回来, 所以[同一小时内跨模型可用]
+  // 不成立. 这里显式释放 = 模拟"时段结束/用户主动关闭后再换模型"的路径.
   await runtimes.get('u1').sessions.release()
   state.startAgentCalls = []
   const resEs = await chat({

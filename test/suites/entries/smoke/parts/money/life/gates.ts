@@ -60,10 +60,9 @@ import path from 'node:path'
   fbRuntimes.clearCooldown('a', model)
 }
 
-// (2.4) session_units 是独立于 Freebucks 的第二道闸门:一手实测证明一笔会话
-//       两本账都扣(units +1.0 且 Freebucks −单价),所以 units 用尽时同样不得
-//       去 admit(上游会用 rate_limited 拒掉,白跑一次往返).注意 recentCount
-//       是小数,比较必须用 >=.见
+// (2.4) session_units 是独立于 Freebucks 的第二道闸门:一笔会话两本账都扣
+//       (units +1.0 且 Freebucks 减单价),所以 units 用尽时同样不得去 admit.
+//       注意 recentCount 是小数,比较必须用 >=.见
 //       .agents/notes/implemented/architecture/2026-09-14-two-ledgers-parallel-gates.md
 {
   const model = 'deepseek/deepseek-v4-flash'
@@ -81,7 +80,7 @@ import path from 'node:path'
       peak: null,
       updatedAt: new Date().toISOString(),
     }
-    // units 已满:6/6(实测里 recentCount 可为小数,这里同时覆盖整数边界).
+    // units 已满:6/6(recentCount 可为小数,这里同时覆盖整数边界).
     sm.quota = {
       byModel: {
         [model]: {
@@ -129,7 +128,7 @@ import path from 'node:path'
   const noRow = fbRuntimes.get('a').sessions.sessionUnitsFor('openai/gpt-5.6-nope')
   assert.equal(noRow.known, false, '无 units 行的模型必须 fail-open')
   assert.equal(noRow.exhausted, false, '无 units 行的模型不得被判用尽')
-  // 清场:后续用例不该继承这里的 6/6(否则会一直被 units 闸门拦下).
+  // 清场:后续用例不该继承这里的 6/6(会被 units 闸门拦下).
   for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.quota = null
 }
 
@@ -187,7 +186,7 @@ import path from 'node:path'
 }
 
 // (2.6) 账本回灌的前缀撞车:账号 key "acc" 与 "acc2" 是不同账号,冷却/记录
-//       绝不能因为 startsWith 就互相串台(单字符 key 的用例测不出来).
+//       必须按完整 key 匹配,不得按前缀串台.
 {
   const pDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-prefix-'))
   try {
@@ -242,7 +241,7 @@ import path from 'node:path'
     )
     await p2.shutdown()
     // 封禁时间要落盘:chat 阶段撞到 banned 与探测发现 banned 同等重要,
-    // 控制台"已被封禁"分区靠它(否则重启后这个号会被当成干净号).
+    // 控制台"已被封禁"分区读该记录.
     const p3 = new AccountRuntimes(pCfg)
     p3.get('acc')
     p3.markCooldown('acc', { code: 'banned' })

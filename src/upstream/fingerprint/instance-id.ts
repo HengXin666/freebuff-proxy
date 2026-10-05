@@ -1,10 +1,8 @@
 /**
  - 会话实例标识与会话 claim  --  instanceId 的两种形态及其协议头.
  *
- * 为什么单独成文件: 原 official-fingerprint.ts 569 行超 300 红线. instanceId
- * 有 desktop(裸 UUID)与 CLI(cli:<uuid>)两种形态, 各自的配套头也不同; 这条线
- * 是[一次 admit = 买断一小时]的直接相关面(新建 instanceId 会让上一次购买作废),
- * 所以单独成文件以便独立审阅与测试.
+ * instanceId 有 desktop(裸 UUID)与 CLI(cli:<uuid>)两种形态, 各自的配套头不同.
+ * 这条线是[一次 admit = 买断一小时]的直接相关面(新建 instanceId 会让上一次购买作废).
  */
 
 /**
@@ -21,9 +19,10 @@
  *   export const FREEBUFF_CLI_CLAIM_PREFIX = 'cli:'
  *   "The server reads it to tell the CLI's claims from Desktop tabs"
  *
- *  实测确认(2026-09-30,真账号):POST admission 时自带
- * x-freebuff-instance-id: cli:<uuid>,服务端接受并原样保留
- * (返回的 instanceId 与传入的完全一致,带前缀).
+ *  服务端按这个前缀把 CLI 的 claim 与 Desktop tab 区分开.
+ *
+ *  POST admission 时自带 x-freebuff-instance-id: cli:<uuid>, 服务端接受并原样
+ * 保留(返回的 instanceId 与传入的完全一致, 带前缀).
  */
 export const CLI_CLAIM_PREFIX = 'cli:'
 

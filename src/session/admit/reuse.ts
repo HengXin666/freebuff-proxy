@@ -6,17 +6,14 @@
 import { logger } from '../../util/log.ts'
 
 /**
- * 换一条新会话并绑定 model(带 handle 的重建).
+ * 销毁式重建一条新会话并绑定 model.
  *
  * 禁止用本方法处理 waiting_room_required(428): 它做的两件事都是错的
- * (2026-10-04 真实事故, 用户原话"花了钱买了东西, 上游说重发一遍, 你却把钱
- * 交了又重新买一遍"):
  *
  *   1. _releaseUnlocked() -- 先 DELETE 掉已经买断的那一小时. 上游对早退
- *      DELETE 不退 Freebucks(实测只回 freebucksRefundPending), 直接烧钱.
+ *      DELETE 不退 Freebucks(只回 freebucksRefundPending).
  *   2. _admitUnlocked() -- 再买一小时. 余额已扣光时这一步必然失败
- *      (skip re-admit: freebucks cannot afford model), 于是钱花了, 货退了,
- *      新的还买不起, 账号进入最差状态.
+ *      (skip re-admit: freebucks cannot afford model).
  *
  * 官方真值(orchestrator.js, 官方 desktop 0.0.158 解包):
  *   - 179243  waiting_room_required: { status: 428, endsTheSession: !0 }
@@ -25,8 +22,7 @@ import { logger } from '../../util/log.ts'
  *               + 同一个 instanceId(整线程复用) -> 上游认作续用那一小时
  *   - 官方从不先 DELETE
  *
- * 所以 428 的正确处置是 readmitToContinue()(复用同一 instanceId +
- * purchase-continuity 续用), 不是本方法. 本方法仅保留给确实需要换一条新会话的
+ * 所以 428 的处置是 readmitToContinue(). 本方法仅保留给确实需要换一条新会话的
  * gate(如 session_model_mismatch 要换绑模型).
  * @param {any} this 会话实例
  * @param {string} model 请求模型
@@ -49,8 +45,7 @@ export async function forceReadmit(this: any, model: string): Promise<any> {
  * 再重跑同一条消息.
  *
  * 本方法只做"续用"这一跳(re-admit with continuity); chat 重发由调用方在
- * 重试循环里完成(用同一 prompt). 关键约束: 绝不释放既有会话 -- 那一小时是
- * 实付的, 扔了就没了.
+ * 重试循环里完成(用同一 prompt). 不释放既有会话 ---- 那一小时是实付的.
  * @param {any} this 会话实例
  * @param {string} model 请求模型
  * @returns {Promise<{ continued: boolean, instanceId?: string | null, reason?: string }>}
@@ -70,7 +65,7 @@ export async function readmitToContinue(this: any, model: string): Promise<any> 
     //
     // officialSessionHeaders() 在有 instanceId 时自动带上
     // x-freebuff-purchase-continuity: 1(见 official-fingerprint.js), 所以这里
-    // 只需把 instanceId 传进去 -- 不额外造一个参数, 以免发明一个并不存在的契约.
+    // 只需把 instanceId 传进去, 不额外造参数.
     const body = await this.upstream.freebuffSession('POST', {
       model,
       instanceId: existing,

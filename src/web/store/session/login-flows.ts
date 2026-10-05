@@ -74,7 +74,7 @@ export class LoginFlowManager {
     this.config = config
     /**
      * 凭证落盘后的回调(记[凭证更新时间]到账号账本).
-     * 用回调而不是直接持有 AccountRuntimes:登录流程只关心登录,账本是上层的事.
+     * 用回调, 不直接持有 AccountRuntimes:登录流程只关心登录.
      */
     this._onCredentialSaved =
       typeof onCredentialSaved === 'function' ? onCredentialSaved : null

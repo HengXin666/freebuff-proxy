@@ -10,8 +10,9 @@ import { state } from '../../../../../smoke/state.ts'
 import { chat } from '../../../harness/runtime.ts'
 import assert from 'node:assert/strict'
 
-// 客户端断开必须立即释放账号锁(回归:reqToAbortSignal 无条件 abort,
-// 否则请求体读完(req.complete=true)后断开会让上游挂到超时,锁占死全部请求)
+// 客户端断开必须立即释放账号锁(回归:reqToAbortSignal 无条件 abort;
+// 请求体读完(req.complete=true)后断开若不复用该 abort, 上游会挂到超时,
+// 锁占死全部请求)
 {
   state.mockMode = 'hold_once'
   state.completionAttempts = 0

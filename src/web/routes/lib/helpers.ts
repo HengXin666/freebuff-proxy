@@ -3,7 +3,6 @@
  *
  * 拆 src/web/api.ts 时,这些"每个域都要用一次"的纯函数若各自复制一份,
  * 就会出现"某域改了分档规则,别的域还是旧口径"的漂移 ---- 本仓已经在模型名
- * 映射上踩过同一个坑(见 .agents/notes/implemented/architecture/2026-10-04-model-name-three-layers.md).
  * 所以收拢到这一处,只有一份实现.
  */
 import { createHash } from 'node:crypto'
@@ -27,10 +26,6 @@ export async function readJson(req: IncomingMessage) {
 /**
  * 上游故障对象上的两个判据字段,以及从任意抛出物里安全取出它们.
  *
- * 为什么单独收两个函数:catch 到的值是 unknown(strict 下),直接写
- * err?.code 会被 TS 拒掉(Property 'code' does not exist on type '{}').
- * 本仓有 6 处探测/刷新分支都要读这两个字段,各写一遍 as any 等于把
- * "错误判据从哪来"这件事复制六份 ---- 与文件头那条纪律冲突.
  *
  * 类型取自真实契约 src/upstream/client/errors.ts 的 UpstreamError:
  * code?: string / status?: number.所以这里只是把值原样透出并补 null,
@@ -108,7 +103,7 @@ export function uniqueStrings(arr: any) {
 
 /**
  * 按 key(id 或邮箱)定位账号行;邮箱匹配仅在唯一命中时生效
- * (同邮箱多个账号时必须以 key 精确指定,否则视为不存在).
+ * (同邮箱多个账号时必须以 key 精确指定).
  *
  * @param {string} dir 账号目录
  * @param {string} key 账号 key / 邮箱
@@ -152,7 +147,7 @@ export function catalogIdForKey(runtimes: any, key: any) {
  *
  * ! 复用 AccountRuntimes.displayNameFor() ---- 那是唯一的展示侧映射入口
  * (内部先归一再做 key->名,支持目录 key / 上游 legacy id / 可读名三种输入,
- * 并带内置静态表兜底).这里此前自己遍历 runtime 的 catalog,是第二套实现,
+ * 并带内置静态表兜底). 这里遍历 runtime 的 catalog 会构成第二套实现,
  * 既漏掉"上游 legacy id"这种输入,也没有内置表兜底.
  *
  * @param {any} runtimes 账号运行时集合

@@ -1,10 +1,8 @@
 /**
- * 各处的超时与预算常量 -- 为什么不写死在调用点.
+ * 各处的超时与预算常量, 集中在一处便于一眼看全.
  *
- * 它们都从 ctx.config.limits 读, 且都有默认值兜底的必要: 配置缺失时若返回
- * undefined, 会变成 setTimeout(undefined) 立即触发或永不触发 (两者都出现过).
- * 集中在一处是为了让这几个数分别是多少能被一眼看完, 而不是散在 2000 行的
- * 请求链路里.
+ * 全部从 ctx.config.limits 读, 并带默认值兜底: 配置缺失时返回 undefined 会让
+ * setTimeout(undefined) 立即触发或永不触发.
  */
 
 export /**
@@ -37,10 +35,9 @@ function chatHeaderTimeoutMs(ctx: any) {
 }
 
 export /**
- - 全局请求闸门的排队上限(毫秒).有界即可:这是"同一进程内等一个并发
- - 名额"的预算,不是上游等待.给足 15s 让突发流量自然消化,超时就明确
- - 拒绝,绝不像旧实现那样把请求永久挂在队列里.可用
- - limits.slotWaitMs 调整(<=0 表示一旦排满立即拒绝).
+ - 全局请求闸门的排队上限(毫秒).这是"同一进程内等一个并发名额"的预算,
+ - 不是上游等待:超时即拒绝,不把请求永久挂在队列里.
+ - 可用 limits.slotWaitMs 调整(<=0 表示一旦排满立即拒绝).
  */
 function slotWaitMs(ctx: any) {
   const v = ctx.config.limits.slotWaitMs
@@ -50,8 +47,7 @@ function slotWaitMs(ctx: any) {
 export /**
  - [首字节之前]的调度总预算(毫秒).上游链路前置 Cloudflare(源站 100s
  - 未回响应头即 524),而本代理在 writeHead 之前有多段串行静默等待(全局槽位
- - → 账号 chat 锁 → 上游首字节).默认 45s:留足正常排队余量,又明显低于
- - 100s 悬崖,绝不把请求静默拖到客户端早已超时.
+ - -> 账号 chat 锁 -> 上游首字节).默认 45s:留足正常排队余量,又低于 100s 阈值.
  */
 function schedulingBudgetMs(ctx: any) {
   const v = ctx.config.limits.schedulingBudgetMs

@@ -1,10 +1,7 @@
 /**
  * 配置合并原语:纯对象判定,键归一,深拷贝,深合并.
  *
- * 全部是纯函数(无 IO),因此可以单独测试.deepMerge 的深拷贝不是优化
- * 而是正确性要求(历史 bug:浅拷贝让 DEFAULTS 被污染).
- *
- * 从 src/config.ts 拆出(原 446 行单文件).
+ * 全部是纯函数(无 IO),因此可以单独测试.
  */
 import { DROPPED_KEYS, KEY_MAP } from './defaults.ts'
 
@@ -38,8 +35,7 @@ export function clonePlain(value: any): any {
 /**
  * YAML snake_case → camelCase,并丢弃已知废弃键.
  *
- * 未知键保留原样(不静默吞掉),这样新增配置项不会因为漏登记 KEY_MAP
- * 而"看起来写了但没生效".
+ * 未知键保留原样(不静默吞掉), 避免新增配置项漏登记 KEY_MAP 时不生效.
  *
  * @param {any} input YAML 解析结果
  * @returns {any} 键归一后的结构
@@ -63,12 +59,7 @@ export function normalizeKeys(input: any): any {
 /**
  * 深合并:override 覆盖 base.
  *
- * 必须深拷贝 base(历史 bug):旧实现用 { ...base } 浅拷贝,当 override 为
- * 空(没有 config.yaml 时 fileConfig = {})嵌套的 session/limits/web/upstream
- * 就与全局 DEFAULTS 共享同一个对象引用.任何一处 config.session.xxx = y
- * 都会污染 DEFAULTS,污染进程内后续所有 loadConfig() 结果(测试套件之间互相串味,
- * 表现为莫名其妙的 "fetch failed" / no_available_account).有 config.yaml 时因为
- * 递归到嵌套键恰好新建了对象,所以才"看起来正常" -- 这个 bug 因此潜伏了很久.
+ * 对 base 做深拷贝, 保证结果不与 DEFAULTS 共享嵌套对象引用.
  *
  * @param {any} base 基底
  * @param {any} override 覆盖值

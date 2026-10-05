@@ -107,7 +107,7 @@ export class DeviceSigner {
   }
 
   /**
-   * 确保本地有可用设备密钥: 已加载则直接返回, 否则从磁盘读/新建并落盘.
+   * 确保本地有可用设备密钥: 已加载则直接返回, 未加载则从磁盘读或新建并落盘.
    * @returns {Promise<any>} 设备密钥记录
    */
   async ensureKey() {

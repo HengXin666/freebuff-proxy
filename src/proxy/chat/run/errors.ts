@@ -1,22 +1,12 @@
 /**
- * 一轮失败的归类与去向 ---- 从 ./loop.ts 按职责切出.
+ * 一轮失败的归类与去向.
  *
- * ## 为什么单独成文件
+ * 判据表: 5 条终态判据(客户端已断开 / 调度预算耗尽 / 会话预算耗尽 / 出口级故障 /
+ * 全池额度耗尽) + 2 条重试分支. 终态判据的共同点是"重试只会有同样结果", 因此
+ * 立即收场, 不消耗剩余轮次.
  *
- * 主循环只做"跑一轮 -> 按结果去下一个状态"; 而"这个错误该不该重试, 换号还是收场"
- * 是一张有 5 条终态判据 + 2 条重试分支的判据表. 两者放在一起时, 读主循环的人要
- * 同时装下这张表. 拆开后主循环 200 行可以整段读, 判据表 200 行可以逐条核对.
- *
- * 终态的五条判据各自对应一次真实事故(见每条的注释): 客户端已断开 / 调度预算耗尽 /
- * 会话预算耗尽 / 出口级故障 / 全池额度耗尽 ---- 它们的共同点是"重试只会有同样结果",
- * 所以必须立即收场而不是白烧 maxAttempts 轮.
- *
- * ## 每请求独立语义
- *
- * 全部状态读写都发生在传入的 st 上(每请求一份, 见 ./state.ts); 本模块不持有任何
- * 模块级可变绑定.
- *
- * 口径: 纯搬移, 行为零改动.
+ * 每请求独立语义: 全部状态读写都发生在传入的 st 上(每请求一份, 见 ./state.ts);
+ * 本模块不持有任何模块级可变绑定.
  */
 import { UpstreamError, isSessionRecoverableGate } from '../../../upstream/client.ts'
 import { logger } from '../../../util/log.ts'
@@ -146,8 +136,7 @@ export function retryAfterUpstreamError(st: any, err: any) {
 /**
  * 网络类错误的下一轮安排: 先同号重试一次, 再失败才换号.
  *
- * 为什么不区分客户端是否已断开: req.destroyed 在请求体读完后就为 true, 无法
- * 可靠区分; 多试一轮最多浪费一次上游调用.
+ * 不区分客户端是否已断开: req.destroyed 在请求体读完后就为 true.
  * @param {any} st 请求级状态(见 ./state.ts)
  * @param {any} err 抛出的错误
  * @returns {void} 无返回
@@ -186,7 +175,7 @@ export function retryAfterNetworkError(st: any, err: any) {
  * @returns {void} 无返回
  */
 export function finalizeUpstreamError(st: any, res: any, err: any) {
-  // 会话不会再被用, 立刻早退 DELETE 释放槽位, 而不是等空闲释放 / 挂到过期.
+  // 会话不会再被用, 立刻早退 DELETE 释放槽位, 不等空闲释放或自然过期.
   if (st.lastKey) {
     // 统一入口(付费时段内拒绝释放)
     st.releaseSessionUnlessPaid(st.lastKey, 'final upstream error')

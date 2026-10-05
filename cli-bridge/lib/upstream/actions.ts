@@ -1,10 +1,6 @@
 /**
  * CLI action 分发 -- 从 cli-bridge/upstream.ts 的入口块按职责搬出.
  *
- * 为什么单独成文件: 这段是 125 行的 if / else-if 链, 每个分支把 input 里的
- * 字段喂给 bridge 的某个方法. 它关心的只有 [action 名字到端点方法的映射],
- * 与 [BridgeLike 怎么签名, 怎么持有 cfg] 完全无关. 搬出来之后, 加一个新 action
- * 只需要在 ACTIONS 表里加一行, 不必再读一遍签名逻辑.
  *
  * 两处与原文的等价变换(纯机械, 不改行为):
  *   1. 原链里 release 分支写了两次(第二处永远不可达, 两个分支体逐字相同)
@@ -148,7 +144,6 @@ async function actFull({ bridge, input, out }: ActionCtx): Promise<void> {
     return
   }
   //  参数名必须是 instanceId(chat 的解构键名).
-  // 此前写成 inst,导致 x-freebuff-instance-id 缺失 ->
   // 上游不知道请求属于哪个会话 -> 428 waiting_room_required.
   const c = await bridge.chat({
     row, instanceId: inst, runId: run.runId,

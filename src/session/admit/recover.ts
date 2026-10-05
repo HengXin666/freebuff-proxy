@@ -1,8 +1,7 @@
 /**
  * admission 的三种"失败回执"恢复路径: model_locked, 槽位接管, claim 轮换.
  *
- * 从 steps.ts 按职责切出. 这三支的共同点是"回执不是 active, 但也不是终态",
- * 各自有官方对齐的重试动作; 与"正常路径怎么拿会话"分开更好审查.
+ * 三支的共同点是"回执不是 active, 但也不是终态", 各自有官方对齐的重试动作.
  */
 import { newRawInstanceId } from '../../upstream/fingerprint/official-fingerprint.ts'
 import { logger } from '../../util/log.ts'
@@ -36,17 +35,16 @@ export async function handleModelLocked(
  * 槽位被占时用 x-freebuff-takeover-instance-id 接管重试(官方行为).
  *
  * 官方 orchestrator.js:208152-208155: 上游回执会告诉我们谁占着槽位
- * (currentInstanceId), 官方据此显式"接管"(带 takeover 头重发一次).
- * 我们此前完全没有这一步 -- takeover 逻辑只存在于 cli-bridge 的 admit(),
- * 而主服务的 admission 走另一条路, 从不带该头. 后果(实测 2026-10-04):
- * 账号直连上游 status: none, balance 15, 但每个请求都回 purchase_capacity.
+ * (currentInstanceId), 官方据此带 takeover 头重发一次.
+ * 主服务的 admission 必须带该头, 缺它时账号直连上游 status: none / balance 15,
+ * 但每个请求都回 purchase_capacity.
  *
  * 只重试一次(与官方一致), 避免与占用者互相抢夺.
  * @param {any} this 会话实例
  * @param {any} body 回执
  * @param {string} model 请求模型
  * @param {string} claimId 本进程复用的 instanceId
- * @returns {Promise<{session: any, body: any}>} 成功时 session 非空, 否则把新回执带回
+ * @returns {Promise<{session: any, body: any}>} 成功时 session 非空; 未接管成功时 session 为 null 并把新回执带回
  */
 export async function handleSlotTaken(
   this: any,
@@ -100,16 +98,13 @@ export async function handleSlotTaken(
 /**
  * purchase_claim_released: 必须换一个全新的 instanceId 再试一次.
  *
- * 这是官方客户端的确切行为(desktop 0.0.158 解包 orchestrator.js:208166-208176):
+ * 官方客户端的确切行为(desktop 0.0.158 解包 orchestrator.js:208166-208176):
  * 先 recovery.finish 结束失败尝试, 再 releasePurchaseClaim(就是
- * deleteSession(instanceId) -- 删的是"已被作废的那条 claim"), 然后
+ * deleteSession(instanceId) ---- 删的是"已被作废的那条 claim"), 然后
  * instanceHint = crypto.randomUUID() 换全新 UUID 重试一次(rotated 只重试一次).
  *
- * 我们此前把它归进 SLOT_BUSY_CODES 当"槽位忙, 跳过", 于是永远卡在同一个
- * 已作废的 instanceId 上: 每个模型都返回同样的错, 直到 expiresAt 到期才恢复
- * (实测日志 11:29:07 / 11:29:44 / 11:29:56 连续三个模型全部
- * purchase_claim_released, 其中 m-22ff70c712 单价 0 也失败 -- 证明卡的不是钱,
- * 是那条 claim).
+ * 把它当"槽位忙, 跳过"会永远卡在同一个已作废的 instanceId 上, 直到 expiresAt
+ * 到期才恢复.
  * @param {any} this 会话实例
  * @param {any} body purchase_claim_released 回执
  * @param {string} model 请求模型

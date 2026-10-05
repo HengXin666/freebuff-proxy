@@ -24,9 +24,6 @@ export function buildTools(layer, tools, officialTools, officialDecide) {
 /**
  * 观测:把"哪些客户端工具被改名,哪些保持原名"记一条.
  *
- *  不再有"丢弃"这个类别(旧版有,实测证伪)---- 上游接受官方不存在的
- * 工具名(8 个陌生名实测 200),所以映射不到的原样保留.
- * 保留这条日志是为了能看出"这次请求里有多少名字不是官方原生的".
  */
 {
   const renamed = [];

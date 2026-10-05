@@ -23,7 +23,7 @@ import path from 'node:path'
   const { writeCatalogCache, readCatalogCache, startCatalogSync } = await import(
     '../../../../../../src/catalog/runtime-sync.ts'
   )
-  // 路径由 dataDir 决定,而不是源码目录旁的 data
+  // 路径由 dataDir 决定, 不取源码目录旁的 data
   assert.equal(catalogCachePath('/data'), path.join('/data', CATALOG_CACHE_FILENAME))
   assert.equal(catalogCachePath('/srv/x'), path.join('/srv/x', 'catalog-cache.json'))
   assert.ok(DEFAULT_CATALOG_CACHE_PATH.endsWith(path.join('data', CATALOG_CACHE_FILENAME)))

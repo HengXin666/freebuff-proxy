@@ -60,15 +60,10 @@ export function apiKeyMatches(token: unknown, keys: string[]): boolean {
 /**
  * 客户端断开信号(调度阶段用,区别于下方的 pipe 阶段).
  *
- * 为什么必须有:本代理在调度上有多个[首字节之前的静默等待]----全局槽位,
- * 账号 chat 锁,上游首字节.这些等待原先完全不感知客户端是否还在.客户端
- * (DSH/sub2api)等不住会自行超时并 abort 旧请求,但代理这边仍在闷等
- * (账号锁最长 accountChatWaitMs,默认 120s),并且继续占着账号 chat 锁.
- * 账号并发默认只有 2,粘性调度又把请求集中到同一个账号上,于是几个"已死"的
- * 请求就能把账号锁钉死 → 后续所有请求排队 → 表现为[跑着跑着完全不接单,
- * 只有重启才恢复].
+ * 本代理在调度上有多个[首字节之前的静默等待]: 全局槽位, 账号 chat 锁, 上游首字节;
+ * 这些等待都感知客户端是否还在.
  *
- * 语义:socket close → 视为客户端已走,等待立即放弃,并保证稍后授予的锁被释放.
+ * 语义: socket close -> 视为客户端已走, 等待立即放弃, 并保证稍后授予的锁被释放.
  * @param {import('node:http').IncomingMessage} req
  * @returns {{isGone: () => boolean, race: (waitPromise: Promise<any>) => Promise<any>, cleanup: () => void}} 断开信号对象
  */
@@ -114,12 +109,9 @@ export function clientGoneSignal(req: IncomingMessage): ClientGoneHandle {
 }
 
 /**
- * 客户端断开的 abort 信号.必须监听底层 socket 关闭:node 的
- * IncomingMessage 'close' 是[请求体读完]事件(body 读完即触发,早于我们注册
- * 监听器的时机),监听它既收不到真正的断开,又会在 body 一读完就 abort 掉上游.
- * 客户端断开(含 keep-alive 下断开)只会体现在 socket close 上.若这里不 abort,
- * 上游 fetch 会一直挂着(最长等 upstreamTimeoutSec=600s),账号 chat 锁被占死,
- * 后续所有请求排队超时(实测 inFlight 卡满,客户端 headers 超时).
+ * 客户端断开的 abort 信号.监听底层 socket 关闭: node 的
+ * IncomingMessage 'close' 是[请求体读完]事件, 早于本函数注册监听器的时机.
+ * 客户端断开(含 keep-alive 下断开)只体现在 socket close 上.
  * @param {import('node:http').IncomingMessage} req
  * @returns {{signal: AbortSignal, cleanup: () => void}} abort 信号与清理函数
  */
@@ -141,14 +133,10 @@ export function reqToAbortSignal(req: IncomingMessage): {
 
 /**
  * 把上游响应体透传给下游,带 idle 超时兜底:
- * 上游流式响应"发了一半不再吐数据,也不断开"(幽灵连接)时,超过
- * idleTimeoutMs 没有新数据块 → 取消上游读取,销毁下游连接,并抛出带
- * stalled 标记的错误(err.wroteBytes 记录已下发的字节数),
- * 由调用方决定换号重试还是直接断开.
+ * 超过 idleTimeoutMs 没有新数据块 -> 取消上游读取,销毁下游连接,并抛出带
+ * stalled 标记的错误(err.wroteBytes 记录已下发的字节数).
  *
- * 客户端断开也必须立即中断:实测 reader.cancel()/fetch abort 都不能让挂起的
- * reader.read() 拒绝(会一直挂到 idle 超时),账号 chat 锁被占死.因此把
- * [客户端连接关闭]显式加进 race,断开瞬间 reject 并释放锁.
+ * 客户端断开也立即中断:把 [客户端连接关闭] 显式加进 race,断开瞬间 reject 并释放锁.
  * @param {ReadableStream<Uint8Array>} webBody 上游响应体(WebStream)
  * @param {import('node:http').ServerResponse} nodeRes
  * @param {import('node:http').IncomingMessage} nodeReq

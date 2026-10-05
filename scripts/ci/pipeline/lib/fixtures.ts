@@ -1,10 +1,6 @@
 /**
  * 数据目录固件 -- 从 scripts/ci/pipeline-image-test.ts 按职责切出.
  *
- * 为什么需要合成数据源: data/ 是 gitignore 的(本地运行数据, 不入库), 所以
- * CI 上拿不到真实 JSON. 若因此跳过 "损坏文件" 场景, 这道门禁就形同虚设
- * (真实故障恰恰是 "损坏的文件 + 新镜像"). 这里就地合成一份结构合法的最小
- * 数据集, 保证流水线在任何环境下都能跑满全部场景.
  *
  * 口径: 纯搬移, 不改行为.
  */
@@ -98,7 +94,6 @@ export function makeFixture(name, opts = {}, dataSource) {
  *
  * 不能直接 rmSync:容器以 root 启动,entrypoint 会把 /data chown 给 node(1000).
  * 本地开发机 uid 恰好是 1000(chown 等价于没变),但 CI runner 不是 -- 宿主侧删除
- * 会 EACCES,而它发生在 finally 里,会把整条流水线带崩(v1.12.0 的 CI 实测).
  * 所以优先借一个 root 容器删(用刚构建的镜像,不额外拉取),失败再退回本地删除.
  * 任何情况下都不得抛:清理失败只是留个临时目录,不该判流水线失败.
  * @param {string} dir fixture 目录

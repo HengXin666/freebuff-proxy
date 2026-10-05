@@ -13,17 +13,15 @@ import { CONTEXT_METHODS } from './context/methods.ts'
 
 /**
  * Multi-account pool. 账号以[account key]标识:
- * key = Freebuff 用户 id(优先),无 id(历史数据)回落邮箱.
- * GitHub / Google 登录同一邮箱但 id 不同 → 两个独立账号,互不覆盖.
+ * key = Freebuff 用户 id(优先),无 id 的数据回落邮箱.
+ * GitHub / Google 登录同一邮箱但 id 不同 -> 两个独立账号,互不覆盖.
  *
  * 本文件保留原路径与全部原有导出名(AccountRuntimes / buildAppContext /
  * maskEmail / freebuffAuthHeaders); 方法实现按域放在 src/context/** 下,
- * 由 ./context/methods.ts 的 CONTEXT_METHODS 装配回原型(名字即契约).
- *
- * 为什么用"原型装配"而不是把方法留在类里: 每个方法都要访问同一批字段
- * (byKey / cooldowns / chatLocks / _reserved ...), 而选号 / 冷却 / 锁 /
- * 生命周期四域各自可以独立阅读. 装配表是唯一清单, 与调用点同名 ---- 漏挂一个
- * 只会在运行时表现为 "x is not a function", 静态检查抓不到.
+ * 由 ./context/methods.ts 的 CONTEXT_METHODS 装配回原型(名字即契约):
+ * 选号 / 冷却 / 锁 / 生命周期四域的方法各自访问同一批字段
+ * (byKey / cooldowns / chatLocks / _reserved ...), 装配表是唯一清单,
+ * 与调用点同名; 漏挂一个会在运行时表现为 "x is not a function".
  */
 
 /**
@@ -120,15 +118,14 @@ export class AccountRuntimes {
     this._lastSuccessKey = null
     /** Per-account success counters (in-memory, for load-balance visibility). */
     this.stats = { total: 0, byKey: new Map() }
-    // 每个账号最近一次被选中/成功的时间戳(粘性调度的核心输入): 优先继续用刚用过的账号,而不是轮换到下一个健康账号. @type {Map<string, number>}
+    // 每个账号最近一次被选中/成功的时间戳(粘性调度的核心输入): 优先继续用刚用过的账号. @type {Map<string, number>}
     this._lastUsedAt = new Map()
-    // [已选中,但还没拿到 chat 锁]的预留数(key → 计数).  为什么必须有它:选号(candidateKeys)发生在拿 chat 锁之前,此刻 chatLock.inFlight
+    // 已选中但还没拿到 chat 锁的预留数(key -> 计数): 选号发生在拿 chat 锁之前, 并发上限判定要把这部分一起算. @type {Map<string, number>}
     this._reserved = new Map()
-    // 预留的兜底释放定时器:请求中途异常退出(选号后未走完 chat 流程)也不该 把账号永久标记为"满".超时自动归还,绝不会泄漏成"账号永远满员". @type {Map<string, No
+    // 预留的兜底释放定时器: 请求中途异常退出时超时自动归还预留, 不把账号永久标记为满员. @type {Map<string, NodeJS.Timeout>}
     this._reserveTimers = new Map()
-    // 必须在所有上述容器(cooldowns/stats/_lastUsedAt)初始化之后回灌,
-    // 否则账本里存着的计数/冷却没有地方放(早先放在构造函数开头,smoke 直接
-    // 以 "Cannot read properties of undefined" 抓到).
+    // 在所有上述容器(cooldowns/stats/_lastUsedAt)初始化之后回灌:
+    // 账本里的计数/冷却要落在这些容器上.
     this._restoreAccountState()
   }
 
@@ -143,7 +140,7 @@ export class AccountRuntimes {
    * 每 3 秒重放直到拿到终态;只在启动时扫一次 = 进程不重启就再也没人问过,
    * 那笔已经预扣的 Freebucks 会一直挂在 pending 里.
    * @param {{budgetMs?: number}} [opts] 本次扫尾的总预算(启动路径必须传,
-   *   否则一个连不通的上游能把启动卡住).
+   *   用于给上游连不通的情况兜底).
    * @returns {Promise<{cleaned: number, failed: number, skipped: number, deferred: number}>} 逐类计数
    */
   async cleanupOrphanSessions(opts = {}) {

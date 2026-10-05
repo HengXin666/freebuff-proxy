@@ -1,11 +1,7 @@
 /**
  * 容器内探测 -- 从 scripts/ci/pipeline-image-test.ts 按职责切出.
  *
- * 为什么必须在容器里做登录:宿主侧端口映射下 cookie 的 Secure/Domain 判定
- * 与浏览器不同,映射后取不到 cookie 会误报"登录坏了".容器内 127.0.0.1
- * 就是应用本身,等价于用户在本机浏览器打开控制台.
  *
- * 口径: 纯搬移, 不改行为. 两处 CI 实测踩坑的注释原样保留.
  */
 import { httpGet, sleep } from './io.ts'
 import { containerState } from './container.ts'
@@ -14,12 +10,6 @@ import { BOOT_TIMEOUT_MS } from './paths.ts'
 /**
  * 在容器内用 admin 账号打一次真实登录, 返回 Set-Cookie.
  *
- * 为什么必须单行脚本(2026-10-04 CI 实测两次踩坑):
- * 坑一:基镜像从 alpine 换成 slim 后容器里没有 wget,旧实现直接失败,
- * 表现为[容器内 admin 登录失败(拿不到会话 cookie)] -- 而被测应用其实完全正常.
- * 坑二:改成 node -e "多行脚本" 后,JSON.stringify 会把换行转义成字面
- * 反斜杠 n,而外层 sh -c 不解释它 -> node 收到含字面换行的单行 -> SyntaxError.
- * 所以这里用分号分隔的单行脚本(不经 shell 转义新行),稳.
  * @param {string} name 容器名
  * @param {(cmd: string, args: string[], opts?: object) => {status: number|null,
  *   stdout?: string, stderr?: string}} run 子进程执行器
@@ -63,7 +53,6 @@ export function loginInsideContainer(name, run) {
  *
  * options 与 callback 之间必须是逗号,不能靠 join(';') 拼 --
  * http.request({...}; res=>{...}) 是语法错误(分号把调用切断了),
- * 脚本静默失败 -> 输出为空 -> 断言判成"接口无响应"(实测踩到).
  * 所以把这一段合成单个字符串,内部用逗号.
  * @param {string} name 容器名
  * @param {string} cookie 会话 cookie

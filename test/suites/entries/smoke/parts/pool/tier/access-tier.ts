@@ -32,8 +32,7 @@ import assert from 'node:assert/strict'
     limited.data.length >= baseline,
     `accessTier=limited 时列表长度不得缩水（${limited.data.length} < ${baseline}）`,
   )
-  // 前端[测试对话]的过滤条件(available !== false)必须留下全部模型----
-  // 这正是以前只剩一个的那一行.
+  // 前端[测试对话]的过滤条件(available !== false)必须留下全部模型.
   const visible = limited.data.filter((m) => m.available !== false)
   assert.equal(visible.length, limited.data.length, '测试对话下拉必须能看到全部模型')
   // 上游真实清单只作为标注透出(upstreamModelIds),不是过滤依据.
@@ -54,12 +53,11 @@ import assert from 'node:assert/strict'
 /**
  * 回归:账号级错误回执不得抹掉活着的 session 句柄.
  *
- * 上游对 banned / country_blocked 的 GET 回执是 200 + {status:'banned'}.以前
- * SessionManager.refresh() 无条件 _apply(body),于是控制台点一次[刷新]就会:
- * 1) 把 session 覆盖成无 instanceId 的空壳 ---- 已付费一小时的会话从此无法寻址,
- * DELETE 不掉(腾不出上游槽位)也追不回钱(退款的唯一凭据就是 instanceId);
- * 用户要求[刷新和警告都不会导致丢失已购买的会话]正是这条.
- * 2) 记成 lastProbe.ok = true ---- 探测失败却显示成功.
+ * 上游对 banned / country_blocked 的 GET 回执是 200 + {status:'banned'}.
+ * 本用例断言此时 refresh() 必须:
+ * 1) 抛出带 code 的错误, 且不覆盖 session(无 instanceId 的空壳会让已付费的
+ * 那一小时既 DELETE 不掉也追不回钱, 退款的唯一凭据就是 instanceId);
+ * 2) 把 lastProbe.ok 记为 false.
  */
 {
   const up = {

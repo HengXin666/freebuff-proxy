@@ -1,9 +1,7 @@
 /**
  * ensureSession: 热会话复用 / 平滑切换 / 冷路径 admit 的编排.
  *
- * 从 session-manager.js 的 ensureSession 切出(原函数 145 行, 其中内层锁回调
- * 137 行, 也是基线里那条 (anonymous)). 这里把"等待在途请求"与"付费时段内
- * 拒换模型"两个判断各自抽走, 主体只剩顺序.
+ * "等待在途请求"与"付费时段内拒换模型"两个判断各自成函数, 主体只剩顺序.
  *
  * 见 .agents/notes/implemented/architecture/2026-09-14-paid-hour-hold.md
  */
@@ -47,13 +45,10 @@ export async function ensureSession(this: any, model: string): Promise<any> {
     }
     // 冷路径: 本地已知"没有活跃会话", 直接 admit.
     //
-    // 这里原本还要先 GET 一次("in case another path left a row"). 但上游
-    // 同一个账号同一时间只能有一个客户端在线: 本进程的会话状态由
+    // 上游同一个账号同一时间只能有一个客户端在线: 本进程的会话状态由
     // session-manager 单点持有(admit/释放/轮询都经 withLock 串行化), 不存在
-    // "别人偷偷建了会话而我不知道". 那次 GET 只在本进程之外有人用同一个号时
-    // 才有意义, 代价却是每条冷请求都多一个完整 RTT(实测 +580ms 首字节).
-    // 真正的兜底已经在上游: 模型不符时 admit 会返回 model_locked,
-    // _admitUnlocked 内部会释放并重试一次.
+    // "别人偷偷建了会话而我不知道". 兜底在上游: 模型不符时 admit 会返回
+    // model_locked, _admitUnlocked 内部会释放并重试一次.
     return this._admitUnlocked(model)
   })
 }
@@ -66,8 +61,8 @@ export async function ensureSession(this: any, model: string): Promise<any> {
  * 上游连接还在但 session 已消失, 用户端会永久卡住. 用循环而非单次等待:
  * 某次归零的瞬间可能有新请求刚拿到 chat 锁开始在途, 需继续等它.
  *
- * 等待必须有上界: 在途流若因网络波动长时间不结束, 新请求不能无限干等 --
- * 否则"一条链卡死 -> 所有后续请求全部超时". 超时放弃本账号, 由上层冷却.
+ * 等待必须有上界: 在途流长时间不结束时, 新请求不能无限干等, 超时放弃本账号并由
+ * 上层冷却(一条链卡死会导致所有后续请求全部超时).
  * @param {any} this 会话实例
  * @param {string} model 请求模型
  * @returns {Promise<void>} 进入真正空闲窗口或抛出 account_busy
@@ -107,23 +102,20 @@ async function awaitSwitchWindow(self: any, model: string): Promise<void> {
  * 付费时段内换模型 = 纯亏损, 直接抛 paid_window_model_mismatch.
  *
  * 持有的 slot 已不可用(模型不符 / 已过期 / 即将过期)时本应"先释放再 admit",
- * 但仍在已付费时段内时绝不释放(issue #24). 这段原本无条件释放, 直到 #24 在
- * 真实部署上复现:
+ * 但仍在已付费时段内时释放(issue #24). 触发时的会话现场:
  *
  *     18:41:24  session active  expiresAt=19:41:19
  *     18:41:36  releasing session before re-admit(切模型)
  *     18:41:38  slot busy; not cooling  code=purchase_claim_released
  *
- * 即: 已买断的那一小时被主动扔掉, 新模型又没拿到, 账号进入最差状态. 且实测
- * DELETE 之后接不回来(0s / 45s / 90s 三次重试, 换回原模型或换另一个模型,
- * 全部 purchase_claim_released), 直到 expiresAt 到期才恢复.
+ * 即: 已买断的那一小时被主动扔掉, 新模型又没拿到, 账号进入最差状态;
+ * DELETE 之后 0s / 45s / 90s 三次重试都接不回来, 直到 expiresAt 到期才恢复.
  *
  * 付费时段内的会话不是"不可用的 slot", 是"正在生效的资产". 抛
- * paid_window_model_mismatch: 上层据此跳过本账号去选下一个, 而不是冷却它
- * (它是健康的, 只是这一个小时内只能服务旧模型).
+ * paid_window_model_mismatch: 上层据此跳过本账号去选下一个(它是健康的,
+ * 只是这一个小时内只能服务旧模型).
  *
- * 只拦[模型不符], 不拦[即将过期需要续期]: 后者是同一模型的 re-admit,
- * 会话本来就该换新的.
+ * 只拦[模型不符], 不拦[即将过期需要续期]: 后者是同一模型的 re-admit.
  * @param {any} this 会话实例
  * @param {string} model 请求模型
  * @returns {void} 不命中则静默返回; 命中则抛出

@@ -19,9 +19,6 @@ let toastTimer: any = null
 
 export function toast(msg: any, isErr = false) {
   const box = $('#toast')
-  // 没有 #toast 容器时静默返回而不是抛:toast 是反馈通道,它自己崩掉
-  // 会把调用方(通常是某次操作的成功回调)一起炸掉,用户看到"点了没反应".
-  // 历史上这里漏判空 + 用错变量名,导致每一次 toast 都抛 ReferenceError.
   if (!box) return
   box.textContent = msg
   box.classList.toggle('err', !!isErr)

@@ -1,7 +1,7 @@
 /**
  * concurrency: 溢出换号
  *
- * 并发上限是溢出阈值而不是换号阈值.
+ * 并发上限是溢出阈值, 不是换号阈值.
  *
  * 由 test/suites/entries/smoke/smoke.ts 按职责机械切出. 口径: 纯搬移.
  */

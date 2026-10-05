@@ -1,12 +1,8 @@
 /**
  * 上游 HTTP 出站层:统一装配头(UA / Bearer / 目录头 / 设备签名)与超时.
  *
- *  本文件不使用任何闭包变量:所有从 createUpstreamClient 传进来的依赖
- * 都走显式 ctx 参数.原因:旧实现把 apiFetch 嵌在 798 行的工厂函数里,
- * 依赖 7 个外层变量,任何一处拼错名字都只在运行时抛 ReferenceError
- * (node --check 与旧 typecheck 都抓不到,本仓已两次踩中).
- *
- * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
+ * 本文件不使用任何闭包变量:所有从 createUpstreamClient 传进来的依赖都走显式
+ * ctx 参数, 避免依赖未声明的外层名字(那类错误只在运行时抛 ReferenceError).
  */
 import { logger } from '../../util/log.ts'
 import { freebuffAuthHeaders } from '../../auth-store.ts'
@@ -73,20 +69,13 @@ async function buildHeaders(ctx: any, url: string, init: any): Promise<Record<st
   const { token, catalog, deviceSigner } = ctx
   const headers = { ...(init.headers || {}) }
   // 官方 CLI 的非 chat 调用(session/agent-runs/me/usage)都是裸 bun fetch,
-  // 默认 UA = Bun/<version>(对齐 trefeon bunUserAgent = Bun/1.3.14,匹配 pinned
-  // reference/freebuff/.bun-version).chat 请求由调用方显式传 ai-sdk UA 覆盖
+  // 默认 UA = Bun/<version>. chat 请求由调用方显式传 ai-sdk UA 覆盖
   // (见 proxy.js forwardCompletions).
   if (!headers['user-agent'] && !headers['User-Agent']) {
     headers['user-agent'] = ctx.bunUserAgent
   }
-  /**
-   * 鉴权只发 Bearer.
-   *
-   * 以前的注释写着 "Login-issued tokens require x-codebuff-api-key
-   * (Bearer alone -> 401)" -- 那是未做单变量对照的结论:当时同时换了 token
-   * 来源与出口,401 的真实原因从未被证实是这个头.客户端 165 条抓包里
-   * x-codebuff-api-key 出现 0 次(docs/reverse/20 20.4),所以按官方形态只发 Bearer.
-   */
+  // 鉴权只发 Bearer: 客户端 165 条抓包里 x-codebuff-api-key 出现 0 次
+  // (docs/reverse/20 20.4), 官方形态即只发 Bearer.
   if (token && init.includeAuth !== false) {
     Object.assign(headers, freebuffAuthHeaders(token))
   }
@@ -108,8 +97,8 @@ async function buildHeaders(ctx: any, url: string, init: any): Promise<Record<st
       url,
       body: typeof init.body === 'string' ? init.body : null,
       // 签名载荷里的 fetchId 必须与 x-freebuff-catalog-fetch 头完全一致 --
-      // 它把请求绑定到签发句柄的那次目录抓取.传 null 会让签名与头不匹配,
-      // 服务端验签失败 -> 等同于未签名(实测表现为照旧被拒).
+      // 它把请求绑定到签发句柄的那次目录抓取. 传 null 会让签名与头不匹配,
+      // 服务端验签失败 -> 等同于未签名.
       fetchId: catalog.ready ? catalog.fetchId : null,
     })
     Object.assign(headers, sigHeaders)
@@ -128,23 +117,20 @@ async function buildHeaders(ctx: any, url: string, init: any): Promise<Record<st
 /**
  * 登录类请求(/api/auth/cli/code,/api/auth/cli/status)的瞬时故障重试.
  *
- * 为什么需要:代理池回落 + 单次尝试超时只存在于 fetchWithProxy 的 pool 分支
- * (见 transport.ts 的 buildFetchWithProxy).而 resolveProxy 在[无代理且无环境变量]
- * 时返回 kind:'none',fetchWithProxy 直接走裸 fetch 一次性返回 -- 没有任何回落.
- * 官方推荐的家庭部署恰恰就是[代理设置留空],于是这条最推荐的路径上一次
- * 网络抖动 = 一次硬失败,前台表现为[发起登录失败: This operation was aborted]
- * (AbortError 的原文,用户无法判断是超时/DNS/TLS).
+ * 适用范围: 代理池回落 + 单次尝试超时只存在于 fetchWithProxy 的 pool 分支;
+ * resolveProxy 在[无代理且无环境变量]时返回 kind:'none', fetchWithProxy 直接走
+ * 裸 fetch 一次性返回, 没有任何回落. 所以这里补[同代理重试一次].
  *
- * 这里只补[同代理重试一次],不改变换号/换出口语义:loginCode/loginStatus
- * 都是幂等或可重复的,重试不会多买会话,不会动账号账本.
- * 非瞬时错误(4xx/5xx 走 UpstreamError)不重试.
+ * 只重试瞬时错误(中止/网络层失败/常见 socket 码); 4xx/5xx 走 UpstreamError 不重试.
+ * 不改变换号/换出口语义: loginCode/loginStatus 幂等或可重复, 重试不会多买会话,
+ * 不动账号账本.
  *
  * @param {UpstreamCtx} ctx 出站依赖
  * @param {string} url 完整 URL
  * @param {Record<string, any>} init 请求初始化
  * @param {string} label 日志标签(login/code,login/status)
  * @returns {Promise<Response>} 上游响应
- * @throws {UpstreamError} 重试后仍失败时,带稳定原因码(upstream_timeout / upstream_network)
+ * @throws {UpstreamError} 重试后仍失败时,带稳定错误码(upstream_timeout / upstream_network)
  */
 export async function fetchLoginUpstream(ctx: any, url: string, init: any, label: string): Promise<Response> {
   const attempts = 2
@@ -173,7 +159,7 @@ export async function fetchLoginUpstream(ctx: any, url: string, init: any, label
       })
     }
   }
-  // 给出可诊断的原因码,而不是把 AbortError 原文甩给前端
+  // 给出可诊断的错误码, 不把 AbortError 原文甩给前端
   if (lastErr?.name === 'AbortError') {
     throw new UpstreamError(
       `上游登录请求超时（${init.timeoutMs ?? '?'}ms），请重试`,
@@ -183,18 +169,16 @@ export async function fetchLoginUpstream(ctx: any, url: string, init: any, label
   }
   if (lastErr?.name === 'TypeError') {
     /**
-     *  code 必须是稳定的业务码,不能透 Node 底层码.
+     * code 必须是稳定的业务码, 不能透 Node 底层码.
      *
-     * 本仓的 code 是业务判据:多处按集合匹配(SLOT_BUSY_CODES /
-     * UNAVAILABLE_COOLDOWN_CODES / EXHAUST_CODES ...).若把
-     * ECONNREFUSED / ETIMEDOUT 这类裸 socket 码透出去,
-     * 一来违背这里"给可诊断原因码"的承诺(前端拿到的是不稳定原语),
-     * 二来将来任何按 code 匹配的逻辑都可能被误命中.
+     * 本仓的 code 是业务判据: 多处按集合匹配(SLOT_BUSY_CODES /
+     * UNAVAILABLE_COOLDOWN_CODES / EXHAUST_CODES ...). 透出裸 socket 码会让这些
+     * 匹配被误命中.
      *
-     * 底层码仍要可见  --  两处都给:
-     *   1. message 里带一份(前端弹窗直接显示,用户/运维肉眼可见);
-     *   2. cause 字段带一份(结构化,供前端程序化判断与后端排障).
-     * code 保持稳定的 upstream_network,不透裸 socket 码.
+     * 底层码仍要可见, 两处都给:
+     *   1. message 里带一份(前端弹窗直接显示);
+     *   2. cause 字段带一份(结构化, 供前端程序化判断与后端排障).
+     * code 保持稳定的 upstream_network.
      */
     throw new UpstreamError(
       `上游登录请求网络失败：${lastErr.message}（${lastErr.code ?? 'unknown'}）`,

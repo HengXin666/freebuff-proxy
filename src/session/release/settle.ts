@@ -74,9 +74,9 @@ export function recordSettledRefund(
  * 所以: 句柄必须留着(丢了这笔预扣就永远取不回来); 立刻挂上持续重试定时器
  * (只靠"下次启动扫尾"意味着进程不重启就再也没人问过); 也不能上报成退款 0.
  *
- * 同时把句柄登记为 orphan: 上游已确认会话 ended, 这条 session 不能继续占着,
- * 否则该账号永远无法 admit 新会话(等于把整号废掉). 额度占用解除, 但
- * instanceId 落盘保留, 交给启动扫尾 / 后续重放把那笔挂起的结算要回来.
+ * 同时把句柄登记为 orphan: 上游已确认会话 ended, 这条 session 不能继续占着
+ * (占着会让该账号无法 admit 新会话). 额度占用解除, 但 instanceId 落盘保留,
+ * 交给启动扫尾 / 后续重放把那笔挂起的结算要回来.
  * @param {any} self 会话实例
  * @param {string} instanceId 目标会话实例 id
  * @param {string | null | undefined} model 该会话绑定的模型

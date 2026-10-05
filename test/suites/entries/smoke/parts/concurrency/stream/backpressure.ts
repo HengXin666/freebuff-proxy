@@ -74,7 +74,7 @@ import path from 'node:path'
       `Content-Length: ${Buffer.byteLength(bdBody)}\r\n\r\n` +
       bdBody,
   )
-  // 先等请求真正获取到账号锁(否则 waitFor(===0) 在锁未获取时就成立,空转通过)
+  // 先等请求真正获取到账号锁: 锁未获取时 waitFor(===0) 就会成立.
   await waitFor(
     '背压请求应获取账号锁',
     () => bdRuntimes.chatInFlight('bda') === 1,
@@ -108,7 +108,7 @@ import path from 'node:path'
   state.mockMode = 'ok'
 }
 
-// --- 账号被卡死(在途流占死唯一并发槽)时,其他连接换号成功而不是全部超时 ---
+// --- 账号被卡死(在途流占死唯一并发槽)时, 其他连接应换号成功 ---
 {
   const waDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-proxy-wedge-'))
   saveAccountUser(waDir, { id: 'wa', email: 'wa@example.com', authToken: 'token-wa' })
@@ -153,7 +153,7 @@ import path from 'node:path'
   assert.equal(resA.status, 200)
   assert.equal(waRuntimes.chatInFlight('wa'), 1, 'hold 流应占用 wa 的唯一并发槽')
   // B:立刻打第二个请求 → 粘性调度先在 wa 上有界排队;卡死的流会被 idle
-  // 超时(1s)掐断释放槽位,B 随即在 wa 上成功,而不是全部超时.
+  // 超时(1s)掐断释放槽位, B 随即在 wa 上成功完成.
   const t0 = Date.now()
   const resB = await waChat()
   assert.equal(resB.status, 200, await resB.clone().text())

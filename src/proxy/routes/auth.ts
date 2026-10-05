@@ -1,11 +1,9 @@
 /**
- * 两个横切鉴权/释放工具 -- 从 src/proxy.ts 搬出.
+ * 两个横切鉴权/释放工具.
  *
  * authorize: 下游 API Key 鉴权(配置里的 apiKeys 或用户表里的 key).
- * releaseSessionUnlessPaid: 释放上游会话的唯一允许入口 -- 付费时段内一律
- *   拒绝, 因为早退 DELETE 不退 Freebucks (买断制, POST 当场扣整小时).
- *
- * 口径: 纯搬移, 行为零改动.
+ * releaseSessionUnlessPaid: 释放上游会话的唯一允许入口 -- 付费时段内一律拒绝
+ *   (买断制, POST 当场扣整小时).
  */
 
 import { timingSafeEqual } from 'node:crypto'

@@ -1,26 +1,12 @@
 /**
- * 一次 chat 请求的可变状态 ---- 从 src/proxy.ts 的 handleChatCompletionsInner 提出.
+ * 一次 chat 请求的可变状态.
  *
- * ## 为什么必须有这个文件(并发正确性的唯一支点)
+ * 每请求一份: 这批字段必须随请求生灭, 不得提成模块级变量或类实例字段.
+ * 工厂形态 ---- createChatState() 在 handleChatCompletionsInner 里被调用一次,
+ * 产出一个独立的请求作用域对象.
  *
- * 原实现把这批状态放在闭包里(createProxyHandler 内部), 因此每处理一个
- * 请求就新建一份, 天然"每请求独立". 搬出闭包时唯一危险的形态是: 把这些字段
- * 提成模块级变量或类实例字段 ---- 那会变成跨请求共享: 长驻进程里两个并发
- * 请求会互相覆盖对方的 lastKey / pendingGateCode / heldRt, 表现为"A 的失败被
- * 记到 B 的账号上""B 释放了 A 的锁". 这种 bug 在单请求测试里完全看不出来,
- * 只在真并发下偶发(见 .agents/notes/implemented/architecture/2026-10-05-proxy-js-split-by-responsibility.md
- * 的 Alternatives considered 第一条).
- *
- * 所以这里刻意不是类, 而是"每请求调用一次"的工厂: createChatState() 在
- * handleChatCompletionsInner 里被调用一次, 产出一个随请求生灭的独立对象.
- *
- * 验证方式(两条, 见交付报告):
- *   1. 静态: 全文搜 createChatState 的调用点必须是请求作用域内(每请求一次);
- *      模块级不得出现任何可变绑定.
- *   2. 动态: node test/tools/repro-concurrency.ts sticky 2 3 8 与拆分前逐行对比
- *      (并发 8 个请求在同一账号上串行, 账号分配/流峰值/账号状态三行必须一致).
- *
- * 口径: 纯搬移, 行为零改动.
+ * 约束: 模块级不得出现任何可变绑定; createChatState 的调用点必须在请求作用域内.
+ * 见 .agents/notes/implemented/architecture/2026-10-05-proxy-js-split-by-responsibility.md
  */
 import { clientGoneSignal } from '../../transport/stream/stream-pipe.ts'
 import { schedulingBudgetMs, slotWaitMs } from '../../config/limits.ts'
@@ -30,9 +16,8 @@ import { buildChatState } from '../state/fields.ts'
 /**
  * 请求级全局槽位(有界排队).
  *
- * 为什么单独成函数: 它是 handleChatCompletions 里唯一"在解析请求体之前"的
- * 等待, 与后面的选号/上游调用无共享状态, 因此可以被单测直接钉住(排队超时 →
- * 429 server_busy; 客户端断开 → 安静收场).
+ * 是 handleChatCompletions 里唯一在解析请求体之前的等待: 排队超时 -> 429 server_busy;
+ * 客户端断开 -> 安静收场.
  * @param {any} ctx 依赖集合(含 config)
  * @param {any} req 下游请求
  * @param {any} res 下游响应
@@ -40,8 +25,7 @@ import { buildChatState } from '../state/fields.ts'
  * @returns {Promise<(() => void) | null>} 槽位释放函数; null = 已收场(调用方直接返回)
  */
 export async function withRequestSlot(ctx: any, req: any, res: any, onError: any) {
-  // 客户端在排队期间断开:立即放弃等待(否则这个"已死"的请求会一直占着
-  // 它稍后拿到的槽位,直到走完整个上游流程).
+  // 客户端在排队期间断开: 立即放弃等待, 不占用稍后拿到的槽位.
   const slotGone = clientGoneSignal(req)
   try {
     return await slotGone.race(
@@ -105,15 +89,14 @@ function dropChatHold(st: any) {
 /**
  - 账号锁等待时长(仅在所有可用账号都满员时排队才生效;有账号空闲时
  - 选号阶段就已换号,不会走到这里):
- - - 热 session(同模型可直接复用):等一个完整 idle 超时周期.上游卡死也会在
- - streamIdleTimeoutSec 后被掐断释放锁,所以热会话优先排队复用而不是新建 session.
+ - - 热 session(同模型可直接复用):等一个完整 idle 超时周期; 卡死的上游会在
+ - streamIdleTimeoutSec 后被掐断释放锁.
  - - 冷账号/换模型:只等固定窗口,超时即换下一个账号.
  */
 function chatWaitMs(st: any, rt: any) {
-  // spread 模式:并发优先----账号满员就是"该换号了",只给一个短窗
-  // (accountOverflowWaitMs,默认 15s)就溢出到下一个账号,绝不把并发
-  // 钉死在一个账号上干等.sticky(默认)保留大等待:宁可排队也不换号,
-  // 因为换号 = 新买一条 Freebucks 计费会话.
+  // spread 模式: 账号满员即溢出到下一个账号, 只给一个短窗
+  // (accountOverflowWaitMs, 默认 15s). sticky(默认)保留大等待: 优先排队,
+  // 不主动换号.
   if (st.runtimes.schedulingMode() === 'spread') {
     const overflow = st.settingsStore?.get?.()?.accountOverflowWaitMs
     const ms = Number.isFinite(overflow) ? overflow : 15_000

@@ -1,12 +1,8 @@
 /**
- * /v1/models 行的构造 ---- 从 src/model/list-response.ts 按职责切出.
+ * /v1/models 行的构造.
  *
- * 为什么单独成文件: 全文件只有这三段是"一行长什么样"(字段名与来源域),
- * 而 modelIdsFromSession 与 isModelAllowed 是"哪些 id 算数"的判据. 两者
- * 各自被不同调用点使用(白名单校验只用 isModelAllowed, 清单构建只用这两段),
- * 拆开后前者不再需要读后者的 200 行语义.
- *
- * 口径: 纯搬移, 行为零改动.
+ * 本文件只负责"一行长什么样"(字段名与来源域); modelIdsFromSession 与
+ * isModelAllowed 是"哪些 id 算数"的判据.
  */
 import { isPremiumModel } from '../flags.ts'
 import { FREEBUFF_AVAILABLE_MODELS } from './catalog-response.ts'
@@ -42,16 +38,8 @@ export function toOpenAiModel(m: any, meta: { available: boolean, accessTier?: s
  *
  * available 的含义只是"现在能不能直接发请求",不是"这个模型存不存在".
  *
- * 2026-09-15 修:以前这里用 accessTiers.includes(accessTier) 判定,而内置
- * catalog 的 15 条全都没有 accessTiers 字段 -> 一律回落成默认 ['full'] ->
- * 只要上游回一次 accessTier: limited,整个内置目录就被染成 available: false.
- * 下游把 /v1/models 当权威模型表的客户端 + 控制台测试对话(原本只留
- * available !== false)于是只看到剩余的一个(extraIds 里上游给过额度的那个
- * 模型) -- 用户反馈的"只有一个模型"就是这个.
- *
- * 目录准入不等于实时配额:真正拦人的是价格/额度(freebucks 闸门)与 agent
- * 可用性,不是这个静态标记.所以目录条目一律 available: true,tier 信息只作为
- * 元数据透出,由调用方自己决定怎么展示.
+ * 目录条目一律 available: true; tier 信息只作为元数据透出, 由调用方决定展示.
+ * 目录准入不等于实时配额: 真正拦人的是价格/额度(freebucks 闸门)与 agent 可用性.
  *
  * @param {Map<string, object>} byId 结果表(就地写)
  * @param {(id: string) => boolean} skip 是否跳过该 id
@@ -107,18 +95,16 @@ export function addCustomEntries(
  * 当前 model),内置 catalog 未必收录.
  *
  * 这里的 id 不能直接是目录 key(m-00032eaeec):下游 Agent 拿 /v1/models
- * 当模型表,看到的就是这串不透明标识 -- 用户明确要求"返回的应该是模型名称,
- * 而不是 ID".所以按下列优先级取可读口径:
+ * 当模型表,会把这串不透明标识当成模型名.按下列优先级取可读口径:
  *
  * 1. catalogId(deepseek/deepseek-v4-flash) -- 上游与生态通用写法,
  *    调度侧 isModelAllowed / handleFor 都能直接认;
  * 2. displayName(Solar Pro 4) -- 内置 catalog 尚未收录的上游新模型
- *    只有服务端给的名字可取,chat 入口会把它解析回 key(见 proxy.js);
+ *    只有服务端给的名字可取,chat 入口会把它解析回 key(见 proxy.ts);
  * 3. 兜底才是原 key(连名字都没有时,至少不丢模型).
  *
  * 若 catalogId 指向的条目已经在列表里,说明它与内置/自定义条目是同一个模型,
- * 不再重复添加(用户看到的列表里就此不再有裸 key 条目).原始 key 作为
- * freebuff_key 透出,调试/高级客户端仍能拿到服务端真值.
+ * 不再重复添加.原始 key 作为 freebuff_key 透出.
  *
  * @param {Map<string, object>} byId 结果表(就地写)
  * @param {any[]} extraIds 会话回执里的额外模型

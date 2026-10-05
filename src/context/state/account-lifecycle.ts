@@ -1,10 +1,7 @@
 /**
  * 账号的生命周期与账本持久化: 懒创建时回灌, 删除时清理, 账目落盘.
  *
- * 从 app-context.js 按职责切出. 为什么必须持久化: 这些数字(封禁时间, 请求数,
- * 最近使用, 冷却, Freebucks 余额与单价)原先是纯内存的 -- 一次重启全丢,
- * 控制台分不出"干净的未用号"与"已经打废的号", 且 freebucks 归零会让
- * "买不起就别 admit" 的闸门失忆.
+ * 持久化的字段: 封禁时间, 请求数, 最近使用, 冷却, Freebucks 余额与单价.
  */
 import fs from 'node:fs'
 import { accountCredentialsPath, listAccounts } from '../../auth-store.ts'
@@ -48,12 +45,9 @@ export function _hydrateRuntime(this: any, runtime: any) {
 
 /**
  * "这个号什么时候进来的"----取凭据文件的创建时间(birthtime,回退 mtime).
- * 为什么不直接用"账本第一次看到它":老账号升级到本账本时会被记成今天刚
- * 加入,控制台的"从未使用 / 老号"分区就全错了.
- * @param {any} this 账号池(runtimes)
  * @param {any} this 账号池(runtimes)
  * @param {string} key
- * @returns {string | null}
+ * @returns {string | null} ISO 时间串; 取不到时为 null
  */
 export function _importedAtHint(this: any, key: any) {
   try {
@@ -66,9 +60,8 @@ export function _importedAtHint(this: any, key: any) {
   }
 }
 
-/** 账号 key 列表(id 优先,历史账号为邮箱). */
 /**
- * 账号 key 列表(id 优先, 历史账号为邮箱).
+ * 账号 key 列表(id 优先, 旧布局的账号 key 为邮箱).
  * @param {any} this 账号池(runtimes)
  * @returns {string[]} 账号 key 列表
  */
@@ -77,9 +70,8 @@ export function allKeys(this: any) {
 }
 
 /**
- * 忘记某账号(被删除时调用):把它的账本记录一并清掉.
- * 不清的话 account-state.json 会随着删号无限增长,而且下次 prune 之前
- * 控制台仍会从账本里读出这些幽灵账号的"历史".
+ * 忘记某账号(被删除时调用): 把它的账本记录, 统计, 最近使用与冷却一并清掉,
+ * 然后 prune 并落盘.
  * @param {any} this 账号池(runtimes)
  * @param {string} key
  */
@@ -89,7 +81,7 @@ export function forgetAccount(this: any, key: any) {
   if (accounts[key]) {
     delete accounts[key]
   }
-  // 历史邮箱 key 同属一个账号时一并清掉(旧布局凭据).
+  // 同属一个账号的邮箱 key 一并清掉(旧布局凭据).
   this.stats.byKey.delete(key)
   this._lastUsedAt.delete(key)
   if (this._lastSuccessKey === key) this._lastSuccessKey = null
@@ -102,8 +94,7 @@ export function forgetAccount(this: any, key: any) {
 
 /**
  * 记一笔"凭证更新时间"(导入 / 重新登录 / 更新 token 后调用).
- * 所有写凭据的入口(网页导入,浏览器登录回调,开放 API 导入)都要调,
- * 否则前端[更新]列对某些入口永远是空的.
+ * 所有写凭据的入口(网页导入, 浏览器登录回调, 开放 API 导入)都要调.
  * @param {any} this 账号池(runtimes)
  * @param {string} key
  */
@@ -130,8 +121,7 @@ export function _persistAccountState(this: any, key: any, snap: any) {
     return
   }
   const fields: Record<string, any> = {}
-  // 本轮调度的起算点(可空 = 本轮已结束):落盘后控制台能区分
-  // "刚才还在干活" / "从来没被调度过".
+  // 本轮调度的起算点(可空 = 本轮已结束), 供控制台区分"正在干活"与"没被调度过".
   if (snap.schedulingSince !== undefined) {
     fields.schedulingSince = snap.schedulingSince
   }
@@ -150,11 +140,13 @@ export function _persistAccountState(this: any, key: any, snap: any) {
 }
 
 /**
+ * 启动时回灌账本: 冷却, 请求计数, 最近使用, freebucks/quota/探测结果,
+ * 以及上次成功的账号指针.
+ *
+ * 只回灌尚未过期的冷却; freebucks 一并回灌, 使"余额不足就别 admit"的闸门在重启后
+ * 仍然生效.
  * @param {any} this 账号池(runtimes)
- * 启动时回灌账本:冷却,请求计数,最近使用,freebucks/quota/探测结果.
- * 只回灌尚未过期的冷却(过期的直接丢弃,否则重启会把账号永久锁死).
- * 回灌 freebucks 尤其关键:它让"余额买不起就别 admit"这道闸门在重启后
- * 依然生效,而不是失忆放行去撞已知余额不足的账号.
+ * @returns {void} 无返回
  */
 export function _restoreAccountState(this: any) {
   const valid = new Set(this.allKeys())
@@ -172,8 +164,7 @@ export function _restoreAccountState(this: any) {
     }
     const usedAt = rec.lastUsedAt ? Date.parse(rec.lastUsedAt) : NaN
     if (Number.isFinite(usedAt)) this._lastUsedAt.set(key, usedAt)
-    // 上一进程的"本轮调度起算点"必须清掉:那个进程已经死了,在途流也没了,
-    // 留着会让控制台显示一个假的"本轮已运行 3 天".累计时长 scheduledMs 保留.
+    // 清掉上一进程留下的本轮调度起算点(在途流已随进程结束), 累计时长 scheduledMs 保留.
     if (rec.schedulingSince) {
       rec.schedulingSince = null
       this.accountState.touch()
@@ -199,26 +190,17 @@ export function _restoreAccountState(this: any) {
   if (typeof this.accountState.state.lastSuccessKey === 'string') {
     this._lastSuccessKey = this.accountState.state.lastSuccessKey
   }
-  /**
-   *  账本里的 lastSuccessKey 是历史指针,指向的账号可能早已不在凭据目录里
-   * (用户在控制台删了旧号,或换了新号后旧凭据被清掉).它一旦悬空,
-   * getAny() 的 this.get(preferred) 会抛 Account not found,而
-   * buildAppContext 在启动路径上直接调用 getAny() → 整个服务起不来
-   * (实测:重启即  启动失败,堆栈 app-context.js:604 → :1672 → :2107).
-   * 账户删除路径会清这个指针(forgetAccount),但删号发生在另一个进程
-   * (用户在旧容器里删的号,或凭据是手工删的)时清不到,所以这里必须自愈:
-   * 指针指向的 key 不在当前凭据列表里就丢弃,getAny() 自然回落到 keys[0].
-   */
+  // 账本里的 lastSuccessKey 是可能悬空的指针: 指向的 key 不在当前凭据列表里就丢弃,
+  // 让 getAny() 回落到 keys[0].
   if (this._lastSuccessKey && !this.allKeys().includes(this._lastSuccessKey)) {
     this._lastSuccessKey = null
   }
 }
 
-/** 账本 + 句柄索引一起冲刷落盘(进程退出/重启前调用). */
 /**
- * flushState 的说明(见实现与调用点).
+ * 账本 + 句柄索引一起冲刷落盘(进程退出/重启前调用), 落盘失败不影响退出流程.
  * @param {any} this 账号池(runtimes)
- * @returns {any} 见实现
+ * @returns {void} 无返回
  */
 export function flushState(this: any) {
   try {
@@ -241,16 +223,7 @@ export function getAny(this: any) {
       { status: 401, code: 'upstream_auth_missing' },
     )
   }
-  /**
-   * 首选 key 取不到时回落到 keys[0],不把"首选失效"升级成致命错误.
-   *
-   * 这里的 preferred 来自 _lastSuccessKey(历史指针,可能悬空).它悬空时
-   * this.get(preferred) 抛 Account not found;而启动路径
-   * (buildAppContext)直接调用本函数,一抛就是"服务起不来".
-   * 指针在构造期会被校验并清掉(见 _restoreAccountState),但运行期也可能
-   * 出现(并发删号,凭据文件被手工移走);此时正确的行为是换一个能用的账号,
-   * 而不是让控制台/状态接口 500.
-   */
+  // 首选 key 取不到时回落到 keys[0], 不把"首选失效"升级成致命错误.
   const preferred = this._lastSuccessKey && keys.includes(this._lastSuccessKey)
     ? this._lastSuccessKey
     : keys[0]

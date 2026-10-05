@@ -19,8 +19,8 @@
  * 语义与官方 common/src/constants/freebuff-client-descriptor.ts +
  * cli/src/utils/input-profile.ts 逐字对齐.
  *
- *  本代理是服务端,没有真实键盘/粘贴事件.所以不伪造输入画像 ----
- * 见下方 describeProxyInput 的取舍说明.
+ * 本代理是服务端, 没有真实键盘/粘贴事件, 因此不伪造输入画像(见 describeProxyInput
+ * 的说明).
  * 见 .agents/notes/implemented/feature/2026-10-01-chat-metadata-parity.md
  */
 import { logger } from '../../util/log.ts'
@@ -59,14 +59,12 @@ export function encodeInputProfile(p: any) {
 /**
  * 从客户端请求体推断输入画像.
  *
- * 取舍:官方用真实的键盘/粘贴事件计数;本代理是服务端,拿不到这些事件.
- * 但我们能拿到下游请求本身的等价信息 ---- 用户发来的 prompt 文本长度,
- * 消息条数,从请求开始到上游调用的耗时.用这些构造一份与官方同格式且语义
- * 诚实的画像(tc = 用户消息总字符数按"一次插入"计,ke 记 1 次,
- * ms 用真实的下游→上游耗时),而不是编造键盘行为.
+ * 官方用真实的键盘/粘贴事件计数;本代理是服务端,拿不到这些事件.
+ * 可用的等价信息是:用户发来的 prompt 文本长度, 消息条数, 从请求开始到上游调用的
+ * 耗时. 用这些构造一份与官方同格式且语义诚实的画像(tc = 用户消息总字符数按
+ * "一次插入"计, ke 记 1 次, ms 用真实的下游→上游耗时), 不编造键盘行为.
  *
- * 为什么值得发:官方 chat 带这个字段,缺它就是少一层"客户端行为"证据.
- * 但绝不伪造具体按键节奏(那反而自相矛盾).
+ * 官方 chat 带这个字段, 缺它就是少一层"客户端行为"证据.
  *
  * @param {{ messages?: Array<{ role: string, content: any }>, arrivedAtMs?: number, nowMs?: number }} opts
  * @returns {string}
@@ -116,8 +114,8 @@ export function describeProxyInput(opts: any = {}) {
  *  "changedFileScanTruncated":false}
  *
  *
- * 官方是 CLI 扫描本地仓库得出;本代理没有本地仓库概念,如实报告
- * "不可用"(gitAvailable:false + unknown),而不是编造文件数.
+ * 官方是 CLI 扫描本地仓库得出;本代理没有本地仓库概念, 如实报告
+ * "不可用"(gitAvailable:false + unknown), 不填编造的文件数.
  * @returns {string}
  */
 export function describeProxyRepo() {

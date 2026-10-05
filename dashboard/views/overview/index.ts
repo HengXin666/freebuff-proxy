@@ -81,8 +81,6 @@ function renderOverviewHeader(data: any) {
 /** 统计卡片 */
 export function renderStatCards(data: any) {
   const total = data.accounts.length
-  // 可用 = 无账号级冷却 且 未封禁.以前只看 available,会把已封禁的号
-  // 算进"可用账号"里(banned 冷却 24h 到期后 available 又会变回 true).
   const banned = data.accounts.filter((a: any) => a.banned === true || a.bannedAt).length
   const available = data.accounts.filter((a: any) => a.available && !(a.banned === true || a.bannedAt)).length
   const cooldown = data.accounts.filter((a: any) => a.cooldownUntil && !a.banned).length

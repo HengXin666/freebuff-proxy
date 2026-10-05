@@ -4,19 +4,16 @@
     "note": "函数长度棘轮（上限 80 行）：逐函数当前行数，只许降不许涨"
   },
   "entries": {
-    "dashboard/views/logs/index.ts::renderLogs": 152,
-    "dashboard/views/models/index.ts::renderModelSettings": 81,
-    "dashboard/views/models/sync.ts::syncUpstreamModels": 97,
-    "dashboard/views/overview/accounts/row.ts::buildAccountRow": 132,
+    "dashboard/views/logs/index.ts::renderLogs": 144,
+    "dashboard/views/models/sync.ts::syncUpstreamModels": 93,
+    "dashboard/views/overview/accounts/row.ts::buildAccountRow": 122,
     "scripts/catalog/gen-upstream-contract.ts::main": 105,
     "scripts/check-upstream-contract.ts::main": 107,
-    "src/context/sched/account-try.ts::_tryAccountForModel": 85,
     "src/proxy/routes/chat-request.ts::parseChatRequest": 145,
-    "src/proxy/transport/errors/normalize.ts::normalizeUpstreamError": 101,
-    "src/proxy/transport/forward-body.ts::buildForwardBody": 172,
-    "src/proxy/transport/forward.ts::forwardCompletions": 233,
-    "src/proxy/transport/official.ts::tryOfficialChannel": 102,
-    "src/upstream/rpc/official-rpc.ts::buildRpcCfg": 94,
-    "src/web/store/config/settings-store.ts::save": 100
+    "src/proxy/transport/errors/normalize.ts::normalizeUpstreamError": 99,
+    "src/proxy/transport/forward-body.ts::buildForwardBody": 171,
+    "src/proxy/transport/forward.ts::forwardCompletions": 208,
+    "src/proxy/transport/official.ts::tryOfficialChannel": 101,
+    "src/upstream/rpc/official-rpc.ts::buildRpcCfg": 85
   }
 }

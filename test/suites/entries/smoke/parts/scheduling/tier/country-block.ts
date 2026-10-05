@@ -16,14 +16,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-// [2026-10-01 金标准修正]status: 'active' 优先于 countryBlockReason.
+// 判据: status: 'active' 优先于 countryBlockReason.
 //
 // 真机抓包:官方 CLI 在完全相同的出口(JP / country_not_allowed /
-// region_locked)下,服务端返回的就是 status: "active" + 可用
-// instanceId.也就是说 countryBlockReason 是说明性字段(解释为什么模型集
-// 变小),不是拒绝信号.
+// region_locked)下,服务端返回 status: "active" + 可用 instanceId.
+// countryBlockReason 是说明性字段, 不是拒绝信号.
 //
-// 因此本条断言改为:active + terminal reason → 仍然可用(200).
+// 本条断言: active + terminal reason → 仍然可用(200).
 // 只有没有 instanceId 的终态才是真封锁(见下面第二个用例).
 // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
 {
@@ -68,7 +67,7 @@ import path from 'node:path'
     }),
   })
   const cbBody = await res.json()
-  // 金标准:active + country_not_allowed = 可用(官方 CLI 实测拿到 active)
+  // 判据:active + country_not_allowed = 可用
   assert.equal(
     res.status,
     200,
@@ -83,8 +82,8 @@ import path from 'node:path'
     1,
     'country_blocked 是出口属性，换号只会白烧每个账号的额度; admit 次数=' + state.sessionPosts,
   )
-  // 已付费的窗口必须还在:上游照常建会话照常扣费(一次 admit = 一整小时),
-  // 所以句柄必须可寻址 ---- 否则 DELETE 不掉,退款也追不回,等于白扔一小时.
+  // 已付费的窗口必须还在: 上游照常建会话照常扣费(一次 admit = 一整小时),
+  // 所以句柄必须可寻址 ---- 句柄丢失时 DELETE 不掉, 退款也追不回.
   const cbAccounts = cbRuntimes.list()
   const cbA = cbAccounts.find((x) => x.email === 'a@example.com')
   assert.equal(

@@ -11,26 +11,22 @@ import { fbChat, fbConfig, fbRuntimes } from '../refund/fixture.ts'
 import assert from 'node:assert/strict'
 
 // (3.5) 单请求新会话预算 = 0 表示不限制(控制台 b || '不限',配置文档,
-//       API 校验三处一致的契约),不是[零预算].曾经 proxy.js 无条件
-//       Math.max(0, ...) 把 0 存成 remaining:0,于是闸门把每个账号都判成
-//       session_budget_exhausted 跳过,整个代理固定 429 no_available_account ----
-//       纯本地自锁,与上游额度/账号状态毫无关系.
+//       API 校验三处一致的契约).0 被存成 remaining:0 时,闸门会把每个账号都
+//       判成 session_budget_exhausted 跳过,整个代理固定 429 no_available_account.
 //       见 .agents/notes/implemented/bug-fix/2026-09-24-zero-session-budget-means-unlimited.md
 for (const key of ['a', 'b', 'c']) fbRuntimes.clearCooldown(key)
 fbConfig.limits.maxNewSessionsPerRequest = 0
 state.mockFreebucks = null
 for (const key of ['a', 'b', 'c']) fbRuntimes.get(key).sessions.freebucks = null
 /**
- * - 必须显式清掉上一段留下的热会话(2026-10-04).
+ * - 必须显式清掉上一段留下的热会话.
  *
- * - 上一个用例改成"付费时段内不释放已买断的会话"后,会话会留在原地
- * (这正是新行为的目的:那一小时已付款,扔掉就没了).而本用例要断言
- * - sessionPosts === 1(首个请求应正常 admit),复用一个热 session 就不会
- * 再 admit ---- 于是断言失败.
+ * - 上一个用例"付费时段内不释放已买断的会话"会把会话留在原地(那一小时已付款).
+ * 而本用例断言 sessionPosts === 1(首个请求应正常 admit),复用一个热 session
+ * 就不会再 admit.
  *
- * - 这是用例间共享状态的问题,不是实现问题:每个用例应自足地建立自己的
- * 前置状态,而不是依赖上一个用例"恰好把会话清干净了".
- * 用 releaseStrict 真正结束它(这里测的是预算语义,不是付费时段保护).
+ * - 所以本用例自足地建立前置状态.用 releaseStrict 真正结束它(这里测的是预算
+ * 语义,不是付费时段保护).
  */
 for (const key of ['a', 'b', 'c']) {
   await fbRuntimes.get(key).sessions.releaseStrict().catch(() => {})

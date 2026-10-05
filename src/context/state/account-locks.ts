@@ -1,19 +1,8 @@
 /**
  * 账号级 chat 并发闸门与预留计数.
  *
- * 从 app-context.js 按职责切出. 为什么要预留: 选号(candidateKeys)发生在拿
- * chat 锁之前, 此刻 chatLock.inFlight 还是 0 -- N 个并发请求会同时看到
- * "这个账号很空" 而全部选中同一个账号, spread 模式形同虚设.
- * @param {any} this 账号池(runtimes)
- * @returns {any} 见实现
- * @param {any} this 账号池(runtimes)
- * @returns {any} 见实现
- * @param {any} this 账号池(runtimes)
- * @returns {any} 见实现
- * @param {any} this 账号池(runtimes)
- * @returns {any} 见实现
- * @param {any} this 账号池(runtimes)
- * @returns {any} 见实现
+ * 预留的必要性: 选号(candidateKeys)发生在拿 chat 锁之前, 此刻 chatLock.inFlight
+ * 还是 0 ---- N 个并发请求会同时看到"这个账号很空"而全部选中同一个账号.
  */
 import { ChatMutex } from './chat-mutex.ts'
 
@@ -21,10 +10,10 @@ import { ChatMutex } from './chat-mutex.ts'
 export const RESERVE_TTL_MS = 90_000
 
 /**
- * chatLockFor 的说明(见实现与调用点).
+ * 取(必要时创建)该账号的 chat 互斥量, 并按当前配置刷新其容量.
  * @param {any} this 账号池(runtimes)
- * @param {any} key key
- * @returns {any} 见实现
+ * @param {string} key 账号 key
+ * @returns {ChatMutex} chat 互斥量
  */
 export function chatLockFor(this: any, key: any) {
   let lock = this.chatLocks.get(key)
@@ -37,63 +26,41 @@ export function chatLockFor(this: any, key: any) {
   return lock
 }
 
-/** 账号当前是否已达到并发上限(无可用 chat 槽位). */
 /**
- * isChatBusy 的说明(见实现与调用点).
+ * 账号当前是否已达到并发上限(无可用 chat 槽位).
  * @param {any} this 账号池(runtimes)
- * @param {any} key key
- * @returns {any} 见实现
+ * @param {string} key 账号 key
+ * @returns {boolean} 是否已满
  */
 export function isChatBusy(this: any, key: any) {
   return this.chatLocks.get(key)?.busy || false
 }
 
-/** 账号当前在途 chat 数(监控用). */
 /**
- * chatInFlight 的说明(见实现与调用点).
+ * 账号当前在途 chat 数(监控用).
  * @param {any} this 账号池(runtimes)
- * @param {any} key key
- * @returns {any} 见实现
- */
-/**
- * chatInFlight 的说明(见实现与调用点).
- * @param {any} this 账号池(runtimes)
- * @param {any} key key
- * @returns {any} 见实现
+ * @param {string} key 账号 key
+ * @returns {number} 在途数
  */
 export function chatInFlight(this: any, key: any) {
   return this.chatLocks.get(key)?.inFlight || 0
 }
 
-/** 被选中但还没拿到 chat 锁的请求数(spread 排序用). */
 /**
- * reservedCount 的说明(见实现与调用点).
+ * 被选中但还没拿到 chat 锁的请求数(spread 排序用).
  * @param {any} this 账号池(runtimes)
- * @param {any} key key
- * @returns {any} 见实现
- */
-/**
- * reservedCount 的说明(见实现与调用点).
- * @param {any} this 账号池(runtimes)
- * @param {any} key key
- * @returns {any} 见实现
+ * @param {string} key 账号 key
+ * @returns {number} 预留数
  */
 export function reservedCount(this: any, key: any) {
   return this._reserved.get(key) || 0
 }
 
-/** 该账号当前"实际占用 + 已预留"的槽位估计(spread 排序的 load). */
 /**
- * effectiveLoad 的说明(见实现与调用点).
+ * 该账号当前"实际占用 + 已预留"的槽位估计(spread 排序的 load).
  * @param {any} this 账号池(runtimes)
- * @param {any} key key
- * @returns {any} 见实现
- */
-/**
- * effectiveLoad 的说明(见实现与调用点).
- * @param {any} this 账号池(runtimes)
- * @param {any} key key
- * @returns {any} 见实现
+ * @param {string} key 账号 key
+ * @returns {number} 负载估计
  */
 export function effectiveLoad(this: any, key: any) {
   return this.chatInFlight(key) + this.reservedCount(key)

@@ -13,10 +13,8 @@
  * - x-freebuff-device-ts: {timestampMs}
  * - x-freebuff-device-sig: {base64url(signature)}
  *
- * 为什么单独成文件: 原 device-signing.ts 480 行超 300 红线. 它里有两类东西:
- * 本文件(头部名常量 + 纯函数, 可脱离网络与磁盘单独测)与有状态的 DeviceSigner
- * (读密钥文件, 注册, 退避). 状态机与纯原语的审查方式完全不同, 分开放之后
- * "签名算得对不对"可以只盯着本文件看.
+ * 本文件是头部名常量 + 纯函数(可脱离网络与磁盘单独测); 有状态的 DeviceSigner
+ * (读密钥文件, 注册, 退避)在 device-signing.ts.
  */
 import {
   createHash,

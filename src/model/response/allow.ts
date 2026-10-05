@@ -1,12 +1,8 @@
 /**
- * 代理"可调度"白名单判据 ---- 从 src/model/list-response.ts 按职责切出.
+ * 代理"可调度"白名单判据.
  *
- * 为什么单独成文件: 它是 /v1/chat/completions 的准入闸门(任何不在白名单的
- * 模型 id 一律 400 拒绝), 与"清单里该显示谁"是两件事 -- 前者关心上游会不会
- * 把这次探测当异常行为, 后者关心下游看到什么. 分开之后, 改清单展示不再有
- * 碰到准入判据的风险, 反之亦然.
- *
- * 口径: 纯搬移, 行为零改动. 依赖方向: ../catalog-store + ../flags 单向.
+ * 它是 /v1/chat/completions 的准入闸门(任何不在白名单的模型 id 一律 400 拒绝).
+ * 依赖方向: ../catalog-store + ../flags 单向.
  */
 import { catalogModels } from '../catalog-store.ts'
 import { isPremiumModel } from '../flags.ts'

@@ -1,8 +1,6 @@
 /**
  - 定价表的组装与打印 -- 从 bin/pricing.ts 的 main 按职责切出.
  *
- - 为什么切出来: 原 main 是 119 行的单函数, 前半在拿上游数据, 后半在排版打印.
- - 打印段与数据段分开后, --json 与人类可读两条出口各读各的.
  */
 import { fmtCountdown, fmtDuration, fmtNum, fmtTime } from './format.ts'
 
@@ -104,9 +102,6 @@ export function printHuman(
     }
     console.log()
   }
-  // 参考模型:优先用 README 常见的 deepseek flash,否则取最便宜的有价模型.
-  // 刻意不用 /flash/ 之类模糊匹配--它会命中 gemini-3.8-flash 这种最贵的,
-  // 报出来的[今日池约等于多久]会是最悲观的值,反而误导读者.
   const ref =
     rows.find((r) => r.model === 'deepseek/deepseek-v4-flash' && r.price > 0) ||
     [...rows].filter((r) => r.price > 0).sort((a, b) => a.price - b.price)[0]

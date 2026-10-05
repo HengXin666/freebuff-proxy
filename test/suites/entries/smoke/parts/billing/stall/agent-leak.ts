@@ -17,12 +17,11 @@ import os from 'node:os'
 import path from 'node:path'
 
 // ===========================================================================
-// (AGENT-LEAK) 更新凭证 / 改代理池丢弃 runtime 时,必须关闭出网 agent
+// (AGENT-LEAK) 更新凭证 / 改代理池丢弃 runtime 时, 必须关闭出网 agent
 //
 // 每个账号 runtime 构造时都会 new ProxyAgent(带 keep-alive 连接池).
-// "更新凭证/导入账号/切换代理池"都会重建 runtime ---- 若旧 agent 不 close,
-// 它的 socket 会随操作次数单调累积,表现为运行越久越慢,连接越难建立.
-// 修复前实测:12 轮更新 → 13 个常驻 socket;修复后 → 1 个.
+// "更新凭证/导入账号/切换代理池"都会重建 runtime: 旧 agent 不 close 时,
+// 它的 socket 会随操作次数单调累积. 本用例断言重建后常驻 socket 回到 1 个.
 {
   const origin = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -81,10 +80,9 @@ import path from 'node:path'
   try {
     await hit()
     await new Promise((r) => setTimeout(r, 200))
-    // 首次请求会建 2 条 keep-alive:一条是本请求,另一条是目录抓取
-    // (/api/v1/freebuff/models).目录抓取也必须走同一个代理 agent ----
-    // 不走就会旁路直连,上游看到宿主真实出口 IP(issue #5 根因).
-    // 本用例关心的是"是否被回收",不是"建了几条",所以基线取实测值.
+    // 首次请求会建 2 条 keep-alive: 一条是本请求, 另一条是目录抓取
+    // (/api/v1/freebuff/models).目录抓取也必须走同一个代理 agent.
+    // 本用例关心的是"是否被回收", 基线取首次请求后的 socket 数.
     const baseline = await socks()
     assert.ok(
       baseline >= 1 && baseline <= 3,

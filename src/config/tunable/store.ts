@@ -2,7 +2,7 @@
  * 可调项的读写工具: 按点分路径取值/写值, 校验, 以及把 settings.json 合进 config.
  *
  * 三处共用(启动装配 / /api/settings 读写 / 门禁), 因此只在这里实现一次.
- * 见 ./tunables.ts 的文档注释(为什么要有可调项表, 以及生效方式是"保存后重启").
+ * 真源与生效方式见 ./specs.ts 的文档注释.
  */
 import { TUNABLES, type TunableSpec } from './specs.ts'
 
@@ -51,11 +51,10 @@ export function specOf(path: string): TunableSpec | undefined {
 /**
  * 校验一个值是否符合该项声明.
  *
- * 只判"类型 + 范围", 不猜意图 ---- 把非法值静默纠正成默认值是这类接口最典型的
- * 事故(用户填了 9999 并发, 系统悄悄按 16 跑, 而界面显示 9999).
+ * 只判"类型 + 范围", 不猜意图: 非法值一律报错, 不静默纠正成默认值.
  * @param {TunableSpec} spec 项声明
  * @param {unknown} value 待校验值
- * @returns {string | null} 合法返回 null, 否则返回给用户看的错误文案
+ * @returns {string | null} 合法返回 null, 不合法时返回给用户看的错误文案
  */
 export function validateValue(spec: TunableSpec, value: unknown): string | null {
   const label = spec.label
@@ -88,18 +87,11 @@ export function validateValue(spec: TunableSpec, value: unknown): string | null 
 /**
  * 把 settings.json 的已保存值合进 config(就地修改).
  *
- * ## 为什么是"合并进 config"而不是给每项写 getter
+ * 逐条按可调项表校验后写进 config, 不改动 config 的读取点.
  *
- * 用户裁决生效方式是"保存后重启", 那么启动时把值写进 config 之后, 全仓
- * config.limits.xxx / config.session.xxx 的读取点一行都不用改,
- * 也不必为二十多个项各写一个 getter(那是二十多个可能忘改的地方).
- *
- * ## 非法/未知键的处置
- *
- * - 未知键一律忽略(不认识的路径不写进 config): 老版本 settings.json 里
- *   可能留着已删除的项, 忽略比崩溃或误写更安全.
- * - 非法值回落 config 现值(即 config.yaml / DEFAULTS 里的值)并报回来:
- *   静默纠正会让用户"设置了但没生效"却毫无线索.
+ * 非法/未知键的处置:
+ * - 未登记的路径一律忽略(不写进 config).
+ * - 非法值回落 config 现值并在返回值里报回来.
  *
  * @param {Record<string, any>} config 配置对象(就地修改)
  * @param {Record<string, any>} saved settings.json 里读到的原始对象

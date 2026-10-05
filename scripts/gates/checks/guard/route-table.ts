@@ -68,7 +68,6 @@ if (mod) {
   }
 }
 
-// 接线:装配层必须真的用它,而不是自己再写一份分流.
 const serverSrc = fs.existsSync(path.join(ROOT, SERVER)) ? fs.readFileSync(path.join(ROOT, SERVER), 'utf8') : ''
 if (!/from '\.\/server\/route-table\.ts'/.test(serverSrc)) {
   report.add(SERVER, 0, '没有 import 分流表（分流逻辑可能被复制回装配层）', "import { faceOf } from './server/route-table.ts'")

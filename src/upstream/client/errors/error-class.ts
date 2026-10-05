@@ -1,10 +1,9 @@
 /**
  - 上游失败的载体  --  UpstreamError 与响应体读取工具.
  *
- - 为什么单独成文件:这一层不认识任何具体上游端点, 只定义"失败长什么样"
+ - 这一层不认识任何具体上游端点, 只定义"失败长什么样"
  - (status / code / cause / fatal / terminalExhausted 五个字段的含义与分工),
- - 以及读 body 的超时兜底.协议换端点或换字段名时它基本不动, 因此与一整柜
- - "上游判据码"分开放, 免得两类改动互相覆盖.
+ - 以及读 body 的超时兜底.
  */
 
 /** UpstreamError 的附加字段. */
@@ -49,26 +48,21 @@ export class UpstreamError extends Error {
     /**
      * 底层原始错误码(ECONNREFUSED / ENOTFOUND / ETIMEDOUT ...).
      *
-     *  与 code 分工:code 是稳定的业务码(多处按集合匹配,
-     * 不能透裸 socket 码);cause 保留原始错误码供排障与前端细提示.
-     * 两者同时给出,message 里也带一份给人读.
+     * 与 code 分工:code 是稳定的业务码(多处按集合匹配, 不透裸 socket 码);
+     * cause 保留原始错误码供排障与前端细提示. 两者同时给出, message 里也带一份.
      */
     this.cause = extra.cause
-    // 出口级故障(地理封锁):调度层据此立即停止换号  --  它是出口属性,
+    // 出口级故障(地理封锁):调度层据此立即停止换号 ---- 它是出口属性,
     // 换号只会把每个账号的额度依次买断却拿不到答案.
     // 见 .agents/notes/implemented/bug-fix/2026-09-30-country-block-reason-in-200.md
     this.fatal = extra.fatal === true
     /**
      * 全池额度耗尽的终态标记(与 fatal 区分).
      *
-     * fatal = 出口属性(地理封锁),换号无用.
-     * terminalExhausted = 池内每个账号都被额度闸门拒过(遍历完才得出的
-     * 聚合结论),所以换号/同号重试都不可能有不同结果  --  外层据此一次收场,
-     * 不再轮 maxAttempts 轮(每轮都要重新遍历账号并刷一屏日志).
-     *
-     * 为什么需要它:旧行为抛的是单账号级 freebucks_exhausted,而 429 被
-     * shouldSwitchAccountOnError 判成"该换号" → 白轮 maxAttempts 轮
-     * (实测远程 13 个请求各白轮 3 次,日志被冲爆).
+     * fatal = 出口属性(地理封锁), 换号无用.
+     * terminalExhausted = 池内每个账号都被额度闸门拒过(遍历完才得出的聚合结论),
+     * 换号/同号重试都不可能有不同结果 ---- 外层据此一次收场, 不再轮 maxAttempts 轮.
+     * 见 .agents/notes/implemented/bug-fix/2026-10-04-terminal-exhausted-and-log-ring-cap.md
      */
     this.terminalExhausted = extra.terminalExhausted === true
   }

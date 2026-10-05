@@ -54,7 +54,7 @@ export class Report {
     this.violations.push({ file, line, msg, fix })
   }
 
-  /** 记一条非违规的信息(如豁免条数,跳过原因). */
+  
   /**
    - 见本类说明.
    *
@@ -88,13 +88,6 @@ export class Report {
     return EXIT.fail
   }
 }
-
-/**
- - 校验环境变量给出的路径存在,否则以 usage 退出.
- *
- - 为什么必须显式报错:扫描根写错时,"零违规"和"真的没有违规"输出完全一样
- - ---- 这是门禁最危险的失败形态.
- */
 
 /**
  - 见上方模块说明.

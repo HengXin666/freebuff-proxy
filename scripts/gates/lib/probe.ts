@@ -18,8 +18,6 @@ export { ROOT }
 /**
  * 跑一条门禁脚本:夹具目录作 cwd,CHECK_ROOT 指向它.
  *
- * 为什么必须覆盖 CHECK_ROOT:否则门禁扫的是真实仓库,探针就变成"在别人家里
- * 放垃圾",既不隔离也测不出门禁对违规输入的反应.
  */
 export function runGate(script, cwd, extraEnv = {}) {
   try {

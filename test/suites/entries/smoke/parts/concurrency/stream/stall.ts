@@ -46,7 +46,7 @@ import path from 'node:path'
   })
   const stPort = stServer.address().port
 
-  // spa 的流式响应只开不关(幽灵连接,一个字节都不吐)→ 连接被掐断而不是永远挂着
+  // spa 的流式响应只开不关(幽灵连接, 一个字节都不吐) → 连接被掐断
   state.mockMode = 'stall_zero'
   state.sessionPosts = 0
   state.completionAttempts = 0
@@ -71,7 +71,7 @@ import path from 'node:path'
   assert.ok(elapsed < 30_000, `stall zero test took too long: ${elapsed}ms`)
 
   // 幽灵连接(流 idle 超时被掐断)→ 账号短暂冷却(stallCooldownSec 默认 30s):
-  // 该账号刚被掐断过一条卡死链路,下一请求应切到另一个账号,而不是继续撞同一条链路.
+  // 该账号刚被掐断过一条卡死链路, 下一请求应切到另一个账号.
   state.mockMode = 'ok'
   const stRes2 = await fetch(`http://127.0.0.1:${stPort}/v1/chat/completions`, {
     method: 'POST',
@@ -105,7 +105,7 @@ import path from 'node:path'
   spConfig.upstream.credentialsDir = spDir
   spConfig.session.pollIntervalSec = 3600
   spConfig.limits.streamIdleTimeoutSec = 1
-  // stallCooldownSec=0:关闭掐断后的冷却(保留旧行为可配置)----验证该开关
+  // stallCooldownSec=0:关闭掐断后的冷却(可配置)----验证该开关
   // 关闭时,幽灵连接只断开连接,下一请求仍可复用同一会话
   spConfig.limits.stallCooldownSec = 0
 
@@ -126,8 +126,8 @@ import path from 'node:path'
   })
   const spPort = spServer.address().port
 
-  // 第一个请求打到 spa:partial stall(已下发部分字节后卡死)→ 连接被掐断,
-  // 客户端收到截断的 SSE 而不是永远挂着
+  // 第一个请求打到 spa: partial stall(已下发部分字节后卡死) → 连接被掐断,
+  // 客户端收到截断的 SSE
   state.mockMode = 'stall_partial'
   state.sessionPosts = 0
   state.completionAttempts = 0

@@ -33,9 +33,6 @@ const HOST_BIND = process.env.HOST || '127.0.0.1';
 
 // 可用环境变量指定账号(客户端未登录 / 想用另一个号时).
 // 例:FREEBUFF_TOKEN=xxx FREEBUFF_USER_ID=xxx node serve.ts
-//
-// 为什么需要:loadConfig() 默认读官方客户端的登录态,一台机器同时只有
-// 一个登录账号;而多账号池场景常常要显式指定用哪个号.
 const override = {}
 if (process.env.FREEBUFF_TOKEN) override.token = process.env.FREEBUFF_TOKEN
 if (process.env.FREEBUFF_USER_ID) override.userId = process.env.FREEBUFF_USER_ID

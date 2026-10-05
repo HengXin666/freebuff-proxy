@@ -1,16 +1,13 @@
 /**
  * 目录持有者的存储与只读视图  --  CatalogHolder 的基类.
  *
- * 为什么单独成文件: 原 catalog-protocol.ts 322 行超 300 红线. 它里面有两类东西:
- * "存目录结果 + 读视图"(本文件) 与 "模型标识归一到目录 key 的真源"(留在
- * catalog-protocol.ts). 后者的位置被 test/suites/entries/verify/model-mapping-truth.ts
- * 的真源唯一性判据按路径核对(keyByDigest 的读写与 freebuffLegacyModelDigest
- * 的调用必须只在真源文件里), 所以只能把前者搬出来.
+ * 内容分两块: "存目录结果 + 读视图"(本文件) 与 "模型标识归一到目录 key 的真源"
+ * (catalog-protocol.ts). 后者被 test/suites/entries/verify/model-mapping-truth.ts
+ * 的真源唯一性判据按路径核对, 因此本文件不出现 freebuffLegacyModelDigest.
  *
- * 为什么用继承而不是把方法挂到 prototype 上: 方法必须保留完整的类型信息
- * (checkJs 打开, 未声明的成员一律报错), 只有类声明能同时承载 declare 字段与
- * 方法签名. 子类负责注入两个真源钩子(digestOf / keyOf), 因此本文件不出现
- * freebuffLegacyModelDigest, 也就不会被判成第二套实现.
+ * 用类继承而非把方法挂到 prototype: 方法需要保留完整类型信息(checkJs 打开,
+ * 未声明成员一律报错), 只有类声明能同时承载 declare 字段与方法签名.
+ * 子类注入两个真源钩子(digestOf / keyOf).
  */
 import { doFetch } from '../protocol/fetch.ts'
 import {
@@ -68,10 +65,9 @@ export class CatalogBase {
     this.fetchImpl = opts.fetchImpl || globalThis.fetch
     this.timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 20_000
     /**
-     * 目录行全量快照(key 到 row 原文). 模型清单的权威是目录 rows, 而会话回执的
-     * rateLimitsByModel 只是"今日给了额度的子集"(实测 13 行 vs 6 键), 用它反推
-     * 必然漏 -- 这正是[没有任何可用模型]的根因. row 保留服务端原文, 展示侧直接
-     * 取用, 不再从 2026-08 的内置静态表反查(那份 13 行只命中 3 行).
+     * 目录行全量快照(key 到 row 原文). 模型清单以目录 rows 为权威;
+     * 会话回执的 rateLimitsByModel 只是"今日给了额度的子集", 用它反推会漏.
+     * row 保留服务端原文, 展示侧直接取用.
      */
     this.rowByKey = new Map()
     /**
@@ -93,13 +89,13 @@ export class CatalogBase {
     /**
      * @type {Map<string, string>} 目录 key(m-xxx)到人类可读显示名.
      * 上游回执用的全是目录 key(m-00032eaeec), 控制台要显示成人能认的名字;
-     * 目录行自带 displayName, 抓一次就缓存, 否则前端只会裸显示 m-00032eaeec.
+     * 目录行自带 displayName, 抓一次就缓存, 供前端显示可读模型名.
      */
     this.displayNames = new Map()
     /**
      * @type {Map<string, string>} 显示名到目录 key(反向索引).
      * 下游拿到的只有 /v1/models 的 id 与 display_name, 有人会照着 display_name
-     * 填 model; 而上游只认 key / 句柄, 裸显示名必然 400/503. 有这张表就能把
+     * 填 model; 而上游只认 key / 句柄, 裸显示名必然 400/503. 这张表把
      * "MiMo 2.6 Flash" 落回 m-00032eaeec. 见
      * .agents/notes/implemented/bug-fix/2026-10-02-catalog-key-display-name-bridge.md
      */
@@ -107,12 +103,8 @@ export class CatalogBase {
     /**
      * @type {Map<string, string>} legacy 摘要到目录 key.
      * 与 legacyIndex(摘要到句柄)互补: 句柄给上游发请求用, key 给回执与展示用.
-     *
-     * 拆分事故(实测 2026-10-05): 这个字段在基类里只声明未初始化,
-     * 于是 keyForName() 的第 ② 条路径(this.keyByDigest.get(...))抛
-     * "Cannot read properties of undefined (reading 'get')" ----
-     * 而该异常被上游错误归一层压成 no_available_account/cooldown,
-     * 表现为"账号全在冷却", 与真因毫无关系. 声明与初始化必须成对出现.
+     * 必须与声明成对初始化: 未初始化时 keyForName() 的 this.keyByDigest.get(...)
+     * 会抛 TypeError, 并被上游错误归一层压成 no_available_account/cooldown.
      */
     this.keyByDigest = new Map()
     /**

@@ -1,24 +1,15 @@
 /**
- * 上游响应契约(字段名与错误码)的单一真源 ---- 建在既有的
- * upstream-contract.ts(端点+头名)同一条线上,把"上游会说什么"也收口.
+ * 上游响应契约(字段名与错误码)的单一真源 ---- 与 upstream-contract.ts(端点+头名)
+ * 同一条线, 把"上游会说什么"也收口.
  *
- *  为什么必须有这个文件(2026-10-05 取证):
+ * 散落度现状: rateLimitsByModel 15 个文件 / recentCount 11 个 /
+ * purchase_capacity 7 个 / freebucksRefundPending 7 个 / waiting_room_required 6 个 /
+ * desktopPurchases 5 个 / holderInstanceId 4 个. 这些字段读取失败通常表现为
+ * undefined → 走兜底分支 → 静默降级, 类型检查与测试都不会变红.
  *
- * 用户的原话是[上游变更 API 时,我们还能轻而易举地基于逆向拿到新接口,
- * 并快速填充,且其他接口都有契约,不会牵一发动全身].
- *
- * 实测散落度(grep -rl 计数):
- *   rateLimitsByModel 15 个文件 / recentCount 11 个 / purchase_capacity 7 个 /
- *   freebucksRefundPending 7 个 / waiting_room_required 6 个 /
- *   desktopPurchases 5 个 / holderInstanceId 4 个.
- *
- * 也就是说:上游把 rateLimitsByModel 改个名,要在 15 个文件里改 15 处,
- * 而其中任何一处漏改都不会让类型检查或测试变红(字段读取失败通常表现为
- * undefined → 走兜底分支 → 静默降级).这正是"牵一发动全身"的病灶.
- *
- * 头名/端点已经有 check-upstream-contract.mjs 在看;本文件把响应字段与
- * 判据码补上同一套机制:所有直接读上游回执字段的地方从这里取常量,
- * check-contract-surface.mjs 拦住新写的裸字面量.
+ * 头名/端点由 check-upstream-contract.mjs 看管; 本文件把响应字段与判据码补上同一套
+ * 机制: 所有直接读上游回执字段的地方从这里取常量, check-contract-surface.mjs 拦住
+ * 新写的裸字面量.
  *
  * ## 上游变更后的固定处置(与端点同构)
  *

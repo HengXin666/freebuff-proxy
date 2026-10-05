@@ -2,7 +2,7 @@
 
  * mock chat: 请求形态断言
  *
- * 把 mock 上游当成上游的守门人: 客户端发来的 model 形态 / 元数据 / 工具签名 / 输出预算必须与真机一致, 否则用例会在错误的前提下变绿.
+ * mock 侧逐项断言客户端发来的 model 形态 / 元数据 / 工具签名 / 输出预算与真机一致.
  *
  * 由 test/suites/entries/smoke/smoke.ts 按职责机械切出. 口径: 纯搬移.
  */
@@ -19,8 +19,8 @@ export function assertChatShape(body, headers) {
   //   - provider/name(legacy 模型 id,如 deepseek/deepseek-v4-flash)
   //   - m-xxxxxxx(目录 key,服务端指派)
   //   - fbm1.xxx(目录句柄,服务端签名)
-  // chat 必须用会话回执里服务端指派的 model,不能用自己的模型名
-  // (否则上游报 session_model_mismatch).见
+  // chat 必须用会话回执里服务端指派的 model, 不能用自己的模型名
+  // (自己另取模型名会命中上游的 session_model_mismatch 拒绝).见
   // .agents/notes/implemented/bug-fix/2026-10-01-session-model-binding.md
   assert.match(
     body.model,
@@ -61,8 +61,8 @@ export function assertChatShape(body, headers) {
   assert.ok(userMsg && String(userMsg.content).length > 0)
   assert.ok(headers.Authorization || headers.authorization)
   /**
-   * - x-codebuff-api-key 必须不存在:客户端 165 条抓包里出现 0 次
-   * (docs/reverse/20 §20.4).以前的断言要求它必须存在,与真值相反.
+   * - x-codebuff-api-key 必须不存在:客户端抓包里出现 0 次
+   * (docs/reverse/20 §20.4).
    */
   assert.ok(
     !headers['x-codebuff-api-key'] && !headers['X-Codebuff-Api-Key'],

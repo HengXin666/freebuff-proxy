@@ -2,11 +2,8 @@
  * 上游 mock 的各端点处理 -- 从 test/proxy-test-helpers.mjs 的 createMockUpstreamServer
  * 按端点拆出.
  *
- * 为什么拆: 原回调是一个 87 行的匿名函数, 里面 5 个 if 分支各管一个端点,
- * 读它的人要同时装下准入 / 会话 / 运行 / chat 四套形态. 拆成"一个端点一个函数"
- * 之后, 每个分支的注释与它守护的不变量贴在一起.
- *
- * 口径: 纯搬移, 不改行为, 不改任何一行响应体.
+ * 一个端点一个函数: 每个函数只认自己的方法与路径, 未命中返回 false,
+ * 命中则写回该端点的真机回执形态.
  */
 
 /**
@@ -24,8 +21,7 @@ export function makeJson(res) {
 /**
  * POST /api/v1/freebuff/session/admission -- 官方 POST 准入端点.
  *
- * 官方端点是 .../session/admission(不是 .../session);
- * 这个真实 HTTP mock 必须跟着走, 否则测的就不是一个真实的链路.
+ * 官方端点是 .../session/admission(不是 .../session), 本 mock 按该路径应答.
  * 见 .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md
  * @param {any} ctx 上下文(state / json / req / method)
  * @returns {boolean} 已处理则为真

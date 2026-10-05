@@ -1,14 +1,13 @@
 /**
- * 目录索引的查询 -- 从 CatalogHolder 的方法体按职责抽出.
+ * 目录索引的查询 -- CatalogHolder 的只读表查找.
  *
- * 为什么抽出来: 这几张表(handles / displayNames / digestByKey)由 parse 与
- * 真源一次性建好, 之后只被读; 纯表查找不该长在类里占掉 150 行.
+ * 这几张表(handles / displayNames / digestByKey)由 parse 与真源一次性建好,
+ * 之后只被读.
  *
- * 边界(不能越): "上游 id 到目录 key"与它的 displayName 兜底必须留在真源文件
+ * 边界: "上游 id 到目录 key"与它的 displayName 兜底留在真源文件
  * catalog-protocol.js -- test/verify-model-mapping-truth.mjs 的真源唯一性判据
- * 按路径核对 keyByDigest 的读写, 搬到这里会被判成第二套实现.
- * 本文件只留不碰摘要索引的查询: 显示名 / 摘要反查 / 句柄映射.
- * 摘要函数与映射所需的摘要值由调用方传入, 不在这里重实现.
+ * 按路径核对 keyByDigest 的读写. 本文件只留不碰摘要索引的查询.
+ * 摘要函数与映射所需的摘要值由调用方传入.
  */
 import { isModelHandle } from './constants.ts'
 
@@ -68,9 +67,9 @@ export function handleFor(idx: CatalogIndex, modelId: string, digestOf: (id: str
 /**
  * 句柄映射的 displayName 兜底: 用完全一致的显示名反查 key, 再取句柄.
  *
- * 主服务 /v1/models 的 id 来自静态快照, 而目录是实时的, 两者会漂移.
- * 实测: 快照里的 deepseek/deepseek-v4.1-flash 在实时目录里的 legacyDigest
- * 对应的是 deepseek/deepseek-v4-flash. 兜底只做这一件稳妥的事.
+ * 主服务 /v1/models 的 id 来自静态快照, 而目录是实时的, 两者会漂移:
+ * 快照里的 deepseek/deepseek-v4.1-flash 在实时目录里的 legacyDigest 对应的是
+ * deepseek/deepseek-v4-flash. 兜底只做这一件稳妥的事.
  * @param {CatalogIndex} idx 索引
  * @param {string} modelId legacy 模型 id
  * @param {string|null} [displayName] 静态快照里的可读名

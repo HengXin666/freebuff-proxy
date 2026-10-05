@@ -65,9 +65,8 @@ import path from 'node:path'
   state.mockMode = 'ok'
   state.calls = []
   /**
-   * 先对一次账(等价于控制台点过[刷新]/此前建过会话):本地既拿到"买不起"
-   * 的 Freebucks,也拿到会话清单.真实故障现场正是这个状态 ----
-   * 面板上都看得到那条会话,调度手上当然也有这份快照.
+   * 先对一次账(等价于控制台点过[刷新]):本地既拿到"买不起"的 Freebucks,
+   * 也拿到会话清单.该状态下手上有这条会话的快照.
    */
   await misRuntimes.get('p2').sessions.refresh()
   const misRes = await fetch(`http://127.0.0.1:${misPort}/v1/chat/completions`, {

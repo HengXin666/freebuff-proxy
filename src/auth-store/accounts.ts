@@ -1,9 +1,7 @@
 /**
  * 账号记录的读取,写入,迁移与列出.
  *
- * Runtime format is bare user object. Migrate-only: 兼容历史 { default: user }.
- *
- * 从 src/auth-store.ts 拆出(原 392 行单文件).
+ * 运行时格式是裸 user 对象; 同时兼容旧包装 { default: user }.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -76,9 +74,9 @@ export function readAccountUser(dir: string, key: string): any {
 /**
  * 保存账号(key = id 优先 / 邮箱).
  *
- * 核心修复:同邮箱但 id 不同的两个账号(如 GitHub 与 Google 登录同一邮箱)
- * 各自存到自己的 <id>.json,互不覆盖;只有 id 相同的重登才更新原文件.
- * 历史 <email>.json 若属于同一账号(id 相同)会迁移删除,属于别的账号则保留.
+ * 同邮箱但 id 不同的两个账号(GitHub 与 Google 登录同一邮箱)各自存到
+ * 自己的 <id>.json,互不覆盖; 只有 id 相同的重登才更新原文件.
+ * <email>.json 若属于同一账号(id 相同)则删除,属于别的账号则保留.
  *
  * @param {string} dir 凭据目录
  * @param {any} user 账号对象
@@ -92,8 +90,7 @@ export function saveAccountUser(dir: string, user: any): { user: any, path: stri
   const key = accountKeyOf(u)
   const filePath = accountCredentialsPath(dir, key)
   if (u.id) {
-    // 同邮箱的旧布局文件:仅当它属于同一个账号(id 相同)才清理,
-    // 否则(不同账号同邮箱)保留 -- 不覆盖别的账号.
+    // 同邮箱的旧文件名: 仅当它属于同一个账号(id 相同)才清理.
     const legacy = path.join(dir, emailToFilename(u.email))
     if (legacy !== filePath && fs.existsSync(legacy)) {
       const legacyUser = coerceUser(readJsonFile(legacy))
@@ -142,9 +139,7 @@ export function listAccounts(dir: string): any[] {
   for (const file of files) {
     const full = path.join(dir, file)
     const user = coerceUser(readJsonFile(full))
-    // 脏凭据文件(语法坏 / 缺 id+email / 缺 authToken)以前是静默跳过:
-    // 控制台里账号凭空消失,而磁盘上文件还在(用户以为"账号丢了").
-    // 这里显式点名,绝不无声无息.
+    // 脏凭据文件(语法坏 / 缺 id+email / 缺 authToken)显式记入 invalidCredentialFiles.
     if (!user) {
       invalidCredentialFiles.push(full)
       continue
@@ -154,9 +149,8 @@ export function listAccounts(dir: string): any[] {
     try {
       target = accountCredentialsPath(dir, key)
     } catch (err) {
-      // id 是 '' / '.' / '..' 这类无法当文件名用的值:safeAccountStem 会抛.
-      // 以前这个异常会直接从 listAccounts() 冒到启动流程 -> 服务起不来.
-      // 凭据文件本身不该让整个服务停摆:跳过它并点名,交给用户处置.
+      // id 是 '' / '.' / '..' 这类无法当文件名用的值时 safeAccountStem 会抛:
+      // 记入 invalidCredentialFiles 并跳过该文件, 不中断整轮列举.
       invalidCredentialFiles.push(full)
       logger.warn('跳过无法解析的账号凭据(key 不能当文件名用)', {
         file: full,
@@ -167,7 +161,7 @@ export function listAccounts(dir: string): any[] {
     }
     if (path.basename(target) !== file) {
       if (fs.existsSync(target)) {
-        // <key>.json 已存在 -> 旧 <email>.json 是同账号的历史遗留,删除
+        // <key>.json 已存在 -> 同账号的 <email>.json 是重复文件,删除
         try {
           fs.unlinkSync(full)
         } catch {

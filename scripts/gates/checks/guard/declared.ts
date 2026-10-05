@@ -3,7 +3,6 @@
  *
  * 拦什么:Cannot find name 'X'(TS2304)的出现.
  *
- *  为什么必须单独有一条(两次真实事故,形状完全相同):
  *
  *   1. 2026-10-04:mergeOfficialTools 里 mapped 未声明.node --check 只查语法,
  *      tsc 当时 checkJs:false,两关都抓不到.它进了远程镜像,55 个工具一
@@ -11,7 +10,6 @@
  *   2. 2026-10-05(本次重构):把 shouldSwitchAccountOnError 搬进子模块后,原文件
  *      只留了 export { ... } from './x.ts' ---- 而 re-export 不会把名字带进本模块
  *      作用域.函数体里两处调用点仍在直接调用它,于是每次走"账号侧故障换号"
- *      分支都抛 ReferenceError,被 catch 成 500 回给客户端(npm test 实测复现:
  *      AssertionError: 500 !== 404).
  *
  * 这类错误的特点是只在特定分支运行时触发,静态语法检查与冒烟用例都可能漏过,

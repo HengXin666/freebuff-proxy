@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict'
 
 // chat metadata 对齐:freebuff_input_profile / repo_snapshot / llm_step_number.
-// 官方 chat 带这三个字段,我们此前一个都没有.格式逐字对齐官方
+// 官方 chat 带这三个字段, 格式逐字对齐官方
 // cli/src/utils/input-profile.ts encodeInputProfile().
 // 见 .agents/notes/implemented/feature/2026-10-01-chat-metadata-parity.md
 {

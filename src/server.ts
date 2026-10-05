@@ -76,8 +76,7 @@ export function startServer(deps: any) {
     serveStatic(req, res, url, dashboardDir)
   }
 
-  // 上游超时 + 余量:请求超时必须比上游宽松,否则代理会在收到上游回执前自行掐断
-  // (客户端看到 408,而上游其实成功并已经扣了钱).
+  // 上游超时 + 余量:请求超时比上游宽松, 代理收到上游回执前不自行掐断.
   server.requestTimeout = (config.limits.upstreamTimeoutSec + 30) * 1000
   server.headersTimeout = (config.limits.upstreamTimeoutSec + 60) * 1000
 

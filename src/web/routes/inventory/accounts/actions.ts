@@ -14,7 +14,6 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 /**
  * POST /api/accounts/:key/probe ---- 单账号只读检测(前端每行的"检测"按钮).
  *
- * 返回 可用/不可用+原因(封禁/限流/凭证失效...),不创建 session,不占额度.
  *
  * @param {string} key 账号 key
  * @param {import('node:http').ServerResponse} res
@@ -91,7 +90,6 @@ async function closeSession(key: any, req: IncomingMessage, res: ServerResponse,
     const rt = runtimes.get(key)
     // 先等在途 SSE 自然结束(有界,不无限等),再释放----尽量不掐断正在
     // 传输的回复;超时仍在途则如实标记 interrupted 并照常释放(用户明确
-    // 要求关闭这条会话,不能因为一条卡死链路就关不掉).
     // 释放成功后句柄会被清空,先留一份供前端/日志展示"关掉的是哪条会话"
     const released = rt.sessions.getSnapshot()?.instanceId ?? null
     await rt.sessions._waitForIdle(waitMs)

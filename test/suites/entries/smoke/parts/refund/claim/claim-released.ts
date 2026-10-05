@@ -46,9 +46,7 @@ import assert from 'node:assert/strict'
   )
   /**
    * - 核心断言:绝不能发 DELETE.
-   * - 改前这里无条件 _releaseUnlocked(),而实测 DELETE 之后接不回来
-   * (0s/45s/90s 三次重试全部 purchase_claim_released)---- 已买断的一小时
-   * 既不能用也拿不回来.
+   * - DELETE 之后接不回来:那条已买断的一小时既不能用也拿不回来.
    */
   assert.equal(
     events.includes('DELETE'),
@@ -86,11 +84,11 @@ import assert from 'node:assert/strict'
    * → host.forget(instanceId) + crypto.randomUUID()(换全新 id)
    * - → 重试一次(rotated)
    *
-   * 我们此前把它当"槽位忙"跳过 → 永远卡在同一个作废 id 上(真实事故:
-   * 连续三个模型全部失败,含单价 0 的模型,直到 expiresAt 才恢复).
+   * - 必须换全新 id 重试一次(rotated):
+   * 把 purchase_claim_released 当"槽位忙"跳过会永远卡在同一个作废 id 上.
    *
-   * - 这里用纯 mock 复现该形态,并连跑 5 轮(用户要求[至少测试五轮]----
-   * 单轮会漏掉"第一轮侥幸成功,后续卡死"这类问题).
+   * - 这里用纯 mock 复现该形态,并连跑 5 轮 ---- 单轮会漏掉"第一轮侥幸成功,
+   * 后续卡死"这类问题.
    */
   const events = []
   const retired = new Set()          // 已被作废过的 instanceId
@@ -107,9 +105,8 @@ import assert from 'node:assert/strict'
         /**
          * - 只让第一个 id 作废一次(模拟上游对那条 claim 的作废).
          * 换新 id 后必须放行 ---- 这正是本用例要验证的行为:
-         * 若不换 id(旧行为),会带同一个 id 再来 → 已在 retired 里 → 继续被拒.
-         * - 不能写成"第一次见的 id 就作废":那会让换新后的 id 也被作废
-         * (实测踩到,测试因此恒失败).
+         * 若不换 id,会带同一个 id 再来 → 已在 retired 里 → 继续被拒.
+         * - 不能写成"第一次见的 id 就作废":那会让换新后的 id 也被作废.
          */
         if (id && !retired.has(id) && retired.size === 0) {
           retired.add(id)

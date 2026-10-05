@@ -1,10 +1,8 @@
 /**
  * agent 推导与模型标识助手(纯函数 + agent 索引).
  *
- * 依赖方向:本文件只依赖 catalog-store,不反向依赖对外清单/过滤器 --
- * 否则会形成 available <-> agents 的循环 import(依赖方向靠本注释约束, 无独立文档).
- *
- * 从 src/model.ts 拆出(原 758 行单文件).
+ * 依赖方向:本文件只依赖 catalog-store,不反向依赖对外清单/过滤器,
+ * 避免 available <-> agents 的循环 import.
  */
 import { catalogModels } from './catalog-store.ts'
 export { isFreeModel, isPremiumModel } from './flags.ts'
@@ -26,9 +24,9 @@ export { isFreeModel, isPremiumModel } from './flags.ts'
  * 二进制原文:
  *   UK = "base3-free-catalog"
  *   Ps$(H){ return WD().row(H)?.key === H ? UK : cCH(H) }
- * 即:会话模型是目录 key 时返回 UK,否则才走 cCH(按 base2/base3 推导).
+ * 即:会话模型是目录 key 时返回 UK,其余走 cCH(按 base2/base3 推导).
  *
- * 抓包实测:官方 chat 走目录协议时,agent-run 的 START 是
+ * 官方 chat 走目录协议时, agent-run 的 START 为
  * {"action":"START","agentId":"base3-free-catalog","ancestorRunIds":[]}.
  *
  * 见 .agents/notes/implemented/bug-fix/2026-10-01-catalog-agent.md
@@ -88,22 +86,17 @@ export function requireModelId(requested: unknown): string | null {
 /**
  * 模型名称的单一真源:目录行 -> 对外的可读名.
  *
- * 三层链路的边界定义(用户裁决,2026-10-04):
+ * 三层链路的边界定义:
  *
- * 1. 对外(/v1/models,控制台):永远只出现模型名称("DeepSeek V4.1 Flash"),
- *    绝不出现上游的不透明 id(m-096e75164d).
- * 2. 内部:永远只把名称映射成目录 id(m-xxx)后使用 -- 调度,额度,
+ * 1. 对外(/v1/models,控制台):只出现模型名称("DeepSeek V4.1 Flash"),
+ *    不出现上游的不透明 id(m-096e75164d).
+ * 2. 内部:把名称映射成目录 id(m-xxx)后使用 -- 调度,额度,
  *    单价,冷却,句柄映射全部以 key 为判据.
  * 3. 对上游:只传映射后的合法内容(key 或服务端句柄 fbm1.).
  *
- * 为什么必须收成一个函数:这条规则原先在 5 处各写各的
- * (catalog-models.js 两处,web/api.js 一处,model.js 两处),
- * 规则字面相同(displayName || key)但各写各的实现,任何一处改动都会
- * 造成口径漂移 -- 而"对外展示"与"内部映射"必须严格 1:1,漂移就是
- * "清单里显示的名字请求时被拒"这类 bug 的温床.
+ * 全仓只此一处实现该映射, 保证"对外展示"与"内部映射"严格 1:1.
  *
- * 回退顺序:displayName -> key.回退到 key 是最后的诚实选择:
- * 目录行缺了 displayName 时,宁可露出 key 也不编一个名字出来.
+ * 回退顺序:displayName -> key.
  *
  * @param {{ key?: string, displayName?: string }} row 目录行
  * @returns {string} 对外名称;两者皆空时返回空串(调用方应过滤该行)
@@ -250,7 +243,7 @@ export function agentFallbackForModel(modelId: string, customModels?: CustomMode
 }
 
 /**
- * 单条模型解析后的完整 agent 元信息(供前端展示/同步参考,不参与调度决策).
+ * 单条模型解析后的完整 agent 元信息(供前端展示/同步参考,不参与调度).
  *
  * @param {string} modelId 模型 id
  * @param {{ id: string, agentId?: string, fallbackAgentId?: string }[]} [customModels] 自定义模型

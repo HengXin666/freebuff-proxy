@@ -2,7 +2,6 @@
  * 文本规范自动修复器 ---- 把注释与文档里的中文标点换成 ASCII,并清掉注释里的
  * markdown 标记与表情.
  *
- * ## 三条事故教训(这个脚本是重灾区,改动前必须读)
  *
  * 本脚本的第一版一次性改坏 223 个文件,制造了三类损坏,每一条都写进判据了:
  *
@@ -144,9 +143,6 @@ const EXEMPT = ['.agents/skills/', 'dashboard/version.json', 'docs/reverse/captu
 /**
  * 只有在用户显式把路径写在命令行上时才动的文件.
  *
- * 为什么:AGENTS.md 自己是"未经允许不得编辑"的受保护文件.自动修复器
- * 按 git ls-files 全量扫时会把它一并改写 ---- 那正是把项目最高优先级约定
- * 交给一个批处理脚本去改.要改就必须有人在命令行上点名.
  */
 const PROTECTED = ['AGENTS.md', 'CLAUDE.md', '.agents/notes/AGENTS.md', '.agents/notes/implemented/AGENTS.md', '.agents/notes/archived/AGENTS.md']
 
@@ -155,7 +151,6 @@ const PROTECTED = ['AGENTS.md', 'CLAUDE.md', '.agents/notes/AGENTS.md', '.agents
  * @returns {string[]} 仓库相对路径
  */
 function targets() {
-  // 命令行点名 = 显式授权;否则走全量扫描并跳过受保护文件.
   const explicit = argv.length > 0
   const base = explicit
     ? argv

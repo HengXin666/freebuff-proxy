@@ -26,10 +26,8 @@ export function handleAgentRunsPost(headers, init) {
     if (state.mockMode === 'run_500_a' && String(runAuth).includes('token-a')) {
       return jsonRes({ error: 'internal_error', message: 'run boom' }, 500)
     }
-    // startAgentRun 以 403 拒绝该账号(非 banned/ip_capped 等账号级封禁 code,
-    // 只是该账号+agent 组合不可用):必须冷却当前账号并换下一个,而不是
-    // 把 start_agent_run_failed 直接甩给用户(回归:403 曾因不在换号条件内而
-    // 不换号,第一次尝试就报错给用户).
+    // run_403_a 模式下 token-a 的 startAgentRun 回 403 start_agent_run_failed.
+    // 用例断言该账号被冷却后换下一个账号, 不把该错误直接甩给下游.
     if (state.mockMode === 'run_403_a' && String(runAuth).includes('token-a')) {
       return jsonRes(
         {

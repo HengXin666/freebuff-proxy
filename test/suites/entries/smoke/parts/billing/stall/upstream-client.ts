@@ -12,12 +12,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-// 登录链路的瞬时故障重试与可诊断原因码(issue #22 / PR #23).
+// 登录链路的瞬时故障重试与可诊断错误码.
 //
-// 为什么必须钉住:buildFetchWithProxy 的池内回落只存在于 kind==='pool',
-// 而"代理设置留空"(官方推荐的家庭部署)返回 kind:'none' → 裸 fetch 零回落.
-// 修复靠 fetchLoginUpstream 补一次重试,并把失败翻译成稳定原因码.
-// 这里钉三件事:重试只发生一次,code 是稳定业务码,cause 保留底层原始码.
+// 本用例钉三件事: 重试只发生一次, code 是稳定业务码, cause 保留底层原始码.
+// (buildFetchWithProxy 的池内回落只存在于 kind==='pool', 代理设置留空时
+// 返回 kind:'none' 即裸 fetch 零回落, fetchLoginUpstream 补的那次重试
+// 与错误码翻译就是针对该分支.)
 {
   const { createUpstreamClient } = await import('../../../../../../../src/upstream/client.ts')
   const loginCfg = loadConfig()

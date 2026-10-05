@@ -58,7 +58,7 @@ export function installIdFromClientState(): string | null {
  * 不做成必需依赖:bun 未随镜像分发 / 执行失败时静默退回 Node 路径
  * (功能不降级,只是头集差两项).
  *
- * 为什么同步返回:createUpstreamClient 不是 async,改成 await 会破坏签名.
+ * 同步返回:createUpstreamClient 不是 async, 改成 await 会破坏签名;
  * 真正的加载推迟到第一次抓取时,不阻塞客户端构造.
  *
  * @param {string} apiBase 上游 API 主机
@@ -174,15 +174,11 @@ export function makeDeviceKeysViaBun(
 /**
  * 构造 bun 侧的会话读取器(GET /api/v1/freebuff/session).
  *
- *  必须接收并透传 opts.instanceId / opts.heartbeat.
- *
- * 旧签名 async () => {} 不收参数 → 调用方传的 instanceId 在 GET 路径被
- * 静默丢弃 → bun 侧的 /session GET 从来不带 x-freebuff-instance-id,
- * 也从不发 x-freebuff-heartbeat: 1.
- *
- * 官方在 admission 成功后立刻发一次这形态的心跳,之后每 45 秒一次
- * (orchestrator.js:208918-208957).我们一次没发  --  与真实事故吻合:
- * admission 后 25 秒就被上游退款(session_superseded + "purchase was refunded").
+ * 必须接收并透传 opts.instanceId / opts.heartbeat: 不透传时 bun 侧的
+ * /session GET 不带 x-freebuff-instance-id, 也不发 x-freebuff-heartbeat: 1.
+ * 官方在 admission 成功后立刻发一次这形态的心跳, 之后每 45 秒一次
+ * (orchestrator.js:208918-208957); 不发心跳会让会话在 admission 后约 25 秒
+ * 被上游退款(session_superseded + "purchase was refunded").
  *
  * @param {string} token 上游 token
  * @param {string} [accountId] 账号 id
@@ -215,7 +211,7 @@ export function makeSessionViaBun(
       if (!cfg) return null
       // 会话这一跳客户端是带 install-id 的(chat 不带,故 buildRpcCfg 置 null)
       cfg.installId = installIdFromClientState() || null
-      //  主机随主服务配置走,否则本地镜像对照会变成真打上游
+      // 主机随主服务配置走, 保证镜像对照与主服务指向同一上游
       cfg.apiHost = apiBase || null
       const r = await mod.rpcSession({
         cfg,
@@ -232,24 +228,14 @@ export function makeSessionViaBun(
 /**
  * 判定 bun 侧会话返回:401 显式抛出,其余失败回落 Node,成功返回会话体.
  *
- *  401 绝不静默回落 Node.
+ * 401 直接抛出, 不回落 Node: 重试换运行时不会改变"上游不认这个 token"这个语义,
+ * 只会多制造一次被拒记录并吞掉 bun 那一跳的关键字段(status / hasKeyId).
  *
- * 旧行为:r.ok === false 就 return null → 主服务走 Node 实现
- * 再发一次同样的请求 → 再吃一个 401 → 才抛 auth_unauthorized.
- * 后果有两个,都直接误导排障:
- *   1) 控制台点一次[检测]= 上游收到 两次 401(账号侧看到的
- *      是同一个坏 token 被连打两遍,本身就是自动化特征);
- *   2) 日志里只留 Node 那一跳,bun 那一跳的关键字段
- *      (status / hasKeyId)被吞掉  --  于是"到底签没签名"永远查不到.
- *
- * 401 的语义是确定的:上游不认这个 token.重试换运行时不会改变它,
- * 只会多制造一次被拒记录.所以这里直接把 bun 侧的结果抛出去,
- * 并标注本次到底签没签名(cfg.keyId) --  它是[token 真坏了]与
- * [设备未注册导致被拒]的分流判据:签名齐全仍 401 = token 坏;
+ * 抛出时标注本次到底签没签名(cfg.keyId): 它是[token 真坏了]与
+ * [设备未注册导致被拒]的分流判据 ---- 签名齐全仍 401 = token 坏;
  * 没签名就 401 = 先去查设备密钥.
  *
- * 其余失败(网络/bun 本身挂了/status 非 401)保持原样回落 Node:
- * 可用性优先,不能因为通道故障就让功能不可用.
+ * 其余失败(网络/bun 本身挂了/status 非 401)回落 Node.
  * 见 docs/reverse/21 §21.5[通道接上 ≠ 通道生效].
  *
  * @param {{ ok?: boolean, status?: number, body?: any, error?: string } | null} r bun 侧回执

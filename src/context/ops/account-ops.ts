@@ -1,20 +1,20 @@
 /**
  * 账号运行时的运维动作: 重建, 顶替, 全量释放, 进程收尾.
  *
- * 从 app-context.js 按职责切出. 这些动作的共同点是"会动到别的请求正在用的
- * 出网资源", 因此每个都以"先优雅释放会话, 再关 agent"为顺序.
+ * 这些动作会动到别的请求正在用的出网资源, 因此每个都以"先释放会话, 再关 agent"
+ * 为顺序.
  */
 import { UpstreamError } from '../../upstream/client.ts'
 import { logger } from '../../util/log.ts'
 
 /**
- * 丢弃一个 runtime 时的统一收尾:先优雅释放它的上游会话(要用它的
- * upstream 出网),会话收尾后再关闭出网 agent,否则 keep-alive
- * socket 会随"更新凭证/导入账号/改代理池"的次数一直累积(运行越久越慢).
- * 全程不阻塞调用方(fire-and-forget),失败只记日志.
+ * 丢弃一个 runtime 时的统一收尾: 先释放它的上游会话(要用它的 upstream 出网),
+ * 会话收尾后再关闭出网 agent(keep-alive socket 会随更新凭证/导入账号/改代理池
+ * 的次数累积). 全程不阻塞调用方(fire-and-forget), 失败只记日志.
  * @param {any} this 账号池(runtimes)
- * @param {any} rt
- * @param {string} why
+ * @param {any} rt 账号 runtime
+ * @param {string} why 收尾场景说明(写进日志)
+ * @returns {void} 无返回
  */
 export function _disposeRuntime(this: any, rt: any, why: any) {
   if (!rt) return
@@ -37,7 +37,7 @@ export function _disposeRuntime(this: any, rt: any, why: any) {
     })
   }
   if (pending && typeof pending.then === 'function') {
-    // 必须等会话释放(它要用 upstream 出网)再关 agent,否则 DELETE 会失败.
+    // 等会话释放(它要用 upstream 出网)再关 agent.
     pending.then(closeUpstream, (err: any) => {
       logger.warn(`${why}; deferred session release failed`, {
         key: rt.key,
@@ -52,13 +52,13 @@ export function _disposeRuntime(this: any, rt: any, why: any) {
 
 /**
  * 释放某账号的上游会话(早退 DELETE → session_units 当场按实际占用退还;
- * Freebucks 侧回 freebucksRefundPending,由待结算队列持续重放追问).
- * 两本账并行扣费,一手实测见 docs/evidence/ledger-session-units-vs-freebucks.json.
- * 换号/冷却时调用:失败账号的会话没人再用,留着只会白占一个上游会话槽位;
- * 有在途流时等它结束再释放(releaseWhenIdle),绝不掐断正在传输的 SSE.
+ * Freebucks 侧回 freebucksRefundPending, 由待结算队列持续重放追问).
+ * 两本账并行扣费, 见 docs/evidence/ledger-session-units-vs-freebucks.json.
+ * 换号/冷却时调用: 失败账号的会话没人再用, 留着只会白占一个上游会话槽位;
+ * 有在途流时等它结束再释放(releaseWhenIdle).
  * @param {any} this 账号池(runtimes)
- * @param {any} this 账号池(runtimes)
- * @param {string} key
+ * @param {string} key 账号 key
+ * @returns {void} 无返回
  */
 export function releaseSession(this: any, key: any) {
   const rt = this.byKey.get(key)
@@ -74,23 +74,23 @@ export function releaseSession(this: any, key: any) {
 
 /**
  * 该 runtime 是否仍是该账号当前缓存的 runtime.
- * 代理/账号信息切换后旧 runtime 会被顶替(byKey 指向新 runtime),
- * chat 流程借此识别"排队等锁期间已被切换"的请求并重新选号,
- * 而不是拿着旧出口的 runtime 去撞已被释放的旧 session.
+ *
+ * 代理/账号信息切换后旧 runtime 会被顶替(byKey 指向新 runtime), chat 流程借此识别
+ * "排队等锁期间已被切换"的请求并重新选号.
  * @param {any} this 账号池(runtimes)
- * @param {{ key: string }} rt
- * @returns {any} 见实现
+ * @param {{ key: string }} rt 账号 runtime
+ * @returns {boolean} 是否仍是当前 runtime
  */
 export function isCurrentRuntime(this: any, rt: any) {
   return this.byKey.get(rt.key) === rt
 }
 
 /**
- * 丢弃单个账号的缓存 runtime(删除/改代理后调用,让新状态立即生效).
- * 立即让位(新请求走新 runtime),旧 session 等在途 SSE 结束后优雅释放,
- * 避免把正在传输的连接掐断.
+ * 丢弃单个账号的缓存 runtime(删除/改代理后调用, 让新状态立即生效).
+ * 旧 session 等在途 SSE 结束后释放.
  * @param {any} this 账号池(runtimes)
- * @param {string} key
+ * @param {string} key 账号 key
+ * @returns {Promise<void>} 让位完成即 resolve
  */
 export async function invalidate(this: any, key: any) {
   const rt = this.byKey.get(key)
@@ -113,8 +113,7 @@ export async function reconnectAll(this: any) {
     keys.map(async (key: any) => {
       const rt = this.byKey.get(key)
       try {
-        // 严格释放:等到上游确认结束或退避重试耗尽,失败带上原因----绝不
-        // "报成功但其实没删掉"(删不掉 = 白白多扣一小时,见 issue #7).
+        // 严格释放: 等到上游确认结束或退避重试耗尽, 失败带上错误信息(见 issue #7).
         const rel = rt
           ? await rt.sessions.releaseStrict()
           : { ok: true, attempts: 0 }
@@ -186,12 +185,10 @@ export async function sweepPendingRefunds(this: any, opts: any = {}) {
 
 /**
  * 严格释放全部账号([断开全部连接]/[重启服务]/进程退出用):
- * 与 fire-and-forget 的 releaseSession 不同,这里等到每条会话都确认结束
- * 或重试耗尽才返回,并给出逐账号明细----绝不"报成功其实没删掉".
- * 失败的句柄仍留在 sessions.json,由下次启动扫尾继续清理.
+ * 与 fire-and-forget 的 releaseSession 不同, 这里等到每条会话都确认结束或重试耗尽
+ * 才返回, 并给出逐账号明细. 失败的句柄仍留在 sessions.json, 由下次启动扫尾继续清理.
  * @param {any} this 账号池(runtimes)
- * @param {any} this 账号池(runtimes)
- * @param {{waitInFlightMs?: number}} [opts]
+ * @param {{waitInFlightMs?: number}} [opts] 等在途流结束的上限(毫秒)
  * @returns {Promise<{ok: boolean, released: number,
  *   failed: Array<{key: string, instanceId?: string, error?: string}>}>} 释放结果明细
  */
@@ -240,8 +237,8 @@ export async function releaseAllStrict(this: any, opts: any = {}) {
 /**
  * 进程退出前的收尾: 停计时器, 按 strict 决定释放强度.
  *
- * strict=true 走"逐次 DELETE 直到确认结束"(换容器/重启前的严格释放), 否则走
- * 普通 release. 绝不谎报成功: 失败的句柄留在 sessions.json 里.
+ * strict=true 走"逐次 DELETE 直到确认结束"(换容器/重启前的严格释放);
+ * strict=false 走普通 release. 失败的句柄留在 sessions.json 里.
  * @param {any} this 账号池(runtimes)
  * @param {any} [opts] strict=true 走严格释放
  * @returns {Promise<any>} 释放结果明细

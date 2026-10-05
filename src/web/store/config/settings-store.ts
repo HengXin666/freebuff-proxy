@@ -14,7 +14,6 @@ interface Settings {
 const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   // 转发上游时是否补齐官方真签名工具(名字 + 真实参数 schema),让上游不把请求
   // 判作第三方客户端并降级.上游 2026-09-17 起要求签名工具[名字 + 真实参数 schema]
-  // 双真 ---- 旧实现补的空心 end_turn 正是它点名封堵的形态.关掉 = 接受被判外来并降级.
   // 判据与对照实验见
   // .agents/notes/implemented/bug-fix/2026-09-19-genuine-tool-signature.md
   freeToolSignatureEnabled: true,
@@ -36,7 +35,6 @@ const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   //   'official' ---- 照抄官方客户端抓包真值:官方 37 工具(worker)/ 官方
   //       decide(manager),官方 system 模板,desktop 世代 agent,分层 provider.
   //       见 src/upstream/official-shape.js 与 docs/reverse/14/15/17.
-  //       2026-10-03 在 cli-bridge 实测:200 + write_file 工具调用.
   // 默认 official:与官方客户端抓包逐字段一致,身份/世代不再错配.
   // 回退:控制台[设置 → 上游请求链路]切回 legacy 即可,无需重启.
   upstreamChannel: 'official',
@@ -45,14 +43,14 @@ const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   // 才溢出到下一个账号;从不主动平摊到新账号(上游把轮换健康账号当农场特征,
   // 且 Freebucks 按会话占用时长计费,换号 = 新买一条计费行).
   accountMaxConcurrency: 2,
-  // 账号调度模式(2026-09 新增,默认保持旧行为):
+  // 账号调度模式:
   //   'sticky' = 粘性优先(drain, not rotate):并发上限是溢出阈值----
   //              满员先在该账号上有界排队,排队超时才溢出到下一个账号.
   //              最少换号 = 最少新建计费会话(换号就是新买一条 Freebucks 行).
   //   'spread' = 并发优先:排序时优先有空闲槽位的账号,只在所有账号都
   //              满员时才排队;已用账号仍优先于从未用过的账号,但"已用账号
   //              全满 + 还有未用账号"时允许启用一个未用账号(= 申请新号).
-  //              代价是可能多预占(N 路并发铺到 M 个账号 = 最多 M 条计费会话),
+  //              会多预占(N 路并发铺到 M 个账号 = 最多 M 条计费会话),
   //              换来的是不再为并发让请求干等(低提交延迟).
   // 用户场景:并发满了就该开新号(批量/绘图);默认关闭以保持升级不改变行为.
   accountSchedulingMode: 'sticky',
@@ -70,7 +68,7 @@ const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   // 0 = 关闭该分组.用户要的是[一眼看到快跑完的号],所以阈值可调.
   lowBalanceThreshold: 15,
   // 注意：额度保护两项（idleReleaseSec / maxNewSessionsPerRequest）不写死默认值
-  // ——只有用户在控制台保存过才进 settings.json，否则回落 config.yaml
+  // ——只有用户在控制台保存过才进 settings.json, 否则回落 config.yaml
   // （session.idle_release_sec / limits.max_new_sessions_per_request），
   // 这样"config.yaml 只作兜底默认值"的约定才成立。
 })
@@ -85,7 +83,7 @@ export class SettingsStore {
     this.file = file
     this.settings = { ...DEFAULT_SETTINGS }
     /** 装载结果('ok' | 'missing' | 'invalid'):损坏时是回落默认值,必须在
-     * 启动横幅/自检里说清楚,否则用户配的额度保护会悄悄消失. */
+     * 启动横幅/自检里说清楚. */
     this.loadStatus = 'missing'
     this.loadReason = null
     this.load()
@@ -157,7 +155,6 @@ export class SettingsStore {
    * 与 get() 的区别是刻意的: get() 是运行设置的强类型快照(11 个实时字段,
    * 有默认值); 本方法是 settings.json 里原样存下的可调项(24 项, 无默认值,
    * 没保存过就不该覆盖 config.yaml 的兜底). 实现见 ./tunables-store.ts
-   * (为什么分开写在那里).
    * @returns {Record<string, any>} 已保存的可调项(未保存过则为空对象)
    */
   savedTunables() {
@@ -185,7 +182,6 @@ export class SettingsStore {
     for (const [key, value] of Object.entries(next || {})) {
       if (value === undefined) continue
       const spec = LIVE_FIELDS[key]
-      // 未知键一律拒绝而不是静默忽略: 拼错字段名却"保存成功"是最难查的一类.
       if (!spec) throw new TypeError(`未知的运行设置字段: ${key}`)
       const r = spec.normalize(value)
       if (!r.ok) throw new TypeError(`${key} ${r.message}`)

@@ -9,12 +9,12 @@
 import { loadConfig } from '../../../../../../src/config.ts'
 import assert from 'node:assert/strict'
 
-// --- unit: loadConfig 不得污染全局 DEFAULTS(深拷贝缺失的真 bug) ---
-// 历史 bug:deepMerge 用 { ...base } 浅拷贝,当没有 config.yaml 时 fileConfig={},
+// --- unit: loadConfig 不得污染全局 DEFAULTS(深拷贝缺失的 bug) ---
+// 场景: deepMerge 用 { ...base } 浅拷贝时, 无 config.yaml 时 fileConfig={},
 // 嵌套的 session/limits/web/upstream 与 DEFAULTS 共享同一对象;任何一处
-// config.session.xxx = y(测试与运行时代码都这么改)都会污染 DEFAULTS,
+// config.session.xxx = y(测试与运行时代码都这么改)都会改写 DEFAULTS,
 // 使同一进程内后续所有 loadConfig() 拿到被改坏的配置.有 config.yaml 时因递归
-// 新建对象而被掩盖----CI 一直靠仓库里的 config.yaml 侥幸通过.
+// 新建对象而被掩盖.
 {
   const { DEFAULTS } = await import('../../../../../../src/config.ts')
   const snapshot = JSON.stringify(DEFAULTS)

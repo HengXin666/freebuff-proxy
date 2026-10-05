@@ -1,10 +1,9 @@
 /**
  * admission 的编排: 把 steps.ts 的各步串成"一次 admit".
  *
- * 从 session-manager.js 的 _admitUnlocked 切出(原函数 366 行, 这里只做顺序
- * 与提前返回, 每一步的实现与它自己的理由都在 steps.ts).
+ * 这里只做顺序与提前返回, 每一步的实现与它自己的依据都在 steps.ts.
  *
- * 顺序不可随意调换, 每一步都是被上游实际回执逼出来的:
+ * 顺序不可随意调换: 每一步都有上游回执依据.
  *   结清待结束会话 -> GET claim -> POST admission -> [补一次 POST]
  *   -> 终态封锁 / active -> model_locked -> 槽位接管 -> claim 轮换
  */
@@ -35,9 +34,8 @@ import {
 export async function _admitUnlocked(
   this: any,
   model: string,
-  // 用命名参数而不是内联解构: 本仓的 check-notes 按参数文本逐字比对 @param,
-  // 解构模式无法表达(原文件因此把这条登记成 JSDoc 债务). 全部调用点都传
-  // 0 或 1 个参数, 两种写法行为完全一致.
+  // 用命名参数而非内联解构: check-notes 按参数文本逐字比对 @param,
+  // 解构模式无法表达. 全部调用点都传 0 或 1 个参数, 两种写法行为一致.
   opts: { forceReleaseLocked?: boolean } = {},
 ): Promise<any> {
   if (opts.forceReleaseLocked) {
@@ -61,18 +59,17 @@ async function resolveAdmission(this: any, model: string, claimId: string): Prom
   let body = await probeClaim.call(this, claimId)
   // GET 没给出可用会话: 再 POST 一次(带 model 作为 hint).
   //
-  // 官方行为(真机抓包): 全程 18 次 GET, 零次 POST, 会话最终变成 active.
-  // 说明 GET 本身就是建会话路径. 此前我们 status:none 就立刻回落 POST
-  // admission -- 而那是服务端会拒的路径(实测 country_not_allowed), 等于
-  // 主动把自己送进死路.
+  // 官方行为(真机抓包): 全程 18 次 GET, 零次 POST, 会话最终变成 active,
+  // 说明 GET 本身就是建会话路径. 回落 POST 的形态是服务端会拒的路径
+  // (country_not_allowed).
   if (!body || body.status === 'none') {
     body = await postAdmission.call(this, model, claimId)
   }
   // 仍拿不到: 最后再试一次 POST(等价重复, 作为老部署兜底).
   //
-  // 真机抓包确认官方建会话只走一次 POST /session/admission; 上面的 POST
-  // 失败后这里不会再成功, 但保留一层兜底不影响保真度(与官方
-  // session_admission_unavailable 的容错语义一致).
+  // 真机抓包确认官方建会话只走一次 POST /session/admission; 上面那次 POST
+  // 失败后这里不会再成功, 保留一层与官方 session_admission_unavailable
+  // 容错语义一致的兜底.
   if (!body || body.status === 'none') {
     logger.warn('admission produced no session; retrying POST once', { model, claimId })
     body = await this.upstream.freebuffSession('POST', { model, instanceId: claimId })
@@ -83,9 +80,9 @@ async function resolveAdmission(this: any, model: string, claimId: string): Prom
 /**
  * 按回执终态分派.
  *
- * status: 'active' 必须优先于 countryBlockReason(2026-10-01 真机抓包修正):
- * countryBlockReason 是说明性字段(告诉客户端为什么模型集变小了), 不是拒绝
- * 信号. 只有没有 instanceId 的 terminal 封锁才该抛(那才是真拒绝).
+ * status: 'active' 优先于 countryBlockReason: countryBlockReason 是说明性字段
+ * (告诉客户端模型集变小了), 不是拒绝信号. 只有没有 instanceId 的 terminal
+ * 封锁才该抛(那才是真拒绝).
  * @param {any} this 会话实例
  * @param {any} body 上游回执
  * @param {string} model 请求模型
@@ -119,8 +116,8 @@ async function dispatchAdmission(
  * 把上游终态回执翻成带 HTTP 语义的 UpstreamError.
  *
  * 地理封锁是出口属性, 不是账号属性: 所有账号共享同一出口, 换号只会把每个
- * 账号的额度依次买断(一次 admit = 一整小时 Freebucks)却永远拿不到答案.
- * 标记 fatal 后调度层立即终止选号并把原因交给用户, 出路是换代理.
+ * 账号的额度依次买断(一次 admit = 一整小时 Freebucks)却拿不到答案.
+ * 标记 fatal 后调度层立即终止选号并把这条说明交给用户.
  * @param {any} this 会话实例
  * @param {any} body 上游回执
  * @param {string} model 请求模型

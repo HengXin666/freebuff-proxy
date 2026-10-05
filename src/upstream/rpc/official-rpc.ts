@@ -1,15 +1,11 @@
 /**
  * 副仓库(cli-bridge)RPC 客户端  --  薄封装, 零协议代码.
  *
- * 设计原则:上游请求的协议实现只有一份,在 cli-bridge/(bun 执行).
- * 主服务(Node)不复制那套逻辑,而是把请求委托给它执行,再把结果透传给下游.
- * 这就是用户要的[主侧请求到副侧,副侧直接透传自己逻辑,相当于一个 RPC].
+ * 上游请求的协议实现只有一份, 在 cli-bridge/(bun 执行). 主服务(Node)把请求委托
+ * 给它执行, 再把结果透传给下游(相当于一个 RPC).
  *
- * 本文件只保留 buildRpcCfg  --  用主服务凭据装配副仓库需要的 cfg.
- * 为什么它留在这里而不是一起搬进 rpc/: 它是本文件被门禁登记的符号
- * (functions 基线里 official-rpc.ts::buildRpcCfg 94 行), 搬走会让基线条目
- * 变成"陈旧"并让新文件冒出一条 fresh 超限; 而且它与"本机密钥文件在哪"
- * 强耦合, 与那六个纯转发端口是两类东西. 端口实现见 rpc/ports.ts.
+ * 本文件只保留 buildRpcCfg ---- 用主服务凭据装配副仓库需要的 cfg; 它与"本机密钥
+ * 文件在哪"强耦合. 六个纯转发端口见 rpc/ports.ts.
  *
  * 见 docs/reverse/17-current-status-and-gaps.md.
  */
@@ -80,49 +76,40 @@ export async function buildRpcCfg(upstream: any, config: any = {}) {
     }
     if (dk) {
       /**
-       * scope 的主机随实际 apiBase 走:本地镜像对照时也要拼对,
-       * 否则取不到 keyId → 退化成不签名(与客户端不一致).
+       * scope 的主机随实际 apiBase 走:本地镜像对照时也要拼对, 取不到 keyId
+       * 就会退化成不签名(与客户端不一致).
        */
       cfg.keyId =
         dk.registrations?.[`${host} user:${cfg.userId}`] ||
         dk.registrations?.[`https://www.codebuff.com user:${cfg.userId}`] ||
         null
       /**
-       *  私钥格式契约:主服务落盘的是 PEM
+       * 私钥格式契约:主服务落盘的是 PEM
        * (privateKeyEncoding: { type:'pkcs8', format:'pem' }),
-       * 而 cli-bridge 的 derFromB64u() 要的是 base64url 裸 DER.
-       * 直接透传会让 bun 侧 atob() 抛
-       * "The string contains invalid characters." ---- 整个 bun 请求失败,
-       * 静默回落 Node(表现就是"通道没生效").
+       * 而 cli-bridge 的 derFromB64u() 要的是 base64url 裸 DER; 直接透传会让
+       * bun 侧 atob() 抛错, 整个 bun 请求失败并静默回落 Node.
        *
-       * 这里做一次格式归一(适配,不是重写签名逻辑):
-       * PEM → 剥头尾 → base64 → base64url.已经是 base64url 的原样透传.
+       * 这里做一次格式归一: PEM → 剥头尾 → base64 → base64url; 已经是
+       * base64url 的原样透传.
        */
       cfg.privateKey = normalizePrivateKeyForBun(dk.privateKey)
       /**
        * 公钥是 bun 侧惰性注册的原料.
        *
-       * Docker 全新卷上 registrations 为空(有密钥,没注册过),
-       * bun 侧见此会用这个公钥自己注册一个 keyId ---- 否则 session GET
-       * 将不带签名,而它是抓包里唯一必签的端点.
+       * Docker 全新卷上 registrations 为空(有密钥,没注册过), bun 侧见此会用这个
+       * 公钥自己注册一个 keyId; 没有签名时 session GET 将不带签名, 而它是抓包里
+       * 唯一必签的端点.
        */
       cfg.publicKey =
         typeof dk.publicKey === 'string' && dk.publicKey ? dk.publicKey : null
     }
   }
   /**
-   *  兜底必须在 try 之外.
+   * 兜底必须在读主密钥的 try 之外: 主密钥文件不存在时 readFile 抛错, 若与主路径
+   * 共用同一个 catch, 兜底块会被跳过, keyId 依旧是 null.
    *
-   * 第一版把它写在读主密钥的那个 try 里 ---- 主密钥文件不存在时
-   * (本仓库当前的真实状态:data/device-keys/ 只有调试残留,
-   * 唯独没有账号自己的文件)readFile 直接抛,
-   * 于是整个兜底块被 catch 跳过,keyId 依旧是 null.
-   * 实测确认:兜底跑完 keyId 仍为 null,等于没写.
-   *
-   * 这正是 docs/reverse/21 §21.5 那条教训的复现:
-   * [通道接上 ≠ 通道生效,失败会静默回落].
-   * 适用于兜底路径的同一条纪律:兜底自己失败时也要看得见,
-   * 绝不能和"主路径失败"共用同一个 catch.
+   * 同一条纪律适用于兜底路径: 兜底自己失败时也要看得见.
+   * 见 docs/reverse/21 §21.5[通道接上 ≠ 通道生效,失败会静默回落].
    */
   if (!cfg.keyId) {
     const official = await readOfficialDeviceKey(host, cfg.userId)

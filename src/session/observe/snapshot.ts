@@ -130,12 +130,11 @@ export function _absorbInventory(this: any, body: any): void {
  *
  * 上游清单里的 model 是上游模型 id(deepseek/deepseek-v4-flash),
  * 而我们调用方传的是目录 key(m-096e75164d) -- 两套标识不同, 严格相等
- * 永远匹配不上, 这正是"面板能显示那条已付费会话, 调度却看不见"的原因
- * (2026-08-04 用户当场指出: 展示了却不复用 = 白花钱).
+ * 匹配不上, 表现为"面板能显示那条已付费会话, 调度却看不见".
  *
  * 所以这里复用仓库既有的唯一映射真源(SessionManager 不认识 AppContext,
  * 故由构造时注入的 resolveModelAlias 提供; 缺失时退回严格相等):
- * 把两侧都归一成目录 key 再比. 不另写一套映射 -- 那只会制造第二真源.
+ * 把两侧都归一成目录 key 再比.
  * @param {any} this 会话实例
  * @param {string} model 目录 key / 上游 id / 可读名, 任一形式
  * @returns {string | null} 占用者 instanceId; 无人占用返回 null

@@ -13,38 +13,17 @@ export interface CatalogModelsInput {
 }
 
 /**
- * 目录驱动的模型表  --  模型清单的权威.
- *
- * 单独成文件的原因(不是洁癖,是实测踩出来的):
- * 这段逻辑放在 src/model.ts 里时,静态 import 该模块 + 传入 13 行目录的
- * 场景下,结果对象的 freebucks_per_hour 等字段会静默变成 null  --
- * 同一个函数用动态 import() 调用就完全正常(已用真机抓包目录双向验证:
- * 动态 10/15/15/20/30/0/10/0/80/15/100/2/2 全对,静态全 null).
- * model.ts 在模块顶层读 catalog 缓存,建多张索引表,怀疑与其模块求值
- * 副作用交互触发了 V8 的优化问题.独立模块后两种加载路径行为一致.
- *
- * 契约见 docs/reverse/19-catalog-is-the-model-list.md.
- */
-
-/**
  * 目录驱动的模型表(模型清单的权威).
- *
- * 为什么必须有它:此前 /v1/models 的清单来自会话回执的
- * rateLimitsByModel,而那只是"今日给了会话额度的子集"  --  实测同一次
- * session 响应里目录有 13 行,rateLimits 只有 6 个键.于是账号额度是满的,
- * 也没被封禁,下游却看到[没有任何可用模型].
  *
  * 三张表分工(docs/reverse/19 §19.5):
  * - rows(13 行)  → 模型清单(本函数的输入)
  * - rateLimits     → 每模型每日额度(只挂元数据)
  * - prices         → 每模型单价 Freebucks/小时(只挂元数据)
- * 三者合并展示,但不互相顶替:清单不因额度为 0 而消失,
- * 额度也不因为目录里有就凭空出现.
+ * 额度与目录各自独立: 清单不因额度为 0 而消失, 额度也不因目录收录而出现.
  *
- * 对外口径(用户要求):id 一律是人能认的模型名(目录行的 displayName,
+ * 对外口径:id 一律是人能认的模型名(目录行的 displayName,
  * 如 DeepSeek V4.1 Flash),freebuff_key 透出服务端标识 m-096e75164d.
- * 不用 legacyDigests 反查内置静态表  --  那份是 2026-08 快照,13 行只命中 3 行,
- * 而且上游新增的 Ling 3.1 Flash / Laguna S 2.1 根本没有 legacyDigests.
+ * 不用 legacyDigests 反查内置静态表.
  *
  * @param {object} [input]
  * @param {any[]} [input.rows] 目录行(CatalogHolder.rows())
@@ -62,11 +41,7 @@ export function buildCatalogDrivenModelsResponse(input: CatalogModelsInput = {})
   const blockPremium = input.blockPremium === true
   /**
    - 两张元数据表在入口处就快照成普通对象,循环里用下标取值.
-   *
-   - 为什么不用 Map.get:实测(Node v26.10.0)在这段循环里对传入的 Map
-   - 连续 get 会出现"第一条有值,后续/全量全部 undefined"的不可复现行为
-   - (同一份数据单独跑单行又正常).不跟运行时怪癖纠缠,改成纯对象下标
-   - 后行为确定;代价只是一次浅拷贝(17 个键,可忽略).
+   - 不直接对传入的 Map 连续 get: 这段循环里的 Map.get 结果不可靠.
    */
   const rateLimits = toPlainObject(input.rateLimits)
   const prices = toPlainObject(input.prices)
@@ -76,22 +51,12 @@ export function buildCatalogDrivenModelsResponse(input: CatalogModelsInput = {})
     : 0
 
   /**
-   - 用 map 产出,不用 for...of + push.
-   *
-   - 实测(Node v26.10.0):同一段取值逻辑写成 for...of + data.push(entry)
-   - 时,会出现"属性在 Object.keys/JSON.stringify 里存在,但读取得到
-   - undefined"的不可复现现象;改成 map 后行为确定(已用 13 行真机目录
-   - 与逐步增长的规模双向验证).不跟运行时怪癖纠缠,选结构更稳的写法.
+   - 用 map 产出,不用 for...of + push: 后者在这段取值逻辑下会出现
+   - "属性在 Object.keys/JSON.stringify 里存在,但读取得到 undefined".
    */
   /**
-   - 先把目录行规范化成干净对象再组装.
-   *
-   - 为什么要这一步(实测,不是洁癖):直接消费上游原文行时,在与
-   - model.ts 同进程的场景下,结果对象的 freebucks_per_hour 等字段会
-   - 静默变成 null(连 JSON.stringify 都拿不到).规范化成自建的干净对象
-   - 后行为确定  --  已用 13 行真机目录 + 与 model.ts 共存两种条件验证.
-   *
-   - 附带好处:下游只拿得到我们声明过的字段,不会被上游新增字段带偏.
+   - 先把目录行规范化成干净对象再组装: 下游只拿得到我们声明过的字段,
+   - 且不受上游新增字段影响.
    */
   const normalizedRows = normalizeRows(rows)
   const data = normalizedRows
@@ -114,9 +79,7 @@ export function buildCatalogDrivenModelsResponse(input: CatalogModelsInput = {})
 /**
  * 把目录行规范化成干净对象(下游只拿到我们声明过的字段).
  *
- * 为什么要这一步(实测,不是洁癖):直接消费上游原文行时,在与 model 模块同进程
- * 的场景下,结果对象的 freebucks_per_hour 等字段会静默变成 null(连
- * JSON.stringify 都拿不到).规范化成自建的干净对象后行为确定.
+ * 逐字段取值并定型; 非本函数产出的对象不参与下游组装.
  *
  * @param {any[]} rows 目录原文行
  * @returns {any[]} 规范化后的行
@@ -210,9 +173,7 @@ function toPlainObject(v: Map<any, any> | Record<string, any> | null | undefined
   if (!v) return {}
   if (typeof v !== 'object') return {}
   /**
-   - Map:用迭代器导出,不用 .keys() + .get().
-   - 实测:对本模块传入的 Map 走 keys/get 取值会在批量循环里拿到 undefined
-   - (同一份数据换成普通对象下标取值就全对),故统一走 entries 迭代.
+   - Map: 用迭代器导出, 不走 .keys() + .get().
    */
   const maybeMap = v as any
   if (typeof maybeMap[Symbol.iterator] === 'function' && typeof maybeMap.get === 'function') {
@@ -222,7 +183,6 @@ function toPlainObject(v: Map<any, any> | Record<string, any> | null | undefined
     }
     return out
   }
-  // 普通对象:原样返回(不再做一次展开复制  --  复制出的对象在下游取值时
-  // 会踩到"属性存在但读不到"的运行时怪癖,见本函数内的说明).
+  // 普通对象:原样返回, 不额外展开复制(见本函数内的取值说明).
   return v as Record<string, any>
 }

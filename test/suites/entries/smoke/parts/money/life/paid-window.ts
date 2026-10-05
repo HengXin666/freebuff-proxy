@@ -11,7 +11,7 @@ import { waitFor } from '../../../harness/helpers.ts'
 import { fbChat, fbRuntimes, freebucks25, futureReset } from '../refund/fixture.ts'
 import assert from 'node:assert/strict'
 
-// (1) 已付费时段内不释放(2026-09-14 一手实测后改):
+// (1) 已付费时段内不释放:
 //     上游一次 admit 就是买断一小时,POST 当场扣满整小时单价,回执带 expiresAt.
 //     这一小时内继续用边际成本为 0,而 DELETE 后那一小时作废,重开要重买.
 //     所以空闲超过 idleReleaseSec 也不得释放;要等付费时段结束.
@@ -195,7 +195,7 @@ state.completionAttempts = 0
     assert.ok(!('key' in f), `failures 条目不得含 key，got ${JSON.stringify(f)}`)
     assert.ok(!('message' in f), `failures 条目不得含 message，got ${JSON.stringify(f)}`)
   }
-  // 聚合字段仍在(调用方据此判断"为什么全挂了")
+  // 聚合字段仍在:reasons 给失败构成, tried 给尝试次数
   assert.ok(j.error.details?.reasons, '应给 reasons 聚合')
   assert.equal(typeof j.error.details?.tried, 'number', '应给 tried 计数')
   assert.equal(

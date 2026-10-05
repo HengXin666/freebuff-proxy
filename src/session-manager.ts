@@ -1,5 +1,5 @@
 /**
- * SessionManager 的薄门面(.js 路径, 实现见 ./session/).
+ * SessionManager 的薄门面(实现见 ./session/).
  *
  * 保留原路径与全部原有导出名, 所以 src/app-context.ts, src/proxy.ts,
  * bin/, test/ 的既有 import 一处都不用改.
@@ -17,9 +17,8 @@
  *   - ./session/admit/*             ensureSession 与 admission 的每一步
  *   - ./session/release/*           释放, 退款结算与追问
  *
- * 为什么拆: 原文件 2280 行, 其中 _admitUnlocked 一个函数 366 行. 拆开之后
- * 每个方法的依赖只通过 this 上的状态契约传递, 静态检查(check-declared)能
- * 抓住漏挂的方法 -- 这曾经是本仓的生产事故形态.
+ * 拆分要点: 每个方法的依赖只通过 this 上的状态契约传递, 静态检查
+ * (check-declared)能抓住漏挂的方法.
  */
 export { SessionManager } from './session/manager.ts'
 export { accountLevelSessionStatus } from './session/inventory.ts'
