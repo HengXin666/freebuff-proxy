@@ -23,7 +23,12 @@ export const LANES = {
   },
   notes: {
     title: '文档与决策记录',
-    prefixes: ['.agents/', 'docs/', 'README.md', 'REVERSE_ENGINEERING_SUMMARY.md', 'AGENTS.md', 'CLAUDE.md'],
+    prefixes: [
+      // README_EN.md 是英文版 README: 顶层条目必须被某条 lane 认领.
+      // 双语取舍见 .agents/notes/implemented/feature/2026-10-07-bilingual-readme.md
+      '.agents/', 'docs/', 'README.md', 'README_EN.md',
+      'REVERSE_ENGINEERING_SUMMARY.md', 'AGENTS.md', 'CLAUDE.md',
+    ],
     fixHint: '修完再提交：node scripts/gates/run.ts notes',
   },
   guard: {

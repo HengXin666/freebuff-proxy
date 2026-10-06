@@ -9,8 +9,10 @@
 <a href="https://github.com/HengXin666/freebuff-proxy/pkgs/container/freebuff-proxy"><img src="https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white" alt="Docker"></a>
 </p>
 <p><strong>超轻量</strong> . <strong>一键 Docker 部署</strong> . <strong>一切管理都在前端页面</strong></p>
+<p>
+<a href="./README.md"><strong>中文</strong></a> . <a href="./README_EN.md">English</a>
+</p>
 </div>
-
 下游 Agent 只需要标准的 `base_url + api_key + model`,本服务负责 Freebuff 身份凭证(多账号池),免费 session 准入,协议形态与额度调度,并把**流式 / 非流式响应原样透传**.
 
 > 本项目使用 Freebuff 官方接口,与 Freebuff 官方无隶属关系.计费与额度**最终以上游实时返回为准**.
@@ -56,7 +58,7 @@
 git clone https://github.com/HengXin666/freebuff-proxy.git
 cd freebuff-proxy
 cp .env.example .env      # 建议设置 ADMIN_PASSWORD
-docker compose up -d      # 自动拉取 GHCR 预构建镜像，无需本地构建
+docker compose up -d      # 自动拉取 GHCR 预构建镜像, 无需本地构建
 ```
 
 浏览器打开 `http://<宿主机IP>:8787/`,用管理员登录,在[总览 → + 添加账号]完成 Freebuff 登录回调即可开始使用.
@@ -65,7 +67,7 @@ docker compose up -d      # 自动拉取 GHCR 预构建镜像，无需本地构�
 docker compose logs freebuff-proxy | grep -A6 "首次启动"   # 未设 ADMIN_PASSWORD 时查看随机密码
 docker compose logs -f      # 日志
 docker compose pull && docker compose up -d   # 升级
-docker compose down         # 停止（数据保留在 ./data）
+docker compose down         # 停止(数据保留在 ./data)
 ```
 
 > 网络为 **host 模式**:容器与宿主机共享网络栈,应用直接监听宿主 `0.0.0.0:<PORT>`,无需端口映射(host 模式下 `ports` 会被忽略).
@@ -117,6 +119,19 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 ---
 
+## 调度开关: 指定只用哪几个账号
+
+账号表每一行都有 **调度** 开关(默认开启):
+
+- **开** = 参与调度: 该账号会被选号, 可按需新建会话.
+- **关** = 排除在外: 不进候选, 不会被选号, 不会 admit.
+- **关开关不释放会话** ---- 已买断的那一小时保留到自然过期, 再打开即复用, 不额外花钱.
+- 状态落在账本 `/data/account-state.json`, **重启后仍然生效**.
+
+用来钉住一组"只用这几个号"(比如留几个备用), 既不用删凭据, 也不用等冷却过期.
+
+---
+
 ## 计费与额度
 
 上游按 **Freebucks(FB)** 计费:每个模型有单价(FB/小时),**admit 一次按整小时买断**;这一小时内继续发请求**边际成本为 0**,而提前 `DELETE` **拿不回 Freebucks** ---- 所以**付费时段内不为空闲释放**(详见 [调度与额度保护](docs/design/scheduling.md#额度保护freebucks-计费控制台可调)).每日池在太平洋午夜重置(官方档约 25 FB,走代理时实测 20).
@@ -124,7 +139,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 上游没有可引用的静态价格表,定价在每次 session 响应的 `freebucks.prices` 里.本服务**不写死价格**,直接读上游实时值:
 
 ```bash
-npm run pricing            # 人类可读的实时价目表（GET 探测，不创建 session、不消耗额度）
+npm run pricing            # 人类可读的实时价目表(GET 探测, 不创建 session, 不消耗额度)
 npm run pricing -- --json  # 机器可读
 ```
 

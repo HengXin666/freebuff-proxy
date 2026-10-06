@@ -116,7 +116,7 @@ docs/
 
 ### 快速上手
 
-想直接跑起来,看仓库根的 [README.md](../README.md)(docker compose 一键 + 三步接入).
+想直接跑起来,看仓库根的 [README.md](../README.md)(中文)或 [README_EN.md](../README_EN.md)(English)----docker compose 一键 + 三步接入.
 
 ## 四,常见误配(都已误导过至少一份文档,写在这里防复发)
 
