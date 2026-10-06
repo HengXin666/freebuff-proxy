@@ -15,6 +15,7 @@ import {
 } from '../../../../config/tunable/store.ts'
 import { OFFICIAL_TOOL_META } from '../../../../upstream/signals/tools/official-tool-select.ts'
 import { normalizeReasoningOverride } from '../../../../proxy/reasoning-effort.ts'
+import { toPlaceholderTemplate } from '../../../../upstream/system/official-template.ts'
 
 /**
  * 提示词占位符名单与可用性.
@@ -39,13 +40,17 @@ const PROMPT_PLACEHOLDERS = [
 ]
 
 /**
- * 读官方 system 抓包原文(worker 层).
+ * 读官方 system 抓包原文(worker 层), 并还原成占位符形态.
+ *
+ * 抓包文件存的是渲染后的文本: 日期 / 仓库统计 / 变更文件块都冻在抓包那一刻.
+ * 控制台给人看给人改的必须是模板形态, 否则用户一保存就把[抓包当天的日期]与
+ * [别人仓库的统计]写进出站文本. 还原规则见 src/upstream/system/official-template.ts.
  *
  * 为什么从文件直读而不是走 cli-bridge: cli-bridge 是 bun 侧的执行体,
- * 控制台(本进程)只为[恢复官方原文]按钮提供一份对照文本, 不需要执行任何上游逻辑.
+ * 控制台(本进程)只为编辑与[恢复官方原文]提供一份对照文本, 不需要执行任何上游逻辑.
  * 读不到时返回空串 ---- 前端据此把按钮置灰, 比给一份假文本安全.
  *
- * @returns {string} 官方 worker 层 system 原文;读不到为空串
+ * @returns {string} 官方 worker 层 system 的占位符形态;读不到为空串
  */
 export function officialSystemPromptDefault() {
   try {
@@ -54,7 +59,7 @@ export function officialSystemPromptDefault() {
       import.meta.url,
     )
     const raw = JSON.parse(fs.readFileSync(p, 'utf8'))
-    return typeof raw?.worker === 'string' ? raw.worker : ''
+    return typeof raw?.worker === 'string' ? toPlaceholderTemplate(raw.worker) : ''
   } catch {
     return ''
   }

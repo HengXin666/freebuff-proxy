@@ -29,6 +29,9 @@ const MODELS = [
   { key: 'm-bbb', name: 'Solar Pro 4', efforts: null, defaultEffort: null },
 ]
 
+/** 记录每次保存提交的内容(断言点击真的接上了保存链). */
+const saves: any[] = []
+
 /**
  * 渲染一次卡片并挂到 body.
  *
@@ -36,7 +39,7 @@ const MODELS = [
  * @returns {any} 卡片元素
  */
 function mount(override: any) {
-  const card = buildEffortOverrideCard(override, MODELS, false, () => {})
+  const card = buildEffortOverrideCard(override, MODELS, false, () => { saves.push(1) })
   body.append(card)
   return card
 }
@@ -93,6 +96,30 @@ function mount(override: any) {
   const card = buildEffortOverrideCard({ enabled: true, models: [] }, [], false, () => {})
   body.append(card)
   ok(card.querySelectorAll('.effort-empty').length === 1, '没有目录行时必须提示去同步模型')
+}
+
+// -- (6) 芯片必须可点: 每个档位芯片都要挂上点击处理器 ----------------
+// 这条是 2026-10-06 用户实报缺陷的回归: 芯片渲染出来了, 但没挂 handler,
+// 于是[有模型也点不动]. 只断言[渲染出 7 个芯片]抓不到它 ---- 必须断言处理器存在.
+{
+  body.children.length = 0
+  saves.length = 0
+  const card = mount({ enabled: true, models: [] })
+  const chips = [...card.querySelectorAll('.effort-chip')]
+  ok(chips.length > 0, `前置: 必须有芯片可点, got ${chips.length}`)
+  const dead = chips.filter((c: any) => !c.handlers.click || c.handlers.click.length === 0)
+  ok(dead.length === 0, `每个档位芯片都必须有 click 处理器(用户报[点不动]), 无处理器的有 ${dead.length} 个`)
+  // 真触发一次: 点 MiMo 的 max -> 该芯片变选中, 且保存链被调用.
+  const target = chips.find((c: any) => c.attrs['data-model'] === 'm-aaa' && c.attrs['data-effort'] === 'max')
+  ok(!!target, '必须能找到 m-aaa 的 max 芯片')
+  await target.dispatch('click')
+  ok(target.attrs['data-on'] === '1' && String(target.className).includes('is-on'),
+    `点击后该芯片必须变为选中, got data-on=${target.attrs['data-on']} class=${target.className}`)
+  ok(saves.length >= 1, '点击必须触发保存回调(否则界面选了也不生效)')
+  // 同一行的其它档位必须被互斥取消.
+  const others = chips.filter((c: any) => c.attrs['data-model'] === 'm-aaa' && c !== target)
+  ok(others.every((c: any) => c.attrs['data-on'] === '0'),
+    '同一模型只能有一个档位被选中')
 }
 
 console.log(`思考强度卡结构验证通过(断言 ${n} 条)`)

@@ -451,3 +451,7 @@
 @media (max-width: 820px) {
   .effort-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
 }
+
+/* 系统提示词卡: [占位符形态]的说明行. 用户分不清[模板]与[别人机器那次渲染结果],
+   这行就是那条分界, 所以常驻而不是塞进 tooltip. */
+.system-prompt-note { font-size: 12px; margin: 6px 0 2px; }

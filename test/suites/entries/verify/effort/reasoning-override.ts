@@ -12,7 +12,7 @@ import path from 'node:path'
 import {
   REASONING_EFFORTS, isReasoningOverrideShape, normalizeReasoningOverride,
   resolveForcedEffort, applyForcedEffort,
-} from '../../../../src/proxy/reasoning-effort.ts'
+} from '../../../../../src/proxy/reasoning-effort.ts'
 
 let n = 0
 const ok = (cond: unknown, msg: string) => {
@@ -116,7 +116,7 @@ ok(REASONING_EFFORTS.includes('ultra'), '档位枚举必须含官方全集')
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-effort-'))
   const file = path.join(dir, 'settings.json')
-  const { SettingsStore } = await import('../../../../src/web/store/config/settings-store.ts')
+  const { SettingsStore } = await import('../../../../../src/web/store/config/settings-store.ts')
   const store: any = new SettingsStore(file)
   ok(store.get().reasoningOverride?.enabled === false, '默认必须是关闭')
   store.save({ reasoningOverride: { enabled: true, models: [{ model: 'm-aaa', effort: 'max' }] } })
@@ -134,7 +134,7 @@ ok(REASONING_EFFORTS.includes('ultra'), '档位枚举必须含官方全集')
 
 // -- (9) 出站体落点: buildForwardBody 命中覆盖时改 legacy 体 --------------
 {
-  const { buildForwardBody } = await import('../../../../src/proxy/transport/forward-body.ts')
+  const { buildForwardBody } = await import('../../../../../src/proxy/transport/forward-body.ts')
   const settings = { reasoningOverride: { enabled: true, models: [{ model: 'm-aaa', effort: 'max' }] } }
   const ctx = { settingsStore: { get: () => settings }, config: { upstream: { channel: 'official' } } }
   const built = buildForwardBody(

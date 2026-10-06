@@ -133,6 +133,12 @@ export default {
   'system.officialSystemRestored': {
     'zh-CN': '已恢复官方原文并保存', en: 'Official text restored and saved',
   },
+  'system.officialSystemTemplateNote': {
+    'zh-CN': '这里显示的是官方模板的占位符形态（{CODEBUFF_*} 运行时替换），'
+      + '不是抓包那一刻渲染出来的结果',
+    en: 'This is the official template in its placeholder form '
+      + '({CODEBUFF_*} is filled at runtime), not the rendered result from the capture',
+  },
   'system.officialSystemHint': {
     'zh-CN':
       '官方模板明文要求模型调用 suggest_prompts、写待办、申请提权、操作浏览器预览等工具。'

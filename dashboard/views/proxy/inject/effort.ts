@@ -49,7 +49,9 @@ function effortOf(selected: Map<string, string>, model: string) {
  * @param {boolean} disabled 只读时禁用
  * @returns {any} 芯片容器
  */
-function effortChips(model: string, efforts: string[], current: string, disabled: boolean) {
+function effortChips(
+  model: string, efforts: string[], current: string, disabled: boolean, onApply: any,
+) {
   const row = el('div', { class: 'effort-chips' })
   for (const effort of efforts) {
     const on = effort === current
@@ -60,10 +62,35 @@ function effortChips(model: string, efforts: string[], current: string, disabled
       'data-effort': effort,
       'data-on': on ? '1' : '0',
       title: t('system.effortChipTitle'),
+      // 选中态是卡片自己的状态, 先就地切换再交给保存处理器 ----
+      // 把切换塞进保存处理器会让[点了没反应]与[存失败]长得一模一样.
+      onclick: (event: any) => {
+        toggleEffortChip(event?.currentTarget)
+        onApply(event)
+      },
       ...(disabled ? { disabled: '' } : {}),
     }, effort))
   }
   return row
+}
+
+/**
+ * 切换一个芯片的选中态: 同一模型只允许一个档位, 其余兄弟芯片一并取消.
+ *
+ * @param {any} chip 被点击的芯片(没有它时什么也不做)
+ * @returns {void} 无返回值
+ */
+export function toggleEffortChip(chip: any) {
+  if (!chip || !chip.classList?.contains('effort-chip')) return
+  const on = chip.getAttribute('data-on') === '1'
+  chip.setAttribute('data-on', on ? '0' : '1')
+  chip.classList.toggle('is-on', !on)
+  for (const sib of chip.parentElement?.querySelectorAll('.effort-chip') || []) {
+    if (sib === chip) continue
+    sib.setAttribute('data-on', '0')
+    sib.classList.remove('is-on')
+  }
+  syncRowState(chip)
 }
 
 /**
@@ -74,7 +101,7 @@ function effortChips(model: string, efforts: string[], current: string, disabled
  * @param {boolean} disabled 只读时禁用
  * @returns {any} 行元素
  */
-function effortRow(item: any, selected: Map<string, string>, disabled: boolean) {
+function effortRow(item: any, selected: Map<string, string>, disabled: boolean, onApply: any) {
   const model = item.key || item.name
   const current = effortOf(selected, model) || effortOf(selected, item.name)
   const head = el('div', { class: 'effort-row-head' }, [
@@ -84,7 +111,7 @@ function effortRow(item: any, selected: Map<string, string>, disabled: boolean) 
       : el('span', { class: 'effort-current muted' }, t('system.effortFollow'))
   ])
   const body = item.efforts && item.efforts.length
-    ? effortChips(model, item.efforts, current, disabled)
+    ? effortChips(model, item.efforts, current, disabled, onApply)
     : el('div', { class: 'muted effort-no-efforts' }, t('system.effortNoEfforts'))
   return el('div', { class: 'effort-row' + (current ? ' is-set' : '') }, [head, body])
 }
@@ -97,7 +124,9 @@ function effortRow(item: any, selected: Map<string, string>, disabled: boolean) 
  * @param {boolean} disabled 只读时禁用
  * @returns {any[]} 行元素数组
  */
-function danglingRows(selected: Map<string, string>, known: Set<string>, disabled: boolean) {
+function danglingRows(
+  selected: Map<string, string>, known: Set<string>, disabled: boolean, onApply: any,
+) {
   const out: any[] = []
   for (const [model, effort] of selected) {
     if (known.has(model)) continue
@@ -106,7 +135,7 @@ function danglingRows(selected: Map<string, string>, known: Set<string>, disable
         el('span', { class: 'effort-name' }, model),
         el('span', { class: 'effort-current' }, effort),
       ]),
-      effortChips(model, EFFORTS, effort, disabled),
+      effortChips(model, EFFORTS, effort, disabled, onApply),
     ]))
   }
   return out
@@ -129,9 +158,9 @@ export function buildEffortOverrideCard(raw: any, models: any[], disabled: boole
   for (const item of list) {
     if (item?.key) known.add(item.key)
     if (item?.name) known.add(item.name)
-    rows.push(effortRow(item, cfg.selected, disabled))
+    rows.push(effortRow(item, cfg.selected, disabled, onApply))
   }
-  rows.push(...danglingRows(cfg.selected, known, disabled))
+  rows.push(...danglingRows(cfg.selected, known, disabled, onApply))
   const switcher = el('label', { class: 'switch', for: 'effort-override' }, [
     el('input', {
       id: 'effort-override',
@@ -194,22 +223,10 @@ function readConfig() {
  *
  * 点击芯片的行为: 点未选中的档位 = 选中; 再点已选中的档位 = 取消该模型的覆盖.
  *
- * @param {any} event 复选框/芯片的 click 或 change 事件
  * @returns {Promise<void>} 无返回值
  */
-export async function saveEffortOverride(event: any) {
-  const target = event?.currentTarget
-  if (target?.classList?.contains('effort-chip')) {
-    const on = target.getAttribute('data-on') === '1'
-    target.setAttribute('data-on', on ? '0' : '1')
-    target.classList.toggle('is-on', !on)
-    for (const sib of target.parentElement?.querySelectorAll('.effort-chip') || []) {
-      if (sib === target) continue
-      sib.setAttribute('data-on', '0')
-      sib.classList.remove('is-on')
-    }
-    syncRowState(target)
-  }
+export async function saveEffortOverride() {
+  // 选中态由卡片在点击时就地切换(见 toggleEffortChip), 这里只做[读当前态 -> 落盘].
   const cfg = readConfig()
   try {
     await api('/api/settings', { method: 'POST', body: JSON.stringify({ reasoningOverride: cfg }) })

@@ -1,25 +1,14 @@
 /**
  * 极小 DOM 桩 ---- 只为[能对 dashboard 的组件做结构性断言].
  *
- * ## 为什么需要它
+ * smoke-frontend 用的是万能 Proxy 桩: 能抓 TDZ, 但不记账 ---- 数不出有几个孩子
+ * 节点. 一件签到警告条重复堆积, 一次[芯片没挂处理器]都是靠这里的真记账桩抓到的.
  *
- * 原有的前端冒烟(smoke-frontend)用的是一个[万能 Proxy 桩]: 任何属性访问都返回
- * 它自己. 那能抓 TDZ(模块能否被求值), 但抓不到[节点有没有被重复追加] ----
- * 桩不记账, 数不出有几个孩子节点.
- *
- * 2026-10-06 的真实缺陷正好落在这一块: 一键签到每次点击都多一条警告条
- * (根因是回读时用 btn.parentElement 反推容器, 拿到的是内层 wrap),
- * 而所有门禁与测试全绿 ---- 因为没有一处能数 DOM 节点.
- *
- * ## 边界(刻意不做的)
- *
- * 不解析 HTML, 不做 CSS, 不做事件冒泡, 不实现 layout.
- * insertAdjacentHTML 只做[记录这段 HTML 文本]: 图标是内部受控的 SVG 片段,
- * 测试只关心[有没有多出一个节点], 不关心它的内部结构.
- *
- * 这不是一个通用 DOM 实现, 是给本仓组件做结构断言的最小够用集.
- * 换组件用之前先看它的 DOM 依赖是否都在这里.
+ * 边界(刻意不做): 不解析 HTML, 不做 CSS, 不做事件冒泡, 不实现 layout.
+ * insertAdjacentHTML 只记录片段文本. 这不是通用 DOM, 是结构断言的最小够用集.
  */
+
+import { makeClassList } from './class-list.ts'
 
 /** 一个可数孩子的极简元素. */
 class StubNode {
@@ -86,6 +75,11 @@ class StubNode {
       this.children.unshift(n)
       if (n instanceof StubNode) n.parentNode = this
     }
+  }
+
+  /** classList 的最小实现(见 ./class-list.ts). */
+  get classList() {
+    return makeClassList(this)
   }
 
   setAttribute(k: string, v: any) {

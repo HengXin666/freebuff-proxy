@@ -40,6 +40,7 @@ export function buildSystemPromptCard(
       el('div', {}, [
         el('h3', { style: 'margin:0 0 2px' }, t('system.officialSystem')),
         el('span', { class: 'muted' }, t('system.officialSystemHint')),
+        el('div', { class: 'muted system-prompt-note' }, t('system.officialSystemTemplateNote')),
       ]),
       el('div', { class: 'row', style: 'gap:10px;align-items:center' }, [
         el('span', { class: 'muted', id: 'official-system-state' }, t('system.officialSystemAutoSaved')),
