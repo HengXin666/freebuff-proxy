@@ -48,7 +48,9 @@ export function buildSettingsSections(ctx: any) {
       buildToolCarrierCard(ctx.carrierAttrs, ctx.carrierEnabled),
     ]),
     settingsSection('settings.sectionSystemPrompt', 'settings.sectionSystemPromptHint', [
-      buildSystemPromptCard(ctx.systemPromptText, ctx.systemPromptDefault, ctx.toolsDisabled),
+      buildSystemPromptCard(
+        ctx.systemPromptText, ctx.systemPromptDefault, ctx.toolsDisabled, ctx.promptPlaceholders,
+      ),
     ]),
     settingsSection('settings.sectionScheduling', 'settings.sectionSchedulingHint', [
       buildLoadBalanceCard(ctx.schedMode, ctx.concurrency, ctx.overflowWaitMs),

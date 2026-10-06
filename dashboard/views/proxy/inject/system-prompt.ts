@@ -24,9 +24,12 @@ let saveTimer: any = null
  * @param {string} text 当前生效的正文
  * @param {string} officialDefault 官方抓包原文(用于[恢复官方原文])
  * @param {boolean} disabled 非管理员时禁用交互
+ * @param {any[]} placeholders 可用占位符名单(名字 + 可用性)
  * @returns {any} 卡片元素
  */
-export function buildSystemPromptCard(text: string, officialDefault: string, disabled: boolean) {
+export function buildSystemPromptCard(
+  text: string, officialDefault: string, disabled: boolean, placeholders: any[] = [],
+) {
   // 高度交给 CSS(.system-prompt-holder): 这里写死会和[占满高度]冲突.
   const holder = el('div', {
     class: 'system-prompt-holder', id: 'official-system-editor',
@@ -48,8 +51,49 @@ export function buildSystemPromptCard(text: string, officialDefault: string, dis
         }, t('system.officialSystemRestore')),
       ]),
     ]),
+    placeholderHelp(placeholders),
     holder,
   ])
+}
+
+/**
+ * 占位符说明: 列出可用占位符, 点击插入到编辑器光标处.
+ *
+ * 用户改提示词时可以直接复用这些占位符 ---- 运行时会被替换成真值.
+ * 取不到值的那些也列出来但标注[本代理取不到], 免得用户以为写了就有内容.
+ *
+ * @param {any[]} list 占位符名字与可用性
+ * @returns {any} 说明块;名单为空时为 null
+ */
+function placeholderHelp(list: any[]) {
+  if (!Array.isArray(list) || list.length === 0) return null
+  const items = list.map((p: any) => el('button', {
+    class: p.filled ? 'ph-chip' : 'ph-chip ph-chip-empty',
+    type: 'button',
+    title: (p.filled ? '' : t('system.phUnavailable') + ' ') + (p.note || ''),
+    onclick: () => insertPlaceholder('{CODEBUFF_' + p.name + '}'),
+  }, ['{CODEBUFF_' + p.name + '}']))
+  return el('details', { class: 'ph-help' }, [
+    el('summary', {}, t('system.phTitle')),
+    el('div', { class: 'muted', style: 'font-size:12px;margin:6px 0' }, t('system.phHint')),
+    el('div', { class: 'ph-list' }, items),
+  ])
+}
+
+/**
+ * 把占位符插入到编辑器光标处.
+ *
+ * @param {string} token 占位符文本
+ * @returns {void} 无返回值
+ */
+function insertPlaceholder(token: string) {
+  const ed = editorRef
+  if (!ed) return
+  try {
+    ed.insert?.(token) ?? ed.setValue(String(ed.getValue() || '') + token)
+  } catch {
+    // 编辑器不可用时忽略(不阻塞用户手写)
+  }
 }
 
 /**

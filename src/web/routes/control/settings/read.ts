@@ -16,6 +16,28 @@ import {
 import { OFFICIAL_TOOL_META } from '../../../../upstream/signals/tools/official-tool-select.ts'
 
 /**
+ * 提示词占位符名单与可用性.
+ *
+ * 语法与官方一致({CODEBUFF_NAME}, 见 orchestrator 的 PLACEHOLDER). filled 表示
+ * 本代理能否给出真值 ---- 取不到的那些替换成空串(官方对没有值的占位符也是空串).
+ */
+const PROMPT_PLACEHOLDERS = [
+  { name: 'CURRENT_DATE', filled: true, note: '当前日期(en-US 长格式)' },
+  { name: 'AGENT_NAME', filled: true, note: '代理名(本代理恒为 Buffy)' },
+  { name: 'USER_INPUT_PROMPT', filled: true, note: '本次用户消息' },
+  { name: 'INITIAL_AGENT_PROMPT', filled: true, note: '首轮提示(有则填)' },
+  { name: 'REMAINING_STEPS', filled: true, note: '剩余步数(有则填)' },
+  { name: 'FILE_TREE_PROMPT', filled: false, note: '客户端文件树' },
+  { name: 'FILE_TREE_PROMPT_SMALL', filled: false, note: '客户端文件树(小预算)' },
+  { name: 'FILE_TREE_PROMPT_LARGE', filled: false, note: '客户端文件树(大预算)' },
+  { name: 'GIT_CHANGES_PROMPT', filled: false, note: '客户端仓库 git 摘要' },
+  { name: 'KNOWLEDGE_FILES_CONTENTS', filled: false, note: '客户端知识文件内容' },
+  { name: 'PROJECT_ROOT', filled: false, note: '客户端项目根路径' },
+  { name: 'USER_CWD', filled: false, note: '客户端工作目录' },
+  { name: 'SYSTEM_INFO_PROMPT', filled: false, note: '客户端系统信息' },
+]
+
+/**
  * 读官方 system 抓包原文(worker 层).
  *
  * 为什么从文件直读而不是走 cli-bridge: cli-bridge 是 bun 侧的执行体,
@@ -88,6 +110,13 @@ export function readSettings(config: any, settingsStore: any) {
     autoSignInEnabled: s.autoSignInEnabled === true,
     /** 官方工具分类目录(分组 + 一句话说明), 前端据此渲染勾选列表. */
     officialToolCatalog: OFFICIAL_TOOL_META,
+    /**
+     * 系统提示词里可用的占位符与各自的可用性.
+     *
+     * 前端据此在编辑器上方给出说明 ---- 用户改了正文也能继续复用这些占位符.
+     * filled=false 的那些取值来自客户端本地上下文, 本代理拿不到, 会被替换成空串.
+     */
+    promptPlaceholders: PROMPT_PLACEHOLDERS,
     /**
      * 可调项(除 server.host/port 外的全部).
      *

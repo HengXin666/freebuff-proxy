@@ -306,6 +306,23 @@
 .system-prompt-holder .monaco-editor,
 .system-prompt-holder .monaco-editor .overflow-guard { border-radius: 0; }
 /* 自动换行开关: 小号, 与旁边的状态文字同一视觉层级. */
+/* 占位符说明: 默认折叠, 展开后是一排可点的芯片. */
+.ph-help { margin-top: 8px; font-size: 12px; }
+.ph-help summary { cursor: pointer; color: var(--muted, #6b717d); }
+.ph-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.ph-chip {
+  padding: 3px 8px;
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 999px;
+  background: #282c34;
+  color: #98c379;
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ph-chip:hover { border-color: #5b8cff; }
+.ph-chip-empty { color: #6b717d; }
+
 .editor-wrap-toggle {
   /* 标签不折行: 否则[自动换行]会被压成两行(实测). */
   white-space: nowrap;

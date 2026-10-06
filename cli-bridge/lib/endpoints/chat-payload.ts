@@ -3,7 +3,7 @@
  - 纯函数(不碰 this), 除 buildMetadata 需要 bridge 取 run 状态与项目目录.
  */
 import { collectRepoSnapshot } from '../snapshot.ts'
-import { renderManagerSystem, renderWorkerSystem } from '../system.ts'
+import { applyPlaceholders, renderManagerSystem, renderWorkerSystem } from '../system.ts'
 import { MAP_TOOLS, mergeOfficialTools } from '../tool-map.ts'
 
 /**
@@ -85,11 +85,19 @@ let sysText = null;
 if (systemPrompt?.mode === 'none') {
   sysText = null;
 } else if (systemPrompt?.mode === 'custom') {
-  sysText = typeof systemPrompt.text === 'string' ? systemPrompt.text : '';
+  /**
+   * 自定义正文也要过占位符替换 ----
+   * 用户正文里可以写 {CODEBUFF_CURRENT_DATE} 这类占位符(语法与官方一致,
+   * 见 orchestrator 的 PLACEHOLDER), 由这里在运行时填成真值.
+   * 不做这一步等于自定义模式用不了任何动态值.
+   */
+  const body = typeof systemPrompt.text === 'string' ? systemPrompt.text : '';
+  sysText = applyPlaceholders(body, { userInput: typeof userText === 'string' ? userText : '' })
 } else if (sysTpl) {
+  const mission = typeof userText === 'string' ? userText : JSON.stringify(userText)
   sysText = layer === 'manager'
-    ? renderManagerSystem(sysTpl, typeof userText === 'string' ? userText : JSON.stringify(userText))
-    : renderWorkerSystem(sysTpl);
+    ? renderManagerSystem(sysTpl, mission)
+    : renderWorkerSystem(sysTpl, { userInput: mission });
 }
 // 无官方 system 时原样返回 messages(不是 rest): 客户端自己的 system 消息
 // 必须保留 ---- 'none' 的语义是[不加官方 system], 不是[清掉所有 system].

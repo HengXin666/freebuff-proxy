@@ -75,6 +75,7 @@ export async function renderProxySettings(view: any) {
     systemPromptDefault: typeof settings.officialSystemPromptDefault === 'string'
       ? settings.officialSystemPromptDefault
       : '',
+    promptPlaceholders: Array.isArray(settings.promptPlaceholders) ? settings.promptPlaceholders : [],
     schedMode, concurrency, overflowWaitMs,
     advice, idleReleaseSec, lowBalanceThreshold, maxNewSessions,
     autoSignInAttrs, autoSignInEnabled,

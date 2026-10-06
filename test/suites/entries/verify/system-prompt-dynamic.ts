@@ -13,7 +13,7 @@ import path from 'node:path'
 
 // test/suites/entries/verify/ -> 仓库根: 往上 4 级(verify/model 才是 5 级).
 const ROOT = path.join(import.meta.dirname, '..', '..', '..', '..')
-const { renderWorkerSystem } = await import(
+const { renderWorkerSystem, applyPlaceholders, PLACEHOLDER_NAMES } = await import(
   path.join(ROOT, 'cli-bridge/lib/system.ts')
 )
 
@@ -82,6 +82,32 @@ const ok = (cond: unknown, msg: string) => {
   )
   ok(out.includes('# Freebuff Desktop'), '后续段落必须原样保留')
   ok(out.includes('Merge'), '模板尾部内容不得丢失')
+}
+
+// ── 5 占位符: 语法与官方一致({CODEBUFF_*}), 取不到的替换成空串 ──────
+{
+  ok(PLACEHOLDER_NAMES.length === 13, `官方占位符应有 13 个, got ${PLACEHOLDER_NAMES.length}`)
+  ok(PLACEHOLDER_NAMES.includes('CURRENT_DATE'), '名单必须含 CURRENT_DATE')
+  ok(PLACEHOLDER_NAMES.includes('USER_INPUT_PROMPT'), '名单必须含 USER_INPUT_PROMPT')
+
+  const out = applyPlaceholders(
+    'D={CODEBUFF_CURRENT_DATE} N={CODEBUFF_AGENT_NAME} U={CODEBUFF_USER_INPUT_PROMPT}',
+    { date: 'January 2, 2030', userInput: 'hello' },
+  )
+  ok(out.includes('D=January 2, 2030'), 'CURRENT_DATE 要替换成注入值, got ' + out)
+  ok(out.includes('N=Buffy'), 'AGENT_NAME 默认应是 Buffy')
+  ok(out.includes('U=hello'), 'USER_INPUT_PROMPT 要替换成本次用户消息')
+
+  // 取不到的占位符: 替换成空串(与官方一致), 而不是留着原样发出去
+  const empty = applyPlaceholders('[{CODEBUFF_PROJECT_ROOT}]', {})
+  ok(empty === '[]', `取不到的占位符必须替换成空串, got ${JSON.stringify(empty)}`)
+  ok(!empty.includes('undefined'), '取不到时不得替换成字符串 undefined')
+
+  // 自定义正文里的占位符也要生效(这是本次改动的核心目的)
+  const custom = applyPlaceholders('Root={CODEBUFF_PROJECT_ROOT}; Date={CODEBUFF_CURRENT_DATE}', {
+    date: 'January 2, 2030',
+  })
+  ok(custom.startsWith('Root=; Date=January 2, 2030'), '自定义正文同样要替换, got ' + custom)
 }
 
 console.log(`官方 system 动态段渲染验证通过(断言 ${n} 条)`)

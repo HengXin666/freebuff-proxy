@@ -190,6 +190,14 @@ export async function createCodeEditor(opts: any) {
       getValue: () => editor.getValue(),
       setValue: (v: string) => editor.setValue(v ?? ''),
       setReadOnly: (ro: boolean) => editor.updateOptions({ readOnly: ro }),
+      /** 在光标处插入文本(占位符快捷插入用). */
+      insert: (t: string) => {
+        try {
+          const sel = editor.getSelection()
+          if (!sel) return
+          editor.executeEdits('insert', [{ range: sel, text: t }])
+        } catch { /* 已销毁 */ }
+      },
       /** 切换自动换行(开关用). */
       setWordWrap: (on: boolean) => {
         try { editor.updateOptions({ wordWrap: on ? 'on' : 'off' }) } catch { /* 已销毁 */ }

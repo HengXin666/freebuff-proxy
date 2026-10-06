@@ -114,6 +114,14 @@ export default {
     en: 'Official tool injection updated (applies to the next request)',
   },
   'system.officialSystem': { 'zh-CN': '官方系统提示词', en: 'Official system prompt' },
+  'system.phTitle': { 'zh-CN': '可用占位符（点一下插入）', en: 'Placeholders (click to insert)' },
+  'system.phHint': {
+    'zh-CN': '这些占位符在每次请求时会被替换成真值，写了就能用；灰底的那些取值在客户端本机，'
+      + '本代理取不到，会被替换成空。语法与官方一致。',
+    en: 'These are replaced with real values on every request. Grey ones come from the client machine '
+      + 'and cannot be resolved here, so they become empty. Syntax matches the official client.',
+  },
+  'system.phUnavailable': { 'zh-CN': '本代理取不到，会替换成空', en: 'Not resolvable here; becomes empty' },
   'system.officialSystemWrap': { 'zh-CN': '自动换行', en: 'Wrap' },
   'system.officialSystemWrapHint': {
     'zh-CN': '长行折到窗口宽度内显示；关掉则横向滚动看原始行.',
