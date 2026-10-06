@@ -64,7 +64,7 @@ export function prepareRewriteHeaders(res: any, respHeaders: any, opts: any) {
  * @returns {Promise<{ handled: boolean, text?: string, body?: any }>} 非流式返回文本, 流式返回改写后的体
  */
 export async function rewriteUpstreamResponse(upstreamRes: any, opts: any) {
-  const { stream, hermesDelegateAlias, plan, declaredToolNames, declaredToolSchemas } = opts
+  const { stream, hermesDelegateAlias, plan, declaredToolNames, declaredToolSchemas, paramContext } = opts
   /**
    * RPC 路径已经在 buildUpstreamResponseFromRpc 里做过[流式增量]改写,
    * 这里不能再做一遍(两层各改一次会让名字/参数被二次翻译).
@@ -121,9 +121,12 @@ export async function rewriteUpstreamResponse(upstreamRes: any, opts: any) {
  * @param {any} carrierPlan 本次请求的工具载体映射(可缺省)
  * @param {Iterable<string>|any[]} [declaredNames] 本次下游声明的工具名集合
  * @param {Record<string, any>} [declaredSchemas] 本次下游声明的工具 schema(名字 -> parameters)
+ * @param {any} [paramContext] 运行期参数(下游本地事实, 见 signals/param-map.ts)
  * @returns {any} 下游响应对象(status 与上游一致)
  */
-export function buildUpstreamResponseFromRpc(rpc: any, carrierPlan: any, declaredNames?: any, declaredSchemas?: any) {
+export function buildUpstreamResponseFromRpc(
+  rpc: any, carrierPlan: any, declaredNames?: any, declaredSchemas?: any, paramContext?: any,
+) {
   const plan = carrierPlan ?? EMPTY_CARRIER_PLAN
 
   // 流式: 管道里做增量改写, 不缓冲整份.
@@ -132,6 +135,7 @@ export function buildUpstreamResponseFromRpc(rpc: any, carrierPlan: any, declare
       carrierPlan: plan,
       declaredToolNames: declaredNames,
       declaredToolSchemas: declaredSchemas,
+      paramContext,
     })
     const body = rpc.streamedBody.pipeThrough(createToolRewriteSseTransform(rewritePlan))
     return markRewritten(new Response(body, {
@@ -143,7 +147,7 @@ export function buildUpstreamResponseFromRpc(rpc: any, carrierPlan: any, declare
   const rawText = rpc.text || ''
   const carrierUnpacked = plan.active ? unpackCarrierInRpcText(rawText, plan) : rawText
   return markRewritten(new Response(
-    unmapToolCallsInSse(carrierUnpacked, declaredNames, declaredSchemas),
+    unmapToolCallsInSse(carrierUnpacked, declaredNames, declaredSchemas, paramContext),
     {
       status: rpc.status,
       headers: { 'content-type': 'application/json' },

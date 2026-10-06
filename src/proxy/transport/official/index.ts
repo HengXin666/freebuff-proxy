@@ -34,6 +34,7 @@ import {
   injectableOfficialTools,
   selectOfficialTools,
 } from '../../../upstream/signals/tools/official-tool-select.ts'
+import { paramContextOf } from '../../../upstream/signals/param-map.ts'
 
 /**
  * 上游首字节之后的整篇生成上限(毫秒).
@@ -100,6 +101,9 @@ export async function tryOfficialChannel(ctx: any, args: any) {
           carrierPlan,
           declaredToolNames,
           declaredToolSchemas,
+          // 运行期参数(下游本地事实): 下游要求而官方 schema 里没有的字段只能
+          // 由本代理补. 逐请求取一次, 与工具声明同生命周期.
+          paramContext: paramContextOf(ctx.config),
           wantStream: args.stream !== false,
         })
         if (rpc?.upstreamRes) {
@@ -134,21 +138,6 @@ export async function tryOfficialChannel(ctx: any, args: any) {
   return { upstreamRes, upstreamErrText, rpcResponse }
 }
 
-/**
- * 解析出这次要注入的官方工具名单.
- *
- * 两级判据, 控制台配置优先:
- *   1. 控制台配过名单 -> 按名单(空数组 = 一个都不注入);
- *   2. 未配置         -> 自动规则: 只注入回程能还原成下游本次真的声明过的名字的那些.
- *
- * 自动规则为什么是默认: 静态分类表对不上客户端形态. 实测同一台机器两种形态,
- * 只声明 run_code 的会话里 37 个官方工具全部派发不了(含静态表判为可派发的 10 个),
- * 而自动规则对任意客户端零配置生效.
- *
- * @param {any} ctx 依赖集合(取 settingsStore)
- * @param {any} declared 下游本次声明的工具名
- * @returns {string[]} 要注入的官方工具名
- */
 /**
  * 把控制台的官方 system 配置解析成 bun 侧要的形态.
  *
@@ -264,9 +253,12 @@ async function runOfficialRpc(ctx: any, args: any) {
       RPC_TOTAL_TIMEOUT_MS,
     ),
   }
+  const packed: [any, any, any, any] = [
+    args.carrierPlan, args.declaredToolNames, args.declaredToolSchemas, args.paramContext,
+  ]
   return args.wantStream
-    ? await runStreamingRpc(rpcArgs, args.carrierPlan, args.declaredToolNames, args.declaredToolSchemas)
-    : await runWholeRpc(rpcArgs, args.carrierPlan, args.declaredToolNames, args.declaredToolSchemas)
+    ? await runStreamingRpc(rpcArgs, ...packed)
+    : await runWholeRpc(rpcArgs, ...packed)
 }
 
 /**
@@ -276,14 +268,19 @@ async function runOfficialRpc(ctx: any, args: any) {
  * @param {any} carrierPlan 载体映射
  * @param {any} declaredToolNames 本次声明的工具名
  * @param {any} declaredToolSchemas 本次声明的工具 schema
+ * @param {any} paramContext 运行期参数(下游本地事实)
  * @returns {Promise<{upstreamRes: any, upstreamErrText: any}|null>} 结果
  */
-async function runWholeRpc(rpcArgs: any, carrierPlan: any, declaredToolNames: any, declaredToolSchemas: any) {
+async function runWholeRpc(
+  rpcArgs: any, carrierPlan: any, declaredToolNames: any, declaredToolSchemas: any, paramContext?: any,
+) {
   const rpc: any = await rpcReuse(rpcArgs)
   logRpcResult(rpc)
   if (!rpc.status) return null
   return {
-    upstreamRes: buildUpstreamResponseFromRpc(rpc, carrierPlan, declaredToolNames, declaredToolSchemas),
+    upstreamRes: buildUpstreamResponseFromRpc(
+      rpc, carrierPlan, declaredToolNames, declaredToolSchemas, paramContext,
+    ),
     upstreamErrText: rpc.ok ? null : (rpc.text || ''),
   }
 }

@@ -49,10 +49,11 @@ export function logRpcResult(rpc: any): void {
  * @param {any} carrierPlan 载体映射
  * @param {any} declaredToolNames 本次声明的工具名
  * @param {any} declaredToolSchemas 本次声明的工具 schema
+ * @param {any} paramContext 运行期参数(下游本地事实)
  * @returns {Promise<{upstreamRes: any, upstreamErrText: any}|null>} 结果
  */
 export async function runStreamingRpc(
-  rpcArgs: any, carrierPlan: any, declaredToolNames: any, declaredToolSchemas: any,
+  rpcArgs: any, carrierPlan: any, declaredToolNames: any, declaredToolSchemas: any, paramContext?: any,
 ) {
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>()
   const writer = writable.getWriter()
@@ -117,12 +118,15 @@ export async function runStreamingRpc(
         carrierPlan,
         declaredToolNames,
         declaredToolSchemas,
+        paramContext,
       ),
       upstreamErrText: null,
     }
   }
 
-  return buildStatusMismatchResult(rpcPromise, writer, carrierPlan, declaredToolNames, declaredToolSchemas, signal)
+  return buildStatusMismatchResult(
+    rpcPromise, writer, carrierPlan, declaredToolNames, declaredToolSchemas, paramContext, signal,
+  )
 }
 
 /**
@@ -135,6 +139,7 @@ export async function runStreamingRpc(
  * @param {any} carrierPlan 载体映射
  * @param {any} declaredToolNames 本次声明的工具名
  * @param {any} declaredToolSchemas 本次声明的工具 schema
+ * @param {any} paramContext 运行期参数(下游本地事实)
  * @param {{status?: number}} signal 首个信号(取状态码兜底)
  * @returns {Promise<{upstreamRes: any, upstreamErrText: any}|null>} 结果
  */
@@ -144,6 +149,7 @@ async function buildStatusMismatchResult(
   carrierPlan: any,
   declaredToolNames: any,
   declaredToolSchemas: any,
+  paramContext: any,
   signal: { status?: number },
 ) {
   const rpc: any = await rpcPromise
@@ -157,6 +163,7 @@ async function buildStatusMismatchResult(
       carrierPlan,
       declaredToolNames,
       declaredToolSchemas,
+      paramContext,
     ),
     upstreamErrText: finalRpc.ok ? null : (finalRpc.text || ''),
   }

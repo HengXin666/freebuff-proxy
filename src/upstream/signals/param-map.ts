@@ -31,6 +31,30 @@ export { PARAM_RULES } from './tools/param-rules.ts'
 export type { FieldRule, ParamRule } from './tools/param-rules.ts'
 
 /**
+ * 运行期参数上下文 -- 官方 schema 里没有, 只能由本代理补上的值.
+ *
+ * 与 [从官方参数推导] 的区别: 那些字段的取值都在 src 里(改个名或换形态即可),
+ * 而这里的取值根本不在上游请求里 ---- 它是下游客户端的本地事实.
+ */
+export interface ParamContext {
+  /** 下游要求的绝对搜索目录(客户端本地工作目录, 由控制台配置). */
+  searchFolder?: string | null
+}
+
+/**
+ * 从已装载的配置解析运行期参数(唯一入口).
+ *
+ * 转发路径与控制台共用这一处口径: 两边各写一次判据必然漂移, 而漂移的表现是
+ * [页面显示已配置, 回程却仍按未配置处理].
+ * @param {any} config 已合并可调项的配置
+ * @returns {ParamContext} 运行期参数
+ */
+export function paramContextOf(config: any): ParamContext {
+  const raw = config?.downstream?.searchFolder
+  return { searchFolder: typeof raw === 'string' && raw.trim() ? raw.trim() : null }
+}
+
+/**
  * 该下游工具名是否有参数翻译规则.
  *
  * 给流式回程用: 没有规则的工具名(55 个里的大多数)完全不该被缓冲,
@@ -49,12 +73,14 @@ export function hasParamRule(clientName: unknown): boolean {
  * @param {any} clientName 还原后的下游工具名
  * @param {any} argsText 官方形态的参数 JSON 文本
  * @param {any} [clientSchema] 下游本次为该工具声明的 parameters(用于裁剪)
+ * @param {ParamContext} [context] 运行期参数(下游的本地事实, 上游请求里没有)
  * @returns {string | null} 翻译后的 JSON 文本; 无规则/解析失败/无需翻译时返回 null
  */
 export function translateParamsForDownstream(
   clientName: any,
   argsText: any,
   clientSchema?: any,
+  context?: ParamContext,
 ): string | null {
   if (typeof clientName !== 'string' || typeof argsText !== 'string' || !argsText) return null
   const rule = PARAM_RULES[clientName]
@@ -88,7 +114,7 @@ export function translateParamsForDownstream(
   for (const [key, make] of Object.entries(rule.synth || {})) {
     if (out[key] !== undefined) continue
     if (!requiresField(clientSchema, key)) continue
-    const value = make(src)
+    const value = make(src, context)
     if (value !== undefined && value !== null) out[key] = value
   }
   /**

@@ -57,6 +57,12 @@ export interface TunableSpec {
 export const TUNABLES: readonly TunableSpec[] = Object.freeze([
   // ── 上游 ────────────────────────────────────────────────────────────
   { path: 'upstream.loginBase', type: 'string', group: 'upstream', label: '登录站点' },
+  {
+    path: 'downstream.searchFolder',
+    type: 'string',
+    group: 'upstream',
+    label: '下游搜索目录(绝对路径)',
+  },
 
   // ── 会话 ────────────────────────────────────────────────────────────
   { path: 'session.releaseOnShutdown', type: 'boolean', group: 'session', label: '退出时释放会话' },

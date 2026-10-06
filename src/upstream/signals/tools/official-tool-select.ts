@@ -40,7 +40,7 @@ export const OFFICIAL_TOOL_META: readonly OfficialToolMeta[] = Object.freeze([
   { name: 'str_replace', group: 'common', desc: '在文件里替换文本, 对应下游 edit' },
   { name: 'write_file', group: 'common', desc: '写入或新建文件, 对应下游 write' },
   { name: 'run_terminal_command', group: 'common', desc: '执行 shell 命令, 对应下游 bash' },
-  { name: 'code_search', group: 'common', desc: '按正则搜索代码, 对应下游 grep' },
+  { name: 'code_search', group: 'common', desc: '按正则搜索代码, 对应下游 grep 或同名 code_search' },
   { name: 'glob', group: 'common', desc: '按通配符找文件, 对应下游 glob' },
   { name: 'list_directory', group: 'orphan', desc: '列出目录内容, 下游没有对应工具' },
   { name: 'write_todos', group: 'common', desc: '写待办清单, 对应下游 todo_write' },

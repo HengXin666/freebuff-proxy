@@ -150,6 +150,21 @@ export default {
   },
   'system.officialSystemDirty': { 'zh-CN': '有未保存的改动', en: 'Unsaved changes' },
   'system.officialSystemRestore': { 'zh-CN': '恢复官方原文', en: 'Restore the official text' },
+  'system.officialToolsSearchHint': {
+    'zh-CN':
+      'code_search（按正则搜索代码）回家的名字在各客户端不一致：'
+      + 'dsh 自带同名工具 code_search，参数却是 search_term + search_folder_absolute_uri'
+      + '（两者都必填，后者必须是会话工作目录下的绝对路径）；没有同名工具的客户端落到 grep。'
+      + '前一种情况里搜索目录不在上游请求里，需要到[高级]区填「下游搜索目录（绝对路径）」，'
+      + '填的应当是本机那个会话的工作目录；留空时该调用会因缺字段失败。',
+    en:
+      'code_search lands on different client tools: dsh ships its own code_search whose parameters '
+      + 'are search_term + search_folder_absolute_uri (both required, the latter an absolute path '
+      + 'inside the session working directory); clients without that name fall back to grep. '
+      + 'The search folder is not part of the upstream request, so set "downstream search folder '
+      + '(absolute path)" in the Advanced section to the session working directory on this machine; '
+      + 'left empty, that call fails on the missing field.',
+  },
   'system.officialToolsEmptyWarn': {
     'zh-CN':
       '注意：一个都不注入时，上游会因为工具集不完整而直接拒绝请求（返回 503）。'

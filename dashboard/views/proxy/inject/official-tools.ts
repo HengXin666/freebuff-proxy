@@ -77,6 +77,9 @@ export function buildOfficialToolsCard(
     el('div', {
       class: emptyWarnClass(unconfigured, activeNames),
     }, t('system.officialToolsEmptyWarn')),
+    // code_search 的落法与其余工具不同, 单列一段说明: 它回家的名字与官方同名,
+    // 但参数形态完全不同, 且下游有一个参数取自[本代理看不到的本地事实].
+    el('div', { class: 'muted official-tools-search-hint' }, t('system.officialToolsSearchHint')),
     el('div', { class: 'official-tools-summary' }, [
       el('span', { class: 'muted' }, t('system.officialToolsCountLabel')),
       el('strong', { class: 'official-tools-count-value' },

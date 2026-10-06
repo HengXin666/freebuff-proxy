@@ -36,7 +36,19 @@ export interface ToolRewritePlan {
   schemas: any
   /** Hermes delegate 别名(null 时该段整体跳过). */
   hermesAlias: any
+  /** 运行期参数(下游本地事实, 见 upstream/signals/param-map.ts). */
+  paramContext: any
 }
+
+/**
+ * 官方名与下游名同名, 形态却不同的工具 -- 名字还原不改写它们, 因此缓冲不能
+ * 只看声明的名字集合.
+ *
+ * 这类工具在两个通道上都会被还原: back[name] 命中(改名通道), 或
+ * back[name] 未命中但下游本次声明了同名工具(见 unmapToolCallsInBody 的判据).
+ * 后者是流式路径唯一能捕获它们的地方.
+ */
+const SAME_NAME_SHAPE_DIFFERS = new Set(['code_search'])
 
 /**
  * 建一次请求的改写上下文.
@@ -54,6 +66,7 @@ export function createToolRewritePlan(opts: any = {}): ToolRewritePlan {
     declared: toNameSet(opts.declaredToolNames),
     schemas: opts.declaredToolSchemas || {},
     hermesAlias: opts.hermesDelegateAlias ?? null,
+    paramContext: opts.paramContext ?? {},
   }
 }
 
@@ -69,6 +82,7 @@ export function createToolRewritePlan(opts: any = {}): ToolRewritePlan {
  */
 export function worthBuffering(plan: ToolRewritePlan, clientName: any): boolean {
   if (!hasParamRule(clientName)) return false
+  if (SAME_NAME_SHAPE_DIFFERS.has(clientName)) return true
   return plan.declared.size === 0 || plan.declared.has(clientName)
 }
 
@@ -218,7 +232,9 @@ function issueArgs(
     return
   }
   state.buf += fn.arguments
-  const translated = translateParamsForDownstream(state.name, state.buf, plan.schemas[state.name])
+  const translated = translateParamsForDownstream(
+    state.name, state.buf, plan.schemas[state.name], plan.paramContext,
+  )
   if (translated != null) {
     fn.arguments = translated
     state.emitted = true

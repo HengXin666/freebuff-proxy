@@ -32,6 +32,7 @@ const SUITES = [
   ['tool-param-idempotent', 'suites/entries/verify/tool/param/idempotent.ts'],
   ['tool-official-select', 'suites/entries/verify/tool/official-select.ts'],
   ['tool-dispatch-ready', 'suites/entries/verify/tool/param/dispatch-ready.ts'],
+  ['tool-dispatch-minimal', 'suites/entries/verify/tool/param/dispatch-minimal.ts'],
   ['tool-stream-rewrite', 'suites/entries/verify/tool/stream-rewrite.ts'],
   ['chat-payload-contract', 'suites/entries/verify/chat-payload-contract.ts'],
   ['system-prompt-dynamic', 'suites/entries/verify/system-prompt-dynamic.ts'],

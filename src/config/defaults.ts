@@ -46,6 +46,16 @@ export const DEFAULTS: Record<string, any> = {
     /** 全局代理池(多代理):账号按稳定哈希分配到池内某个代理;连接失败自动回落下一个. */
     proxies: [],
   },
+  downstream: {
+    /**
+     * 下游客户端的本地工作目录(绝对路径).
+     *
+     * 有些下游工具要求[绝对搜索目录]这种本地事实, 而它不在上游请求里, 只能由
+     * 控制台配一次. 未配置时同名工具的参数翻译不做兜底, 下游会明确报必填缺失.
+     * 见 .agents/notes/implemented/bug-fix/2026-10-06-downstream-code-search-mapping.md
+     */
+    searchFolder: null,
+  },
   web: {
     cookieSecure: false,
     sessionTtlHours: 24 * 7,

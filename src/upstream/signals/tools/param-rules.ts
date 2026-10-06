@@ -22,8 +22,13 @@ export interface FieldRule {
 export interface ParamRule {
   /** 官方字段名 -> 规则. 未列出的官方字段一律丢弃. */
   fields: Record<string, FieldRule>
-  /** 下游必填但官方 schema 里没有的字段: 名字 -> 由整份官方参数合成. */
-  synth?: Record<string, (src: any) => any>
+  /**
+   * 下游必填但官方 schema 里没有的字段: 名字 -> 由整份官方参数合成.
+   *
+   * 第二个入参是运行期上下文(见 param-map.ts 的 ParamContext): 取值不在上游
+   * 请求里, 而是下游客户端的本地事实, 由调用方逐请求传进来.
+   */
+  synth?: Record<string, (src: any, context?: any) => any>
 }
 
 export const PARAM_RULES: Record<string, ParamRule> = {
@@ -120,6 +125,24 @@ export const PARAM_RULES: Record<string, ParamRule> = {
   /** code_search(pattern, cwd?) -> grep(pattern, path?). */
   grep: {
     fields: { pattern: { to: 'pattern' }, cwd: { to: 'path' } },
+  },
+  /**
+   * code_search(pattern, cwd?, flags?, maxResults?) ->
+   * code_search(search_term, search_folder_absolute_uri).
+   *
+   * 同名不同形: 下游 dsh 的同名工具两个参数都必填(search_term 与
+   * search_folder_absolute_uri), 官方这两个字段一个都没有.
+   * pattern 改名直通; 搜索目录取运行期上下文(下游客户端自己的本地目录).
+   * 官方多出的 flags / maxResults 下游不认识, 由引擎按下游 schema 裁掉.
+   */
+  code_search: {
+    fields: { pattern: { to: 'search_term' } },
+    synth: {
+      search_folder_absolute_uri: (_src: any, context?: any) =>
+        typeof context?.searchFolder === 'string' && context.searchFolder
+          ? context.searchFolder
+          : undefined,
+    },
   },
   /** list_directory(path) -> ls(path). */
   ls: { fields: { path: { to: 'path' } } },
