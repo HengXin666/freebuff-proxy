@@ -14,6 +14,7 @@ import {
   snapshotTunables, secretsEffective,
 } from '../../../../config/tunable/store.ts'
 import { OFFICIAL_TOOL_META } from '../../../../upstream/signals/tools/official-tool-select.ts'
+import { normalizeReasoningOverride } from '../../../../proxy/reasoning-effort.ts'
 
 /**
  * 提示词占位符名单与可用性.
@@ -60,13 +61,44 @@ export function officialSystemPromptDefault() {
 }
 
 /**
+ * 目录行 -> [模型 / 可读名 / 可用思考档位] 三件套(前端逐模型渲染用).
+ *
+ * 档位真源是目录行的 efforts; 未声明时回 null(前端据此不显示档位芯片).
+ * 只读本地已抓到的目录, 不发任何上游请求.
+ * @param {any} ctx 路由上下文(取 runtimes; 缺省时返回空表)
+ * @returns {Array<{ key: string, name: string, efforts: string[] | null, defaultEffort: string | null }>} 模型档位表
+ */
+function reasoningModels(ctx: any) {
+  const out: Array<{ key: string, name: string, efforts: string[] | null, defaultEffort: string | null }> = []
+  try {
+    const { rows } = ctx?.runtimes?.catalogRows?.() || {}
+    for (const row of rows || []) {
+      if (typeof row?.key !== 'string' || !row.key) continue
+      const name = typeof row.displayName === 'string' && row.displayName.trim()
+        ? row.displayName.trim()
+        : row.key
+      out.push({
+        key: row.key,
+        name,
+        efforts: Array.isArray(row.efforts) && row.efforts.length ? row.efforts : null,
+        defaultEffort: typeof row.defaultEffort === 'string' ? row.defaultEffort : null,
+      })
+    }
+  } catch {
+    // 目录不可用时不阻塞设置页(返回空表, 前端显示[未探测])
+  }
+  return out
+}
+
+/**
  * 读快照:把内存设置与 config.yaml 默认值合成一个扁平对象.
  *
  * @param {any} config 运行配置
  * @param {any} settingsStore 运行设置存储
+ * @param {any} [ctx] 路由上下文(取本地目录行给[思考强度]卡渲染档位)
  * @returns {Record<string, any>} 前端消费的设置快照
  */
-export function readSettings(config: any, settingsStore: any) {
+export function readSettings(config: any, settingsStore: any, ctx?: any) {
   const s = settingsStore?.get() || {}
   return {
     freeToolSignatureEnabled: s.freeToolSignatureEnabled !== false,
@@ -108,6 +140,15 @@ export function readSettings(config: any, settingsStore: any) {
     officialSystemPromptDefault: officialSystemPromptDefault(),
     /** 自动签到开关(默认关闭). 间隔固定 25 小时. */
     autoSignInEnabled: s.autoSignInEnabled === true,
+    /**
+     * 思考强度覆盖: 开关 + 逐模型档位(默认关闭 + 空表).
+     *
+     * 服务端不把档位归一成默认值 ---- 前端提交什么就回什么, 用户能看出自己存了什么.
+     * 逐模型的[可用档位]来自目录行, 见 reasoningModels.
+     */
+    reasoningOverride: normalizeReasoningOverride(s.reasoningOverride),
+    /** 目录里的模型与各自可用的思考档位(前端逐模型渲染用; 只读本地缓存). */
+    reasoningModels: reasoningModels(ctx),
     /** 官方工具分类目录(分组 + 一句话说明), 前端据此渲染勾选列表. */
     officialToolCatalog: OFFICIAL_TOOL_META,
     /**

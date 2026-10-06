@@ -189,14 +189,12 @@ export {
  * @param {any} body 上游响应体
  * @param {Iterable<string>|any[]} [declaredNames] 本次下游声明的工具名集合
  * @param {Record<string, any>} [declaredSchemas] 本次下游声明的 schema 表
- * @param {any} [paramContext] 运行期参数(下游本地事实, 见 signals/param-map.ts)
  * @returns {any} 原地修改后的 body
  */
 export function unmapToolCallsInBody(
   body: any,
   declaredNames?: Iterable<string>,
   declaredSchemas?: any,
-  paramContext?: any,
 ) {
   if (!body || typeof body !== 'object') return body
   const declared = toNameSet(declaredNames)
@@ -235,7 +233,6 @@ export function unmapToolCallsInBody(
           clientName,
           call.function.arguments,
           declaredSchemas?.[clientName],
-          paramContext,
         )
         if (translated != null) call.function.arguments = translated
       }

@@ -72,22 +72,18 @@ export function upstreamBodyEmbeddedError(text: string): string | null {
  * @param {string} text
  * @param {Iterable<string>|any[]} [declaredNames] 本次下游声明的工具名集合
  * @param {Record<string, any>} [declaredSchemas] 本次下游声明的工具 schema(名字 -> parameters)
- * @param {any} [paramContext] 运行期参数(下游本地事实, 见 signals/param-map.ts)
  * @returns {string}
  */
 export function unmapToolCallsInSse(
   text: string | null | undefined,
   declaredNames?: Iterable<string> | any[],
   declaredSchemas?: any,
-  paramContext?: any,
 ): string | null | undefined {
   if (!text || typeof text !== 'string') return text
   const looksSse = text.includes('data: ')
   if (!looksSse) {
     try {
-      return JSON.stringify(
-        unmapToolCallsInBody(JSON.parse(text), declaredNames, declaredSchemas, paramContext),
-      )
+      return JSON.stringify(unmapToolCallsInBody(JSON.parse(text), declaredNames, declaredSchemas))
     } catch {
       return text
     }
@@ -113,9 +109,7 @@ export function unmapToolCallsInSse(
             )
           : false
         if (!hasCalls) return line
-        return 'data: ' + JSON.stringify(
-          unmapToolCallsInBody(obj, declaredNames, declaredSchemas, paramContext),
-        )
+        return 'data: ' + JSON.stringify(unmapToolCallsInBody(obj, declaredNames, declaredSchemas))
       } catch {
         return line
       }

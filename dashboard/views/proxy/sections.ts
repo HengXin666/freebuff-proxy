@@ -17,6 +17,7 @@ import {
   buildUpstreamChannelCard,
 } from './cards.ts'
 import { buildAutoSignInCard } from './switches/auto-signin.ts'
+import { buildEffortOverrideCard } from './inject/effort.ts'
 import { buildOfficialToolsCard } from './inject/official-tools.ts'
 import { buildSystemPromptCard } from './inject/system-prompt.ts'
 import { buildTunablesCard } from './tunables.ts'
@@ -43,6 +44,9 @@ export function buildSettingsSections(ctx: any) {
     ]),
     settingsSection('settings.sectionUpstream', 'settings.sectionUpstreamHint', [
       buildUpstreamChannelCard(ctx.channel),
+      buildEffortOverrideCard(
+        ctx.reasoningOverride, ctx.reasoningModels, ctx.toolsDisabled, ctx.onReasoningOverride,
+      ),
       buildFreeToolSignatureCard(ctx.toggleAttrs, ctx.signatureEnabled),
       buildStripToolsCard(ctx.stripAttrs, ctx.stripTools),
       buildToolCarrierCard(ctx.carrierAttrs, ctx.carrierEnabled),

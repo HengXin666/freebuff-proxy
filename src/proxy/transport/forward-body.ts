@@ -21,6 +21,7 @@ import { HERMES_DELEGATE_TOOL_NAME, rewriteHermesDelegateForUpstream } from '../
 import { EMPTY_CARRIER_PLAN, alignToolNamesForUpstream, packClientTools } from './tool-carrier.ts'
 import { resolveWireModel } from '../../upstream/catalog/freshness.ts'
 import { logger } from '../../util/log.ts'
+import { applyForcedEffort, resolveForcedEffort } from '../reasoning-effort.ts'
 
 /** 一键屏蔽收费模型开关(前端[模型管理],实时生效). */
 function blockPremiumModels(ctx: any) {
@@ -189,6 +190,21 @@ export function buildForwardBody(
   body = rewriteHermesDelegateForUpstream(body, hermesDelegateAlias)
   // One reasoning field only -- avoids Freebuff default + client dual fields.
   body = normalizeReasoningFields(body)
+  // 思考强度覆盖(前端[思考强度], 实时生效): 命中时忽略下游传来的档位, 换成配置值.
+  // 本行只改 legacy 形态; official 通道由 ./official/index.ts 把同一函数的结果
+  // 交给副仓库写进 codebuff_metadata. 见 src/proxy/reasoning-effort.ts.
+  const forcedEffort = resolveForcedEffort(
+    ctx.settingsStore?.get?.(),
+    catalog,
+    [upstreamModel, outgoing.model, sessionModel],
+  )
+  if (forcedEffort) {
+    body = applyForcedEffort(body, forcedEffort.effort)
+    logger.info('reasoning effort overridden (legacy body)', {
+      model: forcedEffort.model,
+      effort: forcedEffort.effort,
+    })
+  }
   // 输出预算治理:客户端偏小的 max_tokens/max_completion_tokens 会把思考链
   // (reasoning token 计入该预算)提前掐断(finish_reason=length)----参考
   // freebuff2api-wokers#8[DS4 思考链稍长即截断].转发上游前抬到 floor.

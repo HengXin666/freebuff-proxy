@@ -34,7 +34,7 @@ import {
   injectableOfficialTools,
   selectOfficialTools,
 } from '../../../upstream/signals/tools/official-tool-select.ts'
-import { paramContextOf } from '../../../upstream/signals/param-map.ts'
+import { resolveForcedEffort } from '../../reasoning-effort.ts'
 
 /**
  * 上游首字节之后的整篇生成上限(毫秒).
@@ -101,9 +101,6 @@ export async function tryOfficialChannel(ctx: any, args: any) {
           carrierPlan,
           declaredToolNames,
           declaredToolSchemas,
-          // 运行期参数(下游本地事实): 下游要求而官方 schema 里没有的字段只能
-          // 由本代理补. 逐请求取一次, 与工具声明同生命周期.
-          paramContext: paramContextOf(ctx.config),
           wantStream: args.stream !== false,
         })
         if (rpc?.upstreamRes) {
@@ -228,6 +225,21 @@ async function runOfficialRpc(ctx: any, args: any) {
       reason: rpcModel.reason,
     })
   }
+  // 思考强度覆盖(前端[思考强度], 实时生效): 命中时忽略下游传来的档位, 用配置的档位.
+  // 解析真源是 Node 侧的 resolveForcedEffort; 本处只把结果交给副仓库, 由它写进
+  // codebuff_metadata.freebuff_reasoning_effort. 未命中为 null, 出站形态不变.
+  const forcedEffort = resolveForcedEffort(
+    ctx.settingsStore?.get?.(),
+    args.upstream?.catalog,
+    [args.upstreamModel, args.forwardBody?.model, rpcModel.model],
+  )
+  if (forcedEffort) {
+    logger.info('reasoning effort overridden', {
+      channel: 'official',
+      model: forcedEffort.model,
+      effort: forcedEffort.effort,
+    })
+  }
   const rpcArgs = {
     cfg: args.rpcCfg,
     instanceId: args.instanceId,
@@ -236,6 +248,8 @@ async function runOfficialRpc(ctx: any, args: any) {
     tools: args.forwardBody.tools,
     layer: 'worker',
     stream: true,
+    // 强制档位(null = 不覆盖, 副仓库据此不发该 metadata 键).
+    reasoningEffort: forcedEffort?.effort ?? null,
     // 官方工具注入名单: undefined = 不裁剪(全注入).
     //
     // 这里只传[结果]不传[分类]: 官方工具的分类真源在 Node 侧
@@ -253,12 +267,9 @@ async function runOfficialRpc(ctx: any, args: any) {
       RPC_TOTAL_TIMEOUT_MS,
     ),
   }
-  const packed: [any, any, any, any] = [
-    args.carrierPlan, args.declaredToolNames, args.declaredToolSchemas, args.paramContext,
-  ]
   return args.wantStream
-    ? await runStreamingRpc(rpcArgs, ...packed)
-    : await runWholeRpc(rpcArgs, ...packed)
+    ? await runStreamingRpc(rpcArgs, args.carrierPlan, args.declaredToolNames, args.declaredToolSchemas)
+    : await runWholeRpc(rpcArgs, args.carrierPlan, args.declaredToolNames, args.declaredToolSchemas)
 }
 
 /**
@@ -268,19 +279,14 @@ async function runOfficialRpc(ctx: any, args: any) {
  * @param {any} carrierPlan 载体映射
  * @param {any} declaredToolNames 本次声明的工具名
  * @param {any} declaredToolSchemas 本次声明的工具 schema
- * @param {any} paramContext 运行期参数(下游本地事实)
  * @returns {Promise<{upstreamRes: any, upstreamErrText: any}|null>} 结果
  */
-async function runWholeRpc(
-  rpcArgs: any, carrierPlan: any, declaredToolNames: any, declaredToolSchemas: any, paramContext?: any,
-) {
+async function runWholeRpc(rpcArgs: any, carrierPlan: any, declaredToolNames: any, declaredToolSchemas: any) {
   const rpc: any = await rpcReuse(rpcArgs)
   logRpcResult(rpc)
   if (!rpc.status) return null
   return {
-    upstreamRes: buildUpstreamResponseFromRpc(
-      rpc, carrierPlan, declaredToolNames, declaredToolSchemas, paramContext,
-    ),
+    upstreamRes: buildUpstreamResponseFromRpc(rpc, carrierPlan, declaredToolNames, declaredToolSchemas),
     upstreamErrText: rpc.ok ? null : (rpc.text || ''),
   }
 }

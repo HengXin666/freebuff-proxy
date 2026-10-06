@@ -19,7 +19,6 @@ import { shouldSwitchAccountOnError } from './errors/errors.ts'
 import { mapAndSendError, writeUpstreamError } from './errors/respond.ts'
 import { pipeWebStreamToNode, reqToAbortSignal } from './stream/stream-pipe.ts'
 import { unmapToolCallsInSse } from './errors/errors.ts'
-import { paramContextOf } from '../../upstream/signals/param-map.ts'
 import { restoreHermesDelegateInResponse, createHermesDelegateSseTransform } from '../../tool-alias.ts'
 import { agentIdForModel } from '../../model.ts'
 import { filterRequestHeaders, filterResponseHeaders } from '../../util/http.ts'
@@ -228,7 +227,7 @@ export async function forwardCompletions(
   const rewritten = await rewriteUpstreamResponse(upstreamRes, {
     stream,
     hermesDelegateAlias,
-    plan, declaredToolNames, declaredToolSchemas, paramContext: paramContextOf(ctx.config),
+    plan, declaredToolNames, declaredToolSchemas,
   })
   if (rewritten.handled) {
     res.writeHead(status, respHeaders)

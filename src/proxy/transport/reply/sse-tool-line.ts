@@ -36,8 +36,6 @@ export interface ToolRewritePlan {
   schemas: any
   /** Hermes delegate 别名(null 时该段整体跳过). */
   hermesAlias: any
-  /** 运行期参数(下游本地事实, 见 upstream/signals/param-map.ts). */
-  paramContext: any
 }
 
 /**
@@ -66,7 +64,6 @@ export function createToolRewritePlan(opts: any = {}): ToolRewritePlan {
     declared: toNameSet(opts.declaredToolNames),
     schemas: opts.declaredToolSchemas || {},
     hermesAlias: opts.hermesDelegateAlias ?? null,
-    paramContext: opts.paramContext ?? {},
   }
 }
 
@@ -232,9 +229,7 @@ function issueArgs(
     return
   }
   state.buf += fn.arguments
-  const translated = translateParamsForDownstream(
-    state.name, state.buf, plan.schemas[state.name], plan.paramContext,
-  )
+  const translated = translateParamsForDownstream(state.name, state.buf, plan.schemas[state.name])
   if (translated != null) {
     fn.arguments = translated
     state.emitted = true

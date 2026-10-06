@@ -1,3 +1,47 @@
+/** 运行设置(实时字段)的完整形态; 语义逐项见 settings-store.ts 的 DEFAULT_SETTINGS 注释. */
+export interface SettingsShape {
+  freeToolSignatureEnabled: boolean; cliTelemetryEnabled: boolean; stripToolsOnSchemaRejection: boolean
+  toolCarrierEnabled: boolean
+  upstreamChannel: 'legacy' | 'official'; accountSchedulingMode: 'sticky' | 'spread'
+  accountMaxConcurrency: number; accountOverflowWaitMs: number; lowBalanceThreshold: number
+  blockPremiumModels: boolean; idleReleaseSec?: number; maxNewSessionsPerRequest?: number
+  /**
+   * 出站注入哪些官方工具.
+   *
+   * undefined = 未配置, 全注入(与旧行为一致); [] = 一个都不注入;
+   * [名字...] = 只注入这些. 语义唯一真源见 signals/official-tool-select.ts.
+   */
+  officialToolNames?: string[]
+  /**
+   * 官方 system 提示词的三态.
+   *
+   * 为什么单独做一个开关而不是只给个文本框: 官方 worker 模板里点名要求模型
+   * 调用 suggest_prompts / write_todos 等下游没有的工具, 用户需要能在
+   * [照抄官方] / [换成自己的] / [整段不带] 之间切换并随时回到官方原文.
+   * 'official' = 未改过, 用抓包原文; 'custom' = 用 officialSystemPromptText;
+   * 'none' = 不带官方 system(下游自己的 system 原样透传).
+   *
+   * 见 .agents/notes/implemented/bug-fix/2026-10-06-config-passthrough-and-system-prompt-controls.md
+   */
+  officialSystemPromptMode: 'official' | 'custom' | 'none'
+  /** 自定义正文; 只在 mode='custom' 时参与渲染. */
+  officialSystemPromptText?: string
+  /**
+   * 自动签到开关(默认关闭).
+   *
+   * 间隔固定 25 小时(比 24 多一点, 避开跨时区/夏令时边界上"同一天触发两次").
+   * 签到本身要发一条消息, 有成本, 所以默认关闭 ---- 不能替用户默认花钱.
+   */
+  autoSignInEnabled: boolean
+  /**
+   * 思考强度覆盖(默认关闭): 开启后忽略下游传来的档位, 按模型发配置的档位.
+   *
+   * 形态与判定真源见 src/proxy/reasoning-effort.ts 与
+   * .agents/notes/implemented/feature/2026-10-06-reasoning-effort-override.md.
+   */
+  reasoningOverride?: ReasoningOverride
+}
+
 /**
  * 运行设置(实时字段)的字段声明与校验.
  *
@@ -15,6 +59,10 @@
  *   - tunables.ts = 可调项(点分路径, 保存后重启生效, 无默认值).
  * 两套东西分开的理由见 ../tunables-store.ts 的文档注释.
  */
+
+import {
+  isReasoningOverrideShape, normalizeReasoningOverride, type ReasoningOverride,
+} from '../../../proxy/reasoning-effort.ts'
 
 /** 字段规格: key -> 取值器(返回 null 表示合法). */
 export interface LiveFieldSpec {
@@ -117,6 +165,18 @@ const freeText = (max: number): LiveFieldSpec => ({
 })
 
 /**
+ * 思考强度覆盖字段的规格: 开关 + 逐模型档位表.
+ *
+ * 形态由 src/proxy/reasoning-effort.ts 的 isReasoningOverrideShape 判定; 通过后
+ * 原样存盘(不做二次归一, 归一发生在装载与消费点).
+ */
+const reasoningOverride = (): LiveFieldSpec => ({
+  normalize: (v) => (isReasoningOverrideShape(v)
+    ? ok(normalizeReasoningOverride(v))
+    : err('必须是 { enabled, models: [{ model, effort }] } 形态')),
+})
+
+/**
  * 实时字段表(与 Settings 接口一一对应).
  *
  */
@@ -138,4 +198,91 @@ export const LIVE_FIELDS: Record<string, LiveFieldSpec> = {
   officialSystemPromptText: freeText(200_000),
   // 自动签到开关(默认关闭). 间隔固定 25 小时, 见 store/signin/store.ts.
   autoSignInEnabled: bool(),
+  // 思考强度覆盖(默认关闭). 见 src/proxy/reasoning-effort.ts.
+  reasoningOverride: reasoningOverride(),
+}
+
+/**
+ * 把盘上存过的字段逐个读回默认值快照, 返回合并后的设置.
+ *
+ * 为什么抽成独立纯函数: 它是 13 个字段的 if 链, 每条都带[为什么必须读回]的
+ * 注释(漏读的症状一律是"控制台改了, 重启就自己变回去"), 塞在 load() 里会让
+ * 那个方法超函数长度红线, 也让"读回判据"与"装载流程"两件事糊在一起.
+ *
+ * 判据纪律: 只用[类型 + 取值域]判, 不做静默纠正 ----
+ * 非法值落回默认值比接受一个拼错的枚举更安全(见 upstreamChannel 那条).
+ *
+ * @param {SettingsShape} base 默认值快照
+ * @param {any} raw 盘上读出的原始对象
+ * @returns {SettingsShape} 合并后的设置
+ */
+export function applyStoredSettings(base: SettingsShape, raw: any): SettingsShape {
+  const s: any = { ...base }
+  if (typeof raw?.freeToolSignatureEnabled === 'boolean') {
+    s.freeToolSignatureEnabled = raw.freeToolSignatureEnabled
+  }
+  if (typeof raw?.stripToolsOnSchemaRejection === 'boolean') {
+    s.stripToolsOnSchemaRejection = raw.stripToolsOnSchemaRejection
+  }
+  // 第三方工具承载开关: 不读回的话, 控制台关掉它重启后又自己打开
+  // (症状与"开关没生效"无法区分).
+  if (typeof raw?.toolCarrierEnabled === 'boolean') {
+    s.toolCarrierEnabled = raw.toolCarrierEnabled
+  }
+  // 遥测开关必须读回: 它能经 save() 写进 settings.json, 漏读则重启回落到 false.
+  // 白名单读回的纪律与往返回归用例见
+  // .agents/notes/implemented/bug-fix/2026-10-01-web-channel-switch-not-persisted.md
+  if (typeof raw?.cliTelemetryEnabled === 'boolean') {
+    s.cliTelemetryEnabled = raw.cliTelemetryEnabled
+  }
+  // 官方工具注入名单: 空数组是合法值(一个都不注入), 所以只判是不是数组,
+  // 不能用长度判 ---- 用长度判会把[全不注入]读成[未配置], 重启即失效.
+  if (Array.isArray(raw?.officialToolNames)) {
+    s.officialToolNames = raw.officialToolNames.filter(
+      (n: any) => typeof n === 'string' && n,
+    )
+  }
+  // 官方 system 三态同样必须读回(漏读 = 改成自定义后重启又回官方).
+  if (raw?.officialSystemPromptMode === 'official'
+    || raw?.officialSystemPromptMode === 'custom'
+    || raw?.officialSystemPromptMode === 'none') {
+    s.officialSystemPromptMode = raw.officialSystemPromptMode
+  }
+  if (typeof raw?.officialSystemPromptText === 'string') {
+    s.officialSystemPromptText = raw.officialSystemPromptText
+  }
+  // 自动签到开关(漏读 = 开了自动签到, 重启就自己关了).
+  if (typeof raw?.autoSignInEnabled === 'boolean') {
+    s.autoSignInEnabled = raw.autoSignInEnabled
+  }
+  // 思考强度覆盖(漏读 = 配了档位, 重启就自己关了). 逐项校验后归一.
+  if (raw?.reasoningOverride && typeof raw.reasoningOverride === 'object') {
+    s.reasoningOverride = normalizeReasoningOverride(raw.reasoningOverride)
+  }
+  if (Number.isInteger(raw?.accountMaxConcurrency)) {
+    s.accountMaxConcurrency = clampConcurrency(raw.accountMaxConcurrency)
+  }
+  // 只接受两个已知通道, 非法值一律回落到 legacy(不静默接受拼写错误).
+  if (raw?.upstreamChannel === 'official' || raw?.upstreamChannel === 'legacy') {
+    s.upstreamChannel = raw.upstreamChannel
+  }
+  if (raw?.accountSchedulingMode === 'sticky' || raw?.accountSchedulingMode === 'spread') {
+    s.accountSchedulingMode = raw.accountSchedulingMode
+  }
+  if (Number.isInteger(raw?.accountOverflowWaitMs)) {
+    s.accountOverflowWaitMs = clampOverflowWait(raw.accountOverflowWaitMs)
+  }
+  if (typeof raw?.blockPremiumModels === 'boolean') {
+    s.blockPremiumModels = raw.blockPremiumModels
+  }
+  if (Number.isInteger(raw?.lowBalanceThreshold)) {
+    s.lowBalanceThreshold = clampLowBalance(raw.lowBalanceThreshold)
+  }
+  if (Number.isInteger(raw?.idleReleaseSec)) {
+    s.idleReleaseSec = clampIdleReleaseSec(raw.idleReleaseSec)
+  }
+  if (Number.isInteger(raw?.maxNewSessionsPerRequest)) {
+    s.maxNewSessionsPerRequest = clampNewSessions(raw.maxNewSessionsPerRequest)
+  }
+  return s as SettingsShape
 }

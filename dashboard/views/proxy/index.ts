@@ -11,6 +11,7 @@ import {
 } from './cards.ts'
 import { buildAdvancedSection, buildSettingsSections } from './sections.ts'
 import { saveOfficialToolsSetting } from './inject/official-tools.ts'
+import { saveEffortOverride } from './inject/effort.ts'
 import {
   saveAutoSignInSetting, saveBlockPremiumSetting, saveFreeToolSignatureSetting,
   saveStripToolsSetting, saveToolCarrierSetting, saveUpstreamChannelSetting,
@@ -65,6 +66,10 @@ export async function renderProxySettings(view: any) {
       : null,
     toolsDisabled: state.me.role !== 'admin',
     onOfficialToolsApply: saveOfficialToolsSetting,
+    // 思考强度覆盖: 开关 + 逐模型档位(档位选项来自本地目录行).
+    reasoningOverride: settings.reasoningOverride || { enabled: false, models: [] },
+    reasoningModels: Array.isArray(settings.reasoningModels) ? settings.reasoningModels : [],
+    onReasoningOverride: saveEffortOverride,
     // 编辑器正文: 自定义态用存下的正文, 其余态显示官方原文(否则打开是空白).
     systemPromptText: settings.officialSystemPromptMode === 'custom'
       && typeof settings.officialSystemPromptText === 'string'

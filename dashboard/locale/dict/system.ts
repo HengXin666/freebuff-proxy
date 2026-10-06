@@ -152,18 +152,16 @@ export default {
   'system.officialSystemRestore': { 'zh-CN': '恢复官方原文', en: 'Restore the official text' },
   'system.officialToolsSearchHint': {
     'zh-CN':
-      'code_search（按正则搜索代码）回家的名字在各客户端不一致：'
-      + 'dsh 自带同名工具 code_search，参数却是 search_term + search_folder_absolute_uri'
-      + '（两者都必填，后者必须是会话工作目录下的绝对路径）；没有同名工具的客户端落到 grep。'
-      + '前一种情况里搜索目录不在上游请求里，需要到[高级]区填「下游搜索目录（绝对路径）」，'
-      + '填的应当是本机那个会话的工作目录；留空时该调用会因缺字段失败。',
+      'code_search（按正则搜索代码）优先落到命令执行 bash：官方那几个参数会被合成一条 ripgrep 命令，'
+      + '搜索根用会话工作目录这样的相对路径，不需要配置任何绝对路径。'
+      + '若下游没有 bash，则退回它自己的 grep（参数形态本来就对得上）。'
+      + '官方 flags 是 ripgrep 方言，会原样透传；机器上没有 rg 时命令自动退回 grep。',
     en:
-      'code_search lands on different client tools: dsh ships its own code_search whose parameters '
-      + 'are search_term + search_folder_absolute_uri (both required, the latter an absolute path '
-      + 'inside the session working directory); clients without that name fall back to grep. '
-      + 'The search folder is not part of the upstream request, so set "downstream search folder '
-      + '(absolute path)" in the Advanced section to the session working directory on this machine; '
-      + 'left empty, that call fails on the missing field.',
+      'code_search lands on the shell tool bash: the official parameters are composed into one '
+      + 'ripgrep command, whose search root is relative to the session working directory, so no '
+      + 'absolute path needs configuring. Without a client bash it falls back to the client grep '
+      + '(whose parameters already match). Official flags are ripgrep flags and pass through as-is; '
+      + 'on machines without rg the command falls back to grep.',
   },
   'system.officialToolsEmptyWarn': {
     'zh-CN':
@@ -303,6 +301,46 @@ export default {
   'system.quotaSavedOff': {
     'zh-CN': '已关闭空闲释放（会话留到自然过期）· 单请求最多 {max} 个新会话',
     en: 'Idle release disabled (sessions live until they expire) · at most {max} new sessions per request',
+  },
+
+  // ---- 系统设置:思考强度覆盖 ----
+  'system.effortTitle': { 'zh-CN': '思考强度覆盖', en: 'Reasoning effort override' },
+  'system.effortHint': {
+    'zh-CN': '开启后忽略下游传来的思考档位；每个模型按自己的可用档位单独配置，实时生效',
+    en: 'When on, the downstream reasoning effort is ignored — each model uses its own configured effort, applied live',
+  },
+  'system.effortWhen': {
+    'zh-CN': '只影响之后发出的请求；同一个模型可以配不同档位，未配置的模型保持上游默认',
+    en: 'Affects requests sent after saving; models keep independent efforts, '
+      + 'unconfigured models stay on the upstream default',
+  },
+  'system.effortStatusOn': {
+    'zh-CN': '已启用 · 已覆盖 {n} 个模型',
+    en: 'Enabled · {n} model(s) overridden',
+  },
+  'system.effortStatusOff': {
+    'zh-CN': '未启用（下游档位原样透传）',
+    en: 'Disabled (downstream effort passes through)',
+  },
+  'system.effortEmptyWarn': {
+    'zh-CN': '开关已开但没有配置任何模型：当前不会有任何覆盖生效。至少给一个模型选档位，或关掉开关。',
+    en: 'The switch is on but no model is configured — nothing is overridden yet. '
+      + 'Pick an effort for at least one model, or turn the switch off.',
+  },
+  'system.effortFollow': { 'zh-CN': '不覆盖', en: 'not overridden' },
+  'system.effortNoEfforts': {
+    'zh-CN': '该模型未声明思考档位，配置不生效',
+    en: 'This model declares no reasoning efforts; configuration has no effect',
+  },
+  'system.effortNoModels': {
+    'zh-CN': '本地还没有上游目录：请先在「模型」区点「同步上游模型」，档位选项来自目录',
+    en: 'No upstream catalog cached locally yet: use “Sync upstream models” in the '
+      + 'Models section — effort choices come from the catalog',
+  },
+  'system.effortChipTitle': { 'zh-CN': '点击选择；再点一次取消该模型的覆盖', en: 'Click to choose; click again to clear this model' },
+  'system.effortTip': {
+    'zh-CN': '档位来自目录里该模型声明的 efforts；只列出模型真正支持的档位。',
+    en: 'Choices come from the efforts the model declares in the catalog — only supported levels are listed.',
   },
 
   // ---- 系统设置:可调项(config.yaml 里除 host/port 外的项)----

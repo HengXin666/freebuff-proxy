@@ -40,8 +40,6 @@ const schemas: Record<string, any> = Object.fromEntries(
   TOOLS.map((t: any) => [t.name, t.parameters]),
 )
 const declared = new Set(Object.keys(schemas))
-/** 夹具是抓包真值, 不是手写清单: 它必须带着那个同名工具. */
-const SEARCH_FOLDER = '/home/hx/example-workspace'
 const back = buildOfficialToClientMap(declared)
 
 /**
@@ -54,9 +52,7 @@ const back = buildOfficialToClientMap(declared)
 function dispatch(officialName: string, args: string) {
   const client = back[officialName] || null
   if (!client) return { client: null, out: null, missing: [] }
-  const out = translateParamsForDownstream(client, args, schemas[client], {
-    searchFolder: SEARCH_FOLDER,
-  })
+  const out = translateParamsForDownstream(client, args, schemas[client])
   const parsed = out ? JSON.parse(out) : {}
   const required: string[] = schemas[client]?.required || []
   const missing = required.filter((k) => parsed[k] === undefined)
@@ -74,35 +70,37 @@ function dispatch(officialName: string, args: string) {
   ok(schemas.grep === undefined, '极简模式没有 grep: 同名工具的存在改变了注入集')
 }
 
-// ── 2 同名工具的还原目标是它自己, 但参数必须翻译 ────────────────
+// ── 2 官方 code_search 优先落到 bash(命令执行), 不是同名工具 ─────
+// 判据: 命令在会话工作目录里跑, 所以[搜索根]是相对语义, 不需要按机器配绝对路径.
 {
-  ok(back.code_search === 'code_search', '官方 code_search 应还原成同名下游工具, got ' + back.code_search)
+  ok(back.code_search === 'bash', '官方 code_search 应优先还原成 bash, got ' + back.code_search)
   const r = dispatch('code_search', '{"pattern":"TODO","maxResults":3}')
-  ok(r.client === 'code_search', 'code_search 必须落到下游声明过的同名工具')
+  ok(r.client === 'bash', 'code_search 必须落到下游声明过的 bash')
   ok(r.missing.length === 0, '翻译后下游 required 必须齐全, 缺: ' + r.missing.join(','))
   const args = JSON.parse(r.out as string)
-  ok(args.search_term === 'TODO', 'pattern 必须改名成 search_term, got ' + JSON.stringify(args.search_term))
-  ok(
-    args.search_folder_absolute_uri === SEARCH_FOLDER,
-    '搜索目录必须由运行期上下文补上, got ' + JSON.stringify(args.search_folder_absolute_uri),
-  )
+  ok(typeof args.command === 'string' && args.command.includes('rg'), 'command 必须是 rg 命令')
+  ok(args.command.includes("'TODO'"), "pattern 必须进命令文本, got " + args.command)
+  ok(args.command.includes('-m 3'), 'maxResults 必须翻成 rg 的行数上限, got ' + args.command)
+  ok(args.command.includes("'." + "'"), '未给 cwd 时搜索根必须是 .(会话工作目录)')
+  // 官方字段一律不得作为独立字段泄给下游(下游 additionalProperties 是收紧的).
   ok(args.pattern === undefined, '官方字段 pattern 不得残留')
-  ok(args.maxResults === undefined, 'maxResults 不得泄漏给下游')
-  ok(args.flags === undefined, 'flags 不得泄漏给下游')
+  ok(args.maxResults === undefined, 'maxResults 不得残留')
+  ok(args.flags === undefined, 'flags 不得残留')
+  ok(args.cwd === undefined, 'cwd 不得残留')
+  // description 只在[下游 schema 真的要求]时才补: 极简形态的 bash 只必填 command,
+  // 所以这里不该凭空多出一个字段(下游 additionalProperties 是收紧的).
+  ok(args.description === undefined, '下游不要求 description 时不得多产出')
 }
 
-// ── 3 未配置搜索目录时必须[不产出该字段]而不是产出空串 ───────────
-// 产空串会让下游报错指向[路径非法], 而真实原因是[本代理没配]; 缺字段能让
-// 下游直接报必填缺失, 指向更准.
+// ── 3 官方 flags 必须原样进命令(rg 方言), cwd 必须进搜索根 ─────────
 {
-  const client = back.code_search as string
-  const out = translateParamsForDownstream(client, '{"pattern":"x"}', schemas[client], {})
-  const parsed = out ? JSON.parse(out) : {}
-  ok(parsed.search_term === 'x', 'pattern 仍必须翻译')
-  ok(
-    parsed.search_folder_absolute_uri === undefined,
-    '未配置目录时不得产出该字段, got ' + JSON.stringify(parsed.search_folder_absolute_uri),
-  )
+  const r = dispatch('code_search', '{"pattern":"foo","cwd":"src","flags":"-i -g *.ts"}')
+  const args = JSON.parse(r.out as string)
+  ok(args.command.includes("'-i'"), 'flags 的 -i 必须原样透传')
+  // 通配符必须被引号挡住, 否则 shell 会先展开成文件名列表.
+  ok(args.command.includes("'*.ts'"), "通配符必须被引号包住, got " + args.command)
+  ok(args.command.includes("'src'"), 'cwd 必须进搜索根')
+  ok(!args.command.includes("-- '.'"), '给了 cwd 时不得再退回 .')
 }
 
 // ── 4 注入集必须随这 27 个声明收敛, 且每个名字都能落回下游 ─────────
@@ -113,6 +111,9 @@ function dispatch(officialName: string, args: string) {
     JSON.stringify(inject) === JSON.stringify(['run_terminal_command', 'code_search']),
     '极简形态的注入集必须是 run_terminal_command + code_search, got ' + JSON.stringify(inject),
   )
+  // 两个官方工具都落到 bash: 一个是 bash 本身, 一个是 code_search 的命令形态.
+  ok(back.run_terminal_command === 'bash', 'run_terminal_command 必须落到 bash')
+  ok(back.code_search === 'bash', 'code_search 也必须落到 bash(命令执行)')
   for (const name of inject) {
     const client = back[name]
     ok(!!client, name + ' 必须能还原成下游名')

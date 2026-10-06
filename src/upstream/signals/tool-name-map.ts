@@ -123,6 +123,24 @@ export const OFFICIAL_NATIVE_TO_CLIENT: Record<string, string> = Object.freeze({
 })
 
 /**
+ * 官方名 -> 下游名的显式优先级(覆盖表内顺序, 仍受[本次声明]过滤).
+ *
+ * 只登记[同一个官方工具该优先落到哪个下游工具]这件事, 与上面两张表的分工不同:
+ *   - CLIENT_TO_OFFICIAL_TOOL: 下行, 下游名 -> 官方名;
+ *   - OFFICIAL_NATIVE_TO_CLIENT: 上行, 官方原生名 -> 下游名(一对一补充);
+ *   - 本表: 上行, 官方名 -> 下游名[优先顺序], 即一个官方名有多个候选时选谁.
+ *
+ * code_search 为什么需要它: 上游那个 code_search 的载荷是 pattern, 而下游有两种
+ * 接法 ---- bash 收[一条命令], grep 收[pattern + path]. bash 排在前面是因为它的
+ * 搜索根是[会话工作目录]这个相对语义, 不需要任何按机器配的绝对路径; 而下游某些
+ * 同名工具要求[绝对搜索目录], 那个值上游不给(见 search-command.ts 文件头).
+ * grep 仍留在最前: 它是原生搜索工具, 参数形态本来就对得上, 没有理由改动.
+ */
+export const OFFICIAL_TOOL_CLIENT_PRIORITY: Record<string, readonly string[]> = Object.freeze({
+  code_search: ['grep', 'bash', 'code_search', 'find'],
+})
+
+/**
  * 构造 官方名 -> 下游名 的还原表, 并做[本次声明]过滤.
  *
  * 两个消费者共用同一条规则: 非流式的 unmapToolCallsInBody 与流式的逐分片改写
@@ -149,6 +167,13 @@ export function buildOfficialToClientMap(declaredNames?: any): Record<string, st
   for (const [official, client] of Object.entries(OFFICIAL_NATIVE_TO_CLIENT)) {
     if (declared.size > 0 && !declared.has(client)) continue
     if (!back[official]) back[official] = client
+  }
+  // 优先级表最后覆盖: 声明集为空时退化为全表的路径不受影响(那是已知的风险面, 不扩大).
+  if (declared.size > 0) {
+    for (const [official, order] of Object.entries(OFFICIAL_TOOL_CLIENT_PRIORITY)) {
+      const picked = order.find((candidate) => declared.has(candidate))
+      if (picked) back[official] = picked
+    }
   }
   return back
 }

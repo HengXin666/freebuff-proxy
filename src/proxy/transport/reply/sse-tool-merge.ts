@@ -27,14 +27,12 @@ interface MergedCall {
  * @param {string} text SSE 原文
  * @param {Iterable<string>|any[]} [declaredNames] 本次下游声明的工具名
  * @param {Record<string, any>} [declaredSchemas] 本次下游声明的工具 schema(名字 -> parameters)
- * @param {any} [paramContext] 运行期参数(下游本地事实, 见 signals/param-map.ts)
  * @returns {string} 改写后的文本;无需改写或解析失败时返回原文
  */
 export function mergeAndTranslateSseToolCalls(
  text: any,
  declaredNames?: any,
  declaredSchemas?: any,
- paramContext?: any,
 ): string {
  if (typeof text !== 'string' || !text || !text.includes('data: ')) return text
  const lines = text.split('\n')
@@ -65,7 +63,7 @@ export function mergeAndTranslateSseToolCalls(
  // 合并后的完整调用先按下游形态翻译(复用 unmapToolCallsInBody 的名字与参数规则).
  const translated = new Map<string, MergedCall>()
  for (const [key, call] of merged) {
- translated.set(key, translateOne(call, declaredNames, declaredSchemas, paramContext))
+ translated.set(key, translateOne(call, declaredNames, declaredSchemas))
  }
  if (![...translated.values()].some((c) => c.name)) return text
  /** 已经输出过完整参数的分片 key(后续分片的 arguments 清空). */
@@ -141,12 +139,9 @@ function collectCalls(obj: any, merged: Map<string, MergedCall>): void {
  * @param {MergedCall} call 合并后的调用
  * @param {any} declaredNames 本次下游声明的工具名
  * @param {any} declaredSchemas 本次下游声明的工具 schema
- * @param {any} [paramContext] 运行期参数(下游本地事实)
  * @returns {MergedCall} 翻译后的调用
  */
-function translateOne(
- call: MergedCall, declaredNames: any, declaredSchemas: any, paramContext?: any,
-): MergedCall {
+function translateOne(call: MergedCall, declaredNames: any, declaredSchemas: any): MergedCall {
  if (!call.name) return call
  const probe = {
  choices: [
@@ -154,7 +149,7 @@ function translateOne(
  ],
  }
  try {
- unmapToolCallsInBody(probe, declaredNames, declaredSchemas, paramContext)
+ unmapToolCallsInBody(probe, declaredNames, declaredSchemas)
  const fn = probe.choices[0].message.tool_calls[0].function
  return { name: fn.name, args: fn.arguments }
  } catch {

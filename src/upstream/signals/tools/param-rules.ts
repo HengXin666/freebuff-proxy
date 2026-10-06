@@ -8,6 +8,7 @@
  * 真值与判据来源见 param-map.ts 的文件头.
  * 每条规则翻译完下游是否真能用, 判据与实测见 .agents/notes/implemented/bug-fix/2026-10-06-tool-param-dispatch-readiness.md.
  */
+import { buildSearchCommand, isSearchPayload } from './search-command.ts'
 
 export interface FieldRule {
   /** 官方字段名 -> 下游字段名. 省略表示同名. */
@@ -23,12 +24,17 @@ export interface ParamRule {
   /** 官方字段名 -> 规则. 未列出的官方字段一律丢弃. */
   fields: Record<string, FieldRule>
   /**
-   * 下游必填但官方 schema 里没有的字段: 名字 -> 由整份官方参数合成.
-   *
-   * 第二个入参是运行期上下文(见 param-map.ts 的 ParamContext): 取值不在上游
-   * 请求里, 而是下游客户端的本地事实, 由调用方逐请求传进来.
+   * 载荷是否属于本规则的特殊形态; 为真时由 searchCommand 合成参数并跳过逐字段翻译.
+   * 用于[同一个下游工具名可能收到两种官方载荷]的场合(见 code_search 的注释).
    */
-  synth?: Record<string, (src: any, context?: any) => any>
+  matches?: (src: any) => boolean
+  /**
+   * 特殊形态的参数合成(整份官方参数 -> 下游 required 字段).
+   * 只有 matches 为真时才走这里.
+   */
+  searchCommand?: (src: any) => Record<string, any>
+  /** 下游必填但官方 schema 里没有的字段: 名字 -> 由整份官方参数合成. */
+  synth?: Record<string, (src: any) => any>
 }
 
 export const PARAM_RULES: Record<string, ParamRule> = {
@@ -102,6 +108,15 @@ export const PARAM_RULES: Record<string, ParamRule> = {
    *     字段被丢 -> 模型以为丢到后台, 实际前台跑, 到点被掐.
    */
   bash: {
+    /**
+     * 两种官方载荷共用这一个下游名:
+     *   - run_terminal_command -> command / cwd / timeout_seconds / process_type;
+     *   - code_search          -> pattern / cwd / flags / maxResults(合成一句搜索命令).
+     *
+     * 判据是 pattern 字段: 命令载荷里没有它. 见 search-command.ts 的文件头.
+     */
+    matches: isSearchPayload,
+    searchCommand: (src: any) => ({ command: buildSearchCommand(src) }),
     fields: {
       command: { to: 'command' },
       cwd: { to: 'workdir' },
@@ -127,22 +142,21 @@ export const PARAM_RULES: Record<string, ParamRule> = {
     fields: { pattern: { to: 'pattern' }, cwd: { to: 'path' } },
   },
   /**
-   * code_search(pattern, cwd?, flags?, maxResults?) ->
-   * code_search(search_term, search_folder_absolute_uri).
+   * code_search(pattern, cwd?, flags?, maxResults?) -> bash(command, description).
    *
-   * 同名不同形: 下游 dsh 的同名工具两个参数都必填(search_term 与
-   * search_folder_absolute_uri), 官方这两个字段一个都没有.
-   * pattern 改名直通; 搜索目录取运行期上下文(下游客户端自己的本地目录).
-   * 官方多出的 flags / maxResults 下游不认识, 由引擎按下游 schema 裁掉.
+   * 落成命令而不是同名工具的理由见 search-command.ts 的文件头: 命令执行天然在
+   * 会话工作目录里跑, 不需要[绝对搜索目录]这种按机器配置的值.
+   *
+   * 四个官方字段全部进命令文本(pattern / flags / cwd / maxResults), 因此本规则
+   * 没有 fields 可映射 ---- 引擎在载荷命中 isSearchPayload 时改走 searchCommand,
+   * 不走逐字段翻译. 这一分支由 param-map 实现, 与 [没有规则的组合返回 null] 那条
+   * 纪律不冲突: 这里不是[不知道怎么翻], 而是[翻出来的形态是另一套].
    */
   code_search: {
-    fields: { pattern: { to: 'search_term' } },
-    synth: {
-      search_folder_absolute_uri: (_src: any, context?: any) =>
-        typeof context?.searchFolder === 'string' && context.searchFolder
-          ? context.searchFolder
-          : undefined,
-    },
+    // 只有[下游没声明 bash 却声明了同名工具]时才会走到这里; 同一套合成逻辑.
+    fields: {},
+    matches: isSearchPayload,
+    searchCommand: (src: any) => ({ command: buildSearchCommand(src) }),
   },
   /** list_directory(path) -> ls(path). */
   ls: { fields: { path: { to: 'path' } } },

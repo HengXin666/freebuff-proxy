@@ -10,6 +10,7 @@ import { logger } from '../../../util/log.ts'
 import { envProxyOrNull } from '../lib/helpers.ts'
 import { denyUnlessAdmin } from '../lib/http-codes.ts'
 import { readSettings } from './settings/read.ts'
+import { isReasoningOverrideShape } from '../../../proxy/reasoning-effort.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 
@@ -76,6 +77,12 @@ const FIELDS: FieldSpec[] = [
   ],
   // 自动签到开关(默认关闭; 间隔固定 25 小时).
   ['autoSignInEnabled', 'autoSignInEnabled 必须是布尔值', (v: any) => typeof v === 'boolean'],
+  // 思考强度覆盖(见 src/proxy/reasoning-effort.ts).
+  [
+    'reasoningOverride',
+    'reasoningOverride 必须是 { enabled, models: [{ model, effort }] }(effort 取上游档位枚举)',
+    (v: any) => isReasoningOverrideShape(v),
+  ],
 ]
 
 /**
@@ -233,7 +240,7 @@ export async function handle(
     // 对已认证用户开放(设置页对非 admin 渲染成只读态), 但凭据项的值
     // 一律不回 ---- 见 readSettings 里的 snapshotTunables / secretsEffective.
     // 屏蔽发生在真源那一层, 所以这个回执给谁看都是安全的.
-    sendJson(res, 200, readSettings(config, settingsStore))
+    sendJson(res, 200, readSettings(config, settingsStore, ctx))
     return true
   }
 
