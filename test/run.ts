@@ -43,6 +43,7 @@ const SUITES = [
   ['dashboard-cold-start-state', 'suites/entries/verify/dashboard/cold-start-account-state.ts'],
   ['dashboard-signin-rerender', 'suites/entries/verify/dashboard/signin-rerender.ts'],
   ['dashboard-effort-card', 'suites/entries/verify/dashboard/effort-card.ts'],
+  ['dashboard-account-scheduling-switch', 'suites/entries/verify/dashboard/account-scheduling-switch.ts'],
   ['e2e-dashboard-latency', 'suites/entries/e2e/dashboard-latency.ts'],
 ]
 

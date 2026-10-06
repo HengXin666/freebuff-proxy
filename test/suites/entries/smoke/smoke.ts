@@ -45,6 +45,7 @@ await import('./parts/scheduling/tier/rate-limit.ts') // scheduling: 完成层�
 await import('./parts/units/config-defaults.ts') // unit: loadConfig 不得污染全局 DEFAULTS
 await import('./parts/units/catalog-cache.ts') // unit: catalog 缓存落 dataDir
 await import('./parts/web/bootstrap-admin.ts') // web: 管理员 bootstrap 报告真实结果
+await import('./parts/scheduling/pick/switch.ts') // scheduling: 每账号调度开关
 await import('./parts/scheduling/pick/round-robin.ts') // scheduling: 轮换开关
 await import('./parts/scheduling/pick/sticky.ts') // scheduling: 粘性调度
 await import('./parts/web/dup-email.ts') // web: 同邮箱不同 id 并存
@@ -96,6 +97,7 @@ await import('./parts/protocol/wire/device-signing.ts') // protocol: 设备签�
 await import('./parts/protocol/model/catalog.ts') // protocol: 目录协议与模型清单
 await import('./parts/protocol/model/mapping.ts') // protocol: 模型映射用 legacyDigests
 await import('./parts/protocol/model/input-profile.ts') // protocol: 输入画像与代理描述
+await import('./parts/webapi/probe/scheduling-endpoint.ts') // webapi: 每账号调度开关端点
 await import('./parts/protocol/view/i18n.ts') // protocol: 前端 i18n 词条一致性
 await import('./parts/protocol/view/account-view.ts') // protocol: 账号视图与邮箱遮蔽
 await import('./parts/refund/wire/upstream-401.ts') // refund: 上游 401 的真值
