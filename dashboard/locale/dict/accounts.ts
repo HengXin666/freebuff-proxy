@@ -109,6 +109,28 @@ export default {
     en: 'Upstream is temporarily refusing or rate-limiting (auto-recovers when cooldown ends; the session handle is kept and the paid window is unaffected)',
   },
   'account.statusTipOk': { 'zh-CN': '正常：可参与调度', en: 'Healthy: eligible for scheduling' },
+  // ── 每账号[调度]开关 ──────────────────────────────────────
+  'account.schedulingColumn': { 'zh-CN': '调度', en: 'Schedule' },
+  'account.schedulingOnTip': {
+    'zh-CN': '参与调度（默认）：该账号会被选号、可按需新建会话。关掉它则跳过该账号，' +
+      '但已买断的会话仍保留到自然过期。',
+    en: 'Eligible (default): this account can be picked and may open a new session. ' +
+      'Turn it off to skip the account — an already purchased session is kept until it expires.',
+  },
+  'account.schedulingOffTip': {
+    'zh-CN': '已排除在调度之外：不会被选号（也就不会新建计费会话）；' +
+      '已买断的会话句柄保留不动，仍可用到自然过期。',
+    en: 'Excluded from scheduling: it will not be picked (so no new billed session); ' +
+      'an already purchased session is left untouched until it expires.',
+  },
+  'account.schedulingEnabledMsg': {
+    'zh-CN': '该账号已恢复参与调度',
+    en: 'This account is eligible for scheduling again',
+  },
+  'account.schedulingDisabledMsg': {
+    'zh-CN': '该账号已排除在调度之外（已购会话保留）',
+    en: 'This account is excluded from scheduling (purchased sessions are kept)',
+  },
   'account.probeTitle': {
     'zh-CN': '检测该账号（只读拉取状态/模型列表，不占额度）',
     en: 'Check this account (read-only: pulls status and model list, spends no quota)',

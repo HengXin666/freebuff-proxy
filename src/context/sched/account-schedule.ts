@@ -136,3 +136,37 @@ export async function reacquireAfterGate(this: any, model: any, opts: any = {}) 
     this._reacquireAfterGateUnlocked(model, opts),
   )
 }
+
+/**
+ * 该账号是否参与调度(控制台每个账号的[调度]开关, 默认参与).
+ *
+ * 纯读账本, 不建档不落盘: 选号是热路径, 每个候选都会问一次.
+ * 账本里没有这个字段(升级前的老账号)一律视为参与.
+ *
+ * 见 .agents/notes/implemented/feature/2026-10-07-account-scheduling-switch.md
+ * @param {any} this 账号池(runtimes)
+ * @param {string} key 账号 key
+ * @returns {boolean} 是否参与调度
+ */
+export function schedulingEnabled(this: any, key: any) {
+  if (!key) return false
+  const rec = this.accountState?.state?.accounts?.[key]
+  return rec?.schedulingEnabled !== false
+}
+
+/**
+ * 设置某账号是否参与调度并落盘(去抖写, 不阻塞转发).
+ *
+ * 只改选号资格: 不动会话句柄, 不释放也不新建计费会话 ----
+ * 关掉开关不会丢掉已买断的那一小时.
+ * @param {any} this 账号池(runtimes)
+ * @param {string} key 账号 key
+ * @param {boolean} enabled 是否参与调度
+ * @returns {boolean} 落盘后的取值
+ */
+export function setSchedulingEnabled(this: any, key: any, enabled: any) {
+  const on = enabled !== false
+  this.accountState.account(key, this._importedAtHint(key))
+  this.accountState.patch(key, { schedulingEnabled: on })
+  return on
+}

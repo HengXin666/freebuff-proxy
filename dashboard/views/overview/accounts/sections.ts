@@ -110,6 +110,20 @@ export function classifyAccount(a: any) {
   return 'fresh'
 }
 
+/**
+ - 关掉[调度]开关的账号在分区内排到最后.
+ -
+ - 仍然留在原来那个分区: 开关只回答[要不要用它], 不改变[它现在什么处境]
+ - (已封禁的号关掉开关也还是已封禁).
+ - @param {any} rows 该分区的账号行
+ - @returns {any[]} 排序后的行(已关调度开关的在后)
+ */
+export function sortByScheduling(rows: any) {
+  const on = rows.filter((a: any) => a.schedulingEnabled !== false)
+  const off = rows.filter((a: any) => a.schedulingEnabled === false)
+  return [...on, ...off]
+}
+
 /** 账号 → 分区分组(一个号只落在一个分区里,最坏优先). */
 export function groupAccounts(accounts: any) {
   const groups = new Map(ACCOUNT_SECTIONS.map((s) => [s.id, []]))
@@ -117,6 +131,7 @@ export function groupAccounts(accounts: any) {
     const id = classifyAccount(a)
     ;(groups.get(id) || groups.get('fresh')).push(a)
   }
+  for (const [id, rows] of groups) groups.set(id, sortByScheduling(rows))
   return groups
 }
 
@@ -137,6 +152,7 @@ export function buildAccountSection(section: any, rows: any) {
       el('thead', {}, el('tr', {}, [
         t('account.email'),
         t('common.status'),
+        t('account.schedulingColumn'),
         t('account.session'),
         t('account.concurrency'),
         t('account.timeline'),

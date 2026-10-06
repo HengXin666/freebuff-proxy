@@ -36,7 +36,7 @@ import { buildAdvancedSection } from './views/proxy/sections.ts'
 import { render } from './views/shell/index.ts'
 import {
   clearCooldown, closeAccountSession, colorFor, openAddAccount, openCredentialModal,
-  openImportModal, openLoginFlow, removeAccount, shortProxy,
+  openImportModal, openLoginFlow, removeAccount, setAccountScheduling, shortProxy,
 } from './views/users/index.ts'
 
 /* ---------------- 跨视图联动装配 ---------------- */
@@ -68,6 +68,7 @@ registerHooks({
   runProxyTest,
   closeAccountSession,
   clearCooldown,
+  setAccountScheduling,
   removeAccount,
   colorFor,
   openCredentialModal,

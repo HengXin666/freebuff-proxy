@@ -127,6 +127,59 @@ async function closeSession(key: any, req: IncomingMessage, res: ServerResponse,
 }
 
 /**
+ * POST /api/accounts/:key/scheduling ---- 开/关该账号的调度.
+ *
+ * 关掉后该账号不进候选, 不被选号, 不 admit; 已买断的会话句柄保留不动
+ * (关开关不是释放会话,那一小时照旧可用到自然过期).
+ * 与[解除冷却]同权限:管理员才能改.
+ * @param {string} key 账号 key
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @param {any} user 当前用户
+ * @param {any} ctx 路由上下文
+ * @returns {Promise<void>}
+ */
+async function setScheduling(
+  key: any,
+  req: IncomingMessage,
+  res: ServerResponse,
+  user: any,
+  ctx: any,
+) {
+  const { runtimes, readJson } = ctx
+  const a = runtimes.list().find((x: any) => x.key === key)
+  if (!a) {
+    sendJson(res, 404, { error: '账号不存在' })
+    return
+  }
+  let body
+  try {
+    body = await readJson(req)
+  } catch {
+    sendJson(res, 400, { error: '无效的 JSON' })
+    return
+  }
+  if (typeof body?.enabled !== 'boolean') {
+    sendJson(res, 400, { error: 'enabled 必须是布尔值' })
+    return
+  }
+  const enabled = runtimes.setSchedulingEnabled(key, body.enabled)
+  logger.info('account scheduling switch changed via web console', {
+    by: user.username,
+    key,
+    email: a.email,
+    enabled,
+  })
+  sendJson(res, 200, {
+    ok: true,
+    key,
+    email: a.email,
+    schedulingEnabled: enabled,
+    account: runtimes.list().find((x: any) => x.key === key),
+  })
+}
+
+/**
  * accounts 单账号动作侧入口.
  *
  * @param {string} method HTTP 方法
@@ -154,6 +207,13 @@ export async function handle(
   const session = route.match(/^\/api\/accounts\/([^/]+)\/session$/)
   if (session && method === 'POST') {
     await closeSession(decodeSegment(session[1]), req, res, user, ctx)
+    return true
+  }
+
+  const scheduling = route.match(/^\/api\/accounts\/([^/]+)\/scheduling$/)
+  if (scheduling && method === 'POST') {
+    if (denyUnlessAdmin(user, res)) return true
+    await setScheduling(decodeSegment(scheduling[1]), req, res, user, ctx)
     return true
   }
 

@@ -62,6 +62,33 @@ function sessionViewOf(self: any, rt: any, snap: any): any {
 }
 
 /**
+ * 只来自持久化账本的那批字段: 生命周期 / 时间轴 / 退款流水.
+ *
+ * 单独成函数是为了把 row 装配留在 buildAccountRow 里, 而账本口径集中在一处
+ * (账本字段与运行时字段是两类来源, 混在一张长对象字面量里读不出边界).
+ * @param {any} self 账号池(runtimes)
+ * @param {string} key 账号 key
+ * @param {any} rec 该账号的账本记录
+ * @returns {any} 账本字段块
+ */
+function ledgerFields(self: any, key: any, rec: any): any {
+  return {
+    firstSeenAt: rec?.firstSeenAt || null,
+    bannedAt: rec?.bannedAt || null,
+    refunds: self.accountState.refunds(key).slice(0, 20),
+    refundTotal: rec?.refundTotal ?? 0,
+    refundExpectedTotal: rec?.refundExpectedTotal ?? 0,
+    refundPendingCount: rec?.refundPendingCount ?? 0,
+    refundUnitsExpectedTotal: rec?.refundUnitsExpectedTotal ?? 0,
+    importedAt: rec?.importedAt || rec?.firstSeenAt || null,
+    credentialUpdatedAt: rec?.credentialUpdatedAt || null,
+    scheduledMs: Number(rec?.scheduledMs) || 0,
+    schedulingSince: rec?.schedulingSince || null,
+    lastScheduledAt: rec?.lastScheduledAt || null,
+  }
+}
+
+/**
  * 把单个账号的账本/运行时/调度状态合成列表行.
  *
  * 一行要合并三处来源(持久化账本, 运行时快照, 调度锁).
@@ -88,6 +115,11 @@ banned || (cooling && UNAVAILABLE_COOLDOWN_CODES.has(coolingCode))
      * runtimeFor 会按需建 runtime 并完成回灌, 且拿不到凭据时返回 null 而不是抛.
      * 见 src/context/ops/account-runtime.ts 的 runtimeFor.
      */
+    /**
+     * 参与调度开关: 读账本(不是 runtime), 与选号时的判据同一个字段.
+     * 关掉它的账号在 accounts 列表里排在分区末尾, 但仍按原有分区逻辑归类.
+     */
+    const schedulingOn = self.schedulingEnabled(a.key)
     const rt = self.runtimeFor(a.key)
     const snap = rt?.sessions?.getSnapshot?.()
     const chatLock = self.chatLocks.get(a.key)
@@ -100,35 +132,19 @@ lastUsed: self._lastSuccessKey === a.key,
 available: !cooling,
 banned,
 unavailable,
+// 参与调度开关(控制台每个账号一行): false 表示用户手动把它排除在选号之外.
+schedulingEnabled: schedulingOn,
 status: banned ? 'banned' : unavailable ? 'unavailable' : 'ok',
 cooldownUntil: cooling ? new Date(cd.until).toISOString() : null,
 cooldownCode: cooling ? cd.code : null,
 requests: self.stats.byKey.get(a.key) || 0,
-// 生命周期(持久化): 加入时间 / 封禁时间.
-firstSeenAt:
-  self.accountState.account(a.key, self._importedAtHint(a.key))
-    ?.firstSeenAt || null,
-bannedAt: self.accountState.account(a.key)?.bannedAt || null,
-refunds: self.accountState.refunds(a.key).slice(0, 20),
-refundTotal: self.accountState.account(a.key)?.refundTotal ?? 0,
-refundExpectedTotal:
-  self.accountState.account(a.key)?.refundExpectedTotal ?? 0,
-refundPendingCount:
-  self.accountState.account(a.key)?.refundPendingCount ?? 0,
-// units 口径应退(与 Freebucks 的 expectedTotal 是两本账).
-refundUnitsExpectedTotal:
-  self.accountState.account(a.key)?.refundUnitsExpectedTotal ?? 0,
+// 账本口径(生命周期 / 时间轴 / 退款流水).
+...ledgerFields(self, a.key, rec),
 // 是否用过(粘性调度: 未用过的排最后) + 最近使用时间.
 used: self.everUsed(a.key),
 lastUsedAt: self._lastUsedAt.has(a.key)
   ? new Date(self._lastUsedAt.get(a.key)).toISOString()
   : null,
-// 时间轴(持久化): importedAt / credentialUpdatedAt / scheduledMs.
-importedAt: rec?.importedAt || rec?.firstSeenAt || null,
-credentialUpdatedAt: rec?.credentialUpdatedAt || null,
-scheduledMs: Number(rec?.scheduledMs) || 0,
-schedulingSince: rec?.schedulingSince || null,
-lastScheduledAt: rec?.lastScheduledAt || null,
 currentSchedulingMs: rt?.sessions?.currentSchedulingMs?.() || 0,
 // 负载均衡监控: 在途 SSE 流数 / 并发上限.
 inFlight: chatLock?.inFlight || 0,

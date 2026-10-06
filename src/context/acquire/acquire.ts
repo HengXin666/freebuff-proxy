@@ -154,6 +154,7 @@ export async function _reacquireAfterGateUnlocked(this: any, model: any, opts: a
             opts.gateCode !== 'account_busy' &&
             opts.gateCode !== 'runtime_superseded'
           if (
+            this.schedulingEnabled(opts.preferredKey) &&
             rt.sessions.isUsableForModel(model) &&
             (callerHoldsLock || !this.isChatBusy(opts.preferredKey))
           ) {
@@ -189,6 +190,7 @@ export async function _retrySameAccount(this: any, model: any, opts: any) {
       // 非 session-gate 的失败(5xx / 网络抖动 / 上游瞬时故障)在同一账号上重试:
     // 会话还能用就直接复用 ---- 绝不为了重试再买一条计费 session.
     if (
+      this.schedulingEnabled(opts.preferredKey) &&
       (!opts.gateCode || !isSessionRecoverableGate(opts.gateCode)) &&
       rt.sessions.isUsableForModel(model)
     ) {

@@ -39,6 +39,35 @@ export async function closeAccountSession(a: any, btn: any) {
   }
 }
 
+/**
+ - 开/关某账号的调度开关.
+ -
+ - 关掉后该账号不进选号候选(不 admit, 不新建计费会话), 但已买断的会话
+ - 句柄保留不动 ---- 关开关不是释放会话.
+ - @param {string} key 账号 key
+ - @param {boolean} enabled 目标状态
+ - @param {any} [input] 触发这次保存的复选框(失败时只回拨它, 不重建表格)
+ - @returns {Promise<void>} 保存完成(成功或失败都已在界面上给结论)
+ */
+export async function setAccountScheduling(key: any, enabled: any, input: any = null) {
+  const wanted = enabled === true
+  try {
+    const r = await api(`/api/accounts/${encodeURIComponent(key)}/scheduling`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled: wanted }),
+    })
+    toast(r.schedulingEnabled ? t('account.schedulingEnabledMsg') : t('account.schedulingDisabledMsg'))
+    // 成功后整卡局部刷新: 关掉的账号要移到所在分区末尾(顺序由服务端数据决定).
+    need('refreshAccountsCard')()
+  } catch (err) {
+    // 失败时只把这一个复选框拨回去, 不刷新整表: 整表重渲染会替换掉这次点击的
+    // 节点(复选态与焦点丢失, 与"点了没反应"无法区分), 而且失败可能持续发生,
+    // 每次点击都重建一遍 DOM. 判据是服务端拒绝时界面必须回到真实状态.
+    if (input) input.checked = !wanted
+    toast(err.message, true)
+  }
+}
+
 export async function clearCooldown(email: any) {
   await api(`/api/accounts/${encodeURIComponent(email)}/cooldown/clear`, { method: 'POST' })
   toast(t('account.cooldownCleared'))

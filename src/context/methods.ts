@@ -67,7 +67,9 @@ import {
   acquireForModel,
   everUsed,
   reacquireAfterGate,
+  schedulingEnabled,
   schedulingMode,
+  setSchedulingEnabled,
 } from './sched/account-schedule.ts'
 import { candidateKeys } from './select/candidates.ts'
 import {
@@ -138,6 +140,8 @@ export const CONTEXT_METHODS: Record<string, any> = {
   everUsed,
   acquireForModel,
   reacquireAfterGate,
+  schedulingEnabled,
+  setSchedulingEnabled,
   // 选号与重试(实现按职责拆在 ./select 与 ./acquire)
   candidateKeys,
   _acquireForModelUnlocked,

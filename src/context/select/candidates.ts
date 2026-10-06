@@ -145,6 +145,8 @@ export function collectCooldownFailures(self: any, keys: any, model: any, emailB
  * 只有已用账号都不可用时才启用.
  *
  * 排序维度(从前到后):
+ *   0. 参与调度(控制台每个账号的[调度]开关): 关闭的账号在排序之前就被筛掉,
+ *      不是排到最后 ---- 显式关掉一个号是[别用它], 不是[没别的可用时再用它];
  *   1. tier(会话状态): 同模型热 session(复用零成本)> 冷账号 > 活跃 session
  *      绑在别的模型上(换模型要释放它). 冷账号排在"杀掉另一个模型的热会话"之前,
  *      避免多模型交替时在同一账号上反复 release/admit(每次都买一条计费会话);
@@ -169,6 +171,7 @@ export function candidateKeys(this: any, model: any, opts: any = {}) {
   for (let i = 0; i < keys.length; i++) {
     const key = keys[(start + i) % keys.length]
     if (skip?.has(key)) continue
+    if (!this.schedulingEnabled(key)) continue
     if (this.isCoolingDown(key, model)) continue
     const scored = scoreCandidate(this, key, model, i)
     if (scored) candidates.push(scored)

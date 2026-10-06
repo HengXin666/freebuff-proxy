@@ -55,33 +55,52 @@ export function renderUpstreamInventory(a: any) {
   return nodes
 }
 
-export function buildAccountRow(a: any, i: any) {
-  const cd = a.cooldownUntil ? new Date(a.cooldownUntil).toLocaleString() : null
-  // Session 列同时回答两件事:(1) 这条会话还能白用多久;(2) 这个号
-  // 到现在为止买过几条 / 复用了几次----后者是"我们在省钱"的直接证据,
-  const admits = Number(a.admitCount) || 0
-  const reuses = Number(a.reuseCount) || 0
-  const reuseRate =
-    admits + reuses > 0 ? Math.round((reuses / (admits + reuses)) * 100) : null
+/**
+ * 每个账号的[调度]开关(管理员可点, 普通用户只读展示).
+ *
+ * 关掉的账号不进候选, 不被选号, 不 admit; 已买断的会话句柄保留不动,
+ * 所以关开关不会把钱丢掉(那一小时照旧可用到自然过期).
+ * @param {any} a 账号行
+ * @returns {any} 开关元素
+ */
+function schedulingCell(a: any) {
+  const on = a.schedulingEnabled !== false
+  const tip = on ? t('account.schedulingOnTip') : t('account.schedulingOffTip')
+  return el('label', {
+    class: 'switch acct-switch',
+    title: tip,
+  }, [
+    el('input', {
+      type: 'checkbox',
+      class: 'switch-input',
+      'data-key': a.key,
+      'aria-label': tip,
+      ...(on ? { checked: '' } : {}),
+      ...(state.me.role === 'admin' ? {} : { disabled: '' }),
+      onchange: (e: any) => need('setAccountScheduling')(a.key, e.currentTarget.checked, e.currentTarget),
+    }),
+    el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
+  ])
+}
+
+/**
+ * 会话列的第 2/3 行: 已买断时段的标注 + 买过几条/复用几次.
+ *
+ * 单独成函数的是这两行: 它们回答"这条会话还能白用多久, 我们省在哪儿",
+ * 与会话主体(模型 + 剩余时间)是两种信息.
+ * @param {any} a 账号行
+ * @param {boolean} paidBound 是否仍在已买断的一小时内
+ * @param {number} admits 新建会话数
+ * @param {number} reuses 复用次数
+ * @returns {any[]} 若干 DOM 节点(无内容时为占位空串)
+ */
+function sessionMetaRows(a: any, paidBound: any, admits: any, reuses: any) {
+  const reuseRate = admits + reuses > 0 ? Math.round((reuses / (admits + reuses)) * 100) : null
   const countsTip =
     t('account.countsTip', { admits, reuses }) +
     (reuseRate != null ? t('account.countsRate', { rate: reuseRate }) : '') +
     t('account.countsTipTail')
-  /**
-   - [这一小时已买给模型 X]必须显示出来(issue #24).
-   *
-   *
-   - 后端已给 session.inPaidWindow,这里据此加一行标注,把"还能用多久,
-   - 只能用哪个模型,什么时候能换"讲清楚.
-   */
-
-  const paidBound = a.session?.live && a.session?.inPaidWindow === true
-  const sessNode = el('div', {}, [
-    // 这里显示的是给人看的模型名:a.session.model 是目录 key
-    // (m-00032eaeec),必须换成可读名(MiMo 2.6 Flash).
-    el('div', {}, a.session?.live
-      ? `${modelLabel(a)} · ${fmtMs(a.session.remainingMs)}`
-      : (a.session?.status === 'none' ? t('account.noActiveSession') : (a.session?.status || '—'))),
+  return [
     paidBound
       ? el('div', {
           class: 'badge warn',
@@ -98,17 +117,40 @@ export function buildAccountRow(a: any, i: any) {
             ? t('account.boughtReuse', { admits, reuses, rate: reuseRate })
             : t('account.bought', { admits }))
       : '',
+  ]
+}
+
+export function buildAccountRow(a: any, i: any) {
+  const cd = a.cooldownUntil ? new Date(a.cooldownUntil).toLocaleString() : null
+  // Session 列同时回答两件事:(1) 这条会话还能白用多久;(2) 这个号
+  // 到现在为止买过几条 / 复用了几次----后者是"我们在省钱"的直接证据,
+  const admits = Number(a.admitCount) || 0
+  const reuses = Number(a.reuseCount) || 0
+  /**
+   - [这一小时已买给模型 X]必须显示出来(issue #24).
+   *
+   *
+   - 后端已给 session.inPaidWindow,这里据此加一行标注,把"还能用多久,
+   - 只能用哪个模型,什么时候能换"讲清楚.
+   */
+
+  const paidBound = a.session?.live && a.session?.inPaidWindow === true
+  const sess = el('div', {}, [
+    // 这里显示的是给人看的模型名:a.session.model 是目录 key
+    // (m-00032eaeec),必须换成可读名(MiMo 2.6 Flash).
+    el('div', {}, a.session?.live
+      ? `${modelLabel(a)} · ${fmtMs(a.session.remainingMs)}`
+      : (a.session?.status === 'none' ? t('account.noActiveSession') : (a.session?.status || '—'))),
+    ...sessionMetaRows(a, paidBound, admits, reuses),
     /**
      - 上游的会话清单(跨部署可见).
      *
-     - 用户诉求:[即便分布式部署,你在本地建的会话,我在远程也能读到].
-     - 数据来自上游 GET /session 回执的 desktopPurchases----每次 admit/一键刷新
+     - 数据来自 GET /session 回执的 desktopPurchases----每次 admit/一键刷新
      - 都会随回执更新,所以刷新即可看到别的部署建的会话.
      *
      */
     ...renderUpstreamInventory(a),
   ])
-  const sess = sessNode
   const probeFail = a.lastProbe && a.lastProbe.ok === false ? a.lastProbe : null
   const probe = probeFail ? probeReason(probeFail.code, probeFail.message) : null
   /**
@@ -159,6 +201,7 @@ export function buildAccountRow(a: any, i: any) {
       a.lastUsed ? el('span', { class: 'badge ok', style: 'margin-left:6px' }, t('account.lastUsed')) : '',
     ]),
     el('td', {}, statusBadge),
+    el('td', {}, schedulingCell(a)),
     el('td', { class: 'mono', style: 'font-size:12px' }, sess),
     el('td', { class: 'mono' }, `${a.inFlight || 0}/${a.concurrency || 1}`),
     accountTimeCell(a),
