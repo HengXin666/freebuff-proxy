@@ -74,6 +74,7 @@ export class CatalogHolder extends CatalogBase {
    * 人类可读显示名或上游 legacy id 或目录 key, 三种输入都归一到目录 key.
    * 这条实现必须留在本文件: 它是"上游 id 到目录 key"的唯一真源, 真源唯一性
    * 判据(test/verify-model-mapping-truth.mjs)按路径核对.
+   * 见 .agents/notes/implemented/architecture/2026-10-04-model-alias-single-source-and-reuse-paid-session.md.
    * @param {string} name 任一形式的模型标识
    * @returns {string | null} 目录 key
    */

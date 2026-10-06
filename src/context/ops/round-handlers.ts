@@ -3,6 +3,8 @@
  *
  * 脱敏约束: 429 响应会被下游 Agent 客户端整段转发并落进别人的日志, 所以这里只允许
  * 出现 code 与聚合数值, 不带 key / email / 账号标识.
+ *
+ * 见 .agents/notes/implemented/bug-fix/2026-10-02-no-account-pii-in-errors.md
  */
 /**
  * 对外响应里的失败明细: 只保留 code, 去掉 key / email / message.
@@ -39,6 +41,8 @@ export function countReasons(failures: any): Record<string, number> {
  * 语义要点: 一次 admit = 买断一整小时, 当场扣掉整小时单价, 不是按用量扣.
  * 所以"25"是每日池的上限而非余额, 一个请求就能打光 ---- 回执里必须带上这笔账,
  * 让调用方判断"是账号坏了还是额度没了".
+ *
+ * 见 .agents/notes/implemented/bug-fix/2026-10-04-429-carries-freebucks-ledger.md
  *
  * 脱敏纪律(与 sanitizeFailuresForClient / maskEmail 同源): 只带聚合
  * 数值, 不带 key / email / 账号标识.

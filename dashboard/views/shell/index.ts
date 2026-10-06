@@ -26,7 +26,12 @@ export async function render(opts = {}) {
     app.append(renderLogin())
     return
   }
-  const route = (location.hash || '#overview').slice(1) || 'overview'
+  const raw = (location.hash || '#overview').slice(1) || 'overview'
+  // 记录上一次的完整 hash: 同一主路由下切子页不重建内容区.
+  if (currentRaw === raw) { updateNavActive(raw.split('/')[0]); return }
+  currentRaw = raw
+  // 路由可能带子页(#settings/tools 这类). 主路由取第一段, 子页由各页面自己解析.
+  const route = raw.split('/')[0]
   // 骨架已存在且登录态没变 → 只更新内容区(标准 SPA 行为)
   //  force=true(切换语言时用):连 header / nav 一起重建.
   // 否则顶栏与导航会保留切换前的语言(它们不在这次重渲染范围内),
@@ -52,6 +57,9 @@ export async function render(opts = {}) {
   else if (route === 'me') await renderMe(view)
   else await renderOverview(view)
 }
+
+/** 上一次渲染用的完整 hash(含子页), 用于判断是否真的需要重建内容区. */
+let currentRaw = ''
 
 function renderLogin() {
   const wrap = el('div', { class: 'login-wrap' }, [
@@ -209,6 +217,7 @@ function renderNav() {
   if (state.me.role === 'admin') {
     items.push(['users', t('nav.usersManagement'), 'users'])
     // 数据文件自检是排障工具,不是日常操作----从总览页搬出来,admin 专属独立页.
+    // 见 .agents/notes/implemented/feature/2026-09-13-console-system-tab.md
     items.push(['system', t('nav.system'), 'cpu'])
     // 日志页:上游故障判据(如 countryBlockReason)只写进 stdout,用户以往
     // 只能看到一串 503 却不知为何.这里让完整字段在页面上可读,可筛选,可展开.

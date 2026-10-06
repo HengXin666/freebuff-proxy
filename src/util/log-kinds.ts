@@ -5,6 +5,8 @@
  *   - request: 以下游请求为单位聚合. 同一次请求产生的全部日志带同一个 reqId,
  *     控制台按 reqId 归成一组, 能看出"这次请求经历了什么".
  *   - event:   与具体下游请求无关的独立事件(额度刷新 / 账号探测 / 模型获取等).
+ *
+ * 见 .agents/notes/implemented/process/2026-10-05-log-granularity-constants-and-comment-policy.md
  */
 
 /** 颗粒度: 一次下游请求, 或一个独立事件. */

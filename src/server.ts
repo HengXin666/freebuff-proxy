@@ -8,6 +8,7 @@
  *
  - @see ./server/route-table.ts   pathname → 面(含未知路径的处置)
  - @see ./server/startup-tasks.ts 启动期副作用(catalog 缓存 seed)
+ - 见 .agents/notes/implemented/process/2026-10-05-parallel-workstream-write-scopes.md
  */
 import http from 'node:http'
 

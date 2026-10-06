@@ -103,13 +103,24 @@
 }
 /* 官方工具注入卡: 两组勾选列表, 说明文字可折行 */
 .official-tools-body { display: flex; flex-direction: column; gap: 14px; margin-top: 10px; }
+/* 勾选进度: 37 行一屏放不下, 只报总数看不出[现在勾了几个]. */
+.official-tools-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+.official-tools-count-value { color: var(--accent); font-weight: 600; }
 .official-tools-group { border: 1px solid var(--border, #2a2f3a); border-radius: 8px; padding: 10px 12px; }
 .official-tools-group-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid rgba(255, 255, 255, .06);
 }
 .official-tools-group-head strong { font-size: 13px; font-weight: 600; }
 /* 卡头右侧的[当前生效]状态: 未配置时用 muted, 配置过则由 applyStatus 切回常规色. */
@@ -125,6 +136,17 @@
 }
 .official-tools-status.muted { font-weight: 400; border-color: transparent; }
 .official-tools-when { font-size: 12px; margin: 6px 0 2px; }
+/* 空名单是[必然 503]的配置, 用红色明确标出. */
+.official-tools-danger {
+  margin: 8px 0 2px;
+  padding: 7px 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #e06c75;
+  background: rgba(224, 108, 117, .10);
+  border: 1px solid rgba(224, 108, 117, .38);
+  border-radius: 6px;
+}
 /* 官方 system 提示词卡: 正文是多行文本, 要给足高度并允许纵向拉伸. */
 .system-prompt-text {
   display: block;
@@ -198,16 +220,104 @@
 .signin-confirm-list { margin: 0 0 10px; padding-left: 18px; }
 .signin-confirm-list li { margin-bottom: 5px; font-size: 13px; line-height: 1.6; }
 .signin-confirm-actions { justify-content: flex-end; gap: 8px; margin-top: 14px; }
-/* Monaco 宿主: 给个边框让它与卡片里其它控件同款, 并允许纵向拉伸. */
-.system-prompt-holder {
-  margin-top: 8px;
+
+/* 系统提示词页: 提示词动辄上万字, 一律用固定高度 + 滚动的等宽块, 不铺开. */
+.prompts-pre {
+  max-height: 320px;
+  overflow: auto;
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  background: #282c34;
+  color: #abb2bf;
   border: 1px solid var(--border, #2a2f3a);
   border-radius: 6px;
-  overflow: hidden;
-  resize: vertical;
-  min-height: 180px;
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
-.system-prompt-holder .monaco-host { width: 100%; }
+.prompts-pre-sm { max-height: 200px; }
+.prompts-edit {
+  width: 100%;
+  min-height: 180px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  background: #282c34;
+  color: #abb2bf;
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 6px;
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  resize: vertical;
+}
+.prompts-health {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.prompts-health-error {
+  color: #e06c75;
+  background: rgba(224, 108, 117, .10);
+  border: 1px solid rgba(224, 108, 117, .40);
+}
+.prompts-group { margin-bottom: 12px; }
+.prompts-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--border, #2a2f3a);
+}
+.prompts-tool { border-bottom: 1px solid rgba(255, 255, 255, .04); }
+.prompts-tool > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 2px;
+  cursor: pointer;
+  list-style: none;
+}
+.prompts-tool > summary::-webkit-details-marker { display: none; }
+.prompts-tool-name { font-family: var(--mono, monospace); font-size: 12px; min-width: 190px; }
+.prompts-tool-note { flex: 1; font-size: 12px; }
+.prompts-tool-state { flex: 0 0 auto; font-size: 12px; color: var(--muted, #6b717d); }
+/* Monaco 宿主: 给个边框让它与卡片里其它控件同款, 并允许纵向拉伸. */
+/* 编辑器容器: 只有它这一层负责尺寸, 不再自己画边框 ----
+   边框交给 Monaco 内部的 .monaco-editor(它自带边框), 否则会[框套框]. */
+.system-prompt-holder {
+  margin-top: 8px;
+  /* 宽度必须写死: 卡片是 flex 上下文, 不写的子项宽度会塌成 0,
+     而 Monaco 在 0 宽容器里量不到尺寸就不渲染(实测 offsetWidth=2). */
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  /* 高度由 JS 按[容器到视口底部的剩余空间]设给内部 .monaco-host ----
+     CSS 里不写死, 否则会与它打架. */
+  overflow: hidden;
+}
+/* Monaco 宿主: 铺满容器, 由 Monaco 自己画边框与滚动条. */
+.system-prompt-holder .monaco-host { width: 100%; height: 100%; }
+/* 去掉 Monaco 外框的圆角与描边, 避免与外层视觉重复. */
+.system-prompt-holder .monaco-editor,
+.system-prompt-holder .monaco-editor .overflow-guard { border-radius: 0; }
+/* 自动换行开关: 小号, 与旁边的状态文字同一视觉层级. */
+.editor-wrap-toggle {
+  /* 标签不折行: 否则[自动换行]会被压成两行(实测). */
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted, #6b717d);
+  cursor: pointer;
+  user-select: none;
+}
+.editor-wrap-toggle input { margin: 0; cursor: pointer; }
 /* 降级成 textarea 时也保持同样的外观 */
 .system-prompt-holder textarea {
   display: block;
@@ -221,14 +331,32 @@
   line-height: 1.5;
   resize: vertical;
 }
+/* 一行 = 勾选框 + 工具名 + 一句话说明. 行本身是整块可点区, 点名字也能切换勾选. */
 .official-tool-item {
   display: grid;
-  grid-template-columns: 18px 200px 1fr;
-  align-items: baseline;
-  gap: 8px;
-  padding: 3px 0;
+  grid-template-columns: 16px minmax(150px, 220px) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  /* 行高与左右留白: 负外边距让 hover 底色铺满分组宽, 不出现左右断头. */
+  padding: 8px;
+  margin: 0 -8px;
+  border-radius: 6px;
+  border-left: 2px solid transparent;
   cursor: pointer;
+  transition: background .12s var(--ease), border-color .12s var(--ease);
 }
-.official-tool-item input { margin: 0; align-self: center; }
-.official-tool-name { font-family: var(--mono, monospace); font-size: 12px; word-break: break-all; }
-.official-tool-desc { font-size: 12px; }
+/* 行间分隔: 37 行同底色时会糊成一片, 给一条极淡的分隔线定位当前行. */
+.official-tool-item:not(:last-child) { box-shadow: inset 0 -1px rgba(255, 255, 255, .05); }
+.official-tool-item:hover { background: rgba(255, 255, 255, .04); }
+/* 已勾选与未勾选在行级别上可分辨: 左侧色条 + 名字变亮. */
+.official-tool-item.is-on { border-left-color: var(--accent); }
+.official-tool-item.is-on .official-tool-name { color: var(--text); }
+.official-tool-item input { margin: 0; accent-color: var(--accent); cursor: pointer; }
+.official-tool-name {
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  color: var(--text2);
+  word-break: break-all;
+  line-height: 1.45;
+}
+.official-tool-desc { font-size: 12px; line-height: 1.5; min-width: 0; }

@@ -27,7 +27,7 @@
   },
   "backlinks": {
     "enabled": true,
-    "required": false,
+    "required": true,
     "roots": [
       "src",
       "scripts",

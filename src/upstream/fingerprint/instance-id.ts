@@ -23,6 +23,8 @@
  *
  *  POST admission 时自带 x-freebuff-instance-id: cli:<uuid>, 服务端接受并原样
  * 保留(返回的 instanceId 与传入的完全一致, 带前缀).
+ *
+ * 见 .agents/notes/implemented/bug-fix/2026-09-30-cli-claim-instance-id.md
  */
 export const CLI_CLAIM_PREFIX = 'cli:'
 
@@ -101,6 +103,8 @@ function fallbackUuid() {
  *
  * 本仓库走 desktop 路线,故用裸 UUID.且调用方应复用同一个值,
  * 不要每次 admission 新建 ---- 那会让每次购买被全额退款作废.
+ *
+ * 见 .agents/notes/implemented/bug-fix/2026-10-03-instance-id-bare-uuid-reuse.md
  *
  * @returns {string}
  */

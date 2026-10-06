@@ -1,193 +1,192 @@
+/**
+ * 官方系统提示词卡: 一个 VSCode 编辑器 + 一个[恢复官方原文]按钮.
+ *
+ * 编辑即自动保存(防抖), 所以没有单独的保存按钮 ---- 少一个要用户找的控件.
+ * 内容始终按[自定义正文]保存; [恢复官方原文]就是把抓包原文写回编辑器并落盘,
+ * 渲染出的 system 文本与[照抄官方]完全一致, 但用户看得见, 可继续改.
+ *
+ * 三态真源在服务端(src/web/store/config/settings-store.ts 的 officialSystemPromptMode).
+ */
 import { t } from '../../../locale/index.ts'
 import { api } from '../../../lib/api.ts'
 import { el } from '../../../lib/dom.ts'
 import { createCodeEditor } from '../../../lib/editor.ts'
 import { toast } from '../../../lib/ui.ts'
 
-/** 当前编辑器句柄(模块级: 同一时刻页面上只有一个提示词编辑器). */
+/** 编辑器句柄(同一时刻页面上只有一个). */
 let editorRef: any = null
+/** 自动保存的防抖定时器. */
+let saveTimer: any = null
 
 /**
- * 官方 system 提示词卡 -- 三态切换 + 自定义正文 + 一键恢复官方原文.
+ * 官方 system 提示词卡.
  *
- * 为什么需要这张卡(用户要求): 官方 worker 模板里明文要求模型调用
- * suggest_prompts / write_todos / request_elevation / 预览类工具. 其中一部分
- * 下游没有对应物, 模型照着提示词去调就会失败; 用户需要能
- *   - 看到官方原文到底要求了什么;
- *   - 换成自己的指令;
- *   - 或干脆整段不带;
- *   - 并且随时一键回到官方原文.
- *
- * 三态真源在服务端(src/web/store/config/settings-store.ts 的
- * officialSystemPromptMode). 本文件只做 DOM 与提交.
- *
- * @param {string} mode 当前态: official / custom / none
- * @param {string} text 当前自定义正文(官方态时为空)
- * @param {string} officialDefault 官方抓包原文(用于[恢复官方原文]按钮)
+ * @param {string} text 当前生效的正文
+ * @param {string} officialDefault 官方抓包原文(用于[恢复官方原文])
  * @param {boolean} disabled 非管理员时禁用交互
  * @returns {any} 卡片元素
  */
-export function buildSystemPromptCard(
-  mode: string, text: string, officialDefault: string, disabled: boolean,
-) {
-  /**
-   * 正文用 Monaco(VSCode 同款) + One Dark Pro 渲染.
-   *
-   * 为什么不是 textarea: 官方 system 模板是 13KB 的整段文本, 纯 textarea 里
-   * 既没有行号也没有高亮, 想改一句得靠肉眼找. 编辑器初始化是异步的(要加载
-   * Monaco), 所以先放占位容器, 拿到句柄后再把值灌进去.
-   *
-   * 降级路径在 dashboard/lib/editor.ts: Monaco 加载失败时它自己回落成
-   * textarea, 本文件不需要分支.
-   */
+export function buildSystemPromptCard(text: string, officialDefault: string, disabled: boolean) {
+  // 高度交给 CSS(.system-prompt-holder): 这里写死会和[占满高度]冲突.
   const holder = el('div', {
     class: 'system-prompt-holder', id: 'official-system-editor',
   })
-  void createCodeEditor({
-    value: text || '',
-    language: 'plaintext',
-    height: 320,
-    onChange: () => {
-      const flag = document.getElementById('official-system-dirty')
-      if (flag) flag.style.display = 'inline'
-    },
-  }).then((ed: any) => {
-    editorRef = ed
-    holder.append(ed.element)
-    ed.setReadOnly(disabled || mode !== 'custom')
-  })
-
-  // onchange 里按 id 回查而不是闭包引用 select: 自我引用会让类型推断退化成
-  // HTMLElement(拿不到 .value), 而 .value 正是这里唯一需要的东西.
-  const select = el('select', {
-    class: 'input', id: 'official-system-mode',
-    disabled: disabled ? '' : undefined,
-    onchange: () => {
-      const self = document.getElementById('official-system-mode') as HTMLSelectElement | null
-      editorRef?.setReadOnly?.(disabled || (self?.value ?? 'official') !== 'custom')
-      const flag = document.getElementById('official-system-dirty')
-      if (flag) flag.style.display = 'inline'
-    },
-  }, [
-    el('option', { value: 'official', selected: mode === 'official' ? '' : undefined },
-      t('system.officialSystemModeOfficial')),
-    el('option', { value: 'custom', selected: mode === 'custom' ? '' : undefined },
-      t('system.officialSystemModeCustom')),
-    el('option', { value: 'none', selected: mode === 'none' ? '' : undefined },
-      t('system.officialSystemModeNone')),
-  ])
-
+  void mountEditorWhenVisible(holder, text || '', disabled)
   return el('div', { class: 'card settings-band', id: 'official-system-card', style: 'margin-top:12px' }, [
-    el('div', {}, [
-      el('h3', { style: 'margin:0 0 2px' }, t('system.officialSystem')),
-      el('span', { class: 'muted' }, t('system.officialSystemHint')),
-    ]),
-    el('div', { class: 'row', style: 'margin-top:10px;gap:8px;align-items:center' }, [
-      el('span', { class: 'muted' }, t('system.officialSystemMode')),
-      select,
-      el('span', {
-        class: 'muted', id: 'official-system-dirty', style: 'display:none',
-      }, t('system.officialSystemDirty')),
+    el('div', { class: 'row spread' }, [
+      el('div', {}, [
+        el('h3', { style: 'margin:0 0 2px' }, t('system.officialSystem')),
+        el('span', { class: 'muted' }, t('system.officialSystemHint')),
+      ]),
+      el('div', { class: 'row', style: 'gap:10px;align-items:center' }, [
+        el('span', { class: 'muted', id: 'official-system-state' }, t('system.officialSystemAutoSaved')),
+        wrapToggle(),
+        el('button', {
+          class: 'btn btn-sm', type: 'button', id: 'official-system-restore',
+          disabled: disabled || !officialDefault ? '' : undefined,
+          onclick: () => restoreOfficialSystemPrompt(officialDefault),
+        }, t('system.officialSystemRestore')),
+      ]),
     ]),
     holder,
-    actionRow(disabled, officialDefault),
   ])
 }
 
 /**
- * 卡片的按钮行: 应用 / 恢复官方原文 / 查看官方原文.
+ * 自动换行开关.
  *
- * 抽成子函数而不是内联: 三个按钮各自带着 disabled 判据与回调, 内联会让
- * 卡片构造函数超过函数长度红线, 也不便单独读.
+ * 默认开(提示词是长行散文, 不折行会被右边缘切断); 用户想按原样看整行时可关.
+ * 状态存在 localStorage, 刷新后保持.
  *
- * @param {boolean} disabled 非管理员时全禁用
- * @param {string} officialDefault 官方抓包原文(为空时[恢复/查看]不可用)
- * @returns {any} 按钮行元素
+ * @returns {any} 开关元素
  */
-function actionRow(disabled: boolean, officialDefault: string) {
-  return el('div', { class: 'row', style: 'margin-top:10px;gap:8px' }, [
-    el('button', {
-      class: 'btn btn-primary', type: 'button', id: 'official-system-apply',
-      disabled: disabled ? '' : undefined,
-      onclick: saveOfficialSystemPrompt,
-    }, t('system.officialSystemApply')),
-    el('button', {
-      class: 'btn btn-sm', type: 'button', id: 'official-system-restore',
-      disabled: disabled || !officialDefault ? '' : undefined,
-      onclick: restoreOfficialSystemPrompt,
-    }, t('system.officialSystemRestore')),
-    el('button', {
-      class: 'btn btn-sm', type: 'button', id: 'official-system-view',
-      disabled: !officialDefault ? '' : undefined,
-      onclick: () => {
-        // 把官方原文灌进编辑器供对照: 不直接保存, 用户看清后再点[应用].
-        const sel = document.getElementById('official-system-mode') as HTMLSelectElement | null
-        editorRef?.setValue?.(officialDefault)
-        editorRef?.setReadOnly?.(false)
-        if (sel) sel.value = 'custom'
-        const flag = document.getElementById('official-system-dirty')
-        if (flag) flag.style.display = 'inline'
-      },
-    }, t('system.officialSystemView')),
+function wrapToggle() {
+  const saved = localStorage.getItem('fb-editor-wrap')
+  const on = saved !== '0'
+  const cb = el('input', {
+    type: 'checkbox', id: 'official-system-wrap',
+    checked: on ? '' : undefined,
+  }) as HTMLInputElement
+  cb.addEventListener('change', () => {
+    localStorage.setItem('fb-editor-wrap', cb.checked ? '1' : '0')
+    editorRef?.setWordWrap?.(cb.checked)
+  })
+  return el('label', { class: 'editor-wrap-toggle', title: t('system.officialSystemWrapHint') }, [
+    cb, el('span', {}, t('system.officialSystemWrap')),
   ])
 }
 
 /**
- * 保存官方 system 提示词配置.
+ * 等容器可见后再挂编辑器.
  *
- * 提交的是[三态 + 当前正文]整份: 只切态不传正文会把已保存的自定义内容清空,
- * 所以两者一起提交(正文在非 custom 态下也保留, 用户切回去时还在).
+ * 设置页是[左侧分区切换]的: 非当前分区的容器 display:none, 在里面创建的
+ * Monaco 量不到宽高, 表现是编辑器一片空白. 等有尺寸再建.
  *
- * @param {any} event 应用按钮的 click 事件
+ * 释放旧句柄这一步的由来见 [editor-remount note]:
+ * .agents/notes/implemented/bug-fix/2026-10-06-editor-remount-after-page-reentry.md
+ *
+ * @param {any} holder 容器
+ * @param {string} text 初始文本
+ * @param {boolean} disabled 非管理员时禁用
  * @returns {Promise<void>} 无返回值
  */
-export async function saveOfficialSystemPrompt(event: any) {
-  const btn = event.currentTarget
-  const sel = document.getElementById('official-system-mode') as HTMLSelectElement | null
-  if (!sel || !editorRef) return
-  btn.disabled = true
+async function mountEditorWhenVisible(holder: any, text: string, disabled: boolean) {
+  /**
+   * 先把上一次的编辑器放掉.
+   *
+   * 设置页每次进入都会重建卡片与容器: 旧编辑器连同它的 DOM 已经随旧页面被
+   * 丢弃, 但这个模块级句柄还指着它. 不在这里清掉, 新容器就会因为[以为已经
+   * 挂过]而永远挂不上编辑器(实测: 第二次进入设置页 monaco 节点为 0).
+   */
+  if (editorRef && typeof editorRef.dispose === 'function') {
+    try { editorRef.dispose() } catch { /* 已随旧页面回收 */ }
+  }
+  editorRef = null
+  /**
+   * 等容器[进入 DOM 且有宽度]再挂编辑器.
+   *
+   * 两个必须等的原因:
+   *   1. holder 由本卡片创建, 但卡片要等 buildSystemPromptCard 返回后才被
+   *      挂进页面 ---- 一开始 isConnected 是 false, 此时直接 return 会导致
+   *      编辑器永远不挂(实测: 一个 Monaco 请求都没发出).
+   *   2. 非当前分区的容器是 display:none, 在里面建 Monaco 量不到宽度.
+   * 等到就挂; 等满超时也挂 ---- 挂上后 editor.ts 的 ResizeObserver 还能补救,
+   * 完全不挂则连补救机会都没有.
+   */
+  for (let i = 0; i < 60; i += 1) {
+    if (holder.isConnected && holder.offsetWidth > 0) break
+    await new Promise((r) => setTimeout(r, 80))
+  }
+  const ed = await createCodeEditor({
+    value: text,
+    // 用 markdown: 官方模板本身就是 markdown 结构(标题/列表/代码块/标签),
+    // 按 md 着色比 plaintext 可读得多.
+    language: 'markdown',
+    // 高度由容器决定(CSS 给了 calc(100vh - 260px)), 这里传 100% 铺满它.
+    // fill: 用[容器到视口底部的剩余空间], 整页就不会出竖直滚动条.
+    height: 'fill',
+    // 用保存的偏好(默认开; 关过就一直关).
+    wordWrap: localStorage.getItem('fb-editor-wrap') === '0' ? 'off' : 'on',
+    onChange: () => scheduleSave(ed),
+  })
+  editorRef = ed
+  holder.innerHTML = ''
+  holder.append(ed.element)
+  ed.setReadOnly(disabled)
+}
+
+/**
+ * 防抖自动保存(编辑后 800ms).
+ *
+ * @param {any} ed 编辑器句柄
+ * @returns {void} 无返回值
+ */
+function scheduleSave(ed: any) {
+  setState(t('system.officialSystemDirty'))
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => { void persist(ed.getValue()) }, 800)
+}
+
+/**
+ * 落盘当前正文.
+ *
+ * @param {string} value 正文
+ * @returns {Promise<void>} 无返回值
+ */
+async function persist(value: string) {
   try {
     await api('/api/settings', {
       method: 'POST',
-      body: JSON.stringify({
-        officialSystemPromptMode: sel.value,
-        officialSystemPromptText: editorRef.getValue(),
-      }),
+      body: JSON.stringify({ officialSystemPromptMode: 'custom', officialSystemPromptText: value }),
     })
-    toast(t('system.officialSystemSaved'))
-    const flag = document.getElementById('official-system-dirty')
-    if (flag) flag.style.display = 'none'
-  } catch (err) {
+    setState(t('system.officialSystemAutoSaved'))
+  } catch (err: any) {
     toast(err.message, true)
   }
-  btn.disabled = false
 }
 
 /**
- * 一键恢复官方原文: 把抓包原文作为自定义正文保存, 并切到 custom 态.
+ * 写状态文案.
  *
- * 为什么不直接切回 official 态: official 态的语义是[用抓包原文], 而用户点
- * [恢复官方原文]通常是想[先把原文放回输入框, 再在它基础上改]. 若只切态,
- * 输入框是空的, 用户看不到原文就无从改起. 这里把原文写进正文并按 custom 保存,
- * 行为与官方态在链路上等价(渲染出的 system 文本一致), 但用户看得见, 可再编辑.
+ * @param {string} text 文案
+ * @returns {void} 无返回值
+ */
+function setState(text: string) {
+  const s = document.getElementById('official-system-state')
+  if (s) s.textContent = text
+}
+
+/**
+ * 恢复官方原文: 写回编辑器并落盘.
  *
+ * @param {string} officialDefault 官方抓包原文
  * @returns {Promise<void>} 无返回值
  */
-export async function restoreOfficialSystemPrompt() {
-  const sel = document.getElementById('official-system-mode') as HTMLSelectElement | null
-  if (!sel || !editorRef) return
-  try {
-    const s = await api('/api/settings')
-    const def = typeof s.officialSystemPromptDefault === 'string' ? s.officialSystemPromptDefault : ''
-    if (!def) {
-      toast(t('system.officialSystemRestoreUnavailable'), true)
-      return
-    }
-    sel.value = 'custom'
-    editorRef.setReadOnly(false)
-    editorRef.setValue(def)
-    await saveOfficialSystemPrompt({ currentTarget: document.getElementById('official-system-apply') })
-  } catch (err) {
-    toast(err.message, true)
-  }
+async function restoreOfficialSystemPrompt(officialDefault: string) {
+  if (!editorRef || !officialDefault) return
+  editorRef.setValue(officialDefault)
+  await persist(officialDefault)
+  toast(t('system.officialSystemRestored'))
 }
+
+export { saveTimer, editorRef }

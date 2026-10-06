@@ -12,6 +12,7 @@
  - version.json----镜像里显示什么版本完全由流水线决定,不依赖本地状态.
  *
  - 本地开发没有 version.json 时,前端 fallback 显示 "dev".
+ - 见 .agents/notes/implemented/process/2026-10-05-scripts-subdir-root-arithmetic.md
  */
 import fs from 'node:fs'
 import path from 'node:path'

@@ -27,6 +27,8 @@ export /**
  - 只允许"付费时段已过"时释放.这样将来新增重试路径也不会再漏 ----
  - 只要它调的是这个函数.
  *
+ - 决策与证据见 .agents/notes/implemented/bug-fix/2026-10-04-bun-in-image-and-never-release-paid-hour.md.
+ *
  - @param {string} key 账号 key
  - @param {string} why 释放原因(写进日志,便于复盘谁在释放)
  - @returns {boolean} 是否真的发起了释放

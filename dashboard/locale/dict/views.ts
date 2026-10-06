@@ -58,6 +58,11 @@ export default {
     'zh-CN': '请求链路、工具集形态与兼容兜底。',
     en: 'Request channel, tool-set shape, and compatibility fallbacks.',
   },
+  'settings.sectionSystemPrompt': { 'zh-CN': '系统提示词', en: 'System prompt' },
+  'settings.sectionSystemPromptHint': {
+    'zh-CN': '发给上游的全局系统提示词: 照抄官方原文, 或换成你自己的指令.',
+    en: 'The global system prompt sent upstream: use the official capture, or your own text.',
+  },
   'settings.sectionScheduling': { 'zh-CN': '调度与额度', en: 'Scheduling and quota' },
   'settings.sectionSchedulingHint': {
     'zh-CN': '账号如何被选中、并发上限与额度保护闸门。',
@@ -156,6 +161,83 @@ export default {
   },
   'settings.autoSignInOn': { 'zh-CN': '自动签到已开启（间隔 25 小时）', en: 'Auto sign-in enabled (every 25 hours)' },
   'settings.autoSignInOff': { 'zh-CN': '自动签到已关闭', en: 'Auto sign-in disabled' },
+  'nav.prompts': { 'zh-CN': '系统提示词', en: 'System prompts' },
+  'prompts.title': { 'zh-CN': '系统提示词', en: 'System prompts' },
+  'prompts.healthTitle': {
+    'zh-CN': '工具判据异常（{code}）',
+    en: 'Tool judgment error ({code})',
+  },
+  'prompts.healthDetail': {
+    'zh-CN': '最近一次：注入 {injected} 个官方工具 · 控制台配置 {configured} 个',
+    en: 'Last request: {injected} official tools injected · {configured} configured',
+  },
+  'prompts.subtitle': {
+    'zh-CN': '这里能看到模型实际收到的三类提示词：全局系统提示词、官方工具定义、下游工具定义。',
+    en: 'Everything the model receives: the global system prompt, the official tool '
+      + 'definitions, and the client tool definitions.',
+  },
+  'prompts.globalTitle': { 'zh-CN': '全局系统提示词', en: 'Global system prompt' },
+  'prompts.globalHint': {
+    'zh-CN': '官方模板与当前生效的处置（在[设置 → 上游与工具]里修改）',
+    en: 'The official template and the mode currently in effect (changed in Settings)',
+  },
+  'prompts.currentMode': { 'zh-CN': '当前生效方式', en: 'Mode in effect' },
+  'prompts.modeOfficial': { 'zh-CN': '照抄官方原文', en: 'Official capture' },
+  'prompts.modeCustom': { 'zh-CN': '自定义正文', en: 'Custom text' },
+  'prompts.modeNone': { 'zh-CN': '不带官方系统提示词', en: 'No official prompt' },
+  'prompts.length': {
+    'zh-CN': 'worker 层 {n} 字 · manager 层 {m} 字',
+    en: 'worker {n} chars · manager {m} chars',
+  },
+  'prompts.modeLabel': { 'zh-CN': '生效方式：', en: 'Mode:' },
+  'prompts.apply': { 'zh-CN': '应用', en: 'Apply' },
+  'prompts.restoreOfficial': { 'zh-CN': '恢复官方原文', en: 'Use official text' },
+  'prompts.saved': { 'zh-CN': '已保存', en: 'Saved' },
+  'prompts.restoredTip': {
+    'zh-CN': '已填入官方原文，确认后点[应用]才会保存',
+    en: 'Official text filled in; click Apply to save',
+  },
+  'prompts.editPlaceholder': {
+    'zh-CN': '这里是全局系统提示词正文（选[自定义正文]时生效）……',
+    en: 'Global system prompt text (used when mode is Custom)...',
+  },
+  'prompts.editHint': {
+    'zh-CN': '下面是当前生效的正文（只读；修改请到设置页的上游与工具区）',
+    en: 'The text in effect below (read-only; edit it under Settings)',
+  },
+  'prompts.officialTitle': { 'zh-CN': '官方工具提示词', en: 'Official tool prompts' },
+  'prompts.officialHint': {
+    'zh-CN': '37 个官方工具的完整 description，即模型看到的那段说明；点开可看全文',
+    en: 'Full descriptions of the official tools as the model sees them',
+  },
+  'prompts.groupCommon': {
+    'zh-CN': '可派发(下游有对应工具)', en: 'Dispatchable (client counterpart exists)',
+  },
+  'prompts.groupOrphan': {
+    'zh-CN': '不可派发(下游没有对应工具)', en: 'Not dispatchable (no client counterpart)',
+  },
+  'prompts.stateAuto': { 'zh-CN': '自动', en: 'auto' },
+  'prompts.stateOn': { 'zh-CN': '已注入', en: 'injected' },
+  'prompts.stateOff': { 'zh-CN': '未注入', en: 'not injected' },
+  'prompts.officialConfigured': {
+    'zh-CN': '控制台已配置：注入 {n} 个',
+    en: 'Configured: {n} injected',
+  },
+  'prompts.officialAuto': {
+    'zh-CN': '未配置：按下游声明自动裁剪（当前会注入 {n} 个）',
+    en: 'Unconfigured: auto-trimmed by what the client declares (currently {n})',
+  },
+  'prompts.downstreamTitle': { 'zh-CN': '下游工具提示词', en: 'Client tool prompts' },
+  'prompts.downstreamHint': {
+    'zh-CN': '客户端最近一次声明的工具与其描述（原样发给上游的内容）',
+    en: 'What the client last declared, exactly as forwarded upstream',
+  },
+  'prompts.downstreamCount': { 'zh-CN': '共 {n} 个工具', en: '{n} tools' },
+  'prompts.noDownstream': {
+    'zh-CN': '还没有收到过带工具的请求；发起一次对话后这里会显示客户端声明的工具。',
+    en: 'No tool-bearing request seen yet. Send one and the declared tools will appear here.',
+  },
+  'prompts.emptyDesc': { 'zh-CN': '（这个工具没有描述）', en: '(no description)' },
   'settings.sectionModels': { 'zh-CN': '模型', en: 'Models' },
   'settings.sectionModelsHint': {
     'zh-CN': '模型清单与上游目录对账；此处决定哪些模型对外可见。',
@@ -255,6 +337,7 @@ export default {
     'zh-CN': '清空进程内日志缓冲？只清显示的日志，不影响账号/会话/配置等任何落盘数据，也不会重启服务。',
     en: 'Clear the in-process log buffer? Only the displayed logs are cleared — no persisted data (accounts / sessions / config) is touched and the service is not restarted.',
   },
+  'logs.reqIdBadge': { 'zh-CN': '请求号', en: 'request' },
   'logs.cleared': { 'zh-CN': '日志缓冲已清空', en: 'Log buffer cleared' },
   'logs.accountAll': { 'zh-CN': '全部账号', en: 'All accounts' },
   'logs.accountFilterHint': {

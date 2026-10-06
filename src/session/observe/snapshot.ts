@@ -101,6 +101,7 @@ export function hasInventorySnapshot(this: any): boolean {
  *
  * 这是跨部署可见的唯一真源: 本地账本各记各的, 而这份清单列出全部
  * 持有者(含别的部署建的会话) -- 于是"我在本地建的会话, 远程也能看到".
+ * 见 .agents/notes/implemented/architecture/2026-10-04-session-inventory-from-upstream.md.
  * @param {any} this 会话实例
  * @param {any} body 上游回执
  * @returns {void}

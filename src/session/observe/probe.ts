@@ -47,6 +47,7 @@ export async function refresh(this: any, opts: any = {}): Promise<any> {
          *   2) 会记成 lastProbe.ok = true;
          *   3) 会把健康判定退化成"还有没有本地会话".
          * 这里保留会话现场, 落 lastProbe 并抛出, 调用方据此区分 ban / 风控 / IP 上限.
+         * 决策与端到端判据见 .agents/notes/implemented/feature/2026-09-15-console-readonly-refresh.md.
          */
         this._setLastProbe({
           ok: false,
@@ -104,6 +105,8 @@ export function _setLastProbe(this: any, patch: any): void {
  * 发一次持有心跳(官方形态): GET /session + instance-id + -heartbeat: 1.
  *
  * 官方在 admission 后立刻发一次, 之后每 45s 一次. 失败只记日志, 不影响调用方.
+ *
+ * 决策见 .agents/notes/implemented/bug-fix/2026-10-04-hold-heartbeat-and-cold-start-normalize.md.
  * @param {any} this 会话实例
  * @param {string} instanceId 目标会话实例 id
  * @returns {void}
@@ -156,6 +159,7 @@ export function _armPoll(this: any): void {
    * 用例, 打完 smoke ok 却不退出(实测 headless 跑 240s 超时, 而用例本身全绿).
    *
    * 心跳本身是 best-effort(失败只记 warn), 没有理由要求进程为它活着.
+   * 见 .agents/notes/implemented/bug-fix/2026-10-06-session-poll-timer-unref.md
    */
   if (this._pollTimer.unref) this._pollTimer.unref()
 }

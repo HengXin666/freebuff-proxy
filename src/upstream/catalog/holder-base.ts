@@ -207,7 +207,8 @@ export class CatalogBase {
   /**
    * 只给 x-freebuff-catalog-fetch, 不给 -protocol. 官方 chat 头部恒为 8 项,
    * 没有 catalog-protocol -- 它只出现在 catalog 与 admission 上.
-   * 见 docs/reverse/15-protocol-review.md P0-1.
+   * 见 docs/reverse/15-protocol-review.md P0-1 与
+   * .agents/notes/implemented/bug-fix/2026-10-03-chat-catalog-fetch-only.md.
    * @returns {Record<string, string>} 头集
    */
   fetchOnlyHeaders() {

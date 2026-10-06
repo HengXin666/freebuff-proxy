@@ -175,6 +175,9 @@ export {
  *
  - 官方原生名(下游没声明过)原样保留.
  *
+ - 决策, 被否决的备选与线上证据见
+ - .agents/notes/implemented/bug-fix/2026-10-05-downstream-tool-restore-declared-names.md
+ *
  - @param {any} body 上游响应体(chat.completion,含 choices[].message.tool_calls)
  - @param {Iterable<string>|any[]} [declaredNames] 本次下游声明的工具名集合
  - @param {Record<string, any>} [declaredSchemas] 本次下游声明的工具 schema(名字 -> parameters),按它裁剪翻译后的字段

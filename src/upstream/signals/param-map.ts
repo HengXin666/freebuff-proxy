@@ -101,6 +101,7 @@ export function translateParamsForDownstream(
    *
    * 判据是[下游 schema 声明过这个键], 不是[规则里没有] ---- 只放行下游自己
    * 认识的字段, 不把上游的多余字段泄给下游.
+   * 完整决策与反向探针见 .agents/notes/implemented/bug-fix/2026-10-06-tool-param-idempotent-and-multi-harness.md.
    */
   for (const [key, value] of Object.entries(src)) {
     if (out[key] !== undefined) continue

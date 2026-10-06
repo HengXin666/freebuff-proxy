@@ -6,6 +6,7 @@
  * 两者一起改的场景很少, 拆开后加规则不必再读引擎代码.
  *
  * 真值与判据来源见 param-map.ts 的文件头.
+ * 每条规则翻译完下游是否真能用, 判据与实测见 .agents/notes/implemented/bug-fix/2026-10-06-tool-param-dispatch-readiness.md.
  */
 
 export interface FieldRule {

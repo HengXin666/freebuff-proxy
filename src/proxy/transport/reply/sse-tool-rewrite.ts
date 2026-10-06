@@ -29,6 +29,9 @@
  *   载体拆包(proxy__x -> x) -> 官方名还原 + 参数翻译 -> Hermes 别名还原.
  *
  * 任何解析失败都原样放行: 改写是增强, 不是必经环节, 不该把一次成功的响应变成错误.
+ *
+ * 完整决策与被否决的备选(含[只调大 timeoutMs]为什么不成立)见
+ * .agents/notes/implemented/bug-fix/2026-10-05-stream-tool-rewrite-not-buffered.md
  */
 import { restoreHermesDelegateInResponse } from '../../../tool-alias.ts'
 import { buildOfficialToClientMap, toNameSet } from '../../../upstream/signals/tool-name-map.ts'

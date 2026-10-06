@@ -45,6 +45,7 @@ export function coerceUser(raw: any): FreebuffUser | null {
 /**
  * 上游鉴权头 -- 只发 Bearer(x-codebuff-api-key 不作为官方形态的一部分).
  * 调用点统一走本函数, 不必各自拼头.
+ * 见 .agents/notes/implemented/bug-fix/2026-10-03-session-header-and-model-mapping.md
  *
  * @param {string} token 上游 token
  * @returns {{ Authorization: string }} 鉴权头

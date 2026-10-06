@@ -26,6 +26,7 @@ import { CONTEXT_METHODS } from './context/methods.ts'
 
 /**
  * 邮箱脱敏(日志与错误里绝不出现完整账号邮箱).
+ * 见 .agents/notes/implemented/bug-fix/2026-10-02-no-account-pii-in-errors.md
  * @param {any} email 原始邮箱
  * @returns {string} 脱敏结果; 非法输入返回空串
  */

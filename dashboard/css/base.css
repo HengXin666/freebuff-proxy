@@ -180,7 +180,14 @@ h3 { font-size: 15px; font-weight: 600; }
 .grid { display: grid; gap: 12px; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .spread { justify-content: space-between; }
+/* 卡片内的一行[标签 + 控件]: 两端对齐. 注意它只适合[一行内两个元素]的卡,
+   多块内容的卡(如官方工具: 标题+说明+警告+整份列表)必须让内容独占一行,
+   否则 space-between 会把后续块推到右边(实测官方工具列表被推走 500px). */
 .settings-band { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+/* 官方工具卡的列表要独占整行(宽度撑满), 不参与那行的 space-between 分配.
+   判据与实测见 .agents/notes/implemented/bug-fix/2026-10-06-official-tools-row-full-width.md. */
+.settings-band > .official-tools-body { flex: 0 0 100%; }
+.settings-band > .official-tools-danger { flex: 0 0 100%; }
 .muted { color: var(--muted); font-size: 12px; }
 .mono { font-family: var(--mono); }
 .hidden { display: none !important; }

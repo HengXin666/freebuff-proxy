@@ -7,7 +7,8 @@
  * 本文件只保留 buildRpcCfg ---- 用主服务凭据装配副仓库需要的 cfg; 它与"本机密钥
  * 文件在哪"强耦合. 六个纯转发端口见 rpc/ports.ts.
  *
- * 见 docs/reverse/17-current-status-and-gaps.md.
+ * 见 .agents/notes/implemented/architecture/2026-10-03-official-channel-rpc-delegation.md
+ * 与 docs/reverse/17-current-status-and-gaps.md
  */
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
@@ -90,7 +91,7 @@ export async function buildRpcCfg(upstream: any, config: any = {}) {
        * bun 侧 atob() 抛错, 整个 bun 请求失败并静默回落 Node.
        *
        * 这里做一次格式归一: PEM → 剥头尾 → base64 → base64url; 已经是
-       * base64url 的原样透传.
+       * base64url 的原样透传. 见 .agents/notes/implemented/bug-fix/2026-10-03-session-via-bun-port.md
        */
       cfg.privateKey = normalizePrivateKeyForBun(dk.privateKey)
       /**

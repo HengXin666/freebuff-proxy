@@ -96,6 +96,8 @@ export async function handle(ctx: any, chatHandler: any, req: any, res: any) {
  * 必须由路由表显式拒绝, 而不是没有这一支: 去掉它路径会落进下面的 /v1/* 兜底,
  * 被原样透传到上游 /api/v1/responses, 上游无该端点 -> 404 被中间层崩成 502 空体.
  *
+ * 见 .agents/notes/implemented/architecture/2026-10-05-responses-endpoint-explicitly-unsupported.md
+ *
  * @param {object} res 响应对象
  * @returns {void} 无返回
  */

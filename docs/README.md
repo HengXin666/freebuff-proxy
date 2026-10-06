@@ -43,6 +43,7 @@ docs/
 | 本地命令,发版流程 | [guide/development.md](guide/development.md) | `development` |
 | README 那四张截图怎么生成,怎么复现 | [guide/screenshots.md](guide/screenshots.md) | `screenshots` |
 | 接入一个新的下游工具(改哪几个文件,判据与实测) | [guide/tool-compat.md](guide/tool-compat.md) | `tool-compat` |
+| 写文档时的约定(分类 / 三条硬约定 / 登记要求) | [AGENTS.md](AGENTS.md) | - |
 
 ### 内部口径(`docs/design/`)
 

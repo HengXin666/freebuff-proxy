@@ -27,6 +27,7 @@ async function resolveModelForWire(requested: any, displayName: any, catalog: an
   // catalog-protocol.js handleForModel 的说明).displayName 由调用方给
   // (session-manager 没有模型表的上下文),这里从内置静态表按 id 查;
   // 查不到就只走 legacyDigests 精确匹配.
+  // 见 .agents/notes/implemented/bug-fix/2026-10-03-session-header-and-model-mapping.md
   const name =
     displayName ||
     (FREEBUFF_AVAILABLE_MODELS.find((m) => m?.id === requested)?.displayName ?? null)
@@ -35,7 +36,8 @@ async function resolveModelForWire(requested: any, displayName: any, catalog: an
   // 服务端"推荐"的 m-00032eaeec(MiMo 2.6 Flash), 于是会话绑 MiMo 而 agent
   // 是 deepseek, chat 必然 503. 映射只走 legacyDigests(FNV-1a), 已在
   // catalog.handleFor 里实现. 请求的模型不在本次目录里时就保持原值, 让上游
-  // 返回它自己的判据.
+  // 返回它自己的判据. 摘要算法与实测命中表见
+  // .agents/notes/implemented/bug-fix/2026-10-01-legacy-model-digest-mapping.md
   if (resolved === requested) {
     logger.warn('requested model not present in this catalog', {
       requested,

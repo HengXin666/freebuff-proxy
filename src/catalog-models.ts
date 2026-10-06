@@ -24,6 +24,7 @@ export interface CatalogModelsInput {
  * 对外口径:id 一律是人能认的模型名(目录行的 displayName,
  * 如 DeepSeek V4.1 Flash),freebuff_key 透出服务端标识 m-096e75164d.
  * 不用 legacyDigests 反查内置静态表.
+ * 见 .agents/notes/implemented/bug-fix/2026-10-03-catalog-is-the-model-list.md
  *
  * @param {object} [input]
  * @param {any[]} [input.rows] 目录行(CatalogHolder.rows())

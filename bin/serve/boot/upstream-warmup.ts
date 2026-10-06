@@ -49,6 +49,7 @@ function warmCliVersion(settingsStore: any): void {
 /**
  * 周期对齐:CLI 版本随官方发版变化,写死一个过时值本身是可用指纹.
  * 每 6h 拉一次 npm latest;版本变了就 warn(一眼看出该跟进官方).
+ * 见 .agents/notes/implemented/feature/2026-10-02-cli-fingerprint-periodic-align.md
  * unref:定时器绝不挡进程退出.
  * @param {any} settingsStore 控制台设置
  * @returns {void} 只登记定时器, 不等待

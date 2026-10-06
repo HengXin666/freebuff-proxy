@@ -55,9 +55,8 @@ function buildLoginEndpoints(ctx: any): Record<string, Function> {
      */
     async loginCode(fingerprintId: string) {
       // 走 apiFetch(带超时 + 代理池回落), 不用裸 fetchWithProxy:
-      // 无代理部署(kind:'none')下 apiFetch 没有池内回落, 由
-      // fetchLoginUpstream 补一次重试 -- 见 .agents/notes/implemented/
-      // bug-fix/2026-10-03-login-transient-retry.md
+      // 无代理部署(kind:'none')下 apiFetch 没有池内回落, 由 fetchLoginUpstream
+      // 补一次重试, 见 .agents/notes/implemented/bug-fix/2026-10-03-login-transient-retry.md
       const res = await fetchLoginUpstream(
         ctx,
         `${loginBase}/api/auth/cli/code`,

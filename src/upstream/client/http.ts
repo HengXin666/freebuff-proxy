@@ -84,6 +84,7 @@ async function buildHeaders(ctx: any, url: string, init: any): Promise<Record<st
   if (init.catalog !== false) {
     const ok = await catalog.fetch().catch(() => false)
     // chat 只带 catalog-fetch(官方 8 头里没有 catalog-protocol)
+    // 见 .agents/notes/implemented/bug-fix/2026-10-03-chat-catalog-fetch-only.md
     if (ok) {
       Object.assign(headers, init.catalogFetchOnly ? catalog.fetchOnlyHeaders() : catalog.headers())
     }

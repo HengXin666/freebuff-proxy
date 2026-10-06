@@ -5,6 +5,7 @@
 /**
  * 解析上游通道 -- 恒返回 'official'; 传入 'legacy' 时告警一次.
  * 见 .agents/notes/implemented/architecture/2026-10-03-legacy-channel-deprecated.md
+ * 与 implemented/simplification/2026-10-02-cli-channel-only.md
  *
  * @param {object} settings settingsStore.get() 的结果(可为 null)
  * @param {object} config 已加载的 config

@@ -56,6 +56,7 @@ export async function forwardCompletions(
   /**
    - 会话实例 id(admission 回执的 instanceId).
    - 用于 chat 请求的 x-freebuff-instance-id ---- 缺失会导致 428,见下方 headers.
+   - 见 .agents/notes/implemented/bug-fix/2026-10-03-chat-instance-id-header.md
    */
   instanceId,
   /**
@@ -78,23 +79,26 @@ export async function forwardCompletions(
   const headers = {
     ...filterRequestHeaders(req.headers),
     'content-type': 'application/json',
-    // 官方 CLI chat 的 Accept 是 */* ---- Bun fetch 的默认值.
-    // 见 .agents/notes/implemented/bug-fix/2026-10-01-chat-ua-two-part.md
+    // 官方 CLI chat 的 Accept 恒为 */* ---- Bun fetch 的默认值, 不跟第三方
+    // 实现发的 text/event-stream; 见 .agents/notes/implemented/bug-fix/2026-10-01-chat-accept-star-slash-star.md
+    // 与 .agents/notes/implemented/bug-fix/2026-10-01-chat-ua-two-part.md
     accept: '*/*',
     // chat 头逐字对齐官方 codebuff provider 分支:只有 Authorization +
     // user-agent(+可选 x-freebuff-acting-user-id).官方 chat 不带
     // x-codebuff-api-key ---- 那个头只出现在 session / agent-runs 等端点.
-    // 常量真源见 src/upstream/official-fingerprint.ts 与
-    // .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md
+    // 常量真源见 src/upstream/official-fingerprint.ts 与 .agents/notes/implemented/
+    // bug-fix/2026-09-18-official-cli-fingerprint.md
     //  不传 version:官方 chat UA 的版本段是 0.0.0-test(发布构建里
     // __PACKAGE_VERSION__ 未注入而回退).用函数默认值.
     ...officialChatHeaders(upstream.token, {
       // 官方 chat 带 x-freebuff-acting-user-id(chat 头的 13 项里除传输层外的一项).
+      // 取值必须是账号 user id 而不是凭据文件名, 见 .agents/notes/implemented/bug-fix/2026-10-01-chat-acting-user-id.md
       userId: upstream.accountId || undefined,
     }),
     // 不带 x-freebuff-instance-id: 官方 chat 头部恒为 8 项, 实例标识只走
     // codebuff_metadata.freebuff_instance_id.
-    // 见 docs/reverse/15-protocol-review.md P0-1.
+    // 见 docs/reverse/15-protocol-review.md P0-1 与 .agents/notes/implemented/
+    // bug-fix/2026-10-03-chat-header-and-ua-desktop.md
   }
 
   // 风控:chat 调用前打散节奏(随机 [0, requestJitterMs)).上游按请求
@@ -105,8 +109,7 @@ export async function forwardCompletions(
   const abortCtrl = reqToAbortSignal(req)
   // 工具声明被上游拒绝时,去掉 tools 再发一次(见 isToolSchemaRejection).
   // 只对"客户端确实带了 tools"的请求生效.
-  // 判据与取舍见
-  // .agents/notes/implemented/bug-fix/2026-09-18-tool-schema-rejection-strip.md
+  // 判据与取舍见 .agents/notes/implemented/bug-fix/2026-09-18-tool-schema-rejection-strip.md
   // 注意:toolStripCapable 在 RPC 之后计算(见下),只有在确定
   // 走了官方形态时才可禁用这条退路;若 RPC 不可用而降级到 legacy,
   // 退路必须重新生效.
@@ -193,6 +196,7 @@ export async function forwardCompletions(
   const status = upstreamRes.status
   // 可观测性:上游 chat 非 2xx 时把响应体记下来.
   // 503 这类错误不带业务体时最难排查 ---- 没有它只能猜(见控制台[日志]页).
+  // 见 .agents/notes/implemented/feature/2026-10-01-upstream-chat-error-body-logging.md
   if (!upstreamRes.ok) {
     logger.warn('upstream chat non-ok', {
       status,

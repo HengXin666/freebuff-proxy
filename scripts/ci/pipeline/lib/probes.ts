@@ -1,6 +1,7 @@
 /**
  * 容器内探测 -- 从 scripts/ci/pipeline-image-test.ts 按职责切出.
  *
+ * 容器内命令一律走 node(见 .agents/notes/implemented/bug-fix/2026-10-04-probe-tools-after-base-image-swap.md).
  *
  */
 import { httpGet, sleep } from './io.ts'

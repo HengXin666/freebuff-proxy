@@ -1,3 +1,8 @@
+/**
+ * 负向探针用例表 ---- 每条探针证一个门禁真的会红.
+ *
+ * 断言口径与夹具规模要求见 .agents/notes/implemented/process/2026-10-05-probe-drift-after-gate-evolution.md
+ */
 import fs from 'node:fs'
 import path from 'node:path'
 

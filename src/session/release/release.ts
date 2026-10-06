@@ -236,6 +236,7 @@ export function _clearReleaseRetry(this: any): void {
  *
  * 用户对单条会话的显式关闭走 closeSession, 那里显式传 force ----
  * 意图明确就不拦(见 src/web/routes/inventory/accounts/actions.ts).
+ * 见 .agents/notes/implemented/bug-fix/2026-10-06-paid-window-guard-on-bulk-release-and-secret-tunables.md
  * @param {any} this 会话实例
  * @param {{force?: boolean}} [opts] force=true 时连付费时段内也删(用户显式意图)
  * @returns {Promise<{ok: boolean, instanceId?: string, attempts: number, error?: string}>}

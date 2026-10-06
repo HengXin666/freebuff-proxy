@@ -36,8 +36,10 @@ export async function renderModelSettings(view: any) {
   try {
     data = await api('/api/models/custom')
   } catch { /* ignore */ }
+  // cached=1: 只读缓存(裸调用会 force 抓上游+刷会话, 实测 1.65s).
+  // 页面加载不打上游的决定见 .agents/notes/implemented/simplification/2026-10-06-page-load-no-force-upstream.md
   try {
-    upstream = await api('/api/models/upstream')
+    upstream = await api('/api/models/upstream?cached=1')
   } catch { /* ignore */ }
 
   const known: Map<string, any> = new Map()
@@ -67,6 +69,7 @@ export async function renderModelSettings(view: any) {
    *
    - 匹配按可读名(与 /v1/models 同源,口径 displayName || key)比对;
    - 目录 key(m-xxx)作兜底,因为旧自定义条目可能只存了 key.
+   - 决策见 .agents/notes/implemented/bug-fix/2026-10-04-model-list-upstream-reconciliation.md.
    */
   const upstreamIdSet = new Set(
     (upstream.models || []).map((m) => m.id || m.catalogId || m.key).filter(Boolean),
@@ -86,14 +89,11 @@ export async function renderModelSettings(view: any) {
    */
   const staleCount = rows.filter((m) => !isLiveUpstream(m)).length
   const isAdmin = state.me.role === 'admin'
-  // 屏蔽收费模型开关(读全局设置,默认开)
-  let settings = { blockPremiumModels: true }
+  let settings = { blockPremiumModels: true } // 读全局设置, 默认开
   try { settings = await api('/api/settings') } catch { /* 忽略 */ }
   const blockPremium = settings.blockPremiumModels !== false
-  const blockToggleAttrs = {
-    id: 'block-premium',
-    type: 'checkbox',
-    class: 'switch-input',
+  const blockToggleAttrs: any = {
+    id: 'block-premium', type: 'checkbox', class: 'switch-input',
     onchange: need('saveBlockPremiumSetting'),
   }
   if (blockPremium) blockToggleAttrs.checked = ''

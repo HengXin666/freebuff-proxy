@@ -285,6 +285,7 @@ export async function withLock(this: any, fn: () => Promise<any>): Promise<any> 
     // 锁内的整段执行都带上本账号的日志上下文(refresh / admit / release /
     // 退款追问全走这里) -- 没有它, 探测与释放产生的日志在控制台上
     // 就是几十条无主记录, 按账号筛选筛不出任何东西.
+    // 决策见 .agents/notes/implemented/bug-fix/2026-10-04-log-account-context-and-401-normalization.md.
     return this._logContext
       ? await runWithLogContext(this._logContext, fn)
       : await fn()

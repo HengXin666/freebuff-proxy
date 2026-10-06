@@ -11,6 +11,8 @@
  - 3) 代码里用到但字典里没有的 key → 失败
  *
  - 语种:zh-CN(基准)/ en.
+ - 词条按域切分与目录收敛见 .agents/notes/implemented/architecture/2026-10-05-dashboard-split-locale-and-css.md.
+ - 语言切换机制与 CI 红线见 .agents/notes/implemented/feature/2026-10-02-dashboard-i18n.md.
  - 基准语言是 zh-CN:新增 key 先写进 zh-CN,其它语种缺失会被红线拦下.
  */
 

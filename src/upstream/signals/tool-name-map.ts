@@ -9,6 +9,7 @@
  * (cli-bridge/lib/tool-map.ts 的 MAP_TOOLS)各有一张表, 只有一处带[本次声明]过滤,
  * 于是同一官方名在不同协议路径上会还原成不同的下游名. 这张表是 Node 侧的唯一真源,
  * 流式与非流式两条回程路径都从这里取还原表.
+ * 双向映射的取舍与实证见 .agents/notes/implemented/bug-fix/2026-10-04-tool-name-bidirectional-mapping.md.
  */
 
 /**

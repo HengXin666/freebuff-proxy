@@ -124,6 +124,7 @@ export function officialSessionHeaders(method: any, token: any, opts: any = {}) 
   //   x-freebuff-purchase-continuity: 1
   //   x-freebuff-desktop-attempt-id: <每次新 uuid>
   // 见 docs/reverse/15-protocol-review.md P0-2 / P1-5.
+  // 见 .agents/notes/implemented/bug-fix/2026-10-03-instance-id-bare-uuid-reuse.md
   if (opts.instanceId) {
     headers[HEADER_MULTI_SESSION] = '1'
     headers[HEADER_PURCHASE_CONTINUITY] = '1'

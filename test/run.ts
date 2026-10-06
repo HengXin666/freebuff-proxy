@@ -37,6 +37,8 @@ const SUITES = [
   ['config-passthrough', 'suites/entries/verify/config-passthrough.ts'],
   ['signin', 'suites/entries/verify/signin.ts'],
   ['dashboard-cold-start-state', 'suites/entries/verify/dashboard/cold-start-account-state.ts'],
+  ['dashboard-signin-rerender', 'suites/entries/verify/dashboard/signin-rerender.ts'],
+  ['e2e-dashboard-latency', 'suites/entries/e2e/dashboard-latency.ts'],
 ]
 
 let failed = 0

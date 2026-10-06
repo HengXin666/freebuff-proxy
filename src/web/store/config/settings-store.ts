@@ -29,6 +29,8 @@ interface Settings {
    * [照抄官方] / [换成自己的] / [整段不带] 之间切换并随时回到官方原文.
    * 'official' = 未改过, 用抓包原文; 'custom' = 用 officialSystemPromptText;
    * 'none' = 不带官方 system(下游自己的 system 原样透传).
+   *
+   * 见 .agents/notes/implemented/bug-fix/2026-10-06-config-passthrough-and-system-prompt-controls.md
    */
   officialSystemPromptMode: 'official' | 'custom' | 'none'
   /** 自定义正文; 只在 mode='custom' 时参与渲染. */
@@ -147,6 +149,8 @@ function applyStoredSettings(base: Settings, raw: any): Settings {
     s.toolCarrierEnabled = raw.toolCarrierEnabled
   }
   // 遥测开关必须读回: 它能经 save() 写进 settings.json, 漏读则重启回落到 false.
+  // 白名单读回的纪律与往返回归用例见
+  // .agents/notes/implemented/bug-fix/2026-10-01-web-channel-switch-not-persisted.md
   if (typeof raw?.cliTelemetryEnabled === 'boolean') {
     s.cliTelemetryEnabled = raw.cliTelemetryEnabled
   }

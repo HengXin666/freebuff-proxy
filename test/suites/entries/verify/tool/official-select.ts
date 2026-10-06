@@ -77,15 +77,18 @@ const REF_DOWNSTREAM: string[] = JSON.parse(
   }
 }
 
-// ── 4 selectOfficialTools 的三态必须分开 ─────────────────────────
+// ── 4 selectOfficialTools 的三态 ─────────────────────────
+// 空数组自 2026-10-06 起回落成全注入, 不再表示[一个都不注入]:
+// 上游按工具集完整性判第三方客户端, 出站一个官方工具都不带会被直接拒(503),
+// 所以[裁到 0 个]这个配置没有存在价值. 见
+// .agents/notes/implemented/bug-fix/2026-10-06-official-toolset-floor.md
 {
-  // 未配置 = 全注入(旧行为), 与显式[全不选]语义不同.
   const all = selectOfficialTools(null)
   ok(all.mode === 'all', '未配置必须是 all')
   ok(all.names.length === REAL.length, '未配置要注入全部')
   const none = selectOfficialTools([])
-  ok(none.mode === 'none', '空数组必须是 none')
-  ok(none.names.length === 0, '空数组一个都不注入')
+  ok(none.mode === 'all', '空数组必须回落到 all(裁空会被上游 503)')
+  ok(none.names.length === REAL.length, '空数组要回落成注入全部, got ' + none.names.length)
   const sub = selectOfficialTools(['read_files', 'web_search', 'no_such_tool'])
   ok(sub.mode === 'subset', '给了名单是 subset')
   ok(sub.names.length === 2, '名单外的名字要丢掉, got ' + sub.names.length)

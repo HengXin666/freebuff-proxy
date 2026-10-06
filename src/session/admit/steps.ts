@@ -20,6 +20,7 @@ import { logger } from '../../util/log.ts'
  * (purchase_capacity), 而本地账本显示 status: none, 面板与上游各说各话.
  *
  * 只在确实处于待结束状态时做, 正常路径零开销.
+ * 见 .agents/notes/implemented/bug-fix/2026-10-04-admit-preclean-pending-end-and-per-account-ledger.md
  * @param {any} this 会话实例
  * @param {string} model 请求模型
  * @returns {Promise<void>} 结清或无事发生即返回

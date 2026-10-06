@@ -68,6 +68,8 @@ if (tsFiles.length > 0) {
    * 那里没有 node_modules; 但"能否解析"这件事与 root 在哪无关,
    * 用本仓的 tsc 解析夹具完全等价. 不回落会让语法探针因为"找不到 tsc"
    * 而永久失败(正是本轮 CI 红的原因).
+   *
+   * 探针夹具与 CI 检出的前提见 .agents/notes/implemented/bug-fix/2026-10-05-ci-checkout-and-probe-fixtures.md.
    */
   const ownRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../..')
   const tsc = [

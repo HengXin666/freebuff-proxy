@@ -8,6 +8,7 @@
  * ! 零自动探测(docs/reverse/20 §20.3):GET /api/models 只读本地缓存;
  * GET /api/models/upstream 是"同步上游模型"按钮的后端,属用户主动触发,
  * 允许抓目录.
+ * 见 .agents/notes/implemented/bug-fix/2026-10-03-sync-button-fetches-catalog.md
  */
 import { sendJson } from '../../../../util/http.ts'
 import {
@@ -115,7 +116,7 @@ function listModels(res: ServerResponse, ctx: any) {
  * @param {any} ctx
  * @returns {Promise<void>}
  */
-async function upstreamModels(res: ServerResponse, ctx: any) {
+async function upstreamModels(res: ServerResponse, ctx: any, cachedOnly = false) {
   const { runtimes } = ctx
   const accounts = runtimes.list()
   if (!accounts.length) {
@@ -124,11 +125,16 @@ async function upstreamModels(res: ServerResponse, ctx: any) {
   }
   try {
     // 本接口 = "同步上游模型"按钮的后端,是用户主动触发,所以允许抓目录.
-    await runtimes.refreshCatalogs?.({ force: true })
+    //
+    // cachedOnly(页面加载用)绝不抓上游: 页面加载时的网络请求属于[自动探测],
+    // 本仓约定只允许用户主动刷新时才打上游(见 docs/reverse/20). 实测教训:
+    // 设置页加载时调本接口会白等一轮上游往返(1.65s), 而返回的多半是缓存内容.
+    if (!cachedOnly) await runtimes.refreshCatalogs?.({ force: true })
     const catalog = runtimes.catalogRows?.() || { rows: [], issuedAt: null }
     // 抓到目录后顺带刷一次会话补额度/单价:用户点的是"同步上游模型",
     // 要的是一份能用的清单(名字 + 价格 + 额度),不是只有名字的空壳.
-    if (catalog.rows.length) {
+    // cachedOnly 时同样跳过 ---- 会话探测也是打上游.
+    if (!cachedOnly && catalog.rows.length) {
       try {
         await probeAllAccountsSession(runtimes)
       } catch {
@@ -176,17 +182,23 @@ async function upstreamModels(res: ServerResponse, ctx: any) {
  *
  * @param {string} method HTTP 方法
  * @param {string} route 规范化路径
+ * @param {import('node:http').IncomingMessage} req 原始请求(读 cached 参数)
  * @param {import('node:http').ServerResponse} res
  * @param {any} ctx 路由上下文
  * @returns {Promise<boolean>} true = 已处理
  */
-export async function handleList(method: string, route: string, res: ServerResponse, ctx: any) {
+export async function handleList(
+  method: string, route: string, req: any, res: ServerResponse, ctx: any,
+) {
   if (method === 'GET' && route === '/api/models') {
     listModels(res, ctx)
     return true
   }
   if (method === 'GET' && route === '/api/models/upstream') {
-    await upstreamModels(res, ctx)
+    // ?cached=1: 只读本地目录缓存, 不打上游(给页面加载用).
+    const cachedOnly = new URL(String(req?.url || '/'), 'http://localhost')
+      .searchParams.get('cached') === '1'
+    await upstreamModels(res, ctx, cachedOnly)
     return true
   }
   return false

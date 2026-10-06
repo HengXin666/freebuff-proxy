@@ -130,6 +130,8 @@ function lookupPrice(self: any, fb: any, model: string): number | null {
  *
  * 判据是 price === 0(不是"price 缺失"): 缺失在上面已走 unmetered 分支放行并
  * 明确标注, 那是"上游没给价"的未知态; 这里是"上游明确标价 0"的已知免费态.
+ *
+ * 决策见 .agents/notes/implemented/bug-fix/2026-10-04-free-models-must-not-be-gated-by-freebucks.md.
  * @param {any} fb Freebucks 块
  * @param {number} price 该模型单价
  * @returns {any} 判定结果

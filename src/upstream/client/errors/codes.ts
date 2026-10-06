@@ -108,6 +108,9 @@ export function extractRateLimitError(body: any, status?: number): string | null
  *   m-00032eaeec recent=6 limit=6   ← 打满
  *   resetAt = 2026-10-03T07:00:00.000Z(period: pacific_day)
  *
+ * 现场实测与[不并进 model_unavailable 冷却]的取舍见
+ * .agents/notes/implemented/bug-fix/2026-10-02-daily-session-quota-503.md
+ *
  * @param {any} quota session 回执里的 rateLimitsByModel / rateLimit
  * @param {string} [model] 目录 key(m-xxx);不传时只看是否全满
  * @returns {{ exhausted: boolean, resetAtMs: number | null, limit: number | null, recentCount: number | null }}

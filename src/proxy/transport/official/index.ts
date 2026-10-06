@@ -189,7 +189,28 @@ function resolveSystemPrompt(s: any): { mode: string, text?: string } | undefine
  */
 function officialToolsToInject(ctx: any, declared: any): string[] {
   const sel = selectOfficialTools(ctx.settingsStore?.get?.()?.officialToolNames)
-  return sel.mode === 'all' ? injectableOfficialTools(declared) : sel.names
+  const names = sel.mode === 'all' ? injectableOfficialTools(declared) : sel.names
+  /**
+   * 记录本次注入的工具集规模, 供控制台[工具判据]卡片展示.
+   *
+   * 为什么必须记: 上游按工具集完整性/是否含外来工具名判第三方客户端, 判错的
+   * 表现是 503 或回答变差, 而[为什么被判]在服务端完全不可见. 这里把
+   * [本次实际注入了几个官方工具]落成可查询状态, 控制台据此给出明确告警.
+   */
+  try {
+    ctx.lastToolInjection = {
+      at: Date.now(),
+      mode: sel.mode,
+      configured: Array.isArray(ctx.settingsStore?.get?.()?.officialToolNames)
+        ? ctx.settingsStore.get().officialToolNames.length
+        : null,
+      injected: names.length,
+      declared: Array.isArray(declared) ? declared.length : (declared?.size ?? null),
+    }
+  } catch {
+    // 展示用数据, 失败不影响转发
+  }
+  return names
 }
 
 /**

@@ -114,6 +114,17 @@ export default {
     en: 'Official tool injection updated (applies to the next request)',
   },
   'system.officialSystem': { 'zh-CN': '官方系统提示词', en: 'Official system prompt' },
+  'system.officialSystemWrap': { 'zh-CN': '自动换行', en: 'Wrap' },
+  'system.officialSystemWrapHint': {
+    'zh-CN': '长行折到窗口宽度内显示；关掉则横向滚动看原始行.',
+    en: 'Fold long lines to the window; turn off to scroll horizontally.',
+  },
+  'system.officialSystemAutoSaved': {
+    'zh-CN': '编辑后自动保存', en: 'Auto-saved as you type',
+  },
+  'system.officialSystemRestored': {
+    'zh-CN': '已恢复官方原文并保存', en: 'Official text restored and saved',
+  },
   'system.officialSystemHint': {
     'zh-CN':
       '官方模板明文要求模型调用 suggest_prompts、写待办、申请提权、操作浏览器预览等工具。'
@@ -125,25 +136,19 @@ export default {
       + 'fail with unknown tool when the model follows the prompt. Replace it with your own '
       + 'instructions, or drop the official prompt entirely. Applies to later requests.',
   },
-  'system.officialSystemMode': { 'zh-CN': '处理方式', en: 'Mode' },
-  'system.officialSystemModeOfficial': { 'zh-CN': '照抄官方原文（默认）', en: 'Use the official capture (default)' },
-  'system.officialSystemModeCustom': { 'zh-CN': '使用下面的自定义正文', en: 'Use the custom text below' },
-  'system.officialSystemModeNone': { 'zh-CN': '不带官方系统提示词', en: 'Send no official system prompt' },
   'system.officialSystemPlaceholder': {
     'zh-CN': '选择[使用下面的自定义正文]后可在此编辑…',
     en: 'Select "custom text" to edit here…',
   },
   'system.officialSystemDirty': { 'zh-CN': '有未保存的改动', en: 'Unsaved changes' },
-  'system.officialSystemApply': { 'zh-CN': '应用', en: 'Apply' },
   'system.officialSystemRestore': { 'zh-CN': '恢复官方原文', en: 'Restore the official text' },
-  'system.officialSystemView': { 'zh-CN': '查看官方原文', en: 'View the official text' },
-  'system.officialSystemSaved': {
-    'zh-CN': '官方系统提示词已更新（下一个请求生效）',
-    en: 'Official system prompt updated (applies to the next request)',
-  },
-  'system.officialSystemRestoreUnavailable': {
-    'zh-CN': '读不到官方原文（抓包文件缺失），无法恢复',
-    en: 'The official capture is unavailable, so it cannot be restored',
+  'system.officialToolsEmptyWarn': {
+    'zh-CN':
+      '注意：一个都不注入时，上游会因为工具集不完整而直接拒绝请求（返回 503）。'
+      + '所以这种配置不会生效 —— 保存后会自动回退成按下游声明自动注入。',
+    en:
+      'Warning: injecting nothing makes upstream reject the request outright (503), because the tool set '
+      + 'is then incomplete. Such a configuration does not take effect: it falls back to auto-injection.',
   },
   'system.officialToolsStatusAuto': {
     'zh-CN': '未配置（自动）',
@@ -161,6 +166,7 @@ export default {
     'zh-CN': '改动作用于之后的请求，已在途的请求不受影响。',
     en: 'Changes apply to later requests; requests already in flight are unaffected.',
   },
+  'system.officialToolsCountLabel': { 'zh-CN': '已勾选', en: 'Checked' },
   'system.blockPremiumOn': { 'zh-CN': '已屏蔽收费模型（列表与调度已排除）', en: 'Paid models blocked (excluded from the list and from scheduling)' },
   'system.blockPremiumOff': { 'zh-CN': '已显示收费模型', en: 'Paid models shown again' },
   'system.scheduling': { 'zh-CN': '账号调度', en: 'Account scheduling' },

@@ -98,6 +98,9 @@ function clampDimension(value: any) {
  * osc = na.这是自洽的取值 ---- 官方自己也有 na 桶表示"未查询/不适用",
  * 伪造成一个真实终端反而与运行环境矛盾.
  *
+ * 字段面与取值取舍见
+ * .agents/notes/implemented/bug-fix/2026-09-30-client-env-descriptor.md
+ *
  * @param {{ env?: Record<string, string|undefined>, columns?: number, rows?: number }} [opts]
  * @returns {string}
  */

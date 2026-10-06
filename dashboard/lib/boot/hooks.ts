@@ -11,6 +11,8 @@ import { t } from '../../locale/index.ts'
  *
  * 范围限定:只登记[视图 -> 视图]的联动.lib/ 下的纯工具(dom/api/format 等)
  * 不在此列,照常静态 import ---- 它们没有反向依赖,不存在成环风险.
+ *
+ * 见 .agents/notes/implemented/architecture/2026-10-05-entry-and-frontend-lib-split.md
  */
 
 /** 已登记的跨视图回调(名字 -> 实现). */

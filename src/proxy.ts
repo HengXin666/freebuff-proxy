@@ -18,6 +18,9 @@ import { runChatLoop } from './proxy/chat/run/loop.ts'
  * 状态必须每请求一份: createChatState() 在请求作用域内调用, 字段不提成模块级变量
  * 或类实例字段.
  *
+ * 顶层路径与导出名是契约面: 保留原路径 + 按职责拆子目录
+ * (见 .agents/notes/implemented/architecture/2026-10-05-src-top-level-split-by-responsibility.md).
+ *
  * @param {object} ctx 依赖集合(config / runtimes / userStore / settingsStore / modelStore)
  * @returns {{ handle: (req: object, res: object) => Promise<void> }} 请求处理器
  */

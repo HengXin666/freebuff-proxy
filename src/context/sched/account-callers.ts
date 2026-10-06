@@ -23,6 +23,8 @@ import { PAID_WINDOW_BOUND_CODES } from '../state/codes.ts'
  *
  * 取不到名字时原样返回, 不隐藏信息(与 catalogDisplayName 同一条纪律).
  *
+ * 见 .agents/notes/implemented/bug-fix/2026-10-05-readable-model-name-everywhere.md
+ *
  * @param {any} self 账号池(runtimes)
  * @param {any} model 请求模型(可能是目录 key)
  * @returns {string} 可读模型名

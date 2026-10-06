@@ -28,6 +28,8 @@ import {
  *
  * 客户端就是 bun 跑的, 所以只有 bun 这一跳能做到逐字节相同.
  * bun 不可用(未随镜像分发 / 执行失败)时退回 Node 路径, 可用性优先.
+ *
+ * 见 .agents/notes/implemented/bug-fix/2026-10-03-catalog-request-via-bun.md
  * @param {any} holder CatalogHolder 实例
  * @returns {Promise<any|null>} 目录原文;不可用返回 null
  */
@@ -75,6 +77,7 @@ async function fetchViaNode(holder: any) {
       //     include-unused-rate-limits:那些是 session 那跳的头;
       //   - 设备签名三头:官方时序是 catalog(无签名)-> device-keys ->
       //     session(开始签名),catalog 这一跳不签.
+      // 见 .agents/notes/implemented/bug-fix/2026-10-03-catalog-fetch-unsigned.md
       headers: {
         authorization: `Bearer ${holder.token}`,
         [HEADER_CATALOG_PROTOCOL]: CATALOG_PROTOCOL_VERSION,

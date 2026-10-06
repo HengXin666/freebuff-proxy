@@ -73,6 +73,7 @@ function strictness() {
 
 // 快照不含 hooks: .git/hooks 不入库, 本地装了而 CI 没有, 同一份代码会算出
 // 本地环境状态不属于它. hook 是否跑门禁, 由 CI 直接跑 check:gates 来守.
+// 见 .agents/notes/implemented/process/2026-10-05-fingerprint-excludes-local-hook-state.md
 const snapshot = { version: 1, algorithm: 'sha256', ...strictness(), wiring: wiring() }
 snapshot.fingerprint = createHash('sha256').update(stable(snapshot)).digest('hex')
 

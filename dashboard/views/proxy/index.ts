@@ -54,20 +54,8 @@ export async function renderProxySettings(view: any) {
   const lowBalanceThreshold = settings.lowBalanceThreshold ?? 15
   state.lowBalanceThreshold = lowBalanceThreshold
   const advice = idleReleaseAdvice(state.accounts)
-  /**
-   * 按用途分四区渲染, 不再把 8 张卡平铺成一长串.
-   *
-   * 为什么必须分区(用户反馈): 原先总览页尾部一次性挂出工具签名 / 工具兜底 /
-   * 工具承载 / 请求链路 / 负载均衡 / 额度保护 / 代理池 / 可调项, 八张卡视觉
-   * 权重完全相同, "代理池"与"额度保护"这种毫不相干的配置挤在一起, 看不出归属,
-   * 也找不到想改的那一项. 分区后每区有自己的标题与说明, 跳转条按区定位.
-   */
-  /**
-   * 官方工具注入名单: null = 未配置(全部注入), 数组(含空) = 控制台配置过.
-   *
-   * 必须原样透传 null ---- 它与空数组在服务端语义不同(全部注入 / 一个都不注入),
-   * 前端混同会让用户一保存就改掉配置.
-   */
+  // 按用途分区渲染(见 sections.ts); officialToolNames 必须原样透传 null,
+  // 它与空数组在服务端语义不同(全部注入 / 一个都不注入).
   for (const section of buildSettingsSections({
     toggleAttrs, signatureEnabled, stripAttrs, stripTools,
     carrierAttrs, carrierEnabled, channel,
@@ -77,14 +65,13 @@ export async function renderProxySettings(view: any) {
       : null,
     toolsDisabled: state.me.role !== 'admin',
     onOfficialToolsApply: saveOfficialToolsSetting,
-    // 官方 system 提示词三态与原文(见 views/proxy/system-prompt.ts).
-    systemPromptMode: settings.officialSystemPromptMode === 'custom'
-      || settings.officialSystemPromptMode === 'none'
-      ? settings.officialSystemPromptMode
-      : 'official',
-    systemPromptText: typeof settings.officialSystemPromptText === 'string'
+    // 编辑器正文: 自定义态用存下的正文, 其余态显示官方原文(否则打开是空白).
+    systemPromptText: settings.officialSystemPromptMode === 'custom'
+      && typeof settings.officialSystemPromptText === 'string'
       ? settings.officialSystemPromptText
-      : '',
+      : (typeof settings.officialSystemPromptDefault === 'string'
+        ? settings.officialSystemPromptDefault
+        : ''),
     systemPromptDefault: typeof settings.officialSystemPromptDefault === 'string'
       ? settings.officialSystemPromptDefault
       : '',

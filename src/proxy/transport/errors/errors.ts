@@ -40,6 +40,9 @@ export function isToolSchemaRejection(status: number, text: string): boolean {
  *
  * 只做识别与告警, 不改变转发行为: 流式路径下响应体已被消费.
  *
+ * 判据来源, 码表, 以及先落判据不接管道的取舍见
+ * .agents/notes/implemented/bug-fix/2026-10-02-body-embedded-upstream-error.md
+ *
  * @param {string} text 响应体原文(已流式接收的完整文本)
  * @returns {string | null} 命中的错误码
  */
@@ -129,6 +132,8 @@ export function shouldSwitchAccountOnError(status: number | undefined, code: unk
    *  503 不冷却账号: 它是模型侧问题, 处置与 purchase_capacity 同类 --
    * 跳过不冷却, 保留 switchAccount 语义(试下一个账号, 不冷却当前账号).
    * 见 docs/reverse/07-503-root-cause.md
+   * 503 文案不带原因, 不能当作模型映射的判据, 见
+   * .agents/notes/implemented/bug-fix/2026-10-01-chat-503-not-model-mapping.md
    */
   // status 可能为 undefined(上游错误体里没带 HTTP 码): 此时按码判定不成立,
   // undefined >= 500 为 false.

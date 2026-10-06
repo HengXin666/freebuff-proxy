@@ -129,11 +129,13 @@ function buildLogRow(line: any, idx: any) {
             onclick: (e: any) => {
               e.stopPropagation()
               logsView.q = line.reqId
-              const input = document.querySelector('#logs-search')
+              // 输入框的真实 id 是 logs-q(曾误写成 logs-search, 于是点了没反应).
+              const input = document.querySelector('#logs-q') as HTMLInputElement | null
               if (input) input.value = line.reqId
               refreshLogs()
             },
-          }, '#' + line.reqId)
+          // 带标签: 裸 '#' + reqId 看起来像乱码, 用户不知道那是什么.
+          }, t('logs.reqIdBadge') + ' ' + line.reqId)
         : null,
       // 颗粒度与事件类型: 请求日志显示"请求", 独立事件显示它的类型(双语).
       kindBadge(line),
@@ -183,6 +185,11 @@ function renderLogsList() {
  - 导出的是 logsView.lines(当前已加载的),与页面所见严格一致;
  - 每行一个 JSON 对象(jsonl),人能读,jq 也能直接消费.
  - 文件名带上筛选条件,避免多份导出混淆.
+ */
+/**
+ * 导出当前筛选结果.
+ *
+ * @returns {void} 无返回值
  */
 function exportLogs() {
   const lines = logsView.lines || []
@@ -289,7 +296,6 @@ export async function renderLogs(view: any) {
         class: 'danger',
         id: 'logs-clear-btn',
         onclick: async () => {
-          if (!confirm(t('logs.clearConfirm'))) return
           try {
             await api('/api/logs', { method: 'DELETE' })
             logsView.lines = []

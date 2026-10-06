@@ -13,6 +13,8 @@
  *
  * 名字集必须与抓包真值 docs/reverse/captures/official-tools.json 逐条一致;
  * 上游改工具集后必须回来重对(test/suites/entries/verify/tool/official-select.ts 有断言).
+ *
+ * 见 .agents/notes/implemented/feature/2026-10-06-official-tool-injection-selection.md
  */
 
 /** 分类: common 可派发 / orphan 不可派发. */
@@ -107,7 +109,12 @@ export function selectOfficialTools(selected: unknown): OfficialToolSelection {
   const want = new Set(
     (Array.isArray(selected) ? selected : []).filter((n) => typeof n === 'string' && n),
   )
-  if (want.size === 0) return { names: [], mode: "none" }
+  // 空数组不再等于[一个都不注入]: 上游按[工具集完整性]判第三方客户端, 出站
+  // 一个官方工具都不带会被直接拒(2026-10-06 实测: 无 tools / 单个工具 -> 503,
+  // 完整 37 工具 -> 200). 所以这里把它当成[未配置], 走自动规则.
+  // 下拉到 0 个的能力没有存在价值 ---- 它只会制造一个必然失败的配置.
+  // 见 .agents/notes/implemented/bug-fix/2026-10-06-official-toolset-floor.md
+  if (want.size === 0) return { names: [...ALL_OFFICIAL_TOOL_NAMES], mode: "all" }
   const names = ALL_OFFICIAL_TOOL_NAMES.filter((n) => want.has(n))
   return { names, mode: 'subset' }
 }

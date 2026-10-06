@@ -95,6 +95,7 @@ export function requireModelId(requested: unknown): string | null {
  * 3. 对上游:只传映射后的合法内容(key 或服务端句柄 fbm1.).
  *
  * 全仓只此一处实现该映射, 保证"对外展示"与"内部映射"严格 1:1.
+ * 见 .agents/notes/implemented/architecture/2026-10-04-model-name-three-layers.md.
  *
  * 回退顺序:displayName -> key.
  *

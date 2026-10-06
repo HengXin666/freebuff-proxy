@@ -16,6 +16,7 @@ import { logger } from '../../util/log.ts'
  *
  * 取并集: 目录是逐账号持有的(每个 runtime 各抓一次), 任一账号抓失败都不该让清单
  * 退化成空. 并集按 key 去重, 同 key 取第一条.
+ * 见 .agents/notes/implemented/bug-fix/2026-10-03-catalog-is-the-model-list.md
  *
  * @param {any} this 账号池(runtimes)
  * @returns {{ rows: any[], issuedAt: number | null, version: string | null, accountCount: number, readyCount: number }}

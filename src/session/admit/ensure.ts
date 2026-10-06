@@ -116,6 +116,8 @@ async function awaitSwitchWindow(self: any, model: string): Promise<void> {
  * 只是这一个小时内只能服务旧模型).
  *
  * 只拦[模型不符], 不拦[即将过期需要续期]: 后者是同一模型的 re-admit.
+ *
+ * 决策与证据见 .agents/notes/implemented/bug-fix/2026-10-04-paid-window-model-switch-voids-hour.md.
  * @param {any} this 会话实例
  * @param {string} model 请求模型
  * @returns {void} 不命中则静默返回; 命中则抛出

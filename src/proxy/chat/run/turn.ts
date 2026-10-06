@@ -48,6 +48,10 @@ export async function runUpstreamTurn(st: any, res: any) {
    */
   await refreshIfExpired(rt.upstream?.catalog)
 
+  // 记下最近一次下游声明的工具(名称 + 描述), 供控制台[系统提示词]页展示.
+  // 主服务不持有下游工具表(那是每个请求带进来的), 记最近一次是为了让使用者
+  // 看到[自己客户端到底声明了什么].
+  rememberDeclaredTools(ctx, st.body?.tools)
   const agentId = await startAgentRunWithFallback(st)
   const hermesDelegateAlias = chooseHermesDelegateAlias(st.body.tools)
   const built = buildTurnBody(st, agentId, snap, hermesDelegateAlias)
@@ -84,6 +88,28 @@ export async function runUpstreamTurn(st: any, res: any) {
     })
   }
   return result
+}
+
+/**
+ * 记下最近一次下游声明的工具清单(名称 + 描述)到 ctx.
+ *
+ * 只保留展示需要的两个字段, 且封顶条数 ---- 提示词页是给人看的,
+ * 一个客户端声明上千个工具时不该把响应体撑爆.
+ *
+ * @param {any} ctx 请求级依赖集合
+ * @param {any} tools 下游声明的工具数组(OpenAI 形态)
+ * @returns {void} 无返回值
+ */
+function rememberDeclaredTools(ctx: any, tools: any) {
+  if (!Array.isArray(tools)) return
+  try {
+    ctx.lastDeclaredTools = tools.slice(0, 300).map((t: any) => ({
+      name: typeof t?.function?.name === 'string' ? t.function.name : '',
+      description: typeof t?.function?.description === 'string' ? t.function.description : '',
+    })).filter((t: any) => t.name)
+  } catch {
+    // 展示用数据, 失败不影响转发
+  }
 }
 
 /**
@@ -143,6 +169,9 @@ function errorMessageOf(result: any) {
  *   snap.model   服务端指派的 model(用错得到 session_model_mismatch)
  *   runId        本 run 的身份(FINISH 上报与 RPC 回落都要用)
  *   clientId     绑定 run 生命周期, 同一 run 的多次 chat 复用它
+ *
+ * 会话指派值优先于客户端请求的模型名这一条见
+ * .agents/notes/implemented/bug-fix/2026-10-01-session-bound-model-authority.md
  * @param {any} st 请求级状态
  * @param {any} agentId 本轮实际使用的 agent
  * @param {any} snap 会话快照

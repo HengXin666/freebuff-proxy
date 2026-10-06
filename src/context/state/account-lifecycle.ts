@@ -192,6 +192,7 @@ export function _restoreAccountState(this: any) {
   }
   // 账本里的 lastSuccessKey 是可能悬空的指针: 指向的 key 不在当前凭据列表里就丢弃,
   // 让 getAny() 回落到 keys[0].
+  // 见 .agents/notes/implemented/bug-fix/2026-10-03-stale-last-success-key.md
   if (this._lastSuccessKey && !this.allKeys().includes(this._lastSuccessKey)) {
     this._lastSuccessKey = null
   }

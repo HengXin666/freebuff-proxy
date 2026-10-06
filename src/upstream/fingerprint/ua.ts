@@ -27,6 +27,7 @@ export const KNOWN_CLI_VERSION = '0.0.178'
  */
 export const OFFICIAL_CHAT_UA_VERSION = '0.0.0-test'
 // 第三段固定在 runtime/bun/1.4.2; 抓包样本见 docs/reverse/14-captured-diff.md
+// 见 .agents/notes/implemented/bug-fix/2026-10-03-chat-header-and-ua-desktop.md
 export const OFFICIAL_CHAT_UA_SUFFIX =
   'ai-sdk/provider-utils/3.0.25 runtime/bun/1.4.2'
 /**

@@ -15,7 +15,11 @@ import { newRawInstanceId } from '../upstream/fingerprint/official-fingerprint.t
 import { SESSION_METHODS } from './methods.ts'
 import { createSessionState, installSessionState } from './state.ts'
 
-/** 本进程复用的会话实例 id 来源(裸 UUID, 见 official-fingerprint). */
+/**
+ * 本进程复用的会话实例 id 来源(裸 UUID, 见 official-fingerprint).
+ * 复用而非每次 admission 新建的理由见
+ * .agents/notes/implemented/bug-fix/2026-10-03-instance-id-bare-uuid-reuse.md
+ */
 function newManagerInstanceId(): string {
   return newRawInstanceId()
 }

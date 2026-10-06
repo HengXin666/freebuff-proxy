@@ -25,7 +25,7 @@ export async function handle(
   user: any,
   ctx: any,
 ) {
-  if (await handleList(method, route, res, ctx)) return true
+  if (await handleList(method, route, req, res, ctx)) return true
   if (await handleCustom(method, route, req, res, user, ctx)) return true
   return false
 }

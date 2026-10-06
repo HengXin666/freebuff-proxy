@@ -2,6 +2,7 @@
 /**
  * 服务入口: 只做启动编排, 实现按职责拆进 bin/serve/(cli-args / startup-report)
  * 与 bin/serve/boot/(数据自检 / 管理员引导 / 上游预热 / store 装配 / 生命周期).
+ * 见 .agents/notes/implemented/architecture/2026-10-05-entry-and-frontend-lib-split.md
  *
  * 顺序是刻意的, 每一步都有理由:
  *   参数 -> 自重启端口等待 -> users.json 准入 -> store 装配 -> 管理员引导 ->

@@ -42,13 +42,13 @@ export function buildSettingsSections(ctx: any) {
       ),
     ]),
     settingsSection('settings.sectionUpstream', 'settings.sectionUpstreamHint', [
-      buildSystemPromptCard(
-        ctx.systemPromptMode, ctx.systemPromptText, ctx.systemPromptDefault, ctx.toolsDisabled,
-      ),
       buildUpstreamChannelCard(ctx.channel),
       buildFreeToolSignatureCard(ctx.toggleAttrs, ctx.signatureEnabled),
       buildStripToolsCard(ctx.stripAttrs, ctx.stripTools),
       buildToolCarrierCard(ctx.carrierAttrs, ctx.carrierEnabled),
+    ]),
+    settingsSection('settings.sectionSystemPrompt', 'settings.sectionSystemPromptHint', [
+      buildSystemPromptCard(ctx.systemPromptText, ctx.systemPromptDefault, ctx.toolsDisabled),
     ]),
     settingsSection('settings.sectionScheduling', 'settings.sectionSchedulingHint', [
       buildLoadBalanceCard(ctx.schedMode, ctx.concurrency, ctx.overflowWaitMs),

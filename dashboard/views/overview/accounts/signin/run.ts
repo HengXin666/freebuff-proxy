@@ -56,7 +56,11 @@ export async function renderSignInButton(slot: any) {
     title: st && !canSign
       ? t('signin.cooldownTip', { time: fmtRemain(st.remainMs || 0) })
       : t('signin.tip'),
-    onclick: (e: any) => runSignIn(e.currentTarget, st),
+    // 把 slot 显式传下去, 不用 btn.parentElement 反推 ----
+    // 按钮被包进 wrap 之后, parentElement 拿到的是 wrap 而不是真正的容器,
+    // 回读时会把 renderSignInButton(wrap) 当成 renderSignInButton(slot),
+    // 于是每点一次就多一层 .signin-wrap 嵌套 + 多一条警告条(实测会无限累积).
+    onclick: () => runSignIn(btn, st, slot),
   }, [icon('gift', 14), t('signin.button')])
   // 成本警告条常驻在按钮下方(不是 tooltip): 这条信息决定[这次点击要不要
   // 花掉用户一小时的钱], 藏起来等于没有. 用户明确要求[不要让用户觉得
@@ -81,9 +85,10 @@ export async function renderSignInButton(slot: any) {
  *
  * @param {any} btn 按钮
  * @param {any} st 渲染时缓存的 /api/signin 回执(取其 impact 给确认框)
+ * @param {any} slot 按钮所在的容器(回读时重渲染用; 不用 parentElement 反推)
  * @returns {Promise<void>} 无返回值
  */
-export async function runSignIn(btn: any, st: any) {
+export async function runSignIn(btn: any, st: any, slot?: any) {
   if (!btn) return
   // 二次确认: 这个动作可能花掉用户一小时的钱, 所以必须在他点下[确认]之前
   // 把成本摊开讲(见 signin/confirm.ts). 取消(按钮/Esc/点遮罩)则什么都不做.
@@ -111,7 +116,8 @@ export async function runSignIn(btn: any, st: any) {
     btn.disabled = false
     label.textContent = original
     // 回读状态: 成功后按钮要变成[冷却中], 否则用户能连点(后端会拦, 但体验差).
-    const slot = btn.parentElement
+    // 容器用调用方传进来的那个 ---- 反推(btn.parentElement)会拿到 wrap,
+    // 结果是容器被层层套娃, 警告条无限累积.
     if (slot) await renderSignInButton(slot)
   }
 }

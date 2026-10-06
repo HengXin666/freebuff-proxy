@@ -11,6 +11,7 @@ let settings = { level: 'info' }
  *
  * 有界:超容量丢最旧的(默认 5000 条,由 logging.ring_cap 决定;
  * configureLogger() 启动时接线;0 = 不保留).
+ * 决策与页面证据见 .agents/notes/implemented/feature/2026-09-30-console-log-viewer.md.
  * @type {Array<Record<string, any>>}
  */
 const ring: Array<Record<string, any>> = []
@@ -22,6 +23,7 @@ let ringCap: number = LOG.ringCapDefault
  *
  * 用 AsyncLocalStorage 把上下文透传进所有下游调用, logger 自动带上
  * reqId / account / model, 前端按 reqId 聚合.
+ * 见 .agents/notes/implemented/feature/2026-10-03-log-context-reqid-account.md
  */
 let als: any = null
 try {

@@ -27,6 +27,7 @@ type FetchLike = (url: string, init?: any) => Promise<Response>
 /**
  * bun 通道总开关.
  *
+ * 见 .agents/notes/implemented/feature/2026-10-03-bun-channel-kill-switch.md
  * @returns {boolean} true 表示允许走 bun 通道
  */
 export function bunEnabled(): boolean {
@@ -211,7 +212,9 @@ export function makeSessionViaBun(
       if (!cfg) return null
       // 会话这一跳客户端是带 install-id 的(chat 不带,故 buildRpcCfg 置 null)
       cfg.installId = installIdFromClientState() || null
-      // 主机随主服务配置走, 保证镜像对照与主服务指向同一上游
+      // 主机随主服务配置走, 保证镜像对照与主服务指向同一上游(硬编码会让
+      // 本地镜像对照变成真的打到上游), 见
+      // .agents/notes/implemented/bug-fix/2026-10-03-session-via-bun-port.md
       cfg.apiHost = apiBase || null
       const r = await mod.rpcSession({
         cfg,

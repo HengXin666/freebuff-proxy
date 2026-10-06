@@ -39,6 +39,7 @@ interface SignerDeps {
  * catalog 这一跳不带设备签名:抓包真值(2026-10-03,165 条)显示客户端只有
  * /session 带签名三头(13 次),/models 与 /device-keys 都不带;给 catalog
  * 也签名会换成另一份响应.见 docs/reverse/19 19.2.
+ * 见 .agents/notes/implemented/bug-fix/2026-10-03-catalog-fetch-unsigned.md
  *
  * @param {{ apiBase: string, token: string, fetchWithProxy: Function }} deps 依赖
  * @returns {any} 目录持有者
@@ -49,7 +50,8 @@ function makeCatalog({ apiBase, token, fetchWithProxy }: { apiBase: string, toke
     token,
     // bun 通道:catalog 这一跳交给官方同一个运行时发,做到头集逐字节一致
     //(Node 会自动加 accept-language / sec-fetch-mode,且后者设不掉).
-    // 懒加载 cli-bridge,失败时为 null -> 自动退回 Node 路径.见 docs/reverse/19 19.10.
+    // 懒加载 cli-bridge,失败时为 null -> 自动退回 Node 路径.见 docs/reverse/19 19.10
+    // 与 .agents/notes/implemented/bug-fix/2026-10-03-catalog-request-via-bun.md.
     bunFetch: makeBunFetcher(apiBase),
     fetchImpl: async (url: string, init?: any) => {
       const headers = { ...(init?.headers || {}) }

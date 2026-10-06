@@ -36,6 +36,9 @@ import {
 } from './signing.ts';
 import { registerDeviceKey } from './register.ts';
 
+// 这组导出是设备签名契约的唯一真源(测试直接断言常量与纯函数), DeviceSigner
+// 内部复用同一批函数而不另写一份; 导出面被删过一次的事故与取舍见
+// .agents/notes/implemented/bug-fix/2026-10-02-device-signing-export-surface.md
 export {
   DEVICE_KEYS_PATH,
   DEVICE_KEY_HEADER,

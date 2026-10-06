@@ -202,6 +202,7 @@ export function buildForwardBody(
   // 是身份/世代错配的根源.见 docs/reverse/17-current-status-and-gaps.md.
   //
   // 优先级:ctx.settingsStore(前端可调)> ctx.config.upstream.channel(兜底).
+  // 见 .agents/notes/implemented/feature/2026-10-03-upstream-channel-switch.md
   const channel = resolveUpstreamChannel(
     ctx.settingsStore?.get?.(),
     ctx.config,
@@ -224,6 +225,8 @@ export function buildForwardBody(
   //  必须 ?.get()?.:只写 ?.get(). 时,ctx.settingsStore 存在而 get() 返回
   // undefined(store 尚未就绪/读盘降级)会抛 TypeError,直接打断带工具的
   // 转发链路 ---- 与同文件 blockPremiumModels(ctx) 的写法保持一致.
+  // 这个写法的取舍与实测归因见
+  // .agents/notes/implemented/bug-fix/2026-10-01-settings-optional-chain.md
   const freeToolSignatureEnabled =
     ctx.settingsStore?.get?.()?.freeToolSignatureEnabled !== false
   if (channel !== 'official') {

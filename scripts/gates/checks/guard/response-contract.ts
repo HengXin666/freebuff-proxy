@@ -38,6 +38,11 @@ const LITERAL_EXEMPT = [
   'src/catalog/',
 ]
 
+/** markdown 一律豁免: 讲字段名正是它的职责(如 AGENTS.md 里的[哪个字段归哪个契约]). */
+function isDocFile(rel) {
+  return rel.endsWith('.md')
+}
+
 /** 只扫这些目录找裸字面量(产品运行时代码). */
 const SCAN_ROOTS = ['src/', 'bin/']
 
@@ -111,6 +116,7 @@ function surveyLiterals(fields, codes) {
   for (const rel of trackedFiles()) {
     if (!SCAN_ROOTS.some((p) => rel.startsWith(p))) continue
     if (LITERAL_EXEMPT.some((p) => rel.startsWith(p))) continue
+    if (isDocFile(rel)) continue
     let text
     try {
       text = fs.readFileSync(path.join(ROOT, rel), 'utf8')

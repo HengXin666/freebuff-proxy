@@ -88,6 +88,62 @@ async function ensureTheme(monaco: any): Promise<boolean> {
 }
 
 /**
+ * Monaco 的创建选项.
+ *
+ * 抽出来只为让 createCodeEditor 不超函数长度红线; 内容本身是纯配置.
+ *
+ * @param {any} o 取值(value / language / wordWrap / themed)
+ * @returns {any} Monaco 创建选项
+ */
+/**
+ * 按需算高度并设到容器上.
+ *
+ * 高度三种传法: 数字(px) / 'fill'(按容器到视口底部的剩余空间) / 其它 CSS 长度.
+ * 'fill' 的存在是为了[整页不出竖直滚动条]: 编辑器吃掉剩下的高度.
+ *
+ * @param {any} host 容器
+ * @param {any} height 传法
+ * @returns {() => void} 重新计算并应用高度的函数
+ */
+function makeFillHeight(host: any, height: any) {
+  const apply = () => {
+    if (height === 'fill') {
+      const box = host.getBoundingClientRect()
+      const top = box.top + window.scrollY
+      // 底部留余量(卡片下边框 + 内边距 + 呼吸位约 48px), 留少了会多出滚动条.
+      host.style.height = `${Math.max(240, Math.round(window.innerHeight - top - 48))}px`
+    } else {
+      host.style.height = typeof height === 'number' ? `${height}px` : String(height)
+    }
+  }
+  apply()
+  return apply
+}
+
+function editorOptions(o: any) {
+  return {
+    value: o.value,
+    language: o.language,
+    theme: o.themed ? 'one-dark-pro' : 'vs-dark',
+    automaticLayout: true,
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+    fontSize: 12,
+    // 行号必须开: 提示词动辄上万字, 没有行号无法定位.
+    lineNumbers: 'on',
+    lineNumbersMinChars: 4,
+    renderLineHighlight: 'all',
+    // 折行: 提示词是很长的散文, 不折行会横向溢出被右边缘切断(实测第 1 行就被切掉).
+    wordWrap: o.wordWrap,
+    wrappingIndent: 'same',
+    tabSize: 2,
+    // 允许自由编辑(只读由 setReadOnly 控制).
+    readOnly: false,
+    scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
+  }
+}
+
+/**
  * 建一个代码编辑器(优先 Monaco, 失败回落 textarea).
  *
  * 返回的对象形状对两种实现一致, 调用方不需要分支:
@@ -97,33 +153,52 @@ async function ensureTheme(monaco: any): Promise<boolean> {
  * @returns {Promise<any>} 编辑器句柄
  */
 export async function createCodeEditor(opts: any) {
-  const { value = '', language = 'plaintext', height = 320, onChange } = opts
+  const {
+    value = '', language = 'plaintext', height = '100%', onChange,
+    // 折行策略: 提示词是散文, 默认折行; 看代码时调用方可传 'off'.
+    wordWrap = 'on',
+  } = opts
   const monaco = await loadMonaco()
   if (monaco) {
     const themed = await ensureTheme(monaco)
-    const host = el('div', { class: 'monaco-host', style: `height:${height}px` })
-    const editor = monaco.editor.create(host, {
-      value,
-      language,
-      theme: themed ? 'one-dark-pro' : 'vs-dark',
-      automaticLayout: true,
-      minimap: { enabled: false },
-      scrollBeyondLastLine: false,
-      fontSize: 12,
-      lineNumbers: 'on',
-      wordWrap: 'on',
-      tabSize: 2,
-    })
+    const host = el('div', { class: 'monaco-host' })
+    const fillHeight = makeFillHeight(host, height)
+    const editor = monaco.editor.create(host, editorOptions({
+      value, language, wordWrap, themed: Boolean(themed),
+    }))
     if (typeof onChange === 'function') {
       editor.onDidChangeModelContent(() => onChange(editor.getValue()))
     }
+    // 容器在隐藏分区里创建时 Monaco 量不到尺寸(宽度会算成 0), 表现是编辑器
+    // 一片空白 + 两条竖线. 这里在挂载后与容器重新可见时都补一次布局.
+    const relayout = () => {
+      try {
+        fillHeight()
+        editor.layout()
+      } catch { /* 已销毁 */ }
+    }
+    // 窗口尺寸变化时 fill 高度也要重算.
+    if (height === 'fill') window.addEventListener('resize', relayout)
+    if (typeof ResizeObserver === 'function') {
+      try { new ResizeObserver(relayout).observe(host) } catch { /* 环境不支持 */ }
+    }
+    // 父级从 display:none 变可见时, ResizeObserver 不一定触发 ---- 再兜一次.
+    const t = setTimeout(relayout, 0)
     return {
       element: host,
       isMonaco: true,
       getValue: () => editor.getValue(),
       setValue: (v: string) => editor.setValue(v ?? ''),
       setReadOnly: (ro: boolean) => editor.updateOptions({ readOnly: ro }),
-      dispose: () => { try { editor.dispose() } catch { /* 已销毁 */ } },
+      /** 切换自动换行(开关用). */
+      setWordWrap: (on: boolean) => {
+        try { editor.updateOptions({ wordWrap: on ? 'on' : 'off' }) } catch { /* 已销毁 */ }
+      },
+      relayout,
+      dispose: () => {
+        clearTimeout(t)
+        try { editor.dispose() } catch { /* 已销毁 */ }
+      },
     }
   }
   // 降级: 原生 textarea. 功能不减(读写值一致), 只是没有高亮.

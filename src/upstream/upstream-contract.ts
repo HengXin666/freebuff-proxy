@@ -41,6 +41,8 @@ export const EP_CHAT = '/api/v1/chat/completions'
  *
  * 它是只读的: 客户端全仓只有一处调用, 就是上面那个 GET;
  * [签到]本身由[当天第一条消息]触发, 这个端点只报告结果.
+ *
+ * 见 .agents/notes/implemented/feature/2026-10-06-signin-and-monaco-editor.md
  */
 export const EP_STREAK = '/api/v1/freebuff/streak'
 
@@ -112,6 +114,7 @@ export const BUSINESS_HEADERS = [
 /**
  - 已废弃的头:客户端 165 条抓包里出现 0 次,不得再发送.
  - 列在这里是为了让门禁能拦住回潮(有人"顺手加回来"会直接红).
+ - 见 .agents/notes/implemented/bug-fix/2026-10-03-upstream-endpoint-whitelist.md
  */
 export const RETIRED_HEADERS = [
   'x-codebuff-api-key', // 客户端 0 次（docs/reverse/20 §20.4）

@@ -35,6 +35,8 @@ const DOC_INCLUDE = ['docs/', 'README.md']
  * 2026-10-05 文档分类后,审计报告与工程质量全景同处 docs/quality/,但两者命运不同:
  * 全景描述现状,该参与全部判据;审计报告会故意引用错误端点与已删文件作反例,
  * 参与判据必然自噬.所以排除粒度从"docs/code-quality/ 目录"收窄到审计报告本身.
+ *
+ * 见 .agents/notes/implemented/process/2026-10-05-docs-taxonomy-and-index-rewrite.md
  */
 const DOC_EXCLUDE = ['docs/reverse/', 'docs/quality/docs-audit']
 

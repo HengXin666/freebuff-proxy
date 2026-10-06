@@ -9,6 +9,7 @@ import { handle as handleUsers } from './identity/users.ts'
 import { handle as handleSettings } from './settings.ts'
 import { handle as handleAudit } from './audit.ts'
 import { handle as handleLifecycle } from './lifecycle.ts'
+import { handle as handlePrompts } from './prompts.ts'
 
 /** 域处理器签名(dispatcher 只需要知道这一个形状). */
 /**
@@ -25,6 +26,7 @@ export const DOMAINS = {
   settings: handleSettings,
   audit: handleAudit,
   lifecycle: handleLifecycle,
+  prompts: handlePrompts,
   auth: handleAuth,
 }
 

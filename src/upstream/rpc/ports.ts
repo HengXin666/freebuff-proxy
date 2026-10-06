@@ -147,6 +147,8 @@ function rpcReuseStreaming(payload: any, opts: any): Promise<any> {
  * (system 由副仓库用官方模板生成) / tools / layer(默认 worker) /
  * reasoningEffort / stream / timeoutMs.
  *
+ * 请求体由副仓库构造(见 .agents/notes/implemented/bug-fix/2026-10-05-chat-forward-body-missing-return.md).
+ *
  * @param {object} params 见上
  * @returns {Promise<{ ok: boolean, status?: number, text?: string, model?: object, error?: string }>}
  */
@@ -199,6 +201,7 @@ export async function rpcChat(params: any) {
  * 官方形态的实现只有一份, 在 cli-bridge/.
  *
  * 见 docs/reverse/21 §21.3(客户端真值)与 §21.5(对齐状态).
+ * 见 .agents/notes/implemented/bug-fix/2026-10-03-session-via-bun-port.md
  *
  * @param {{ cfg: object, timeoutMs?: number }} params
  * @returns {Promise<{ ok: boolean, status?: number, body?: any, error?: string } | null>}
