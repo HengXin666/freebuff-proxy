@@ -162,6 +162,7 @@ export async function tryOfficialChannel(ctx: any, args: any) {
  *
  * @param {any} s 运行设置快照
  * @returns {{mode: string, text?: string}|undefined} bun 侧入参;未配置时 undefined
+ * 官方模板里被冻住的动态段由 bun 侧重算, 判据见 .agents/notes/implemented/bug-fix/2026-10-06-system-template-dynamic-sections.md
  */
 function resolveSystemPrompt(s: any): { mode: string, text?: string } | undefined {
   if (!s) return undefined

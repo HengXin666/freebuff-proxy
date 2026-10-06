@@ -34,6 +34,7 @@ const SUITES = [
   ['tool-dispatch-ready', 'suites/entries/verify/tool/param/dispatch-ready.ts'],
   ['tool-stream-rewrite', 'suites/entries/verify/tool/stream-rewrite.ts'],
   ['chat-payload-contract', 'suites/entries/verify/chat-payload-contract.ts'],
+  ['system-prompt-dynamic', 'suites/entries/verify/system-prompt-dynamic.ts'],
   ['config-passthrough', 'suites/entries/verify/config-passthrough.ts'],
   ['signin', 'suites/entries/verify/signin.ts'],
   ['dashboard-cold-start-state', 'suites/entries/verify/dashboard/cold-start-account-state.ts'],
