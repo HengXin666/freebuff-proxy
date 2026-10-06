@@ -14,6 +14,7 @@ import {
   ALL_OFFICIAL_TOOL_NAMES,
   DEFAULT_INJECTED_TOOLS,
   OFFICIAL_TOOL_META,
+  injectableOfficialTools,
   selectOfficialTools,
 } from '../../../../../src/upstream/signals/tools/official-tool-select.ts'
 import { CLIENT_TO_OFFICIAL_TOOL } from '../../../../../src/upstream/foreign-client-signals.ts'
@@ -87,6 +88,33 @@ const REF_DOWNSTREAM: string[] = JSON.parse(
   ok(sub.mode === 'subset', '给了名单是 subset')
   ok(sub.names.length === 2, '名单外的名字要丢掉, got ' + sub.names.length)
   ok(sub.names[0] === 'read_files' && sub.names[1] === 'web_search', '顺序按真源而不是入参')
+}
+
+// ── 5 自动规则: 注入集必须随客户端实际声明而变 ────────────────────
+// 这是本模块最关键的一条: 静态分类表对不上客户端形态(实测同一台机器两种形态),
+// 只声明 run_code 的会话里 37 个官方工具全部派发不了.
+// 判据(可证伪): 让 injectableOfficialTools 忽略 declared 参数直接返回全表, 本组变红.
+{
+  const ptc = injectableOfficialTools(['run_code'])
+  ok(ptc.length === 0, '只声明 run_code 时必须注入 0 个, got ' + ptc.length)
+
+  const native = injectableOfficialTools(REF_DOWNSTREAM)
+  ok(native.length > 0, '原生客户端形态不该被裁成空集')
+  for (const name of native) ok(REAL.includes(name), '注入的必须是官方真源里的名字: ' + name)
+
+  // 注入集与[能落回下游]必须等价 ---- 少一个就是漏裁(仍会 unknown tool),
+  // 多一个就是过裁(把可用的工具也砍掉).
+  const reachable = REAL.filter((off) =>
+    REF_DOWNSTREAM.some((c) => (CLIENT_TO_OFFICIAL_TOOL as Record<string, string>)[c] === off),
+  )
+  ok(
+    JSON.stringify(native) === JSON.stringify(reachable),
+    '注入集必须恰好等于[能落回下游]的那些: ' + native.length + ' vs ' + reachable.length,
+  )
+
+  // 空声明 -> 空注入(不能退化成全表).
+  ok(injectableOfficialTools([]).length === 0, '空声明集必须注入 0 个')
+  ok(injectableOfficialTools(null).length === 0, 'null 声明必须注入 0 个')
 }
 
 console.log('官方工具注入选择验证通过(断言 ' + n + ' 条)')

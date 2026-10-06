@@ -30,7 +30,10 @@ import { customModels } from '../../routes/catalog.ts'
 import { logger } from '../../../util/log.ts'
 import { resolveWireModel } from '../../../upstream/catalog/freshness.ts'
 import { runStreamingRpc, logRpcResult } from './stream.ts'
-import { selectOfficialTools } from '../../../upstream/signals/tools/official-tool-select.ts'
+import {
+  injectableOfficialTools,
+  selectOfficialTools,
+} from '../../../upstream/signals/tools/official-tool-select.ts'
 
 /**
  * 上游首字节之后的整篇生成上限(毫秒).
@@ -134,15 +137,21 @@ export async function tryOfficialChannel(ctx: any, args: any) {
 /**
  * 解析出这次要注入的官方工具名单.
  *
- * undefined 表示不裁剪(未配置, 全注入). 只有控制台显式配置过才裁剪,
- * 所以默认路径与旧行为逐字节一致.
+ * 两级判据, 控制台配置优先:
+ *   1. 控制台配过名单 -> 按名单(空数组 = 一个都不注入);
+ *   2. 未配置         -> 自动规则: 只注入回程能还原成下游本次真的声明过的名字的那些.
+ *
+ * 自动规则为什么是默认: 静态分类表对不上客户端形态. 实测同一台机器两种形态,
+ * 只声明 run_code 的会话里 37 个官方工具全部派发不了(含静态表判为可派发的 10 个),
+ * 而自动规则对任意客户端零配置生效.
  *
  * @param {any} ctx 依赖集合(取 settingsStore)
- * @returns {string[]|undefined} 要注入的官方工具名; undefined = 不裁剪
+ * @param {any} declared 下游本次声明的工具名
+ * @returns {string[]} 要注入的官方工具名
  */
-function officialToolsToInject(ctx: any): string[] | undefined {
+function officialToolsToInject(ctx: any, declared: any): string[] {
   const sel = selectOfficialTools(ctx.settingsStore?.get?.()?.officialToolNames)
-  return sel.mode === 'all' ? undefined : sel.names
+  return sel.mode === 'all' ? injectableOfficialTools(declared) : sel.names
 }
 
 /**
@@ -185,7 +194,7 @@ async function runOfficialRpc(ctx: any, args: any) {
     //
     // 在 bun 侧过滤而不是在这里删 tools: 删除会让 [下游没声明工具] 与
     // [控制台配置成不注入] 两种情况在 wire 上完全一样, 事后无法区分.
-    officialToolNames: officialToolsToInject(ctx),
+    officialToolNames: officialToolsToInject(ctx, args.declaredToolNames),
     timeoutMs: Math.max(
       Math.max(1_000, args.schedulingDeadline - Date.now()),
       RPC_TOTAL_TIMEOUT_MS,

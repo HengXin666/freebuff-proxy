@@ -111,3 +111,26 @@ export function selectOfficialTools(selected: unknown): OfficialToolSelection {
   const names = ALL_OFFICIAL_TOOL_NAMES.filter((n) => want.has(n))
   return { names, mode: 'subset' }
 }
+/**
+ * 按[下游本次声明]算出真正可注入的官方工具.
+ *
+ * 判据只有一句: 模型选中这个官方工具后, 回程能把它还原成下游这次真的声明过的
+ * 名字 ---- 还原得回去才可能派发, 还原不回去必然是 unknown tool.
+ *
+ * 为什么不沿用 group 那张静态表: 同一台机器上并存两种客户端形态, 静态表对不上
+ * 任何一种. 实测(dsh 55 工具 / PTC 只声明 run_code):
+ *   - 原生 55 工具: 静态表判 10 个可派发, 与自动规则一致;
+ *   - PTC 只声明 run_code: 静态表仍判 10 个可派发, 实际 37 个全都派发不了.
+ *
+ * 自动规则对任意客户端形态零配置生效: 新客户端接进来不需要维护任何表.
+ *
+ * @param {unknown} declared 下游本次声明的工具名(Set / 字符串数组 / OpenAI 工具数组)
+ * @returns {string[]} 可注入的官方工具名(顺序按真源)
+ */
+export function injectableOfficialTools(declared: unknown): string[] {
+  const set = toNameSet(declared)
+  const back = buildOfficialToClientMap(set)
+  return ALL_OFFICIAL_TOOL_NAMES.filter((name) => set.has(back[name] || name))
+}
+
+import { toNameSet, buildOfficialToClientMap } from '../tool-name-map.ts'
