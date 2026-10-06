@@ -124,7 +124,16 @@ export function createWebApi(deps: any) {
       }
     }
 
-    sendJson(res, 404, { error: `未知接口 ${method} ${route}` })
+    /**
+     * 未知路由的 404: 顺带点明[前端已更新但服务未重启]这一种情形, 并给出唯一的
+     * 处置动作. 路由表在启动时装配, 前端却是按请求读盘投递的, 两者会不同步.
+     * 见 .agents/notes/implemented/bug-fix/2026-10-07-stale-route-table-404.md
+     */
+    sendJson(res, 404, {
+      error:
+        `未知接口 ${method} ${route} - 若控制台刚刚更新过, 请重启服务: ` +
+        '路由表在启动时装配, 重启后新接口才存在',
+    })
     return true
   }
 

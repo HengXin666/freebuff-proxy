@@ -45,7 +45,6 @@
     "src/upstream/foreign-client-signals.ts": 3,
     "src/upstream/metadata/chat-metadata-parity.ts": 1,
     "src/web/store/config/model-store.ts": 4,
-    "test/suites/entries/verify/model-name-chain.ts": 2,
     "test/suites/smoke/state.ts": 2
   }
 }

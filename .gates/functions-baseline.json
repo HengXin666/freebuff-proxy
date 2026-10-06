@@ -4,16 +4,15 @@
     "note": "函数长度棘轮（上限 80 行）：逐函数当前行数，只许降不许涨"
   },
   "entries": {
-    "dashboard/views/logs/index.ts::renderLogs": 144,
+    "dashboard/views/logs/index.ts::renderLogs": 143,
     "dashboard/views/models/sync.ts::syncUpstreamModels": 93,
-    "dashboard/views/overview/accounts/row.ts::buildAccountRow": 122,
+    "dashboard/views/overview/accounts/row.ts::buildAccountRow": 100,
     "scripts/catalog/gen-upstream-contract.ts::main": 105,
     "scripts/check-upstream-contract.ts::main": 107,
     "src/proxy/routes/chat-request.ts::parseChatRequest": 145,
     "src/proxy/transport/errors/normalize.ts::normalizeUpstreamError": 99,
-    "src/proxy/transport/forward-body.ts::buildForwardBody": 171,
+    "src/proxy/transport/forward-body.ts::buildForwardBody": 169,
     "src/proxy/transport/forward.ts::forwardCompletions": 208,
-    "src/proxy/transport/official.ts::tryOfficialChannel": 101,
     "src/upstream/rpc/official-rpc.ts::buildRpcCfg": 85
   }
 }
