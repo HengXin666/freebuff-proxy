@@ -30,6 +30,7 @@ const SUITES = [
   ['catalog-freshness', 'suites/entries/verify/catalog/freshness.ts'],
   ['tool-restore-declared', 'suites/entries/verify/tool/restore-declared.ts'],
   ['tool-param-idempotent', 'suites/entries/verify/tool/param-idempotent.ts'],
+  ['tool-official-select', 'suites/entries/verify/tool/official-select.ts'],
   ['tool-stream-rewrite', 'suites/entries/verify/tool/stream-rewrite.ts'],
   ['chat-payload-contract', 'suites/entries/verify/chat-payload-contract.ts'],
   ['dashboard-cold-start-state', 'suites/entries/verify/dashboard/cold-start-account-state.ts'],

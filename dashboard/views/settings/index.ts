@@ -16,9 +16,10 @@ import { el, icon } from '../../lib/dom.ts'
 import { need } from '../../lib/boot/hooks.ts'
 import { endProgress, startProgress } from '../../lib/ui.ts'
 
-/** 左侧边栏的五个分区(顺序与 buildSettingsSections 的区序一致). */
+/** 左侧边栏的分区(顺序必须与 buildSettingsSections 的区序一致). */
 const SECTIONS: Array<{ key: string, icon: string }> = [
   { key: 'settings.sectionUpstream', icon: 'box' },
+  { key: 'settings.sectionTools', icon: 'terminal' },
   { key: 'settings.sectionScheduling', icon: 'gauge' },
   { key: 'settings.sectionNetwork', icon: 'globe' },
   { key: 'settings.sectionModels', icon: 'cpu' },

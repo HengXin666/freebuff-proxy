@@ -108,7 +108,14 @@ export const PARAM_RULES: Record<string, ParamRule> = {
   },
   /** list_directory(path) -> ls(path). */
   ls: { fields: { path: { to: 'path' } } },
-  /** read_url(url, max_chars?) -> web_fetch(url). */
+  /**
+   * read_url(url, max_chars?) -> web_fetch(url).
+   *
+   * 官方多一个 max_chars(正文字符上限), 下游没有对应字段 ---- 只能丢弃,
+   * 不能凭空塞进下游 schema(下游 additionalProperties: false 会整条拒掉).
+   * 丢它不影响调用成立: 下游按自己的默认上限截断.
+   * 这里显式列出来, 是为了说明[为什么这个字段不在表里]而不是漏了它.
+   */
   web_fetch: { fields: { url: { to: 'url' } } },
   /**
    * 同名工具的形态差异: 官方 glob(pattern, cwd?, max_results?) ->

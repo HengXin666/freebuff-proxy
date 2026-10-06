@@ -4,7 +4,7 @@ import { need } from '../../lib/boot/hooks.ts'
 import { state } from '../../lib/state.ts'
 
 /**
- * 代理设置页的六张卡片(纯渲染,无副作用).
+ * 代理设置页的卡片(纯渲染,无副作用).
  *
  *
  * 本文件所有函数都只做 DOM 构造:不发请求,不写 state,不弹提示.

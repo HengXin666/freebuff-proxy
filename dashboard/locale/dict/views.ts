@@ -68,6 +68,13 @@ export default {
     'zh-CN': '全局代理池：账号会自动分配到池内出口并保持稳定。',
     en: 'Global proxy pool: accounts are assigned to a pool egress automatically and stay stable.',
   },
+  'settings.sectionTools': { 'zh-CN': '官方工具', en: 'Official tools' },
+  'settings.sectionToolsHint': {
+    'zh-CN': '逐项勾选向外注入哪些官方工具。未配置时全部注入；不可派发的工具默认不勾。',
+    en:
+      'Pick which official tools are injected upstream. Unconfigured means inject all; '
+      + 'non-dispatchable tools are unchecked by default.',
+  },
   'settings.sectionModels': { 'zh-CN': '模型', en: 'Models' },
   'settings.sectionModelsHint': {
     'zh-CN': '模型清单与上游目录对账；此处决定哪些模型对外可见。',

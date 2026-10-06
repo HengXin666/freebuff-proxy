@@ -11,6 +11,13 @@ interface Settings {
   upstreamChannel: 'legacy' | 'official'; accountSchedulingMode: 'sticky' | 'spread'
   accountMaxConcurrency: number; accountOverflowWaitMs: number; lowBalanceThreshold: number
   blockPremiumModels: boolean; idleReleaseSec?: number; maxNewSessionsPerRequest?: number
+  /**
+   * 出站注入哪些官方工具.
+   *
+   * undefined = 未配置, 全注入(与旧行为一致); [] = 一个都不注入;
+   * [名字...] = 只注入这些. 语义唯一真源见 signals/official-tool-select.ts.
+   */
+  officialToolNames?: string[]
 }
 const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   // 转发上游时是否补齐官方真签名工具(名字 + 真实参数 schema),让上游不把请求
@@ -36,6 +43,10 @@ const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   // 关闭:下游工具按旧行为原样发出(上游多半回 503), 用于对照排障.
   // 见 .agents/notes/implemented/architecture/2026-10-05-third-party-tool-carrier.md
   toolCarrierEnabled: true,
+  // 出站注入哪些官方工具(2026-10-06 新增). undefined = 未配置 = 全注入:
+  // 官方工具集是上游的指纹判据之一, 默认不能动; 只有控制台显式配置过才按名单裁剪.
+  // 见 src/upstream/signals/official-tool-select.ts 与控制台[官方工具]页.
+  officialToolNames: undefined,
   // 上游请求形态通道(2026-10-03 新增):
   //   'legacy'(默认)---- 沿用现有自拼形态(ensureFreebuffSystemMessages +
   //       ensureFreebuffToolSignature + CLI 世代 agent).来源为早期第三方项目
@@ -124,6 +135,13 @@ export class SettingsStore {
       // [控制台打开了开关,重启就自己关了],症状与"开关没用"无法区分.
       if (typeof raw?.cliTelemetryEnabled === 'boolean') {
         this.settings.cliTelemetryEnabled = raw.cliTelemetryEnabled
+      }
+      // 官方工具注入名单: 空数组是合法值(一个都不注入), 所以只判是不是数组,
+      // 不能用长度判 ---- 用长度判会把[全不注入]读成[未配置], 重启即失效.
+      if (Array.isArray(raw?.officialToolNames)) {
+        this.settings.officialToolNames = raw.officialToolNames.filter(
+          (n: any) => typeof n === 'string' && n,
+        )
       }
       if (Number.isInteger(raw?.accountMaxConcurrency)) {
         this.settings.accountMaxConcurrency = clampConcurrency(raw.accountMaxConcurrency)

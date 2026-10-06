@@ -30,6 +30,7 @@ import { customModels } from '../../routes/catalog.ts'
 import { logger } from '../../../util/log.ts'
 import { resolveWireModel } from '../../../upstream/catalog/freshness.ts'
 import { runStreamingRpc, logRpcResult } from './stream.ts'
+import { selectOfficialTools } from '../../../upstream/signals/tools/official-tool-select.ts'
 
 /**
  * 上游首字节之后的整篇生成上限(毫秒).
@@ -131,6 +132,20 @@ export async function tryOfficialChannel(ctx: any, args: any) {
 }
 
 /**
+ * 解析出这次要注入的官方工具名单.
+ *
+ * undefined 表示不裁剪(未配置, 全注入). 只有控制台显式配置过才裁剪,
+ * 所以默认路径与旧行为逐字节一致.
+ *
+ * @param {any} ctx 依赖集合(取 settingsStore)
+ * @returns {string[]|undefined} 要注入的官方工具名; undefined = 不裁剪
+ */
+function officialToolsToInject(ctx: any): string[] | undefined {
+  const sel = selectOfficialTools(ctx.settingsStore?.get?.()?.officialToolNames)
+  return sel.mode === 'all' ? undefined : sel.names
+}
+
+/**
  * 发一次 official 通道的 RPC.
  *
  * 句柄是单次抓取的票据, 跨进程边界不带它: 副仓库(reuse 路径)每次都自己重抓目录,
@@ -162,6 +177,15 @@ async function runOfficialRpc(ctx: any, args: any) {
     tools: args.forwardBody.tools,
     layer: 'worker',
     stream: true,
+    // 官方工具注入名单: undefined = 不裁剪(全注入).
+    //
+    // 这里只传[结果]不传[分类]: 官方工具的分类真源在 Node 侧
+    // (signals/official-tool-select.ts), 副仓只按名单过滤, 不需要知道哪个是
+    // common 哪个是 orphan ---- 两份分类表必然漂移.
+    //
+    // 在 bun 侧过滤而不是在这里删 tools: 删除会让 [下游没声明工具] 与
+    // [控制台配置成不注入] 两种情况在 wire 上完全一样, 事后无法区分.
+    officialToolNames: officialToolsToInject(ctx),
     timeoutMs: Math.max(
       Math.max(1_000, args.schedulingDeadline - Date.now()),
       RPC_TOTAL_TIMEOUT_MS,

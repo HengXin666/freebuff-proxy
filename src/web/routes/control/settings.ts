@@ -8,6 +8,7 @@ import {
   snapshotTunables, specOf, validateValue, secretsEffective, secretsFromValues, redactTunables,
 } from '../../../config/tunable/store.ts'
 import { logger } from '../../../util/log.ts'
+import { OFFICIAL_TOOL_META } from '../../../upstream/signals/tools/official-tool-select.ts'
 import { envProxyOrNull } from '../lib/helpers.ts'
 import { denyUnlessAdmin } from '../lib/http-codes.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -41,6 +42,11 @@ function readSettings(config: any, settingsStore: any) {
     // 上游请求形态通道('legacy' 默认 / 'official' 照抄官方抓包).
     // 见 src/upstream/official-shape.js
     upstreamChannel: s.upstreamChannel === 'official' ? 'official' : 'legacy',
+    // 官方工具注入: null = 未配置(全注入), 数组(含空) = 控制台配过的名单.
+    // [未配置] 与 [空数组] 必须分开回显, 否则前端会把[全不注入]显示成[全注入].
+    officialToolNames: Array.isArray(s.officialToolNames) ? s.officialToolNames : null,
+    /** 官方工具分类目录(分组 + 一句话说明), 前端据此渲染勾选列表. */
+    officialToolCatalog: OFFICIAL_TOOL_META,
     /**
      * 可调项(24 项, 除 server.host/port 外的全部).
      *
@@ -107,6 +113,12 @@ const FIELDS: FieldSpec[] = [
     (v: any) => Number.isInteger(v) && v >= 0 && v <= 16,
   ],
   ['cliTelemetryEnabled', 'cliTelemetryEnabled 必须是布尔值', (v: any) => typeof v === 'boolean'],
+  // 官方工具注入名单: 空数组合法(一个都不注入), 所以只判元素类型不判长度.
+  [
+    'officialToolNames',
+    'officialToolNames 必须是字符串数组',
+    (v: any) => Array.isArray(v) && v.every((x: any) => typeof x === 'string'),
+  ],
   // 上游请求形态通道(legacy / official).见 src/upstream/official-shape.js
   [
     'upstreamChannel',

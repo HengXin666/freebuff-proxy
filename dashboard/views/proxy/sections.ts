@@ -16,6 +16,7 @@ import {
   buildQuotaProtectionCard, buildStripToolsCard, buildToolCarrierCard,
   buildUpstreamChannelCard,
 } from './cards.ts'
+import { buildOfficialToolsCard } from './official-tools.ts'
 import { buildTunablesCard } from './tunables.ts'
 
 /**
@@ -35,6 +36,11 @@ export function buildSettingsSections(ctx: any) {
       buildFreeToolSignatureCard(ctx.toggleAttrs, ctx.signatureEnabled),
       buildStripToolsCard(ctx.stripAttrs, ctx.stripTools),
       buildToolCarrierCard(ctx.carrierAttrs, ctx.carrierEnabled),
+    ]),
+    settingsSection('settings.sectionTools', 'settings.sectionToolsHint', [
+      buildOfficialToolsCard(
+        ctx.officialToolCatalog, ctx.officialToolNames, ctx.toolsDisabled, ctx.onOfficialToolsApply,
+      ),
     ]),
     settingsSection('settings.sectionScheduling', 'settings.sectionSchedulingHint', [
       buildLoadBalanceCard(ctx.schedMode, ctx.concurrency, ctx.overflowWaitMs),

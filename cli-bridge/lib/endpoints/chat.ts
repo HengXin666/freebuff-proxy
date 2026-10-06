@@ -38,10 +38,12 @@ export async function chat(bridge, opts) {
     reasoningEffort = null,
     noSend = false,
     streamStdout = false,
+    // 官方工具注入名单(undefined = 不裁剪). 由主服务解析好, 副仓只按名单过滤.
+    officialToolNames = undefined,
   } = opts;
   const url = `${bridge.host}/api/v1/chat/completions`;
   const { OFFICIAL_TOOLS, OFFICIAL_DECIDE, OFFICIAL_SYS } = await loadOfficialAssets();
-  const outTools = buildTools(layer, tools, OFFICIAL_TOOLS, OFFICIAL_DECIDE);
+  const outTools = buildTools(layer, tools, OFFICIAL_TOOLS, OFFICIAL_DECIDE, officialToolNames);
   const outMessages = buildSystemMessages(messages, layer, OFFICIAL_SYS);
   const metadata = await buildMetadata({ bridge, layer, runId, instanceId, reasoningEffort });
   const body = buildBody({ row, metadata, outMessages, outTools, layer, stream });

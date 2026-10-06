@@ -36,6 +36,8 @@ export async function rpcReuse(params: any) {
     reasoningEffort = null,
     stream = true,
     timeoutMs = 180_000,
+    /** 官方工具注入名单(undefined = 未配置 = 全注入). 见 signals/official-tool-select.ts. */
+    officialToolNames = undefined,
     /** 每收一行调用一次(不含行尾换行符). 给了它就切到流式通道. */
     onLine = null,
     onError = null,
@@ -43,7 +45,7 @@ export async function rpcReuse(params: any) {
     onStatus = null,
   } = params
 
-  const payload = {
+  const payload: any = {
     cfg,
     action: 'reuse',
     modelKey,
@@ -53,6 +55,11 @@ export async function rpcReuse(params: any) {
     layer,
     reasoningEffort,
     stream,
+  }
+  // 官方工具注入名单是可选字段: 不传时 bun 侧按[未配置 = 全注入]处理,
+  // 所以只在真的配置过时才塞进 payload(少一个字段就少一处形态差异).
+  if (params.officialToolNames !== undefined) {
+    payload.officialToolNames = params.officialToolNames
   }
 
   if (typeof onLine === 'function') {

@@ -79,6 +79,19 @@ const bool = (): LiveFieldSpec => ({
   normalize: (v) => (typeof v === 'boolean' ? ok(v) : err('必须是布尔值')),
 })
 
+/**
+ * 字符串数组字段的规格(元素必须全是字符串; 允许空数组).
+ *
+ * 去重并丢掉空串: 控制台多选列表不会产生重复, 但 settings.json 是手可编辑的,
+ * 重复项会让下游的判据集合变成不确定的大小.
+ */
+const stringArray = (): LiveFieldSpec => ({
+  normalize: (v) =>
+    Array.isArray(v) && v.every((x) => typeof x === 'string')
+      ? ok([...new Set(v as string[])].filter(Boolean))
+      : err('必须是字符串数组'),
+})
+
 /** 整数 + 夹取字段的规格. */
 const intClamped = (clamp: (n: number) => number, min: number): LiveFieldSpec => ({
   normalize: (v) =>
@@ -98,6 +111,7 @@ export const LIVE_FIELDS: Record<string, LiveFieldSpec> = {
   freeToolSignatureEnabled: bool(),
   stripToolsOnSchemaRejection: bool(),
   toolCarrierEnabled: bool(),
+  officialToolNames: stringArray(),
   cliTelemetryEnabled: bool(),
   blockPremiumModels: bool(),
   accountMaxConcurrency: intClamped(clampConcurrency, 1),

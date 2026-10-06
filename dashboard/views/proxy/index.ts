@@ -10,6 +10,7 @@ import {
   buildUpstreamChannelCard,
 } from './cards.ts'
 import { buildAdvancedSection, buildSettingsSections } from './sections.ts'
+import { saveOfficialToolsSetting } from './official-tools.ts'
 
 /* ---------------- proxy settings ---------------- */
 export async function renderProxySettings(view: any) {
@@ -35,35 +36,10 @@ export async function renderProxySettings(view: any) {
     // 拉不到就沿用已有的 state.accounts（可能为空 → 推荐值退回默认 600s）
   }
 
-  const signatureEnabled = settings.freeToolSignatureEnabled !== false
-  const toggleAttrs: Record<string, any> = {
-    id: 'free-tool-signature',
-    type: 'checkbox',
-    class: 'switch-input',
-    onchange: saveFreeToolSignatureSetting,
-  }
-  if (signatureEnabled) toggleAttrs.checked = ''
-  if (state.me.role !== 'admin') toggleAttrs.disabled = ''
-  // 工具被拒时,仅在明确开启纯文本回退后才去掉 tools 重试.
-  const stripTools = settings.stripToolsOnSchemaRejection === true
-  const stripAttrs = {
-    id: 'strip-tools-on-reject',
-    type: 'checkbox',
-    class: 'switch-input',
-    onchange: saveStripToolsSetting,
-  }
-  if (stripTools) stripAttrs.checked = ''
-  if (state.me.role !== 'admin') stripAttrs.disabled = ''
-  // 第三方工具承载:默认开(无官方等价物的下游工具包成官方自定义工具形态发出).
-  const carrierEnabled = settings.toolCarrierEnabled !== false
-  const carrierAttrs: Record<string, any> = {
-    id: 'tool-carrier',
-    type: 'checkbox',
-    class: 'switch-input',
-    onchange: saveToolCarrierSetting,
-  }
-  if (carrierEnabled) carrierAttrs.checked = ''
-  if (state.me.role !== 'admin') carrierAttrs.disabled = ''
+  const switches = buildToolSwitchAttrs(settings)
+  const {
+    toggleAttrs, signatureEnabled, stripAttrs, stripTools, carrierAttrs, carrierEnabled,
+  } = switches
   const channel = settings.upstreamChannel === 'official' ? 'official' : 'legacy'
   const concurrency = settings.accountMaxConcurrency ?? 2
   const schedMode = settings.accountSchedulingMode === 'spread' ? 'spread' : 'sticky'
@@ -81,14 +57,25 @@ export async function renderProxySettings(view: any) {
    * 权重完全相同, "代理池"与"额度保护"这种毫不相干的配置挤在一起, 看不出归属,
    * 也找不到想改的那一项. 分区后每区有自己的标题与说明, 跳转条按区定位.
    */
-  const sections = buildSettingsSections({
+  /**
+   * 官方工具注入名单: null = 未配置(全部注入), 数组(含空) = 控制台配置过.
+   *
+   * 必须原样透传 null ---- 它与空数组在服务端语义不同(全部注入 / 一个都不注入),
+   * 前端混同会让用户一保存就改掉配置.
+   */
+  for (const section of buildSettingsSections({
     toggleAttrs, signatureEnabled, stripAttrs, stripTools,
     carrierAttrs, carrierEnabled, channel,
+    officialToolCatalog: settings.officialToolCatalog || [],
+    officialToolNames: Array.isArray(settings.officialToolNames)
+      ? settings.officialToolNames
+      : null,
+    toolsDisabled: state.me.role !== 'admin',
+    onOfficialToolsApply: saveOfficialToolsSetting,
     schedMode, concurrency, overflowWaitMs,
     advice, idleReleaseSec, lowBalanceThreshold, maxNewSessions,
     data, settings,
-  })
-  for (const section of sections) view.append(section)
+  })) view.append(section)
 }
 
 /** 保存[官方工具签名兼容]开关并即时反映状态文案. */
@@ -462,5 +449,33 @@ export async function runProxyTest(proxy: any) {
   } catch (err) {
     box.innerHTML = ''
     box.append(el('div', { class: 'muted', style: 'color:var(--red)' }, t('proxy.testFailed', { msg: err.message })))
+  }
+}
+
+/**
+ * 造三张工具开关卡需要的 attrs(被拒重试 / 工具签名 / 第三方承载).
+ *
+ * 抽出来只为控制 renderProxySettings 的体量: 三组 attrs 各自三行, 连成一片
+ * 会把主流程淹掉, 而它们之间没有任何控制依赖.
+ *
+ * @param {any} settings /api/settings 回执
+ * @returns {any} 三组 attrs 与三个当前开关状态
+ */
+function buildToolSwitchAttrs(settings: any) {
+  const ro = state.me.role !== 'admin'
+  const mk = (id: string, onchange: any, enabled: boolean) => {
+    const attrs: Record<string, any> = { id, type: 'checkbox', class: 'switch-input', onchange }
+    if (enabled) attrs.checked = ''
+    if (ro) attrs.disabled = ''
+    return attrs
+  }
+  const signatureEnabled = settings.freeToolSignatureEnabled !== false
+  const stripTools = settings.stripToolsOnSchemaRejection === true
+  const carrierEnabled = settings.toolCarrierEnabled !== false
+  return {
+    signatureEnabled, stripTools, carrierEnabled,
+    toggleAttrs: mk('free-tool-signature', saveFreeToolSignatureSetting, signatureEnabled),
+    stripAttrs: mk('strip-tools-on-reject', saveStripToolsSetting, stripTools),
+    carrierAttrs: mk('tool-carrier', saveToolCarrierSetting, carrierEnabled),
   }
 }

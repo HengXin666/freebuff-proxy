@@ -101,3 +101,25 @@
   }
   .settings-nav button { width: auto; white-space: nowrap; }
 }
+/* 官方工具注入卡: 两组勾选列表, 说明文字可折行 */
+.official-tools-body { display: flex; flex-direction: column; gap: 14px; margin-top: 10px; }
+.official-tools-group { border: 1px solid var(--border, #2a2f3a); border-radius: 8px; padding: 10px 12px; }
+.official-tools-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.official-tools-group-head strong { font-size: 13px; font-weight: 600; }
+.official-tool-item {
+  display: grid;
+  grid-template-columns: 18px 200px 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  cursor: pointer;
+}
+.official-tool-item input { margin: 0; align-self: center; }
+.official-tool-name { font-family: var(--mono, monospace); font-size: 12px; word-break: break-all; }
+.official-tool-desc { font-size: 12px; }

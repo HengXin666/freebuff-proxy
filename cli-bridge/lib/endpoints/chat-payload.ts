@@ -12,14 +12,24 @@ import { MAP_TOOLS, mergeOfficialTools } from '../tool-map.ts'
  - @param {any[]} tools 客户端工具
  - @param {any[]} officialTools 官方工具集
  - @param {any[]|null} officialDecide manager 层 decide
+ - @param {string[]|undefined} injectNames 只注入这些官方工具名; undefined = 不裁剪
  - @returns {any[]} 出站工具数组
  */
-export function buildTools(layer, tools, officialTools, officialDecide) {
+export function buildTools(layer, tools, officialTools, officialDecide, injectNames) {
   let outTools = tools || [];
+  // 控制台配置过名单时只注入名单内的官方工具.
+  //
+  // 过滤放在合并之前: 被剔掉的官方工具不该参与去重, 否则下游声明的同名工具
+  // 会因为它占着 seen 而被丢掉(名字在, 工具却从两边一起消失).
+  const picked = Array.isArray(injectNames)
+    ? (Array.isArray(officialTools) ? officialTools : []).filter(
+        (t) => injectNames.includes(t?.function?.name),
+      )
+    : officialTools;
   if (layer === 'manager' && officialDecide?.length) {
     outTools = mergeOfficialTools(officialDecide, tools);
-  } else if (layer === 'worker' && officialTools.length > 0) {
-    outTools = mergeOfficialTools(officialTools, tools);
+  } else if (layer === 'worker' && picked.length > 0) {
+    outTools = mergeOfficialTools(picked, tools);
   }
 /**
  * 观测:把"哪些客户端工具被改名,哪些保持原名"记一条.

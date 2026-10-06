@@ -82,6 +82,39 @@ export default {
     'zh-CN': '第三方工具承载已关闭（下游工具原样发出）',
     en: 'Third-party tool carrier disabled (client tools are sent as-is)',
   },
+  'system.officialTools': { 'zh-CN': '官方工具注入', en: 'Official tool injection' },
+  'system.officialToolsHint': {
+    'zh-CN':
+      '官方工具集是上游识别客户端形态的一部分，默认全部注入。有些官方工具（浏览器预览、写文档、'
+      + '提议后续提问等）在下游没有对应工具，模型一旦选中它们，下游只会报 unknown tool；'
+      + '把它们取消勾选即可不再注入。改动即时生效。',
+    en:
+      'The official tool set is part of how upstream identifies the client, so it is injected in full by default. '
+      + 'Some official tools (browser preview, doc writing, follow-up suggestions) have no downstream '
+      + 'counterpart, so a model that picks them makes the client fail with unknown tool. Unchecking '
+      + 'removes them from injection. Takes effect immediately.',
+  },
+  'system.officialToolsGroupCommon': {
+    'zh-CN': '可派发（下游有对应工具，建议保持勾选）',
+    en: 'Dispatchable (a downstream counterpart exists; keep checked)',
+  },
+  'system.officialToolsGroupOrphan': {
+    'zh-CN': '不可派发（下游没有对应工具，勾选后模型选中会导致 unknown tool）',
+    en:
+      'Not dispatchable (no downstream counterpart; if checked and the model picks it, '
+      + 'the client fails with unknown tool)',
+  },
+  'system.officialToolsApply': { 'zh-CN': '应用勾选', en: 'Apply selection' },
+  'system.officialToolsSelectAll': { 'zh-CN': '全选', en: 'Select all' },
+  'system.officialToolsSelectNone': { 'zh-CN': '全不选', en: 'Select none' },
+  'system.officialToolsAll': {
+    'zh-CN': '当前为未配置状态：全部官方工具都会注入。',
+    en: 'Currently unconfigured: every official tool is injected.',
+  },
+  'system.officialToolsSaved': {
+    'zh-CN': '官方工具注入已更新（即时生效）',
+    en: 'Official tool injection updated (effective immediately)',
+  },
   'system.blockPremiumOn': { 'zh-CN': '已屏蔽收费模型（列表与调度已排除）', en: 'Paid models blocked (excluded from the list and from scheduling)' },
   'system.blockPremiumOff': { 'zh-CN': '已显示收费模型', en: 'Paid models shown again' },
   'system.scheduling': { 'zh-CN': '账号调度', en: 'Account scheduling' },
