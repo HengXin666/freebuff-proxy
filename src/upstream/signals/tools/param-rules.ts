@@ -81,10 +81,19 @@ export const PARAM_RULES: Record<string, ParamRule> = {
     },
   },
   /**
-   * run_terminal_command(command, cwd?, timeout_seconds?) -> bash(command, description, workdir?, timeoutMs?).
+   * run_terminal_command(command, cwd?, timeout_seconds?, process_type?) ->
+   * bash(command, description, workdir?, timeoutMs?, run_in_background?).
    *
    * description 是下游的必填项而官方没有对应字段(官方把意图放在工具调用外层),
    * 用 command 原文合成一句, 保证下游 required 校验能过.
+   *
+   * 两处官方语义必须在这里处置, 否则单次调用直接失败(2026-10-06 实测):
+   *   - timeout_seconds: -1 是官方[不限时]的合法值, 而下游 bash 的 timeoutMs
+   *     要求 > 0, 直接乘 1000 会得到 -1000 -> 下游抛 invalid timeoutMs.
+   *     这里把 <= 0 一律丢弃(下游按自己的默认上限), 只对正数换算并过滤
+   *     非正结果 ---- 官方 schema 的 minimum 是 -1, 但上游偶发回 0 也要挡住.
+   *   - process_type: 官方 BACKGROUND 对应下游 run_in_background, 原先整条
+   *     字段被丢 -> 模型以为丢到后台, 实际前台跑, 到点被掐.
    */
   bash: {
     fields: {
@@ -92,7 +101,12 @@ export const PARAM_RULES: Record<string, ParamRule> = {
       cwd: { to: 'workdir' },
       timeout_seconds: {
         to: 'timeoutMs',
-        get: (v: any) => (typeof v === 'number' ? v * 1000 : undefined),
+        get: (v: any) =>
+          typeof v === 'number' && v > 0 ? v * 1000 : undefined,
+      },
+      process_type: {
+        to: 'run_in_background',
+        get: (v: any) => (v === 'BACKGROUND' ? true : undefined),
       },
     },
     synth: {
@@ -128,6 +142,80 @@ export const PARAM_RULES: Record<string, ParamRule> = {
   web_search: {
     fields: {
       query: { to: 'queries', get: (q: any) => (q == null ? undefined : [String(q)]) },
+    },
+  },
+  /**
+   * ask_questions(questions[{question, header?, options[]?, multiSelect?}]) ->
+   * ask_user_question(questions[{id, question, header?, options[]?, multi_select?}]).
+   *
+   * 为什么必须有(2026-10-06 实测): 名字映射表把 ask_user_question 指向
+   * ask_questions, 但规则表里没有这条, 于是官方参数原样下发; 下游要求每个问题
+   * 带 id, 官方 schema 里根本没有这个字段 -> 必报
+   * missing required property "arguments.questions[0].id".
+   *
+   * 两个官方工具都落到这个下游名上(见 OFFICIAL_NATIVE_TO_CLIENT):
+   *   - ask_questions  : 直接就是问答, 形态差异见下;
+   *   - suggest_prompts: 官方[后续提问建议卡片], 载荷是一组可点击的提示.
+   *
+   * 三处形态差异一起处理:
+   *   - id: 官方没有, 按序号合成(下游要求同一次调用内唯一, 序号天然满足);
+   *   - multiSelect -> multi_select: 官方驼峰, 下游蛇形;
+   *   - 其余字段同名直通, 选项数组原样保留(下游对 items 是宽松的).
+   *
+   * 已是下游形态时保持原样(幂等): 带 id 的输入不得被重新编号.
+   */
+  ask_user_question: {
+    fields: {
+      /**
+       * suggest_prompts(prompts: [{prompt, label?}]) -> 单个问题 + N 个选项.
+       *
+       * 为什么是[一题多选]而不是[N 个问题]: 官方这个工具的形态就是[一组可点击的
+       * 卡片], 与下游 questions[].options[] 一一对应; 拆成 N 个问题会变成 N 次
+       * 独立作答, 与[挑一个继续]的原意不符.
+       *
+       * label 官方是可选的(prompt 才是必填), 而下游 options[].label 必填且
+       * minLength 1 ---- 缺失时用 prompt 的截断文本兜底, 不能让 required 校验失败.
+       * prompt 原文放进 description, 这样点选后仍能看到完整意图.
+       */
+      prompts: {
+        to: 'questions',
+        get: (prompts: any) =>
+          Array.isArray(prompts)
+            ? [{
+                id: 'q1',
+                question: 'Suggested follow-ups',
+                options: prompts
+                  .map((item: any) => {
+                    if (!item || typeof item !== 'object') return null
+                    const text = typeof item.prompt === 'string' ? item.prompt : ''
+                    const label = typeof item.label === 'string' && item.label
+                      ? item.label
+                      : text.slice(0, 60)
+                    if (!label) return null
+                    return text && text !== label
+                      ? { label, description: text }
+                      : { label }
+                  })
+                  .filter(Boolean),
+              }]
+            : undefined,
+      },
+      questions: {
+        get: (questions: any) =>
+          Array.isArray(questions)
+            ? questions.map((item: any, i: number) => {
+                if (!item || typeof item !== 'object') return item
+                const out: Record<string, any> = {}
+                out.id = typeof item.id === 'string' && item.id ? item.id : `q${i + 1}`
+                if (typeof item.question === 'string') out.question = item.question
+                if (item.header !== undefined) out.header = item.header
+                if (Array.isArray(item.options)) out.options = item.options
+                if (typeof item.multi_select === 'boolean') out.multi_select = item.multi_select
+                else if (typeof item.multiSelect === 'boolean') out.multi_select = item.multiSelect
+                return out
+              })
+            : questions,
+      },
     },
   },
 }

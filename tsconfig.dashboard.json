@@ -26,5 +26,9 @@
   },
   "include": [
     "dashboard/**/*"
+  ],
+  "//exclude": "vendor/ 是第三方产物(Monaco 的 min 版), 与 data/ 同性质: 不是我们的代码, 不参与类型检查与体量门禁. 扫它一次会灌进 3.7 万个错误, 把基线数字彻底冲掉.",
+  "exclude": [
+    "dashboard/vendor/**"
   ]
 }

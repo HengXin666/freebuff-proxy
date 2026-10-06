@@ -15,6 +15,7 @@ import { LoginFlowManager } from '../../../src/web/store/session/login-flows.ts'
 import { ProxyStore } from '../../../src/web/store/config/proxy-store.ts'
 import { SettingsStore } from '../../../src/web/store/config/settings-store.ts'
 import { ModelStore } from '../../../src/web/store/config/model-store.ts'
+import { SignInStore } from '../../../src/web/store/signin/store.ts'
 
 /**
  * @param {string} dataDir 数据目录
@@ -60,10 +61,12 @@ export function openConsoleStores(dataDir: string, config: any) {
   }
   // 前端[模型管理]管理的自定义模型列表(覆盖/扩展内置目录)
   const modelStore = new ModelStore(path.join(dataDir, 'custom-models.json'))
+  // 签到记录与防抖状态(手动 18h / 自动 25h). 见 src/web/store/signin/store.ts.
+  const signInStore = new SignInStore(path.join(dataDir, 'signin.json'))
   if (proxyStore.list().length) {
     config.upstream.proxies = proxyStore.list()
   }
-  return { webSessions, proxyStore, settingsStore, modelStore }
+  return { webSessions, proxyStore, settingsStore, modelStore, signInStore }
 }
 
 /**

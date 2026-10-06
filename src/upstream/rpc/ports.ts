@@ -38,6 +38,11 @@ export async function rpcReuse(params: any) {
     timeoutMs = 180_000,
     /** 官方工具注入名单(undefined = 未配置 = 全注入). 见 signals/official-tool-select.ts. */
     officialToolNames = undefined,
+    /**
+     * 官方 system 提示词的处置方式, 由控制台配置决定(见 settings-store).
+     * undefined 表示未配置 -> bun 侧按[照抄官方抓包原文]处理(零回归).
+     */
+    systemPrompt = undefined,
     /** 每收一行调用一次(不含行尾换行符). 给了它就切到流式通道. */
     onLine = null,
     onError = null,
@@ -60,6 +65,10 @@ export async function rpcReuse(params: any) {
   // 所以只在真的配置过时才塞进 payload(少一个字段就少一处形态差异).
   if (params.officialToolNames !== undefined) {
     payload.officialToolNames = params.officialToolNames
+  }
+  // 同理: 官方 system 处置方式也只在真的配置过时才塞进 payload.
+  if (params.systemPrompt !== undefined) {
+    payload.systemPrompt = params.systemPrompt
   }
 
   if (typeof onLine === 'function') {
@@ -223,9 +232,6 @@ export async function rpcSession(params: any) {
 
 /**
  * 注册设备公钥(端口):POST /api/v1/freebuff/device-keys → 拿 keyId.
- *
- * 与 rpcSession 同理:不构造头,交给 bun 侧官方形态实现.
- * 这一跳是签名前置 ---- 拿不到 keyId 则 session/admission/chat 都无法签名.
  *
  * @param {{ cfg: object, publicKey: string, timeoutMs?: number }} params
  * @returns {Promise<{ ok: boolean, status?: number, keyId?: string | null, body?: any, error?: string } | null>}

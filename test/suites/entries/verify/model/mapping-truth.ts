@@ -41,12 +41,12 @@ import assert from 'node:assert/strict'
 import {
   CatalogHolder,
   freebuffLegacyModelDigest,
-} from '../../../../src/upstream/catalog-protocol.ts'
-import { ROOT, checkEqual, failures } from '../../verify-cases/_harness.ts'
-import { run as runHandle } from '../../verify-cases/handle.ts'
-import { run as runKeyShape } from '../../verify-cases/key-shape.ts'
-import { run as runNormalize } from '../../verify-cases/normalize.ts'
-import { run as runTruthSource } from '../../verify-cases/truth-source.ts'
+} from '../../../../../src/upstream/catalog-protocol.ts'
+import { ROOT, checkEqual, failures } from '../../../verify-cases/_harness.ts'
+import { run as runHandle } from '../../../verify-cases/handle.ts'
+import { run as runKeyShape } from '../../../verify-cases/key-shape.ts'
+import { run as runNormalize } from '../../../verify-cases/normalize.ts'
+import { run as runTruthSource } from '../../../verify-cases/truth-source.ts'
 
 // ① ② ③ 三个用例 + ④ 真源唯一性(实现见 test/suites/verify-cases/**)
 runNormalize()
@@ -57,7 +57,7 @@ runTruthSource()
 
 // ═══ ⑤ 汇总 ═════════════════════════════════════════════════════════
 {
-  const { assertions } = await import('../../verify-cases/_harness.ts')
+  const { assertions } = await import('../../../verify-cases/_harness.ts')
   console.log('')
   if (failures.length || process.exitCode) {
     console.error(
@@ -82,7 +82,7 @@ runTruthSource()
 // 后果: 上游清单用上游 id, 调度内部用目录 key → 匹配不上 → 面板能显示已付费
 // 会话, 调度却看不见 → 白花钱重买.本用例防止该参数被再次漏传.
 {
-  const { SessionManager } = await import('../../../../src/session-manager.ts')
+  const { SessionManager } = await import('../../../../../src/session-manager.ts')
   const marker = (v) => 'K:' + v
   const sm = new SessionManager({
     upstream: { freebuffSession: async () => null },
@@ -101,7 +101,7 @@ runTruthSource()
   )
   // 端到端:跨标识必须能命中同一条会话
   const { CatalogHolder: CH, freebuffLegacyModelDigest: digest } = await import(
-    '../../../../src/upstream/catalog-protocol.ts'
+    '../../../../../src/upstream/catalog-protocol.ts'
   )
   const holder = new CH({
     apiHost: 'https://x',

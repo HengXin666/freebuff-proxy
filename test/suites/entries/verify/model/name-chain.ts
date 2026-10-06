@@ -21,9 +21,9 @@
  *
  - 用法:node test/verify-model-name-chain.mjs
  */
-import { catalogDisplayName } from '../../../../src/model.ts'
-import { buildCatalogDrivenModelsResponse } from '../../../../src/catalog-models.ts'
-import { CatalogHolder } from '../../../../src/upstream/catalog-protocol.ts'
+import { catalogDisplayName } from '../../../../../src/model.ts'
+import { buildCatalogDrivenModelsResponse } from '../../../../../src/catalog-models.ts'
+import { CatalogHolder } from '../../../../../src/upstream/catalog-protocol.ts'
 
 let failed = 0
 function check(name, cond, detail = '') {
@@ -119,7 +119,8 @@ console.log('\n② 内部：名称 → 目录 id（走**生产**映射，不是�
   }
   // 反向:key → 句柄(对上游寻址的唯一途径)
   for (const r of ROWS) {
-    check(`对上游可寻址：${r.key} → 句柄`, holder.handleForModel(r.key) === `fbm1.TEST_${r.key}`, String(holder.handleForModel(r.key)))
+    const h = holder.handleForModel(r.key)
+    check(`对上游可寻址：${r.key} → 句柄`, h === `fbm1.TEST_${r.key}`, String(h))
   }
   // 显示名也要能直接换到句柄(客户端照清单填了名称时走这条路)
   for (const r of ROWS) {
@@ -134,7 +135,11 @@ console.log('\n③ 对上游：只有映射后的内容可寻址')
   for (const r of ROWS) {
     const viaName = holder.handleForModel(catalogDisplayName(r), r.displayName)
     const viaKey = holder.handleForModel(r.key)
-    check(`名称与 key 抵达同一句柄：${r.displayName}`, viaName === viaKey && viaName === `fbm1.TEST_${r.key}`, `${viaName} vs ${viaKey}`)
+    check(
+      `名称与 key 抵达同一句柄：${r.displayName}`,
+      viaName === viaKey && viaName === `fbm1.TEST_${r.key}`,
+      `${viaName} vs ${viaKey}`,
+    )
   }
   check('未映射的名称换不到句柄（不猜）', holder.handleForModel('NoSuchModel-xyz') === 'NoSuchModel-xyz')
 }

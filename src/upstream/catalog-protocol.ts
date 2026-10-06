@@ -11,7 +11,7 @@
  * - CatalogHolder.keyForName()   三种输入(可读名 / 上游 id / 已是 key)→ 目录 key
  *
  * 存储与只读视图在 catalog/holder-base.ts; 本文件被
- * test/suites/entries/verify/model-mapping-truth.ts 的真源唯一性判据按路径核对
+ * test/suites/entries/verify/model/mapping-truth.ts 的真源唯一性判据按路径核对
  * (keyByDigest 的读写与 freebuffLegacyModelDigest 的调用只允许出现在这里).
  * 见 .agents/notes/implemented/bug-fix/2026-10-01-catalog-protocol.md.
  */

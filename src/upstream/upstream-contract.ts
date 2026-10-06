@@ -25,8 +25,33 @@ export const EP_SESSION = '/api/v1/freebuff/session'
 export const EP_SESSION_ADMISSION = '/api/v1/freebuff/session/admission'
 export const EP_AGENT_RUNS = '/api/v1/agent-runs'
 export const EP_CHAT = '/api/v1/chat/completions'
+/**
+ * 连续签到状态(只读 GET).
+ *
+ * 为什么它不在抓包生成的那份 JSON 里: 它的抓包时段(2026-10-03)没覆盖到
+ * 这条路径, 而客户端确实会发 ---- 真值取自官方客户端产物
+ * (orchestrator 的 src/server/services/streak.ts, createDesktopStreak.fetch):
+ *
+ *   fetch(${apiHost}/api/v1/freebuff/streak, {
+ *     headers: { Authorization: Bearer <token>, accept: 'application/json' },
+ *   })
+ *
+ * 回执字段(同名真值): streak / todayUsed / lastUsageDate / timeZone /
+ * freebucksDailyBonus / nextResetAt / todayCredited / bonusExpiresAt.
+ *
+ * 它是只读的: 客户端全仓只有一处调用, 就是上面那个 GET;
+ * [签到]本身由[当天第一条消息]触发, 这个端点只报告结果.
+ */
+export const EP_STREAK = '/api/v1/freebuff/streak'
 
-/** 全部必需端点(用于门禁与文档对账). */
+/**
+ * 全部必需端点(用于门禁与文档对账).
+ *
+ * 分两类:
+ *   - 抓包生成的那份(upstream-contract.json)里有的 -> 由脚本对账;
+ *   - 客户端产物里确认存在但抓包时段未覆盖的 -> 见 EP_STREAK 的注释.
+ * 第二类必须写明出处, 否则会变成"谁都能往这个数组里加端点".
+ */
 export const REQUIRED_ENDPOINTS = [
   EP_CATALOG,
   EP_DEVICE_KEYS,
@@ -34,6 +59,7 @@ export const REQUIRED_ENDPOINTS = [
   EP_SESSION_ADMISSION,
   EP_AGENT_RUNS,
   EP_CHAT,
+  EP_STREAK,
 ]
 
 // ── 头名 ────────────────────────────────────────────────────────────────

@@ -24,11 +24,13 @@ import { renderAccountsCard } from './views/overview/accounts/index.ts'
 import {
   probeAccount, refreshAccountsCard, refreshOverviewAfterAccountChange,
 } from './views/overview/accounts/refresh.ts'
-import { renderProxySettings, saveBlockPremiumSetting } from './views/proxy/index.ts'
+import { renderProxySettings } from './views/proxy/index.ts'
 import {
   applyIdleReleaseAdvice, runProxyTest, saveLoadBalanceSettings,
-  saveProxyPool, saveQuotaProtectionSettings, saveUpstreamChannelSetting, schedulingHint,
+  saveProxyPool, saveQuotaProtectionSettings, schedulingHint,
 } from './views/proxy/index.ts'
+// 开关类保存处理器在 switches.ts(按职责从 index.ts 切出, 见该文件头).
+import { saveBlockPremiumSetting, saveUpstreamChannelSetting } from './views/proxy/switches/index.ts'
 // 设置页的分区表在 ./views/proxy/sections.ts(按职责从 index.ts 切出).
 import { buildAdvancedSection } from './views/proxy/sections.ts'
 import { render } from './views/shell/index.ts'

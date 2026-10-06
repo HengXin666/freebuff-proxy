@@ -18,8 +18,9 @@ import { endProgress, startProgress } from '../../lib/ui.ts'
 
 /** 左侧边栏的分区(顺序必须与 buildSettingsSections 的区序一致). */
 const SECTIONS: Array<{ key: string, icon: string }> = [
-  { key: 'settings.sectionUpstream', icon: 'box' },
+  // 顺序必须与 buildSettingsSections 的区序一致: 官方工具在前(默认可见).
   { key: 'settings.sectionTools', icon: 'terminal' },
+  { key: 'settings.sectionUpstream', icon: 'box' },
   { key: 'settings.sectionScheduling', icon: 'gauge' },
   { key: 'settings.sectionNetwork', icon: 'globe' },
   { key: 'settings.sectionModels', icon: 'cpu' },

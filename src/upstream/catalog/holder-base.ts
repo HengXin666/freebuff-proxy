@@ -2,7 +2,7 @@
  * 目录持有者的存储与只读视图  --  CatalogHolder 的基类.
  *
  * 内容分两块: "存目录结果 + 读视图"(本文件) 与 "模型标识归一到目录 key 的真源"
- * (catalog-protocol.ts). 后者被 test/suites/entries/verify/model-mapping-truth.ts
+ * (catalog-protocol.ts). 后者被 test/suites/entries/verify/model/mapping-truth.ts
  * 的真源唯一性判据按路径核对, 因此本文件不出现 freebuffLegacyModelDigest.
  *
  * 用类继承而非把方法挂到 prototype: 方法需要保留完整类型信息(checkJs 打开,

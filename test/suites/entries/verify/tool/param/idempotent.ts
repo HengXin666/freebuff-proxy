@@ -13,7 +13,7 @@ import path from 'node:path'
 import {
   CLIENT_TO_OFFICIAL_TOOL,
   unmapToolCallsInBody,
-} from '../../../../../src/upstream/foreign-client-signals.ts'
+} from '../../../../../../src/upstream/foreign-client-signals.ts'
 
 let n = 0
 const ok = (cond, msg) => {
@@ -21,7 +21,7 @@ const ok = (cond, msg) => {
   n += 1
 }
 
-const ROOT = path.join(import.meta.dirname, '..', '..', '..', '..', '..')
+const ROOT = path.join(import.meta.dirname, '..', '..', '..', '..', '..', '..')
 
 /** dsh 真实声明的工具 schema 与名字集合(与 restore-declared 用同一份 fixture). */
 const DSH_TOOLS = JSON.parse(

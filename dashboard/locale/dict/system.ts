@@ -85,14 +85,16 @@ export default {
   'system.officialTools': { 'zh-CN': '官方工具注入', en: 'Official tool injection' },
   'system.officialToolsHint': {
     'zh-CN':
-      '官方工具集是上游识别客户端形态的一部分，默认全部注入。有些官方工具（浏览器预览、写文档、'
-      + '提议后续提问等）在下游没有对应工具，模型一旦选中它们，下游只会报 unknown tool；'
-      + '把它们取消勾选即可不再注入。改动即时生效。',
+      '官方工具集是上游识别客户端形态的一部分。未配置时按[下游本次声明]自动裁剪：'
+      + '只注入回程能还原成下游真的声明过的那些名字。没有对应工具的工具'
+      + '（浏览器预览、写文档、提议后续提问等）一旦注入，模型选中后下游只会报 unknown tool。'
+      + '勾选并保存即改为按名单注入，全不选则是 [一个都不注入]。',
     en:
-      'The official tool set is part of how upstream identifies the client, so it is injected in full by default. '
-      + 'Some official tools (browser preview, doc writing, follow-up suggestions) have no downstream '
-      + 'counterpart, so a model that picks them makes the client fail with unknown tool. Unchecking '
-      + 'removes them from injection. Takes effect immediately.',
+      'The official tool set is part of how upstream identifies the client. While unconfigured it is '
+      + 'auto-trimmed to the tools whose names can be mapped back to what the client actually declared. '
+      + 'Injected tools without a client counterpart (browser preview, doc writing, follow-up suggestions) '
+      + 'make the client fail with unknown tool when the model picks them. Saving a selection switches to '
+      + 'injecting exactly that list; clearing every box means nothing is injected.',
   },
   'system.officialToolsGroupCommon': {
     'zh-CN': '可派发（下游有对应工具，建议保持勾选）',
@@ -107,13 +109,57 @@ export default {
   'system.officialToolsApply': { 'zh-CN': '应用勾选', en: 'Apply selection' },
   'system.officialToolsSelectAll': { 'zh-CN': '全选', en: 'Select all' },
   'system.officialToolsSelectNone': { 'zh-CN': '全不选', en: 'Select none' },
-  'system.officialToolsAll': {
-    'zh-CN': '当前为未配置状态：全部官方工具都会注入。',
-    en: 'Currently unconfigured: every official tool is injected.',
-  },
   'system.officialToolsSaved': {
-    'zh-CN': '官方工具注入已更新（即时生效）',
-    en: 'Official tool injection updated (effective immediately)',
+    'zh-CN': '官方工具注入已更新（下一个请求生效）',
+    en: 'Official tool injection updated (applies to the next request)',
+  },
+  'system.officialSystem': { 'zh-CN': '官方系统提示词', en: 'Official system prompt' },
+  'system.officialSystemHint': {
+    'zh-CN':
+      '官方模板明文要求模型调用 suggest_prompts、写待办、申请提权、操作浏览器预览等工具。'
+      + '其中下游没有对应物的那些，模型照着提示词去调就会报 unknown tool。'
+      + '这里可以换成你自己的指令，或整段不带官方提示词。改动作用于之后的请求。',
+    en:
+      'The official template explicitly tells the model to call suggest_prompts, write todos, '
+      + 'request elevation, drive the browser preview and more. Those without a client counterpart '
+      + 'fail with unknown tool when the model follows the prompt. Replace it with your own '
+      + 'instructions, or drop the official prompt entirely. Applies to later requests.',
+  },
+  'system.officialSystemMode': { 'zh-CN': '处理方式', en: 'Mode' },
+  'system.officialSystemModeOfficial': { 'zh-CN': '照抄官方原文（默认）', en: 'Use the official capture (default)' },
+  'system.officialSystemModeCustom': { 'zh-CN': '使用下面的自定义正文', en: 'Use the custom text below' },
+  'system.officialSystemModeNone': { 'zh-CN': '不带官方系统提示词', en: 'Send no official system prompt' },
+  'system.officialSystemPlaceholder': {
+    'zh-CN': '选择[使用下面的自定义正文]后可在此编辑…',
+    en: 'Select "custom text" to edit here…',
+  },
+  'system.officialSystemDirty': { 'zh-CN': '有未保存的改动', en: 'Unsaved changes' },
+  'system.officialSystemApply': { 'zh-CN': '应用', en: 'Apply' },
+  'system.officialSystemRestore': { 'zh-CN': '恢复官方原文', en: 'Restore the official text' },
+  'system.officialSystemView': { 'zh-CN': '查看官方原文', en: 'View the official text' },
+  'system.officialSystemSaved': {
+    'zh-CN': '官方系统提示词已更新（下一个请求生效）',
+    en: 'Official system prompt updated (applies to the next request)',
+  },
+  'system.officialSystemRestoreUnavailable': {
+    'zh-CN': '读不到官方原文（抓包文件缺失），无法恢复',
+    en: 'The official capture is unavailable, so it cannot be restored',
+  },
+  'system.officialToolsStatusAuto': {
+    'zh-CN': '未配置（自动）',
+    en: 'Unconfigured (automatic)',
+  },
+  'system.officialToolsStatusNone': {
+    'zh-CN': '已配置：一个都不注入',
+    en: 'Configured: nothing is injected',
+  },
+  'system.officialToolsStatusCount': {
+    'zh-CN': '已配置：注入 {n} 个',
+    en: 'Configured: {n} injected',
+  },
+  'system.officialToolsWhen': {
+    'zh-CN': '改动作用于之后的请求，已在途的请求不受影响。',
+    en: 'Changes apply to later requests; requests already in flight are unaffected.',
   },
   'system.blockPremiumOn': { 'zh-CN': '已屏蔽收费模型（列表与调度已排除）', en: 'Paid models blocked (excluded from the list and from scheduling)' },
   'system.blockPremiumOff': { 'zh-CN': '已显示收费模型', en: 'Paid models shown again' },

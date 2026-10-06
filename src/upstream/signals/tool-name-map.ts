@@ -100,6 +100,28 @@ import { toNameSet } from './declared-names.ts'
 export { toNameSet } from './declared-names.ts'
 
 /**
+ * 官方原生工具 -> 下游等价物的显式补充表(一对多方向).
+ *
+ * 为什么另立一张表而不是往 CLIENT_TO_OFFICIAL_TOOL 里加: 那张表的键是下游名,
+ * 一个下游名只能指向一个官方名. 而这里要表达的恰恰是反过来的关系 ----
+ * 两个不同的官方工具都能落到同一个下游工具上:
+ *   ask_questions    -> ask_user_question(原生问答)
+ *   suggest_prompts  -> ask_user_question(官方[后续提问建议卡片])
+ *
+ * suggest_prompts 为什么可以落过来(2026-10-06 裁决): 它的载荷是一组
+ * {prompt, label} 选项, 与下游 ask_user_question 的 questions[].options[] 同构;
+ * 官方 worker system 模板还明文要求[几乎每一轮都要调用它]. 不映射的代价是
+ * 每轮都有一条注定 unknown tool 的调用; 映射过来后下游至少能把它渲染成
+ * 一组可选项, 语义偏差(建议 vs 提问)由参数规则里的措辞兜住.
+ *
+ * 只对明确做过对标决策的官方名登记; 没有下游对应物的一律不写(写了就会把
+ * 官方原生名翻成下游不认识的别名).
+ */
+export const OFFICIAL_NATIVE_TO_CLIENT: Record<string, string> = Object.freeze({
+  suggest_prompts: 'ask_user_question',
+})
+
+/**
  * 构造 官方名 -> 下游名 的还原表, 并做[本次声明]过滤.
  *
  * 两个消费者共用同一条规则: 非流式的 unmapToolCallsInBody 与流式的逐分片改写
@@ -121,6 +143,11 @@ export function buildOfficialToClientMap(declaredNames?: any): Record<string, st
   for (const [client, official] of Object.entries(CLIENT_TO_OFFICIAL_TOOL)) {
     if (declared.size > 0 && !declared.has(client)) continue
     if (!back[official]) back[official] = client // 取第一个 = 表内优先级
+  }
+  // 显式补充表同样受[本次声明]过滤: 下游这次没声明过那个客户端名时不得造出别名.
+  for (const [official, client] of Object.entries(OFFICIAL_NATIVE_TO_CLIENT)) {
+    if (declared.size > 0 && !declared.has(client)) continue
+    if (!back[official]) back[official] = client
   }
   return back
 }

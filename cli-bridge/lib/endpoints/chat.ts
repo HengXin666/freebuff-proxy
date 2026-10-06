@@ -40,11 +40,13 @@ export async function chat(bridge, opts) {
     streamStdout = false,
     // 官方工具注入名单(undefined = 不裁剪). 由主服务解析好, 副仓只按名单过滤.
     officialToolNames = undefined,
+    // 官方 system 提示词的处置(undefined = 照抄官方抓包原文).
+    systemPrompt = undefined,
   } = opts;
   const url = `${bridge.host}/api/v1/chat/completions`;
   const { OFFICIAL_TOOLS, OFFICIAL_DECIDE, OFFICIAL_SYS } = await loadOfficialAssets();
   const outTools = buildTools(layer, tools, OFFICIAL_TOOLS, OFFICIAL_DECIDE, officialToolNames);
-  const outMessages = buildSystemMessages(messages, layer, OFFICIAL_SYS);
+  const outMessages = buildSystemMessages(messages, layer, OFFICIAL_SYS, systemPrompt);
   const metadata = await buildMetadata({ bridge, layer, runId, instanceId, reasoningEffort });
   const body = buildBody({ row, metadata, outMessages, outTools, layer, stream });
   const hdrs = await buildHeaders(bridge, url, body);

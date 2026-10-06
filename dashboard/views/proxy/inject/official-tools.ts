@@ -4,10 +4,10 @@
  * 拆出理由: index.ts 与 cards.ts 都已贴近 500/300 行上限, 而这张卡的语义
  * (提交整份勾选集合, 空数组是合法值)与其余开关卡的 [改一个布尔] 不同类.
  */
-import { t } from '../../locale/index.ts'
-import { api } from '../../lib/api.ts'
-import { el } from '../../lib/dom.ts'
-import { toast } from '../../lib/ui.ts'
+import { t } from '../../../locale/index.ts'
+import { api } from '../../../lib/api.ts'
+import { el } from '../../../lib/dom.ts'
+import { toast } from '../../../lib/ui.ts'
 
 /**
  * 官方工具注入卡: 按[可派发 / 不可派发]分组的勾选列表.
@@ -57,19 +57,33 @@ export function buildOfficialToolsCard(
       if (on) attrs.checked = ''
       if (disabled) attrs.disabled = ''
       box.append(el('label', { class: 'official-tool-item' }, [
-        el('input', attrs),
+        el('input', { ...attrs, 'data-default': on ? '1' : '0' }),
         el('span', { class: 'official-tool-name' }, item.name),
         el('span', { class: 'muted official-tool-desc' }, item.desc),
       ]))
     }
     body.append(box)
   }
-  return el('div', { class: 'card settings-band', style: 'margin-top:12px' }, [
-    el('div', {}, [
-      el('h3', { style: 'margin:0 0 2px' }, t('system.officialTools')),
-      el('span', { class: 'muted' }, t('system.officialToolsHint')),
+  const activeNames: string[] | null = unconfigured ? null : selected
+  return el('div', {
+    class: 'card settings-band', id: 'official-tools-card', style: 'margin-top:12px',
+  }, [
+    el('div', { class: 'row spread official-tools-head' }, [
+      el('div', {}, [
+        el('h3', { style: 'margin:0 0 2px' }, t('system.officialTools')),
+        el('span', { class: 'muted' }, t('system.officialToolsHint')),
+      ]),
+      el('div', {
+        class: unconfigured ? 'official-tools-status muted' : 'official-tools-status',
+      }, unconfigured || !activeNames
+        ? t('system.officialToolsStatusAuto')
+        : activeNames.length === 0
+          ? t('system.officialToolsStatusNone')
+          : t('system.officialToolsStatusCount').replace('{n}', String(activeNames.length))),
     ]),
-    unconfigured ? el('div', { class: 'muted' }, t('system.officialToolsAll')) : null,
+    // 生效时点必须写在卡上: 这个开关改的是[下一个请求带上游的工具集],
+    // 在途请求不受影响 ---- 只说[即时生效]会让用户拿正在跑的会话去判断.
+    el('div', { class: 'muted official-tools-when' }, t('system.officialToolsWhen')),
     body,
     el('div', { class: 'row' }, [
       el('button', {
@@ -109,11 +123,15 @@ function groupToggleButton(on: boolean, box: any, disabled: boolean) {
  */
 export async function saveOfficialToolsSetting(event: any) {
   const btn = event.currentTarget
-  const card = btn.closest('.card')
+  // 作用域用[卡片容器 id]而不是 closest('.card'): 后者要求按钮恰好落在
+  // .card 内, 卡片结构一变(或按钮被挪出)就会收集到空数组 ---- 而空数组在
+  // 服务端语义是[一个都不注入], 等于静默把用户配置改成全关.
+  const card = document.getElementById('official-tools-card')
   const names: string[] = []
   if (card) {
     for (const input of card.querySelectorAll('input.official-tool-box')) {
-      if (input.checked && input.value) names.push(input.value)
+      const box = input as HTMLInputElement
+      if (box.checked && box.value) names.push(box.value)
     }
   }
   btn.disabled = true
@@ -125,17 +143,47 @@ export async function saveOfficialToolsSetting(event: any) {
     toast(t('system.officialToolsSaved'))
     try {
       const s = await api('/api/settings')
-      if (Array.isArray(s.officialToolNames)) {
-        const active = new Set(s.officialToolNames)
-        if (card) {
-          for (const input of card.querySelectorAll('input.official-tool-box')) {
-            input.checked = active.has(input.value)
-          }
+      // 回读必须把 [未配置(null)] 与 [空数组] 分开回填: 混同会让界面显示的
+      // 勾选态与真实生效值不一致(用户看到勾着, 实际全不注入).
+      const raw: unknown = s.officialToolNames
+      const active = Array.isArray(raw) ? new Set(raw as string[]) : null
+      if (card) {
+        for (const input of card.querySelectorAll('input.official-tool-box')) {
+          const box = input as HTMLInputElement
+          box.checked = active
+            ? active.has(box.value)
+            : box.getAttribute('data-default') === '1'
         }
       }
+      applyStatus(card, active)
     } catch { /* 回读失败也保持可交互 */ }
   } catch (err) {
     toast(err.message, true)
   }
   btn.disabled = false
+}
+
+/**
+ * 刷新卡片顶部的[当前生效]状态行.
+ *
+ * 为什么必须有(用户反馈): 这个开关的作用对象是[发给上游的工具集], 从界面上
+ * 看不出[现在到底注入了几个], 只能靠逐项数勾选, 关掉一个也说不清生效没有.
+ * 状态行把三态直接写出来: 未配置(自动) / 已配置 / 全不注入.
+ *
+ * @param {any} card 卡片容器
+ * @param {Set<string>|null} active 生效名单; null 表示未配置
+ * @returns {void} 无返回值
+ */
+function applyStatus(card: any, active: Set<string> | null) {
+  const line = card?.querySelector?.('.official-tools-status')
+  if (!line) return
+  if (!active) {
+    line.textContent = t('system.officialToolsStatusAuto')
+    line.className = 'official-tools-status muted'
+    return
+  }
+  line.textContent = active.size === 0
+    ? t('system.officialToolsStatusNone')
+    : t('system.officialToolsStatusCount').replace('{n}', String(active.size))
+  line.className = 'official-tools-status'
 }

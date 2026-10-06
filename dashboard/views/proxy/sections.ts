@@ -16,7 +16,9 @@ import {
   buildQuotaProtectionCard, buildStripToolsCard, buildToolCarrierCard,
   buildUpstreamChannelCard,
 } from './cards.ts'
-import { buildOfficialToolsCard } from './official-tools.ts'
+import { buildAutoSignInCard } from './switches/auto-signin.ts'
+import { buildOfficialToolsCard } from './inject/official-tools.ts'
+import { buildSystemPromptCard } from './inject/system-prompt.ts'
 import { buildTunablesCard } from './tunables.ts'
 
 /**
@@ -31,22 +33,29 @@ import { buildTunablesCard } from './tunables.ts'
 export function buildSettingsSections(ctx: any) {
   const s = ctx.settings
   return [
-    settingsSection('settings.sectionUpstream', 'settings.sectionUpstreamHint', [
-      buildUpstreamChannelCard(ctx.channel),
-      buildFreeToolSignatureCard(ctx.toggleAttrs, ctx.signatureEnabled),
-      buildStripToolsCard(ctx.stripAttrs, ctx.stripTools),
-      buildToolCarrierCard(ctx.carrierAttrs, ctx.carrierEnabled),
-    ]),
+    // 官方工具注入排第一区: 它是[发给上游的工具集]这个开关组里唯一会直接
+    // 决定[模型能不能派发]的一项(用户反馈: 原先藏在二级区里, 要滚下去点
+    // 侧栏才找得到). 其余三张开关卡与它同源, 放在它后面.
     settingsSection('settings.sectionTools', 'settings.sectionToolsHint', [
       buildOfficialToolsCard(
         ctx.officialToolCatalog, ctx.officialToolNames, ctx.toolsDisabled, ctx.onOfficialToolsApply,
       ),
+    ]),
+    settingsSection('settings.sectionUpstream', 'settings.sectionUpstreamHint', [
+      buildSystemPromptCard(
+        ctx.systemPromptMode, ctx.systemPromptText, ctx.systemPromptDefault, ctx.toolsDisabled,
+      ),
+      buildUpstreamChannelCard(ctx.channel),
+      buildFreeToolSignatureCard(ctx.toggleAttrs, ctx.signatureEnabled),
+      buildStripToolsCard(ctx.stripAttrs, ctx.stripTools),
+      buildToolCarrierCard(ctx.carrierAttrs, ctx.carrierEnabled),
     ]),
     settingsSection('settings.sectionScheduling', 'settings.sectionSchedulingHint', [
       buildLoadBalanceCard(ctx.schedMode, ctx.concurrency, ctx.overflowWaitMs),
       buildQuotaProtectionCard(
         ctx.advice, ctx.idleReleaseSec, ctx.lowBalanceThreshold, ctx.maxNewSessions,
       ),
+      buildAutoSignInCard(ctx.autoSignInAttrs, ctx.autoSignInEnabled),
     ]),
     settingsSection('settings.sectionNetwork', 'settings.sectionNetworkHint', [
       buildProxyPoolCard(ctx.data),

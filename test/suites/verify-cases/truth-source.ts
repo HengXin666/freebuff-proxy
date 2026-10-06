@@ -1,6 +1,6 @@
 /**
  * 真源唯一性:除 catalog-protocol.ts 外不得有第二套[上游 id → 目录 key]实现 --
- * 从 test/suites/entries/verify/model-mapping-truth.ts 的 ④ 段逐字搬出.
+ * 从 test/suites/entries/verify/model/mapping-truth.ts 的 ④ 段逐字搬出.
  *
  * 判据(用户点名):其它文件不得调用 freebuffLegacyModelDigest(, 也不得直接
  * 读取 keyByDigest; 任何把摘要当查询键去查表的写法都判违规.

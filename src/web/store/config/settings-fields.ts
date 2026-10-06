@@ -104,6 +104,19 @@ const oneOf = (values: string[]): LiveFieldSpec => ({
 })
 
 /**
+ * 自由文本字段的规格(只在超过上限时拒绝).
+ *
+ * 官方 system 提示词的自定义正文用它: 内容不做语义校验(用户可能想贴任何
+ * 指令), 只卡长度 ---- 上限取 200000, 远高于官方模板的 13KB, 又能在误贴
+ * 整份文件时给出明确错误而不是让请求体爆掉.
+ */
+const freeText = (max: number): LiveFieldSpec => ({
+  normalize: (v) => (typeof v === 'string' && v.length <= max
+    ? ok(v)
+    : err(`必须是长度不超过 ${max} 的字符串`)),
+})
+
+/**
  * 实时字段表(与 Settings 接口一一对应).
  *
  */
@@ -121,4 +134,8 @@ export const LIVE_FIELDS: Record<string, LiveFieldSpec> = {
   maxNewSessionsPerRequest: intClamped(clampNewSessions, 0),
   upstreamChannel: oneOf(['official', 'legacy']),
   accountSchedulingMode: oneOf(['sticky', 'spread']),
+  officialSystemPromptMode: oneOf(['official', 'custom', 'none']),
+  officialSystemPromptText: freeText(200_000),
+  // 自动签到开关(默认关闭). 间隔固定 25 小时, 见 store/signin/store.ts.
+  autoSignInEnabled: bool(),
 }

@@ -75,6 +75,87 @@ export default {
       'Pick which official tools are injected upstream. Unconfigured means inject all; '
       + 'non-dispatchable tools are unchecked by default.',
   },
+  'signin.button': { 'zh-CN': '一键签到', en: 'Sign in all' },
+  // 成本警告: 常驻在按钮旁(不是 tooltip). 每条对应一个已核实的机制, 见
+  // views/overview/accounts/signin/confirm.ts 的文件头.
+  'signin.costNotice': {
+    'zh-CN':
+      '签到不是免费查询：上游没有签到接口，当天签到由当天第一条消息触发。'
+      + '若账号当前没有可复用的会话，会按所选中模型的整小时单价预扣一次。',
+    en:
+      'Signing in is not a free lookup: the upstream has no sign-in endpoint, and the daily '
+      + 'sign-in is triggered by the day\'s first message. If an account has no reusable session '
+      + 'right now, a whole hour of the chosen model is prepaid.',
+  },
+  'signin.confirmTitle': { 'zh-CN': '确认一键签到？', en: 'Sign in all accounts?' },
+  'signin.confirmImpact': {
+    'zh-CN': '本次会波及 {alive} 个存活账号（账号池共 {total} 个）。',
+    en: 'This touches {alive} live account(s) out of {total} in the pool.',
+  },
+  'signin.confirmZeroPrice': {
+    'zh-CN': ' 其中至少有一个单价为 0 的模型可用。',
+    en: ' At least one zero-priced model is available.',
+  },
+  'signin.confirmCost': {
+    'zh-CN': '这个操作会对每个存活账号发一条消息，因此可能产生真实花费：',
+    en: 'This sends one message per live account, so it can cost real quota:',
+  },
+  'signin.confirmBulletCold': {
+    'zh-CN': '没有可复用会话的账号：按所选中模型的整小时单价预扣一次（当前账号池里'
+      + '优先挑单价为 0 的模型，挑不到才会用有价的）。',
+    en:
+      'Accounts without a reusable session: one whole hour of the chosen model is prepaid '
+      + '(the cheapest model with a zero price is preferred; a priced one is used only if none exists).',
+  },
+  'signin.confirmBulletWarm': {
+    'zh-CN': '已有热会话的账号：复用那条已付费的会话，零边际成本，不再扣。',
+    en: 'Accounts with a warm session: that already-paid hour is reused at zero marginal cost.',
+  },
+  'signin.confirmBulletSkip': {
+    'zh-CN': '今天已经签过的账号：直接跳过，一分钱不花。',
+    en: 'Accounts already signed in today: skipped entirely, nothing is spent.',
+  },
+  'signin.confirmNote': {
+    'zh-CN': '收益是连续签到天数（7 天解锁）与 freebucksDailyBonus。'
+      + '手动签到 18 小时内只能触发一次。',
+    en:
+      'What you get: the consecutive-day streak (unlocks at 7 days) and the freebucksDailyBonus. '
+      + 'Manual sign-in can only be triggered once every 18 hours.',
+  },
+  'signin.confirmOk': { 'zh-CN': '确认签到', en: 'Sign in now' },
+  // 与 costNotice 口径一致: 不写[不消耗额度]那种会让人误判成本的话.
+  'signin.tip': {
+    'zh-CN': '给所有存活账号跑一轮签到（已签过的跳过；没有可复用会话的账号会预扣一次）',
+    en: 'Run one sign-in round for every live account (already-signed ones are skipped; '
+      + 'accounts without a reusable session prepay one hour)',
+  },
+  'signin.running': { 'zh-CN': '签到中…', en: 'Signing in…' },
+  'signin.remainHourMin': { 'zh-CN': '还剩 {h} 小时 {m} 分', en: '{h}h {m}m left' },
+  'signin.remainMin': { 'zh-CN': '还剩 {m} 分', en: '{m}m left' },
+  'signin.cooldownTip': {
+    'zh-CN': '手动签到每 18 小时只能触发一次，{time}',
+    en: 'Manual sign-in is limited to once every 18 hours, {time}',
+  },
+  'signin.resultSigned': { 'zh-CN': '签到 {n} 个', en: '{n} signed in' },
+  'signin.resultSkipped': { 'zh-CN': '已签跳过 {n} 个', en: '{n} already signed' },
+  'signin.resultFailed': { 'zh-CN': '失败 {n} 个', en: '{n} failed' },
+  'signin.autoOn': { 'zh-CN': '自动：开', en: 'Auto: on' },
+  'signin.autoOff': { 'zh-CN': '自动：关', en: 'Auto: off' },
+  'signin.autoTipShort': {
+    'zh-CN': '自动签到可在[设置 → 调度与额度]里开启（默认关闭，间隔 25 小时）',
+    en: 'Enable auto sign-in in Settings (off by default, every 25 hours)',
+  },
+  'settings.autoSignIn': { 'zh-CN': '自动签到', en: 'Auto sign-in' },
+  'settings.autoSignInHint': {
+    'zh-CN':
+      '开启后每 25 小时对所有存活账号自动签到一次。签到需要发一条消息，'
+      + '已签过的账号会自动跳过。默认关闭。',
+    en:
+      'When enabled, signs in every live account once every 25 hours. Signing in sends one message; '
+      + 'accounts already signed in today are skipped. Off by default.',
+  },
+  'settings.autoSignInOn': { 'zh-CN': '自动签到已开启（间隔 25 小时）', en: 'Auto sign-in enabled (every 25 hours)' },
+  'settings.autoSignInOff': { 'zh-CN': '自动签到已关闭', en: 'Auto sign-in disabled' },
   'settings.sectionModels': { 'zh-CN': '模型', en: 'Models' },
   'settings.sectionModelsHint': {
     'zh-CN': '模型清单与上游目录对账；此处决定哪些模型对外可见。',

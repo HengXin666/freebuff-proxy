@@ -27,10 +27,10 @@ import path from 'node:path'
 import {
   CLIENT_TO_OFFICIAL_TOOL,
   unmapToolCallsInBody,
-} from '../../../../src/upstream/foreign-client-signals.ts'
-import { mergeAndTranslateSseToolCalls } from '../../../../src/proxy/transport/reply/sse-tool-merge.ts'
+} from '../../../../../src/upstream/foreign-client-signals.ts'
+import { mergeAndTranslateSseToolCalls } from '../../../../../src/proxy/transport/reply/sse-tool-merge.ts'
 
-const ROOT = path.join(import.meta.dirname, '..', '..', '..', '..')
+const ROOT = path.join(import.meta.dirname, '..', '..', '..', '..', '..')
 
 /**
  - 判据用真实抓包(docs/reverse/captures/official-tools.json),

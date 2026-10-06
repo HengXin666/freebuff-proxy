@@ -50,7 +50,7 @@ export const MAP_TOOLS = Object.freeze({
   browser_check: 'browser_check',
   // 其它 harness 的等价名(Claude Code / Codex / Cursor / opencode).
   // 真值与理由见 Node 侧唯一真源 src/upstream/signals/tool-name-map.ts 的同名段;
-  // 两侧表必须逐条一致(test/suites/entries/verify/tool-name-mapping.ts 有断言).
+  // 两侧表必须逐条一致(test/suites/entries/verify/tool/name-mapping.ts 有断言).
   Bash: 'run_terminal_command',
   Read: 'read_files',
   Write: 'write_file',

@@ -81,6 +81,19 @@ async function actRelease({ bridge, input, out }: ActionCtx): Promise<void> {
   out.result = await bridge.release(input.instanceId)
 }
 
+/**
+ * 读连续签到状态(只读, 不产生计费).
+ *
+ * 单独一个 action 而不是搭在 session 上: 它的失败不该拖累会话读取
+ * (签到状态拿不到与会话读不到是两件事, 而且前者可容忍).
+ */
+async function actStreak({ bridge, out }: ActionCtx): Promise<void> {
+  const r = await bridge.getStreak()
+  out.status = r?.status ?? null
+  out.result = r?.body ?? null
+  out.ok = r?.status === 200
+}
+
 /** 买断一个模型的会话(admission). */
 async function actAdmit({ bridge, input, out }: ActionCtx): Promise<void> {
   const row = pickRow(bridge, input)
@@ -99,6 +112,7 @@ async function actChat({ bridge, input, out }: ActionCtx): Promise<void> {
   const row = pickRow(bridge, input)
   if (!row) return failUnknownModel(out, input.modelKey)
   out.model = { key: row.key, name: row.displayName }
+  // 与 actReuse 同一条纪律: 上游能力逐项透传, 不在这里挑字段丢弃.
   out.result = await bridge.chat({
     row,
     instanceId: input.instanceId,
@@ -106,6 +120,10 @@ async function actChat({ bridge, input, out }: ActionCtx): Promise<void> {
     messages: input.messages,
     tools: input.tools,
     stream: input.stream,
+    layer: input.layer || 'worker',
+    reasoningEffort: input.reasoningEffort ?? null,
+    officialToolNames: input.officialToolNames,
+    systemPrompt: input.systemPrompt,
   })
 }
 
@@ -123,6 +141,15 @@ async function actReuse({ bridge, input, out }: ActionCtx): Promise<void> {
   const c = await bridge.reuseChat({
     row, instanceId: input.instanceId, runId: run.runId,
     messages: input.messages, tools: input.tools, stream: input.stream,
+    // 以下四项原先在这里被整段丢弃, 后果是[主服务配了却不生效]:
+    // 官方工具注入名单, 官方 system 处置, 分层(worker/manager), 思考强度
+    // 都到不了 buildTools / buildSystemMessages. 控制台改了官方工具勾选却
+    // 一个都没少, 根因就在这里 ----
+    // 主服务出站前算好了注入名单, 却死在这一层.
+    layer: input.layer || 'worker',
+    reasoningEffort: input.reasoningEffort ?? null,
+    officialToolNames: input.officialToolNames,
+    systemPrompt: input.systemPrompt,
     // 流式 stdout: 正文逐行直接写出去, 不攒在内存里(见 chat.ts 的文件头).
     // 只有显式要求时才开, 其余调用方(serve/api 等)契约不变.
     streamStdout: input.streamStdout === true,
@@ -183,6 +210,8 @@ async function actFull({ bridge, input, out }: ActionCtx): Promise<void> {
     stream: input.stream !== false,
     layer: input.layer || 'worker',
     reasoningEffort: input.reasoningEffort || null,
+    officialToolNames: input.officialToolNames,
+    systemPrompt: input.systemPrompt,
   })
   out.chat = c
   out.ok = c.status === 200
@@ -213,6 +242,7 @@ const ACTIONS: Record<string, ActionFn> = {
   reuse: actReuse,
   dryrun: actDryrun,
   full: actFull,
+  streak: actStreak,
 }
 
 /**
@@ -227,7 +257,9 @@ export async function runAction(bridge: BridgeLike, input: any): Promise<any> {
   const act = input.action
   const out: any = { action: act }
   try {
-    if (act !== 'catalog') await bridge.fetchCatalog()
+    // streak 不需要目录: 它的头集里只要 catalog-fetch 可选地带一下,
+    // 而白抓一次目录等于每次签到多打一个上游请求(零收益).
+    if (act !== 'catalog' && act !== 'streak') await bridge.fetchCatalog()
     const fn = ACTIONS[act]
     if (!fn) {
       out.error = `unknown action: ${act}`

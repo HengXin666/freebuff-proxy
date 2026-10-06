@@ -116,6 +116,41 @@ export async function getSession(bridge, opts = {}) {
 }
 
 /**
+ * 连续签到状态(GET /api/v1/freebuff/streak).
+ *
+ * 只读, 不产生计费 ---- 真实[签到]由[当天第一条消息]触发, 这个端点只报告
+ * 结果(见 src/upstream/upstream-contract.ts 的 EP_STREAK 注释与
+ * docs/guide/streak.md).
+ *
+ * 头形态与 getSession 的[普通查询]分支一致: 同一批 [带 timezone / catalog /
+ * client 标识] 的常规读端点, 少一个都可能被上游按形态不符处理.
+ * 客户端真实实现在 orchestrator 的 src/server/services/streak.ts:
+ *   fetch(${apiHost}/api/v1/freebuff/streak, { headers: { Authorization, accept } })
+ * ---- 官方只带两个头, 我们是代理, 按本仓既有的读端点形态多带 catalog 三头.
+ *
+ * @param {any} bridge Bridge 实例
+ * @returns {Promise<{status: number, body: any}>} 状态与回执(含 freebucksDailyBonus)
+ */
+export async function getStreak(bridge) {
+
+  const url = `${bridge.host}/api/v1/freebuff/streak`;
+  const res = await fetch(url, {
+    headers: {
+      ...bridge.auth(),
+      'x-freebuff-catalog-protocol': '1',
+      ...(bridge.fid ? { 'x-freebuff-catalog-fetch': bridge.fid } : {}),
+      'x-freebuff-client': 'desktop',
+      'x-fb-timezone':
+        bridge.cfg.timeZone ||
+        (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'),
+      ...(bridge.cfg.installId ? { 'x-freebuff-install-id': bridge.cfg.installId } : {}),
+      ...(await bridge.signHeaders('GET', url, null, bridge.fid)),
+    },
+  });
+  return { status: res.status, body: await res.json().catch(() => null) };
+}
+
+/**
  - DELETE 会话(带 instance-id).
  - @param {any} bridge Bridge 实例
  - @param {string} instanceId 会话实例

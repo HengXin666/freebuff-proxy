@@ -42,6 +42,7 @@ docs/
 | 幽灵连接,断开释放,重启兜底 | [guide/connection-health.md](guide/connection-health.md) | `connection-health` |
 | 本地命令,发版流程 | [guide/development.md](guide/development.md) | `development` |
 | README 那四张截图怎么生成,怎么复现 | [guide/screenshots.md](guide/screenshots.md) | `screenshots` |
+| 接入一个新的下游工具(改哪几个文件,判据与实测) | [guide/tool-compat.md](guide/tool-compat.md) | `tool-compat` |
 
 ### 内部口径(`docs/design/`)
 

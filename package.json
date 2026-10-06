@@ -31,7 +31,7 @@
     "notes:archive": "node .agents/skills/hx-agent-notes/scripts/archive-note.ts",
     "notes:board": "node .agents/skills/hx-agent-notes/scripts/build-board.ts --init board.html",
     "test:smoke": "node test/suites/entries/smoke/smoke.ts",
-    "test:catalog": "node test/suites/entries/verify/catalog-models.ts",
+    "test:catalog": "node test/suites/entries/verify/model/catalog-models.ts",
     "gen:contract": "node scripts/catalog/gen-upstream-contract.ts",
     "check:contract": "node scripts/check-upstream-contract.ts",
     "check:all": "npm run check:gates && npm run check:contract && npm run test:catalog && npm run typecheck && npm run test:smoke",

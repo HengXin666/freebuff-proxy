@@ -2,7 +2,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { readJsonFileState, noteDataFile } from '../../../util/json-store.ts'
 import { readTunables, writeTunables } from './tunables-store.ts'
-import { LIVE_FIELDS } from './settings-fields.ts'
+import {
+  LIVE_FIELDS, clampConcurrency, clampOverflowWait, clampLowBalance,
+  clampIdleReleaseSec, clampNewSessions,
+} from './settings-fields.ts'
 
 /** 运行设置字段表; 语义逐项见 DEFAULT_SETTINGS 的注释. */
 interface Settings {
@@ -18,6 +21,25 @@ interface Settings {
    * [名字...] = 只注入这些. 语义唯一真源见 signals/official-tool-select.ts.
    */
   officialToolNames?: string[]
+  /**
+   * 官方 system 提示词的三态.
+   *
+   * 为什么单独做一个开关而不是只给个文本框: 官方 worker 模板里点名要求模型
+   * 调用 suggest_prompts / write_todos 等下游没有的工具, 用户需要能在
+   * [照抄官方] / [换成自己的] / [整段不带] 之间切换并随时回到官方原文.
+   * 'official' = 未改过, 用抓包原文; 'custom' = 用 officialSystemPromptText;
+   * 'none' = 不带官方 system(下游自己的 system 原样透传).
+   */
+  officialSystemPromptMode: 'official' | 'custom' | 'none'
+  /** 自定义正文; 只在 mode='custom' 时参与渲染. */
+  officialSystemPromptText?: string
+  /**
+   * 自动签到开关(默认关闭).
+   *
+   * 间隔固定 25 小时(比 24 多一点, 避开跨时区/夏令时边界上"同一天触发两次").
+   * 签到本身要发一条消息, 有成本, 所以默认关闭 ---- 不能替用户默认花钱.
+   */
+  autoSignInEnabled: boolean
 }
 const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   // 转发上游时是否补齐官方真签名工具(名字 + 真实参数 schema),让上游不把请求
@@ -47,6 +69,11 @@ const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   // 官方工具集是上游的指纹判据之一, 默认不能动; 只有控制台显式配置过才按名单裁剪.
   // 见 src/upstream/signals/official-tool-select.ts 与控制台[官方工具]页.
   officialToolNames: undefined,
+  // 官方 system 提示词: 默认照抄抓包原文(零回归). 见接口注释里的三态说明.
+  officialSystemPromptMode: 'official',
+  officialSystemPromptText: undefined,
+  // 自动签到默认关闭: 它要发消息(有成本), 默认替用户花钱是错的.
+  autoSignInEnabled: false,
   // 上游请求形态通道(2026-10-03 新增):
   //   'legacy'(默认)---- 沿用现有自拼形态(ensureFreebuffSystemMessages +
   //       ensureFreebuffToolSignature + CLI 世代 agent).来源为早期第三方项目
@@ -92,6 +119,85 @@ const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   // 这样"config.yaml 只作兜底默认值"的约定才成立。
 })
 
+/**
+ * 把盘上存过的字段逐个读回默认值快照, 返回合并后的设置.
+ *
+ * 为什么抽成独立纯函数: 它是 13 个字段的 if 链, 每条都带[为什么必须读回]的
+ * 注释(漏读的症状一律是"控制台改了, 重启就自己变回去"), 塞在 load() 里会让
+ * 那个方法超函数长度红线, 也让"读回判据"与"装载流程"两件事糊在一起.
+ *
+ * 判据纪律: 只用[类型 + 取值域]判, 不做静默纠正 ----
+ * 非法值落回默认值比接受一个拼错的枚举更安全(见 upstreamChannel 那条).
+ *
+ * @param {Settings} base 默认值快照
+ * @param {any} raw 盘上读出的原始对象
+ * @returns {Settings} 合并后的设置
+ */
+function applyStoredSettings(base: Settings, raw: any): Settings {
+  const s: any = { ...base }
+  if (typeof raw?.freeToolSignatureEnabled === 'boolean') {
+    s.freeToolSignatureEnabled = raw.freeToolSignatureEnabled
+  }
+  if (typeof raw?.stripToolsOnSchemaRejection === 'boolean') {
+    s.stripToolsOnSchemaRejection = raw.stripToolsOnSchemaRejection
+  }
+  // 第三方工具承载开关: 不读回的话, 控制台关掉它重启后又自己打开
+  // (症状与"开关没生效"无法区分).
+  if (typeof raw?.toolCarrierEnabled === 'boolean') {
+    s.toolCarrierEnabled = raw.toolCarrierEnabled
+  }
+  // 遥测开关必须读回: 它能经 save() 写进 settings.json, 漏读则重启回落到 false.
+  if (typeof raw?.cliTelemetryEnabled === 'boolean') {
+    s.cliTelemetryEnabled = raw.cliTelemetryEnabled
+  }
+  // 官方工具注入名单: 空数组是合法值(一个都不注入), 所以只判是不是数组,
+  // 不能用长度判 ---- 用长度判会把[全不注入]读成[未配置], 重启即失效.
+  if (Array.isArray(raw?.officialToolNames)) {
+    s.officialToolNames = raw.officialToolNames.filter(
+      (n: any) => typeof n === 'string' && n,
+    )
+  }
+  // 官方 system 三态同样必须读回(漏读 = 改成自定义后重启又回官方).
+  if (raw?.officialSystemPromptMode === 'official'
+    || raw?.officialSystemPromptMode === 'custom'
+    || raw?.officialSystemPromptMode === 'none') {
+    s.officialSystemPromptMode = raw.officialSystemPromptMode
+  }
+  if (typeof raw?.officialSystemPromptText === 'string') {
+    s.officialSystemPromptText = raw.officialSystemPromptText
+  }
+  // 自动签到开关(漏读 = 开了自动签到, 重启就自己关了).
+  if (typeof raw?.autoSignInEnabled === 'boolean') {
+    s.autoSignInEnabled = raw.autoSignInEnabled
+  }
+  if (Number.isInteger(raw?.accountMaxConcurrency)) {
+    s.accountMaxConcurrency = clampConcurrency(raw.accountMaxConcurrency)
+  }
+  // 只接受两个已知通道, 非法值一律回落到 legacy(不静默接受拼写错误).
+  if (raw?.upstreamChannel === 'official' || raw?.upstreamChannel === 'legacy') {
+    s.upstreamChannel = raw.upstreamChannel
+  }
+  if (raw?.accountSchedulingMode === 'sticky' || raw?.accountSchedulingMode === 'spread') {
+    s.accountSchedulingMode = raw.accountSchedulingMode
+  }
+  if (Number.isInteger(raw?.accountOverflowWaitMs)) {
+    s.accountOverflowWaitMs = clampOverflowWait(raw.accountOverflowWaitMs)
+  }
+  if (typeof raw?.blockPremiumModels === 'boolean') {
+    s.blockPremiumModels = raw.blockPremiumModels
+  }
+  if (Number.isInteger(raw?.lowBalanceThreshold)) {
+    s.lowBalanceThreshold = clampLowBalance(raw.lowBalanceThreshold)
+  }
+  if (Number.isInteger(raw?.idleReleaseSec)) {
+    s.idleReleaseSec = clampIdleReleaseSec(raw.idleReleaseSec)
+  }
+  if (Number.isInteger(raw?.maxNewSessionsPerRequest)) {
+    s.maxNewSessionsPerRequest = clampNewSessions(raw.maxNewSessionsPerRequest)
+  }
+  return s as Settings
+}
+
 /** Frontend-managed runtime settings persisted under /data. */
 export class SettingsStore {
   declare file: string; declare settings: Settings
@@ -118,58 +224,9 @@ export class SettingsStore {
       this.loadReason = st.reason
     }
     if (st.status === 'ok') {
-      const raw = st.data
-      if (typeof raw?.freeToolSignatureEnabled === 'boolean') {
-        this.settings.freeToolSignatureEnabled = raw.freeToolSignatureEnabled
-      }
-      if (typeof raw?.stripToolsOnSchemaRejection === 'boolean') {
-        this.settings.stripToolsOnSchemaRejection = raw.stripToolsOnSchemaRejection
-      }
-      // 第三方工具承载开关:不读回的话, 控制台关掉它重启后又自己打开
-      // (症状与"开关没生效"无法区分), 与上面 cliTelemetryEnabled 同一条纪律.
-      if (typeof raw?.toolCarrierEnabled === 'boolean') {
-        this.settings.toolCarrierEnabled = raw.toolCarrierEnabled
-      }
-      //  这个布尔开关必须在这里读回:它能经 save() 写进 settings.json,
-      // 但漏读的话重启后一律回落到 DEFAULT_SETTINGS 的 false ---- 表现为
-      // [控制台打开了开关,重启就自己关了],症状与"开关没用"无法区分.
-      if (typeof raw?.cliTelemetryEnabled === 'boolean') {
-        this.settings.cliTelemetryEnabled = raw.cliTelemetryEnabled
-      }
-      // 官方工具注入名单: 空数组是合法值(一个都不注入), 所以只判是不是数组,
-      // 不能用长度判 ---- 用长度判会把[全不注入]读成[未配置], 重启即失效.
-      if (Array.isArray(raw?.officialToolNames)) {
-        this.settings.officialToolNames = raw.officialToolNames.filter(
-          (n: any) => typeof n === 'string' && n,
-        )
-      }
-      if (Number.isInteger(raw?.accountMaxConcurrency)) {
-        this.settings.accountMaxConcurrency = clampConcurrency(raw.accountMaxConcurrency)
-      }
-      // 只接受两个已知通道,非法值一律回落到 legacy(不静默接受拼写错误)
-      if (raw?.upstreamChannel === 'official' || raw?.upstreamChannel === 'legacy') {
-        this.settings.upstreamChannel = raw.upstreamChannel
-      }
-      if (raw?.accountSchedulingMode === 'sticky' || raw?.accountSchedulingMode === 'spread') {
-        this.settings.accountSchedulingMode = raw.accountSchedulingMode
-      }
-      if (Number.isInteger(raw?.accountOverflowWaitMs)) {
-        this.settings.accountOverflowWaitMs = clampOverflowWait(raw.accountOverflowWaitMs)
-      }
-      if (typeof raw?.blockPremiumModels === 'boolean') {
-        this.settings.blockPremiumModels = raw.blockPremiumModels
-      }
-      if (Number.isInteger(raw?.lowBalanceThreshold)) {
-        this.settings.lowBalanceThreshold = clampLowBalance(raw.lowBalanceThreshold)
-      }
-      if (Number.isInteger(raw?.idleReleaseSec)) {
-        this.settings.idleReleaseSec = clampIdleReleaseSec(raw.idleReleaseSec)
-      }
-      if (Number.isInteger(raw?.maxNewSessionsPerRequest)) {
-        this.settings.maxNewSessionsPerRequest = clampNewSessions(
-          raw.maxNewSessionsPerRequest,
-        )
-      }
+      // 字段逐个读回的逻辑抽成纯函数: load 本身只剩[装载 + 记录状态],
+      // 而每个字段的读回判据与注释集中在一处, 新增字段改那一个函数即可.
+      this.settings = applyStoredSettings(this.settings, st.data)
     } else if (st.status === 'invalid') {
       console.error(`[freebuff-proxy] 数据文件损坏: ${this.file} — ${st.reason}（已回落默认设置）`)
     }
@@ -227,47 +284,4 @@ export class SettingsStore {
     return this.get()
   }
 }
-
-/** 并发上限:1..16,防止误配造成上游顶号. */
-function clampConcurrency(n: number): number {
-  return Math.min(16, Math.max(1, n))
-}
-
-/**
- * 空闲释放:0(关闭)或 5s..24h.
- * 上游按整小时单价预扣,早退 DELETE 会按实际占用把未用部分退回来
- * (2026-09-13 结论反转,见 docs/design/account-scheduling-and-refund.md §3).所以挂着的
- * 空闲会话是在花钱,默认值应为[短空闲即释放]的 60s.
- * 下限保留 5s:低于 ~5s 等于把每个回合都切成一条新会话,admit 往返次数暴涨.
- */
-/**
- * 低额度分组阈值:0(关闭)或 1..10000 FB.上限给足空间(个别模型单价很高),
- * 但别到[所有号都在低额度组里]那种失去意义的地步.
- */
-function clampLowBalance(n: number): number {
-  if (n <= 0) return 0
-  return Math.min(10_000, Math.max(1, n))
-}
-
-function clampIdleReleaseSec(n: number): number {
-  if (n <= 0) return 0
-  return Math.min(86_400, Math.max(5, n))
-}
-
-/**
- * 溢出前排队上限:0(不等待,槽位满立即换号)或 1s..10min.
- * 上限压到 10 分钟:调度总预算(schedulingBudgetMs 默认 45s)另有约束,
- * 这里再大也不会真的等那么久,只是给了[宁可排队也不换号]一个上限.
- */
-function clampOverflowWait(n: number): number {
-  if (n <= 0) return 0
-  return Math.min(600_000, Math.max(1_000, n))
-}
-
-/** 单请求新会话预算:0(不限制)或 1..16. */
-function clampNewSessions(n: number): number {
-  if (n <= 0) return 0
-  return Math.min(16, Math.max(1, n))
-}
-
 export { DEFAULT_SETTINGS }

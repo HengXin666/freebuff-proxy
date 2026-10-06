@@ -149,6 +149,44 @@ export async function tryOfficialChannel(ctx: any, args: any) {
  * @param {any} declared 下游本次声明的工具名
  * @returns {string[]} 要注入的官方工具名
  */
+/**
+ * 把控制台的官方 system 配置解析成 bun 侧要的形态.
+ *
+ * 三态映射(与 settings-store 的字段一一对应):
+ *   - 'official'(或未配置): undefined ---- bun 侧照抄抓包原文, 零回归;
+ *   - 'custom': { mode: 'custom', text } ---- 用自定义正文替换官方模板;
+ *   - 'none':   { mode: 'none' } ---- 整段不带官方 system.
+ *
+ * 为什么不是单纯传字符串: 'none' 与[传了空字符串]在 bun 侧无法区分,
+ * 而前者的语义是[不要这个 system 消息], 后者的语义是[要一个空 system].
+ *
+ * @param {any} s 运行设置快照
+ * @returns {{mode: string, text?: string}|undefined} bun 侧入参;未配置时 undefined
+ */
+function resolveSystemPrompt(s: any): { mode: string, text?: string } | undefined {
+  if (!s) return undefined
+  if (s.officialSystemPromptMode === 'none') return { mode: 'none' }
+  if (s.officialSystemPromptMode === 'custom') {
+    return { mode: 'custom', text: String(s.officialSystemPromptText ?? '') }
+  }
+  return undefined
+}
+
+/**
+ * 解析出这次要注入的官方工具名单.
+ *
+ * 两级判据, 控制台配置优先:
+ *   1. 控制台配过名单 -> 按名单(空数组 = 一个都不注入);
+ *   2. 未配置         -> 自动规则: 只注入回程能还原成下游本次真的声明过的名字的那些.
+ *
+ * 自动规则为什么是默认: 静态分类表对不上客户端形态. 实测同一台机器两种形态,
+ * 只声明 run_code 的会话里 37 个官方工具全部派发不了(含静态表判为可派发的 10 个),
+ * 而自动规则对任意客户端零配置生效.
+ *
+ * @param {any} ctx 依赖集合(取 settingsStore)
+ * @param {any} declared 下游本次声明的工具名
+ * @returns {string[]} 要注入的官方工具名
+ */
 function officialToolsToInject(ctx: any, declared: any): string[] {
   const sel = selectOfficialTools(ctx.settingsStore?.get?.()?.officialToolNames)
   return sel.mode === 'all' ? injectableOfficialTools(declared) : sel.names
@@ -195,6 +233,9 @@ async function runOfficialRpc(ctx: any, args: any) {
     // 在 bun 侧过滤而不是在这里删 tools: 删除会让 [下游没声明工具] 与
     // [控制台配置成不注入] 两种情况在 wire 上完全一样, 事后无法区分.
     officialToolNames: officialToolsToInject(ctx, args.declaredToolNames),
+    // 官方 system 提示词的处置(见 settings-store 的接口注释).
+    // undefined = 未配置 -> bun 侧照抄官方原文; 'none' -> 不带官方 system.
+    systemPrompt: resolveSystemPrompt(ctx.settingsStore?.get?.()),
     timeoutMs: Math.max(
       Math.max(1_000, args.schedulingDeadline - Date.now()),
       RPC_TOTAL_TIMEOUT_MS,

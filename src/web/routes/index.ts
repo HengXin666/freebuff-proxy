@@ -44,6 +44,16 @@ function buildContext(deps: any) {
     proxyStore: deps.proxyStore,
     settingsStore: deps.settingsStore,
     modelStore: deps.modelStore,
+    // 签到: 存储 + 本次运行内的结果快照 + 并发闸门.
+    // running 放 ctx 而不是模块级变量: 签到域与转发域共用同一个 ctx 实例,
+    // 模块级变量在测试里会跨用例串味.
+    signInStore: deps.signInStore,
+    lastSignInResult: null,
+    signInRunning: false,
+    // 目录缓存: 签到要挑一个模型建会话, 从这里取.
+    // 目录: 与 /api/accounts/refresh 同源(runtimes 持有的那份).
+    // 不另读一份文件 ---- 两份必然漂移.
+    catalogRows: () => deps.runtimes?.catalogRows?.() || { rows: [] },
     restart: deps.restart,
     readJson,
     parseCookies,

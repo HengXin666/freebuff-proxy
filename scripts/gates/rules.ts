@@ -42,7 +42,12 @@ export const LIMITS = {
  */
 export const TIERS = {
   frontend: ['dashboard/'],
-  exempt: ['.agents/', '.gates/', 'docs/', 'data/', 'data-test/', 'node_modules/', 'tools/', 'src/catalog/'],
+  // vendor/ 是第三方产物(Monaco 的 min 版), 与 data/ 同性质: 不是我们的代码.
+  // 不豁免会把它的 3.7MB 压缩产物扫进格式/体量/注释门禁, 基线数字会被冲掉.
+  exempt: [
+    '.agents/', '.gates/', 'docs/', 'data/', 'data-test/', 'node_modules/',
+    'tools/', 'src/catalog/', 'dashboard/vendor/',
+  ],
 }
 
 /** 代码扩展名(计入体量/目录数/格式/注释门禁的集合). */

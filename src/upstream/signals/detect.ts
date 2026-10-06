@@ -2,7 +2,7 @@
  - 外来客户端判据的判定实现  --  schema 校验与 detectForeignClient.
  *
  * 常量仍留在 ../foreign-client-signals.ts  --  那里同时是外部消费者与
- * test/suites/entries/verify/tool-name-mapping.ts 的 import 点, 且它的逐字对账
+ * test/suites/entries/verify/tool/name-mapping.ts 的 import 点, 且它的逐字对账
  * 判据按该路径核对. 本文件只 import, 不复制任何常量.
  *
  * 本地只把它用于可观测性与[该注入什么签名工具]; 判定权永远在上游.

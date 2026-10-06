@@ -105,8 +105,10 @@ export async function startRun(bridge, agentId = null, opts = {}) {
  */
 export async function reuseChat(bridge, opts) {
 
-  const { row, instanceId, runId, messages, tools, stream = false, streamStdout = false } = opts;
-  return bridge.chat({ row, instanceId, runId, messages, tools, stream, streamStdout });
+  // 逐项透传而不是挑四个: 挑字段会让[上游新增能力在这里被静默吞掉],
+  // 而症状是[主服务配了却没生效] ---- 2026-10-06 实测: officialToolNames /
+  // systemPrompt / layer / reasoningEffort 全被这一层吃掉.
+  return bridge.chat({ ...opts, stream: opts.stream ?? false, streamStdout: opts.streamStdout === true });
 }
 
 /**

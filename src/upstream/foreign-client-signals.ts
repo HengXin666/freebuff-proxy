@@ -15,8 +15,13 @@
 import { translateParamsForDownstream } from './signals/param-map.ts'
 import { CLIENT_TO_OFFICIAL_TOOL, buildOfficialToClientMap, toNameSet } from './signals/tool-name-map.ts'
 
-/** 名字映射真源在本文件之外(见 signals/tool-name-map.ts), 从这里透出保持既有 import 路径可用. */
-export { CLIENT_TO_OFFICIAL_TOOL, buildOfficialToClientMap, toNameSet } from './signals/tool-name-map.ts'
+/** 名字映射真源在本文件之外(见 signals/tool-name-map.ts), 从这里透出保持既有 import 路径可用.
+ *  OFFICIAL_NATIVE_TO_CLIENT 也一并透出: 它是[官方原生名 -> 下游名]的补充表,
+ *  判据与那张大表同源, 消费者只该认这一处入口. */
+export {
+  CLIENT_TO_OFFICIAL_TOOL, OFFICIAL_NATIVE_TO_CLIENT,
+  buildOfficialToClientMap, toNameSet,
+} from './signals/tool-name-map.ts'
 
 /** 判据源码 sha256:上游改动后这里必须一起更新. */
 export const FOREIGN_CLIENT_SIGNALS_SOURCE_SHA256 =

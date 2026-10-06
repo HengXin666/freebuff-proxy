@@ -4,7 +4,7 @@
  - 为什么保留本文件: cli-bridge/upstream.ts 写的是 './lib/endpoints.ts',
  - 门面让"实现拆目录"与"改消费者 import"解耦. 口径: 只许 re-export.
  */
-export { auth, fetchCatalog, registerDeviceKey, getSession, release } from './endpoints/reads.ts'
+export { auth, fetchCatalog, registerDeviceKey, getSession, getStreak, release } from './endpoints/reads.ts'
 export { admit, startRun, reuseChat, finishRun, _traceFor, _stepFor } from './endpoints/session.ts'
 export {
   buildTools, buildSystemMessages, buildMetadata,

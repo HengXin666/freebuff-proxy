@@ -1,81 +1,18 @@
 /**
  * settings 域:运行设置(GET 快照 / POST 热更新)+ 只读配置视图.
  *
+ * 读快照已按体量拆到 ./settings/read.ts(原文件补完官方 system 回显后 346 行,
+ * 撞了后端 300 行硬红线); 本文件只保留[写]与路由分流.
  */
 import { sendJson } from '../../../util/http.ts'
-import { TUNABLES } from '../../../config/tunable/specs.ts'
-import {
-  snapshotTunables, specOf, validateValue, secretsEffective, secretsFromValues, redactTunables,
-} from '../../../config/tunable/store.ts'
+import { specOf, validateValue, secretsFromValues, redactTunables } from '../../../config/tunable/store.ts'
 import { logger } from '../../../util/log.ts'
-import { OFFICIAL_TOOL_META } from '../../../upstream/signals/tools/official-tool-select.ts'
 import { envProxyOrNull } from '../lib/helpers.ts'
 import { denyUnlessAdmin } from '../lib/http-codes.ts'
+import { readSettings } from './settings/read.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-/**
- * 读快照:把内存设置与 config.yaml 默认值合成一个扁平对象.
- *
- * @param {any} config
- * @param {any} settingsStore
- * @returns {Record<string, any>} 前端消费的设置快照
- */
-function readSettings(config: any, settingsStore: any) {
-  const s = settingsStore?.get() || {}
-  return {
-    freeToolSignatureEnabled: s.freeToolSignatureEnabled !== false,
-    stripToolsOnSchemaRejection: s.stripToolsOnSchemaRejection === true,
-    accountMaxConcurrency: s.accountMaxConcurrency ?? 2,
-    // 账号调度模式('sticky' 默认 / 'spread' 并发优先)+ 溢出排队上限.
-    accountSchedulingMode: s.accountSchedulingMode === 'spread' ? 'spread' : 'sticky',
-    accountOverflowWaitMs: s.accountOverflowWaitMs ?? 15_000,
-    blockPremiumModels: s.blockPremiumModels === true,
-    // 额度保护:空闲自动释放秒数 + 单请求新会话预算.
-    // 未在控制台保存过时回落 config.yaml 的默认值(默认 600s,见 config.js).
-    idleReleaseSec: s.idleReleaseSec ?? config.session.idleReleaseSec ?? 600,
-    maxNewSessionsPerRequest:
-      s.maxNewSessionsPerRequest ?? config.limits.maxNewSessionsPerRequest ?? 2,
-    // "低额度"分组阈值(FB).纯前端分组,不参与调度;0 = 关闭分组.
-    lowBalanceThreshold: s.lowBalanceThreshold ?? 15,
-    // 遥测上报开关:官方 CLI 会发 app_launched 等生命周期事件,我们默认不发.
-    cliTelemetryEnabled: s.cliTelemetryEnabled === true,
-    // 上游请求形态通道('legacy' 默认 / 'official' 照抄官方抓包).
-    // 见 src/upstream/official-shape.js
-    upstreamChannel: s.upstreamChannel === 'official' ? 'official' : 'legacy',
-    // 官方工具注入: null = 未配置(全注入), 数组(含空) = 控制台配过的名单.
-    // [未配置] 与 [空数组] 必须分开回显, 否则前端会把[全不注入]显示成[全注入].
-    officialToolNames: Array.isArray(s.officialToolNames) ? s.officialToolNames : null,
-    /** 官方工具分类目录(分组 + 一句话说明), 前端据此渲染勾选列表. */
-    officialToolCatalog: OFFICIAL_TOOL_META,
-    /**
-     * 可调项(24 项, 除 server.host/port 外的全部).
-     *
-     * 与上面 11 个实时字段是两套东西, 不要混:
-     *   - 实时字段: 保存即生效(走 getter);
-     *   - 可调项:   保存后需重启才生效(启动时合并进 config).
-     * 前端必须把这两类分开渲染并分别提示.
-     *
-     * 值来自 config 现值(已含启动时合并进的可调项), 所以这里回显的就是"当前生效值"
-     * ---- 但凭据项(secret)例外: snapshotTunables 把它们的值一律写 null,
-     * 只经 secrets 回[有没有设置]. 明文凭据不进任何响应体.
-     */
-    tunables: snapshotTunables(config),
-    secrets: secretsEffective(config, settingsStore?.savedTunables?.() || {}),
-    /** 可调项的声明(前端据此渲染控件类型/范围/分组), 与后端校验同一真源. */
-    tunableSpecs: TUNABLES,
-  }
-}
 
-/**
- * 字段校验表:[字段, 校验失败文案, 归一化].
- *
- * 每条都先判类型再判范围,且必须显式区分"没传"(跳过)与"传了非法值"
- * (400); undefined 表示"没传", 不是"要清零".
- *
- * 元组必须显式标注:不标的话 TS 会把每一行推成 (string | 函数)[],
- * 解构出来的 ok 就不可调用(buildPatch 里的 ok(...) 直接报 TS2349),
- * 而 key 也不再是 string(索引 patch 报 TS7053).
- */
 type FieldSpec = [string, string, (v: unknown) => boolean]
 
 const FIELDS: FieldSpec[] = [
@@ -125,6 +62,20 @@ const FIELDS: FieldSpec[] = [
     "upstreamChannel 必须是 'legacy' 或 'official'",
     (v: any) => v === 'legacy' || v === 'official',
   ],
+  // 官方 system 提示词三态 + 自定义正文(见 settings-store 的接口注释).
+  // 正文只卡长度不卡内容: 用户可能想贴任何指令, 语义校验只会挡住正当用法.
+  [
+    'officialSystemPromptMode',
+    "officialSystemPromptMode 必须是 'official' / 'custom' / 'none'",
+    (v: any) => v === 'official' || v === 'custom' || v === 'none',
+  ],
+  [
+    'officialSystemPromptText',
+    'officialSystemPromptText 必须是长度不超过 200000 的字符串',
+    (v: any) => typeof v === 'string' && v.length <= 200_000,
+  ],
+  // 自动签到开关(默认关闭; 间隔固定 25 小时).
+  ['autoSignInEnabled', 'autoSignInEnabled 必须是布尔值', (v: any) => typeof v === 'boolean'],
 ]
 
 /**

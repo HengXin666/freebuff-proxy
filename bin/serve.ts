@@ -19,6 +19,7 @@ import { reportStartupFailure } from './serve/startup-report.ts'
 import { logDataFileAudit } from './serve/boot/data-audit.ts'
 import { bootstrapAdmin } from './serve/boot/bootstrap-admin.ts'
 import { startUpstreamWarmup } from './serve/boot/upstream-warmup.ts'
+import { startAutoSignIn } from '../src/web/store/signin/auto.ts'
 import { createLifecycle } from './serve/boot/lifecycle.ts'
 import {
   bindIsSafe, createLoginFlows, createUserStore, openConsoleStores,
@@ -30,14 +31,7 @@ async function main() {
   const config = loadConfig(parseConfigPath(process.argv.slice(2)))
   configureLogger(config.logging)
 
-  // 自重启子进程:等旧进程释放端口后再走正常启动流程
-  if (process.env.FREEBUFF_PROXY_RESTART_CHILD === '1') {
-    logger.info('restart child starting; waiting for port to free', {
-      host: config.server.host,
-      port: config.server.port,
-    })
-    await waitForPortFree(config.server.host, config.server.port, 15_000)
-  }
+  await awaitRestartPort(config)
 
   const dataDir = config.server.dataDir
   const userStore = createUserStore(dataDir)
@@ -47,7 +41,7 @@ async function main() {
     return
   }
 
-  const { webSessions, proxyStore, settingsStore, modelStore } = openConsoleStores(dataDir, config)
+  const { webSessions, proxyStore, settingsStore, modelStore, signInStore } = openConsoleStores(dataDir, config)
 
   // First-run admin bootstrap (or env-driven rotation)
   bootstrapAdmin(userStore, config, dataDir)
@@ -96,15 +90,61 @@ async function main() {
     proxyStore,
     settingsStore,
     modelStore,
+    signInStore,
     restart: scheduleRestart,
   })
 
   // 端口已经在监听了 -- 现在才去碰上游(扫尾 + 身份自检).
   // 顺序是刻意的:上游可达与否绝不能决定"服务起不起来".
   startUpstreamWarmup({ ctx, settingsStore })
+  // 自动签到调度(默认关闭). 见 startSideTasks 的说明.
+  startSideTasks({ ctx, config, settingsStore, signInStore })
 
   process.on('SIGINT', () => shutdown('SIGINT'))
   process.on('SIGTERM', () => shutdown('SIGTERM'))
+}
+
+/**
+ * 自重启子进程:等旧进程释放端口后再走正常启动流程.
+ *
+ * 抽成子函数只为让 main() 守住[装配 + 启动]两件事 ---- 这段是重试性等待,
+ * 与装配无关.
+ *
+ * @param {any} config 运行配置
+ * @returns {Promise<void>} 端口空闲或超时后返回
+ */
+async function awaitRestartPort(config: any) {
+  if (process.env.FREEBUFF_PROXY_RESTART_CHILD !== '1') return
+  logger.info('restart child starting; waiting for port to free', {
+    host: config.server.host,
+    port: config.server.port,
+  })
+  await waitForPortFree(config.server.host, config.server.port, 15_000)
+}
+
+/**
+ * 启动[侧任务]:不参与"服务能不能起来"的那些后台调度.
+ *
+ * 为什么单独一个函数: 它们有一个共同的不变量 ---- 必须在端口已监听之后才起,
+ * 且第一跳就打上游. 上游不可达绝不能拦住服务启动, 把这段从 main() 里挪出来
+ * 既守住那个不变量, 也让 main 保持只做[装配 + 启动]两件事.
+ *
+ * @param {object} deps 依赖
+ * @param {any} deps.ctx 应用上下文
+ * @param {any} deps.config 运行配置
+ * @param {any} deps.settingsStore 运行设置
+ * @param {any} deps.signInStore 签到状态存储
+ * @returns {void} 无返回值
+ */
+function startSideTasks(deps: any) {
+  const { ctx, config, settingsStore, signInStore } = deps
+  startAutoSignIn({
+    runtimes: ctx.runtimes,
+    config,
+    catalogRows: () => ctx.runtimes?.catalogRows?.() || { rows: [] },
+    settingsStore,
+    signInStore,
+  })
 }
 
 main().catch((err) => {

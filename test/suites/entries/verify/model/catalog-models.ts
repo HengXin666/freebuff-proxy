@@ -14,10 +14,11 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
-import { buildCatalogDrivenModelsResponse } from '../../../../src/catalog-models.ts'
-import { isModelAllowed } from '../../../../src/model.ts'
+import { buildCatalogDrivenModelsResponse } from '../../../../../src/catalog-models.ts'
+import { isModelAllowed } from '../../../../../src/model.ts'
 
-const HERE = dirname(dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url))))))
+// 六层 dirname = 仓库根(本文件比原来深一层, 见目录重组).
+const HERE = dirname(dirname(dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))))))
 const CAP = join(HERE, 'docs', 'reverse', 'captures', '2026-10-03-e2')
 
 const cat = JSON.parse(readFileSync(join(CAP, 'catalog-official-client.json'), 'utf8'))

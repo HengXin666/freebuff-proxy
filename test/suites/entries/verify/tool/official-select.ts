@@ -17,7 +17,9 @@ import {
   injectableOfficialTools,
   selectOfficialTools,
 } from '../../../../../src/upstream/signals/tools/official-tool-select.ts'
-import { CLIENT_TO_OFFICIAL_TOOL } from '../../../../../src/upstream/foreign-client-signals.ts'
+import {
+  CLIENT_TO_OFFICIAL_TOOL, OFFICIAL_NATIVE_TO_CLIENT,
+} from '../../../../../src/upstream/foreign-client-signals.ts'
 
 let n = 0
 const ok = (cond: any, msg: string) => {
@@ -104,8 +106,14 @@ const REF_DOWNSTREAM: string[] = JSON.parse(
 
   // 注入集与[能落回下游]必须等价 ---- 少一个就是漏裁(仍会 unknown tool),
   // 多一个就是过裁(把可用的工具也砍掉).
+  // [能落回下游]有两条来源, 缺一条本判据就会与实现漂移:
+  //   1. 大表 CLIENT_TO_OFFICIAL_TOOL(下游名 -> 官方名, 一对一);
+  //   2. 补充表 OFFICIAL_NATIVE_TO_CLIENT(官方原生名 -> 下游名, 反向一对多).
+  // 只按第 1 条算会在 suggest_prompts 落进 ask_user_question 之后凭空少一个.
   const reachable = REAL.filter((off) =>
-    REF_DOWNSTREAM.some((c) => (CLIENT_TO_OFFICIAL_TOOL as Record<string, string>)[c] === off),
+    REF_DOWNSTREAM.some((c) => (CLIENT_TO_OFFICIAL_TOOL as Record<string, string>)[c] === off)
+    || (OFFICIAL_NATIVE_TO_CLIENT[off] !== undefined
+      && REF_DOWNSTREAM.includes(OFFICIAL_NATIVE_TO_CLIENT[off])),
   )
   ok(
     JSON.stringify(native) === JSON.stringify(reachable),

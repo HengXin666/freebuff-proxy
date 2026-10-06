@@ -7,6 +7,7 @@ import { endProgress, startProgress } from '../../lib/ui.ts'
 import { need } from '../../lib/boot/hooks.ts'
 import { renderAccountsCard } from './accounts/index.ts'
 import { oneClickRefresh, probeAllAccounts } from './accounts/refresh.ts'
+import { renderSignInButton } from './accounts/signin/run.ts'
 
 export async function renderOverview(view: any) {
   view.innerHTML = ''
@@ -92,6 +93,13 @@ function renderOverviewHeader(data: any) {
         [icon('refresh', 14), t('overview.oneClickRefresh')]),
       el('button', { onclick: (e: any) => probeAllAccounts(e.currentTarget), title: t('overview.probeOnlyTip') },
         [icon('activity', 14), t('overview.probeRefresh')]),
+      // 一键签到: 签到按钮由它自己拉状态渲染(含 18h 防抖的剩余时间).
+      ...(() => {
+        const slot = el('span', { class: 'row', id: 'signin-slot' })
+        // 渲染是异步的, 但按钮必须立刻占位 ---- 否则顶部按钮行会闪一下.
+        queueMicrotask(() => { void renderSignInButton(slot) })
+        return [slot]
+      })(),
       state.me.role === 'admin'
         ? el('div', { class: 'row' }, [
             el('button', { onclick: () => need('openImportModal')() }, [icon('box', 14), t('account.import')]),

@@ -7,6 +7,7 @@
 import { handle as handleAccounts } from './accounts/index.ts'
 import { handle as handleModels } from './models/index.ts'
 import { handle as handleProxy } from './proxy.ts'
+import { handle as handleSignIn } from './signin.ts'
 
 /** 域处理器签名(dispatcher 只需要知道这一个形状). */
 /**
@@ -20,4 +21,5 @@ export const DOMAINS = {
   accounts: handleAccounts,
   models: handleModels,
   proxy: handleProxy,
+  signin: handleSignIn,
 }

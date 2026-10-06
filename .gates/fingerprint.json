@@ -466,7 +466,8 @@
       "data-test/",
       "node_modules/",
       "tools/",
-      "src/catalog/"
+      "src/catalog/",
+      "dashboard/vendor/"
     ]
   },
   "whitelistEntries": [],
@@ -492,5 +493,5 @@
     ],
     "checkpoints": "CHECKPOINTS = { 'pre-commit': [ 'syntax', 'sizes', 'dirs', 'functions', 'format', 'style', 'md-in-comment', 'notes', 'route-table', 'declared', 'lanes', 'fingerprint', ], 'pre-push': [ 'syntax', 'sizes', 'dirs', 'functions', 'notes', 'format', 'route-table', 'declared', 'types', 'lanes', 'fingerprint', 'contract', 'response-contract', 'docs', 'i18n', ], ci: 'all', }"
   },
-  "fingerprint": "4c3137fd2a785fa7bbf0de7ea624c6ac351e7eda3d1515067f13ed2091fa1eaf"
+  "fingerprint": "94f7623e8927176d20a101a4ddbdb837375698c13d16d86763b0946cb3f8a50f"
 }

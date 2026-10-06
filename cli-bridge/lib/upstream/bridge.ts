@@ -6,7 +6,7 @@
  */
 import { b64u, sha256Hex, derFromB64u, devicePayload } from '../wire/crypto.ts'
 import {
-  auth, fetchCatalog, registerDeviceKey, getSession, release,
+  auth, fetchCatalog, registerDeviceKey, getSession, getStreak, release,
   admit, startRun, reuseChat, finishRun, chat, _traceFor, _stepFor,
 } from '../endpoints.ts'
 
@@ -132,6 +132,9 @@ class Bridge {
   }
   async reuseChat(opts) {
     return reuseChat(this, opts)
+  }
+  async getStreak() {
+    return getStreak(this)
   }
   async finishRun(runId, opts = {}) {
     return finishRun(this, runId, opts)

@@ -60,19 +60,39 @@ export function buildTools(layer, tools, officialTools, officialDecide, injectNa
  - @param {any[]} messages 客户端消息
  - @param {string} layer worker / manager
  - @param {any} officialSys 官方 system 模板集
+ - @param {any} [systemPrompt] 控制台配置的官方 system 处置(undefined=照抄官方)
  - @returns {any[]} 出站消息数组
  */
-export function buildSystemMessages(messages, layer, officialSys) {
+export function buildSystemMessages(messages, layer, officialSys, systemPrompt) {
   const sysTpl = officialSys?.[layer] || officialSys?.worker;
 
 // system:官方模板渲染后置于首位(客户端消息里的 system 不再覆盖它)
 const rest = (messages || []).filter((m) => m && m.role !== 'system');
 const userText = (rest.find((m) => m.role === 'user')?.content) ?? '';
-const sysText = !sysTpl
-  ? null
-  : layer === 'manager'
+/**
+ * 三态由控制台配置决定(见 Node 侧 settings-store 的 officialSystemPromptMode):
+ *   - undefined : 照抄官方抓包模板(默认, 零回归);
+ *   - 'custom'  : 整段用自定义正文, 不做动态区块填充 ---- 用户贴的文本里
+ *                 不会有 <repository_stats> 这类占位符, 替换只会是空操作;
+ *   - 'none'    : 不带官方 system. 下游自己的 system 已在 rest 里被过滤掉了?
+ *                 没有 ---- rest 的定义就是[非 system 消息], 所以 none 等于
+ *                 本轮一个 system 都没有.
+ *
+ * 'none' 与[空字符串]必须分开: 前者是[不要这条消息], 后者是[要一条空消息],
+ * 所以这里对空串也要真的发出去(官方模板不会是空串, 只可能来自 custom).
+ */
+let sysText = null;
+if (systemPrompt?.mode === 'none') {
+  sysText = null;
+} else if (systemPrompt?.mode === 'custom') {
+  sysText = typeof systemPrompt.text === 'string' ? systemPrompt.text : '';
+} else if (sysTpl) {
+  sysText = layer === 'manager'
     ? renderManagerSystem(sysTpl, typeof userText === 'string' ? userText : JSON.stringify(userText))
     : renderWorkerSystem(sysTpl);
+}
+// 无官方 system 时原样返回 messages(不是 rest): 客户端自己的 system 消息
+// 必须保留 ---- 'none' 的语义是[不加官方 system], 不是[清掉所有 system].
 const outMessages = sysText
   ? [{ role: 'system', content: sysText }, ...rest]
   : messages;
