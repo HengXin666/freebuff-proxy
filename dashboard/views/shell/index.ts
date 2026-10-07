@@ -83,6 +83,10 @@ function hasUnsavedPrompt() {
  * 与页面自己调 need('render')(). 取舍见
  * .agents/notes/implemented/bug-fix/2026-10-08-console-page-cache-and-manual-prompt-save.md.
  *
+ * 可见性判据(hidden)必须按[不是当前路由就隐藏]来写, 写反会让当前页消失而历史页
+ * 堆叠; 取舍与判据见
+ * .agents/notes/implemented/bug-fix/2026-10-08-route-panel-hidden-inverted.md.
+ *
  * @param {any} view 内容容器
  * @param {string} route 主路由
  * @returns {Promise<void>} 无返回值
@@ -97,8 +101,10 @@ async function showRoute(view: any, route: string) {
     viewCache.set(route, panel)
   }
   // 切页只切可见性: 每页的 DOM 原样留在树里.
+  // 判据是[不是当前路由就隐藏], 即 hidden = key !== route ----
+  // 写成 key === route 会把当前页藏起来, 只留下所有旧页堆叠显示.
   for (const [key, node] of viewCache) {
-    node.hidden = key === route
+    node.hidden = key !== route
   }
   if (panel.rendered === true) return
   panel.rendered = true

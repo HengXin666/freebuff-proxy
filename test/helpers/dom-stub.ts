@@ -134,20 +134,25 @@ class StubNode {
   /**
    * 该节点下匹配选择器的全部节点.
    *
-   * 只支持两种形式: \.class\ 与 \#id\.
-   * 必须两种都支持 ---- 组件与测试都会用 #id 数节点(本次缺陷的断言正是
-   * querySelectorAll('#signin-btn').length), 只实现 class 会让它恒返回 0.
+   * 支持三种形式: \.class\ 与 \#id\, 以及它们的逗号并列(如
+   * '.view-enter, .view'). 逗号必须支持 ---- 路由层就是靠并列选择器找内容
+   * 容器的, 不支持时它会恒返回 null, 于是每次切页都走[重建骨架]分支,
+   * 页面缓存这条路径在测试里根本跑不到(实测: 隐藏面板数恒为 0).
    *
-   * @param {string} sel 选择器(.class 或 #id)
+   * @param {string} sel 选择器(.class / #id, 可逗号并列)
    * @returns {StubNode[]} 匹配的节点
    */
   querySelectorAll(sel: string) {
-    if (sel.startsWith('#')) {
-      const id = sel.slice(1)
-      return this.walk((n) => n.id === id)
-    }
-    const cls = sel.replace(/^\./, '')
-    return this.walk((n) => (n.className || '').split(/\s+/).includes(cls))
+    const parts = String(sel).split(',').map((x) => x.trim()).filter(Boolean)
+    const hit = (n: StubNode) => parts.some((part) => {
+      if (part.startsWith('#')) return n.id === part.slice(1)
+      if (part.startsWith('.')) return (n.className || '').split(/\s+/).includes(part.slice(1))
+      // 裸选择器 = 标签名. 必须支持: 路由层用 querySelector('header') 判断骨架
+      // 是否已存在, 缺了它该判断恒为 null, 于是每次渲染都重建骨架并把页面缓存
+      // 作废 ---- 缓存那条路径在测试里等于没覆盖(实测: 面板数恒为 1).
+      return n.tagName === part.toUpperCase()
+    })
+    return this.walk(hit)
   }
 
   /**

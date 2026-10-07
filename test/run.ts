@@ -44,6 +44,7 @@ const SUITES = [
   ['dashboard-signin-rerender', 'suites/entries/verify/dashboard/signin-rerender.ts'],
   ['dashboard-effort-card', 'suites/entries/verify/dashboard/effort-card.ts'],
   ['dashboard-account-scheduling-switch', 'suites/entries/verify/dashboard/account-scheduling-switch.ts'],
+  ['dashboard-route-panel-visibility', 'suites/entries/verify/dashboard/route-panel-visibility.ts'],
   ['e2e-dashboard-latency', 'suites/entries/e2e/dashboard-latency.ts'],
 ]
 
