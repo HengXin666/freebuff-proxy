@@ -36,6 +36,9 @@ async function probeOne(key: any, res: ServerResponse, ctx: any) {
       email: a.email,
       account: runtimes.list().find((x: any) => x.key === key),
       session,
+      // 有在途请求时 refresh() 主动跳过探测(顶掉活跃会话会撞 428):
+      // 如实回报, 前端才能说明"这次没真问上游, 显示的是上次快照".
+      skipped: rt.sessions.getSnapshot()?.probeSkipped || null,
       // 检测结果的 toast 里会列"每个模型的已用/上限",其键是目录 key ----
       // 带上映射,前端才显示得出模型名而不是 m-00032eaeec.
       modelNames: overviewModelNames(runtimes),

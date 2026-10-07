@@ -21,7 +21,20 @@ import { accountLevelSessionStatus } from '../inventory.ts'
  */
 export async function refresh(this: any, opts: any = {}): Promise<any> {
   return this.withLock(async () => {
-    if (this._inFlight > 0) return this.session
+    /**
+     * 有在途请求时跳过探测.
+     *
+     * 跳过是必须的(服务端同一账号只允许一个客户端在线, 探测会顶掉活跃会话),
+     * 但必须留下痕迹: 调用方(控制台刷新/探测)拿到的是[上一次的快照],
+     * 而不是"刚问到的值". 不标记就会出现"同一个账号两次刷新显示两个版本"
+     * 而界面上没有任何解释 ---- 用户看到的是纯粹的滞后.
+     * 决策与取舍见 .agents/notes/implemented/bug-fix/2026-10-07-account-pool-view-freshness.md.
+     */
+    if (this._inFlight > 0) {
+      this.lastProbeSkipped = { at: new Date().toISOString(), inFlight: this._inFlight }
+      return this.session
+    }
+    this.lastProbeSkipped = null
     // 官方 CLI 每个 GET 都带自生成的 cli claim
     // (含 x-freebuff-multi-session / -purchase-continuity / -heartbeat),
     // 即使当时没有活跃会话; 没有会话时用本进程复用的那个.

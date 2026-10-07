@@ -199,6 +199,18 @@ export default {
     'zh-CN': '（只读，已购时段不受影响）',
     en: ' (read-only; purchased windows are unaffected)',
   },
+  'account.refreshSkipped': {
+    'zh-CN': '；{n} 个账号有回复在途，本次未重新探测（显示上次快照）',
+    en: '; {n} account(s) had a reply in flight, so no fresh probe was made (showing the previous snapshot)',
+  },
+  'account.probeSkippedBadge': {
+    'zh-CN': '上次快照',
+    en: 'last snapshot',
+  },
+  'account.probeSkipped': {
+    'zh-CN': '该账号有回复在途，本次未重新探测，以下为上次快照',
+    en: 'A reply is in flight for this account, so no fresh probe was made; showing the previous snapshot',
+  },
   'account.probing': { 'zh-CN': '探测中', en: 'Probing…' },
   'account.probeDoneFail': {
     'zh-CN': '探测完成，{n} 个失败（点击行内检测图标看详情）',

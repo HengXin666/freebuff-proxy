@@ -120,6 +120,27 @@ function sessionMetaRows(a: any, paidBound: any, admits: any, reuses: any) {
   ]
 }
 
+/**
+ - 额度列: 本次刷新被跳过时先标一行[上次快照], 再显示额度本身.
+ -
+ - 标注存在的理由: 在途回复期间的刷新不会真的问上游(问了要顶掉活跃会话),
+ - 界面若只是显示旧数字, 用户看到的就是"两次刷新两个版本"且毫无解释.
+ - @param {any} a 账号行
+ - @returns {any[]} 该单元格的节点
+ */
+function quotaCell(a: any) {
+  return [
+    a.probeSkipped
+      ? el('div', {
+          class: 'badge warn',
+          style: 'font-size:10px;margin-bottom:2px',
+          title: t('account.probeSkipped') + ' - ' + fmtTime(a.probeSkipped.at),
+        }, t('account.probeSkippedBadge'))
+      : '',
+    fmtQuota(a.quota, a.freebucks),
+  ]
+}
+
 export function buildAccountRow(a: any, i: any) {
   const cd = a.cooldownUntil ? new Date(a.cooldownUntil).toLocaleString() : null
   // Session 列同时回答两件事:(1) 这条会话还能白用多久;(2) 这个号
@@ -205,7 +226,7 @@ export function buildAccountRow(a: any, i: any) {
     el('td', { class: 'mono', style: 'font-size:12px' }, sess),
     el('td', { class: 'mono' }, `${a.inFlight || 0}/${a.concurrency || 1}`),
     accountTimeCell(a),
-    el('td', {}, fmtQuota(a.quota, a.freebucks)),
+    el('td', {}, quotaCell(a)),
     // a.session.model 是目录 key(m-00032eaeec);可读名由后端解析并放在
     // session.modelDisplayName(AccountRuntimes.list() 统一带上).
     //  之前写成 a.modelDisplayName(顶层)---- 字段不在顶层,永远取不到,

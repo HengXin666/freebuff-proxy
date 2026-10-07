@@ -154,6 +154,13 @@ concurrency: chatLock?.capacity || self._accountConcurrency(),
 effectiveProxy: rt?.effectiveProxy || null,
 // 最近一次探测结果.
 lastProbe: snap?.lastProbe || null,
+    /**
+     * 最近一次刷新是否因[有在途请求]被跳过(带时间与在途数).
+     *
+     * 控制台据此区分[这份额度是刚问到的]与[这是上一次的快照, 本次没真刷] ----
+     * 少了它, 两次刷新显示两个版本就成了无法解释的滞后.
+     */
+    probeSkipped: snap?.probeSkipped || null,
     session: sessionViewOf(self, rt, snap),
 quota: snap?.quota || null,
 // Freebucks 计量: 余额 / 每日池 / 每模型单价.

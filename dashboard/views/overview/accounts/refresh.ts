@@ -100,7 +100,8 @@ export async function probeAccount(a: any, btn: any) {
       const models = Object.entries(limits)
         .map(([id, info]) => `${modelNameFor(id)} ${fmtNum(info?.recentCount)}/${info?.limit ?? '?'}`)
         .join(' · ')
-      toast(t('account.probeOk', { email: a.email, n: modelCount }) + (models ? t('account.probeModelList', { list: models }) : ''))
+      const skippedNote = r.skipped ? t('account.probeSkipped') : ''
+      toast(t('account.probeOk', { email: a.email, n: modelCount }) + (models ? t('account.probeModelList', { list: models }) : '') + skippedNote, Boolean(r.skipped))
       await refreshAccountsCard()
     } else {
       const code = r.code || sess?.status || sess?.error || r.error || t('account.unknownReason')
@@ -130,16 +131,20 @@ export async function oneClickRefresh(btn: any) {
     applyModelNames(r)
     if (Array.isArray(r.upstreamModelIds)) state.upstreamModelIds = r.upstreamModelIds
     if (Array.isArray(r.upstreamModels)) state.upstreamModels = r.upstreamModels
-    const results = r.results || []
-    const failed = results.filter((x: any) => !x.ok)
-    const banned = failed.filter((x: any) => String(x.code || '').includes('banned'))
+    const results: any[] = r.results || []
+    const failed: any[] = results.filter((x: any) => !x.ok)
+    const banned: any[] = failed.filter((x: any) => String(x.code || '').includes('banned'))
     const soft = failed.length - banned.length
+    // 有在途回复的账号会被跳过探测(顶掉活跃会话会撞 428): 如实报出,
+    // 否则用户看到"刷新了但数字没变", 却没有任何解释.
+    const skipped: any[] = results.filter((x: any) => x.skipped)
     const parts = []
     parts.push(t('account.refreshOk', { n: results.length - failed.length }))
     if (banned.length) parts.push(t('account.refreshBanned', { n: banned.length }))
-    if (soft.length) parts.push(t('account.refreshAbnormal', { n: soft.length }))
+    if (soft) parts.push(t('account.refreshAbnormal', { n: soft }))
     parts.push(t('account.refreshModels', { n: (r.upstreamModelIds || []).length }))
-    toast(parts.join(' · ') + t('account.refreshReadOnly'), failed.length > 0)
+    const skippedNote = skipped.length ? t('account.refreshSkipped', { n: skipped.length }) : ''
+    toast(parts.join(' · ') + skippedNote + t('account.refreshReadOnly'), failed.length > 0 || skipped.length > 0)
     applyAccountsSections(state.accounts)
     await applyOverviewAndModelCards()
     need('refreshModelSettingsCard')().catch(() => {})
@@ -164,7 +169,14 @@ export async function probeAllAccounts(btn = null) {
       ? t('account.probeDoneFail', { n: failed.length })
       : t('account.probeDone'), !!failed.length)
     if (applyAccountsSections(r.accounts)) {
-      refreshSnapshotExtras({ accounts: r.accounts })
+      // 统计卡与账号池计数必须与账号表同源: 只传 accounts 会让统计卡少了
+      // slots / accountCount, 于是同一屏出现两套数字(用户报的"两个版本").
+      refreshSnapshotExtras({
+        accounts: r.accounts,
+        accountCount: r.accountCount,
+        modelNames: r.modelNames,
+        slots: r.slots,
+      })
     } else need('render')()
   } catch (err) {
     toast(err.message, true)

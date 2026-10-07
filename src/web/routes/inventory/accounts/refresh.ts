@@ -25,13 +25,17 @@ async function refreshEach(runtimes: any) {
     try {
       const rt = runtimes.get(row.key)
       const session = await rt.sessions.refresh()
-      const limits = rt.sessions.getSnapshot()?.quota?.byModel || {}
+      const snap = rt.sessions.getSnapshot()
+      const limits = snap?.quota?.byModel || {}
       results.push({
         key: row.key,
         email: row.email,
         ok: true,
         status: session?.status ?? null,
         modelCount: Object.keys(limits).length,
+        // 有在途请求时 refresh() 主动跳过探测(不能顶掉活跃会话): 如实标出来,
+        // 否则界面上就是"刷了但数字没变", 而用户无从知道为什么.
+        skipped: snap?.probeSkipped || null,
       })
     } catch (err) {
       const { code, status } = probeErrorFields(err)
@@ -73,7 +77,8 @@ export async function probeAll(res: ServerResponse, ctx: any) {
       const rt = runtimes.get(a.key)
       const session = await rt.sessions.refresh()
       // 额度在 quota.byModel(本地快照 session 上没有这个字段)
-      const limits = rt.sessions.getSnapshot()?.quota?.byModel || {}
+      const snap = rt.sessions.getSnapshot()
+      const limits = snap?.quota?.byModel || {}
       results.push({
         key: a.key,
         email: a.email,
@@ -81,6 +86,8 @@ export async function probeAll(res: ServerResponse, ctx: any) {
         status: session?.status ?? null,
         modelCount: Object.keys(limits).length,
         models: Object.keys(limits),
+        // 同上: 在途期间跳过探测要如实报出, 不要把旧快照当成新值.
+        skipped: snap?.probeSkipped || null,
       })
     } catch (err) {
       const { code, status } = probeErrorFields(err)
@@ -94,7 +101,16 @@ export async function probeAll(res: ServerResponse, ctx: any) {
       })
     }
   }
-  sendJson(res, 200, { ok: true, results, accounts: runtimes.list() })
+  sendJson(res, 200, {
+    ok: true,
+    results,
+    accounts: runtimes.list(),
+    // 统计卡/负载均衡条/账号池计数都要这几项. 少了它们, 前端只能拿 accounts
+    // 凑出一份局部数字 ---- 同一屏上统计卡与账号表显示两套口径.
+    accountCount: runtimes.allKeys().length,
+    modelNames: overviewModelNames(runtimes),
+    slots: ctx.requestSlotStats ? ctx.requestSlotStats() : null,
+  })
 }
 
 /**

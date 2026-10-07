@@ -89,6 +89,8 @@ export interface SessionState {
   lastRefund: RefundEntry | null
   /** 最近一次探测(refresh GET)的结果. */
   lastProbe: any
+  /** 最近一次刷新因[有在途请求]被跳过时的现场(null = 上次刷新真的问了上游). */
+  lastProbeSkipped: any
   /** 本进程是否已经拿到过上游会话清单快照. */
   _inventorySeen: boolean
   /** 当前正在处理中的请求数(在途 chat 时跳过轮询 GET). */
@@ -164,6 +166,7 @@ export function createSessionState(opts: any): SessionState {
     freebucks: null,
     lastRefund: null,
     lastProbe: null,
+    lastProbeSkipped: null,
     _inventorySeen: false,
     _inFlight: 0,
     _schedulingSince: null,

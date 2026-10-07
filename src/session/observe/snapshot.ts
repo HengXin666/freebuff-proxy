@@ -31,6 +31,13 @@ export function getSnapshot(this: any): any {
     purchases: this.desktopPurchases || [],
     sessionCounts: this.desktopSessionCounts || null,
   }
+  /**
+   * 最近一次刷新是否因[有在途请求]被跳过.
+   *
+   * 带出去是为了让控制台把"这次刷新没真的问上游"如实告诉用户 ----
+   * 否则界面只是显示一份旧快照, 用户以为拿到了新值(两次刷新两个版本).
+   */
+  const probeSkipped = this.lastProbeSkipped || null
   if (!s) {
     return {
       status: 'none',
@@ -38,6 +45,7 @@ export function getSnapshot(this: any): any {
       freebucks: this.freebucks,
       lastRefund: this.lastRefund,
       lastProbe: this.lastProbe,
+      probeSkipped,
       inventory,
       ...counts,
     }
@@ -54,6 +62,7 @@ export function getSnapshot(this: any): any {
     freebucks: this.freebucks,
     lastRefund: this.lastRefund,
     lastProbe: this.lastProbe,
+    probeSkipped,
     inventory,
     ...counts,
   }
