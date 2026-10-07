@@ -13,7 +13,7 @@ import { apiFetch, fetchLoginUpstream } from '../http.ts'
 /**
  * @typedef {import('./session.ts').SessionCtx & {
  *   loginBase: string,
- *   proxyRes: { kind: string, agent?: any, agents?: any[] },
+ *   egress: { resolution: { kind: string, agent?: any, agents?: any[] } },
  * }} EndpointCtx
  */
 
@@ -199,7 +199,7 @@ function buildAgentRunEndpoints(ctx: any): Record<string, Function> {
  * @returns {Record<string, Function>} 杂项端点方法
  */
 function buildMiscEndpoints(ctx: any): Record<string, Function> {
-  const { token, proxyRes } = ctx
+  const { token, egress } = ctx
   return {
     /**
      * Low-level passthrough to upstream API path.
@@ -234,8 +234,9 @@ function buildMiscEndpoints(ctx: any): Record<string, Function> {
      * @returns {Promise<void>} 全部 agent 关闭完成
      */
     async close() {
+      const res = egress?.resolution
       const agents =
-        proxyRes.kind === 'pool' ? proxyRes.agents : proxyRes.agent ? [proxyRes.agent] : []
+        res?.kind === 'pool' ? res.agents : res?.agent ? [res.agent] : []
       await Promise.all(
         agents.map(async (a: any) => {
           try {

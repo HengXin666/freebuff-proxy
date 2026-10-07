@@ -74,6 +74,11 @@ export const GATES = [
     args: ['scripts/gates/checks/guard/route-table.ts'],
   },
   {
+    group: 'egress',
+    label: '上游出网只经统一出口（裸 fetch / 直造 agent 零容忍）',
+    args: ['scripts/gates/checks/guard/egress.ts'],
+  },
+  {
     group: 'declared',
     label: '未声明标识符零新增（TS2304：能编译但运行必抛 ReferenceError）',
     args: ['scripts/gates/checks/guard/declared.ts'],

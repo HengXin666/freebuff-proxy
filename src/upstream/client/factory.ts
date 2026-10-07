@@ -8,7 +8,7 @@ import { logger } from '../../util/log.ts'
 import { DeviceSigner } from '../device/device-signing.ts'
 import { CatalogHolder } from '../catalog-protocol.ts'
 import { BUN_USER_AGENT } from '../fingerprint/official-fingerprint.ts'
-import { buildFetchWithProxy, resolveProxy } from './transport.ts'
+import { createEgress } from './egress/index.ts'
 import { makeBunFetcher, makeDeviceKeysViaBun, makeReleaseViaBun, makeSessionViaBun } from './bun-channel.ts'
 import { buildEndpoints } from './endpoints/misc.ts'
 import { freebuffSession } from './endpoints/session.ts'
@@ -27,6 +27,7 @@ interface SignerDeps {
   accountId?: string
   deviceKeyPath?: string
   fetchWithProxy: Function
+  egress?: any
 }
 
 /**
@@ -44,7 +45,14 @@ interface SignerDeps {
  * @param {{ apiBase: string, token: string, fetchWithProxy: Function }} deps 依赖
  * @returns {any} 目录持有者
  */
-function makeCatalog({ apiBase, token, fetchWithProxy }: { apiBase: string, token: string, fetchWithProxy: Function }) {
+function makeCatalog(
+  { apiBase, token, fetchWithProxy, egress }: {
+    apiBase: string
+    token: string
+    fetchWithProxy: Function
+    egress: any
+  },
+) {
   return new (CatalogHolder as any)({
     apiHost: apiBase,
     token,
@@ -52,7 +60,7 @@ function makeCatalog({ apiBase, token, fetchWithProxy }: { apiBase: string, toke
     //(Node 会自动加 accept-language / sec-fetch-mode,且后者设不掉).
     // 懒加载 cli-bridge,失败时为 null -> 自动退回 Node 路径.见 docs/reverse/19 19.10
     // 与 .agents/notes/implemented/bug-fix/2026-10-03-catalog-request-via-bun.md.
-    bunFetch: makeBunFetcher(apiBase),
+    bunFetch: makeBunFetcher(apiBase, egress),
     fetchImpl: async (url: string, init?: any) => {
       const headers = { ...(init?.headers || {}) }
       return fetchWithProxy(url, { ...init, headers })
@@ -72,7 +80,7 @@ function makeCatalog({ apiBase, token, fetchWithProxy }: { apiBase: string, toke
  * @param {SignerDeps} deps 依赖
  * @returns {any} 设备签名器;缺 accountId/deviceKeyPath 时为 null
  */
-function makeDeviceSigner({ apiBase, token, accountId, deviceKeyPath, fetchWithProxy }: SignerDeps) {
+function makeDeviceSigner({ apiBase, token, accountId, deviceKeyPath, fetchWithProxy, egress }: SignerDeps) {
   if (!deviceKeyPath || !accountId) {
     logger.warn('device signer NOT created', {
       hasDeviceKeyPath: !!deviceKeyPath,
@@ -88,7 +96,7 @@ function makeDeviceSigner({ apiBase, token, accountId, deviceKeyPath, fetchWithP
     apiHost: apiBase,
     accountId,
     token,
-    fetchImpl: makeDeviceKeysViaBun(token, apiBase, fetchWithProxy as any),
+    fetchImpl: makeDeviceKeysViaBun(token, apiBase, fetchWithProxy as any, egress),
   })
   logger.info('device signer created', { accountId, storePath: deviceKeyPath })
   return signer
@@ -112,22 +120,25 @@ export function createUpstreamClient(config: any, token: string, opts: UpstreamC
     accountId: opts.accountId,
     apiBase,
   })
-  const proxyRes = resolveProxy(config, opts.proxy, opts.accountId)
-  const poolIndex = proxyRes.kind === 'pool' ? proxyRes.indexFor(opts.accountId || token) : 0
-  /** 该账号实际生效的代理 URL(用于控制台展示) */
-  const proxyUrl = proxyRes.kind === 'pool' ? proxyRes.urls[poolIndex] : proxyRes.url
-  // 带代理池的 fetch(无池/单代理/池回落/单次尝试超时都在 transport.ts).
-  // 注意:单代理池也必须走池分支(见 buildFetchWithProxy 的说明).
-  const fetchWithProxy = buildFetchWithProxy(proxyRes, poolIndex)
+  // 出口只有一个真源: egress(账号 proxy > 全局池 > upstream.proxy > env > 直连).
+  // Node 侧与 bun 侧共用这一份判据, 不允许任何一处自行读配置或环境变量.
+  const egress = createEgress({
+    config,
+    accountId: opts.accountId || token,
+    accountProxy: opts.proxy,
+  })
+  const { proxyUrl } = egress
+  const fetchWithProxy = egress.fetch
   const deviceSigner = makeDeviceSigner({
     apiBase,
     token,
     accountId: opts.accountId,
     deviceKeyPath: opts.deviceKeyPath,
     fetchWithProxy,
+    egress,
   })
-  const catalog = makeCatalog({ apiBase, token, fetchWithProxy })
-  const ctx = makeCtx({ config, token, opts, apiBase, loginBase, catalog, deviceSigner, fetchWithProxy, proxyRes })
+  const catalog = makeCatalog({ apiBase, token, fetchWithProxy, egress })
+  const ctx = makeCtx({ config, token, opts, apiBase, loginBase, catalog, deviceSigner, fetchWithProxy, egress })
   return {
     apiBase,
     loginBase,
@@ -176,10 +187,10 @@ export function createUpstreamClient(config: any, token: string, opts: UpstreamC
  * 组装出站上下文(所有拆出去的函数都从它取依赖,不再依赖闭包).
  *
  * @param {{ config: object, token: string, opts: object, apiBase: string, loginBase: string,
- *   catalog: any, deviceSigner: any, fetchWithProxy: Function, proxyRes: any }} d 依赖
+ *   catalog: any, deviceSigner: any, fetchWithProxy: Function, egress: any }} d 依赖
  * @returns {Record<string, any>} 上下文
  */
-function makeCtx({ config, token, opts, apiBase, loginBase, catalog, deviceSigner, fetchWithProxy, proxyRes }: any) {
+function makeCtx({ config, token, opts, apiBase, loginBase, catalog, deviceSigner, fetchWithProxy, egress }: any) {
   return {
     apiBase,
     loginBase,
@@ -188,10 +199,10 @@ function makeCtx({ config, token, opts, apiBase, loginBase, catalog, deviceSigne
     catalog,
     deviceSigner,
     fetchWithProxy,
-    proxyRes,
+    egress,
     // 经 bun 读/释放会话的通道(官方形态实现在 cli-bridge,这里只调端口).
-    sessionViaBun: makeSessionViaBun(token, opts.accountId, apiBase, opts.deviceKeyPath),
-    releaseViaBun: makeReleaseViaBun(token, opts.accountId, apiBase, opts.deviceKeyPath),
+    sessionViaBun: makeSessionViaBun(token, opts.accountId, apiBase, opts.deviceKeyPath, egress),
+    releaseViaBun: makeReleaseViaBun(token, opts.accountId, apiBase, opts.deviceKeyPath, egress),
     bunUserAgent: BUN_USER_AGENT,
   }
 }

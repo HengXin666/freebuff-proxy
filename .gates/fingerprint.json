@@ -140,12 +140,8 @@
       "dashboard/views/proxy/index.ts::applyIdleReleaseAdvice": 1,
       "dashboard/views/proxy/index.ts::renderProxySettings": 1,
       "dashboard/views/proxy/index.ts::runProxyTest": 1,
-      "dashboard/views/proxy/index.ts::saveBlockPremiumSetting": 1,
-      "dashboard/views/proxy/index.ts::saveFreeToolSignatureSetting": 1,
       "dashboard/views/proxy/index.ts::saveLoadBalanceSettings": 1,
       "dashboard/views/proxy/index.ts::saveProxyPool": 1,
-      "dashboard/views/proxy/index.ts::saveStripToolsSetting": 1,
-      "dashboard/views/proxy/index.ts::saveUpstreamChannelSetting": 1,
       "dashboard/views/proxy/index.ts::schedulingHint": 1,
       "dashboard/views/shell/index.ts::render": 1,
       "dashboard/views/system/index.ts::renderSystem": 1,
@@ -477,6 +473,7 @@
       "md-in-comment|['scripts/gates/checks/style/md-in-comment.ts']",
       "format|['scripts/gates/checks/code/format.ts']",
       "route-table|['scripts/gates/checks/guard/route-table.ts']",
+      "egress|['scripts/gates/checks/guard/egress.ts']",
       "declared|['scripts/gates/checks/guard/declared.ts']",
       "types|['scripts/gates/checks/code/types.ts']",
       "lanes|['scripts/gates/checks/guard/lanes.ts']",
@@ -488,5 +485,5 @@
     ],
     "checkpoints": "CHECKPOINTS = { 'pre-commit': [ 'syntax', 'sizes', 'dirs', 'functions', 'format', 'style', 'md-in-comment', 'notes', 'route-table', 'declared', 'lanes', 'fingerprint', ], 'pre-push': [ 'syntax', 'sizes', 'dirs', 'functions', 'notes', 'format', 'route-table', 'declared', 'types', 'lanes', 'fingerprint', 'contract', 'response-contract', 'docs', 'i18n', ], ci: 'all', }"
   },
-  "fingerprint": "a9d545bebfcdc611facbfb7d26907f52a568d454d722929d710345aae923d08e"
+  "fingerprint": "893e3e60563c3bb61e28802a40f121b2ab2cb52c362b3ddb78377323c7bd9fc8"
 }

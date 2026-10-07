@@ -12,7 +12,7 @@ import { currentCatalogCachePath } from './catalog-store.ts'
  *
  * 懒 import runtime-sync,避免 model 模块顶部引入网络依赖.
  *
- * @param {{ intervalMs?: number, log?: (msg: string) => void, fetchImpl?: Function }} [opts] 同步选项
+ * @param {SyncOpts} [opts] 同步选项(config 用于解析统一出口)
  * @returns {{ stop: () => void, refresh: () => Promise<{ ok: boolean, error?: string, models?: number }> }}
  *   同步控制器
  */
@@ -21,6 +21,7 @@ export interface SyncOpts {
   intervalMs?: number
   log?: (msg: string) => void
   fetchImpl?: Function
+  config?: any
 }
 
 /** 同步控制器. */
@@ -38,6 +39,7 @@ export function startCatalogSync(opts: SyncOpts = {}): CatalogSyncController {
         intervalMs: opts.intervalMs,
         log: opts.log,
         fetchImpl: opts.fetchImpl,
+        config: opts.config,
       })
     })
     .catch((err) => {

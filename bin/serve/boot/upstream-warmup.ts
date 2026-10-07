@@ -16,9 +16,10 @@ import { logger } from '../../../src/util/log.ts'
  * CLI 版本号用仓库内的已知值(getCliVersion() 的默认值);
  * 要跟进官方发版由维护者显式触发, 或打开设置里的开关(见下). 功能保留, 默认不动.
  * @param {any} settingsStore 控制台设置
+ * @param {any} config 已加载配置(解析统一出口用)
  * @returns {void} 只登记异步任务, 不等待
  */
-function warmCliVersion(settingsStore: any): void {
+function warmCliVersion(settingsStore: any, config: any): void {
   const cliVersionAuto = settingsStore?.get?.().cliVersionAutoRefresh === true
   if (!cliVersionAuto) {
     logger.info('cli fingerprint version kept (auto-refresh disabled)', {
@@ -26,7 +27,7 @@ function warmCliVersion(settingsStore: any): void {
     })
     return
   }
-  void refreshCliVersion()
+  void refreshCliVersion({ config })
     .then((version) => {
       logger.info('cli fingerprint version aligned', { version })
       // 遥测上报(可选):官方 CLI 起进程就会发 app_launched +
@@ -35,13 +36,13 @@ function warmCliVersion(settingsStore: any): void {
       // 判据与取舍见
       // .agents/notes/proposed/architecture/2026-09-30-cli-telemetry-reports.md
       if (settingsStore?.get?.().cliTelemetryEnabled === true) {
-        void reportCliLaunch({ fingerprintSuccess: true })
+        void reportCliLaunch({ fingerprintSuccess: true, config })
           .then((n) => {
             if (n > 0) logger.debug('cli telemetry reported', { records: n })
           })
           .catch(() => {})
       }
-      armVersionSweeper(settingsStore)
+      armVersionSweeper(settingsStore, config)
     })
     .catch(() => {})
 }
@@ -52,13 +53,14 @@ function warmCliVersion(settingsStore: any): void {
  * 见 .agents/notes/implemented/feature/2026-10-02-cli-fingerprint-periodic-align.md
  * unref:定时器绝不挡进程退出.
  * @param {any} settingsStore 控制台设置
+ * @param {any} config 已加载配置(解析统一出口用)
  * @returns {void} 只登记定时器, 不等待
  */
-function armVersionSweeper(settingsStore: any): void {
+function armVersionSweeper(settingsStore: any, config: any): void {
   const versionSweeper = setInterval(() => {
     if (settingsStore?.get?.().cliVersionAutoRefresh !== true) return
     const before = getCliVersion()
-    void refreshCliVersion()
+    void refreshCliVersion({ config })
       .then((next) => {
         if (next && next !== before) {
           logger.warn('cli fingerprint version changed upstream; realigned', {
@@ -144,7 +146,7 @@ function logUpstreamAuthReady(ctx: any): void {
  * @returns {void} 只登记异步任务,不等待
  */
 export function startUpstreamWarmup({ ctx, settingsStore }: any) {
-  warmCliVersion(settingsStore)
+  warmCliVersion(settingsStore, ctx?.config)
   sweepOrphanSessions(ctx)
   armRefundSweeper(ctx)
   logUpstreamAuthReady(ctx)

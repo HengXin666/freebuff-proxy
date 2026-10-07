@@ -10,6 +10,18 @@
  * 子类注入两个真源钩子(digestOf / keyOf).
  */
 import { doFetch } from '../protocol/fetch.ts'
+
+/**
+ * 缺 fetchImpl 时的失败出口: 显式报错, 绝不静默直连.
+ *
+ * 静默直连的代价是出口 IP 暴露(issue #5 的 session_model_mismatch 根因),
+ * 而且从日志上看不出任何异常 ---- 只有把"没有传输实现"变成硬错误才可发现.
+ *
+ * @returns {Promise<never>} 永远抛出
+ */
+function missingEgressFetch(): Promise<never> {
+  return Promise.reject(new Error('catalog holder has no egress transport: pass fetchImpl from the egress layer'))
+}
 import {
   displayNameForKey as protoDisplayNameForKey,
   digestForKey as protoDigestForKey,
@@ -62,7 +74,9 @@ export class CatalogBase {
   constructor(opts: any) {
     this.apiHost = opts.apiHost
     this.token = opts.token
-    this.fetchImpl = opts.fetchImpl || globalThis.fetch
+    // 没有 fetchImpl 时不给直连兜底: 那会绕过统一出口(配了代理却直连, 上游
+    // 拿到宿主真实 IP). 装配侧(factory)一律经 egress 注入传输实现.
+    this.fetchImpl = opts.fetchImpl || missingEgressFetch
     this.timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 20_000
     /**
      * 目录行全量快照(key 到 row 原文). 模型清单以目录 rows 为权威;

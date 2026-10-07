@@ -50,7 +50,7 @@ export async function admit(bridge, row, opts = {}) {
         ...(await bridge.signHeaders('POST', url, null, bridge.fid)),
       };
     await dumpReq(`admit-${i}`, 'POST', url, hdrs, null);
-    const res = await fetch(url, { method: 'POST', headers: hdrs });
+    const res = await bridge.egressFetch(url, { method: 'POST', headers: hdrs });
     const body = await res.json().catch(() => null);
     last = { status: res.status, body, instanceId: inst, attempt: i };
     if (body?.status === 'active') return last;
@@ -92,7 +92,7 @@ export async function startRun(bridge, agentId = null, opts = {}) {
     'x-freebuff-acting-user-id': bridge.cfg.userId,
   };
   await dumpReq('startRun', 'POST', url, hdrs, payload);
-  const res = await fetch(url, { method: 'POST', headers: hdrs, body: payload });
+  const res = await bridge.egressFetch(url, { method: 'POST', headers: hdrs, body: payload });
   const body = await res.json().catch(() => null);
   return { status: res.status, body, runId: body?.runId ?? null };
 }
@@ -137,7 +137,7 @@ export async function finishRun(bridge, runId, opts = {}) {
     'x-freebuff-acting-user-id': bridge.cfg.userId,
   };
   await dumpReq('finishRun', 'POST', url, hdrs, payload);
-  const res = await fetch(url, { method: 'POST', headers: hdrs, body: payload });
+  const res = await bridge.egressFetch(url, { method: 'POST', headers: hdrs, body: payload });
   const text = await res.text().catch(() => '');
   return { status: res.status, text: text.slice(0, 300) };
 }

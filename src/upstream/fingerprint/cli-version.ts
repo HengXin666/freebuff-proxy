@@ -4,6 +4,7 @@
  * 内容: 可变的进程级状态(activeCliVersion)加一个 best-effort 网络刷新----
  * 它是少数会随时间自己变化的指纹值, 单独放着便于查"哪些值会漂".
  */
+import { createEgress } from '../client/egress/index.ts'
 import { KNOWN_CLI_VERSION } from './ua.ts'
 
 /**
@@ -38,11 +39,11 @@ export function setCliVersion(version: any) {
  * UA 里的版本号是上游判断[这是不是官方客户端]的一部分指纹, 写死一个过时值
  * 长期看本身就是破绽.拿不到就保留现值, 网络失败不影响代理可用性.
  *
- * @param {{ fetchImpl?: typeof fetch, timeoutMs?: number }} [opts]
+ * @param {{ fetchImpl?: typeof fetch, timeoutMs?: number, config?: any }} [opts]
  * @returns {Promise<string>} 生效的版本号
  */
 export async function refreshCliVersion(opts: any = {}) {
-  const fetchImpl = opts.fetchImpl || globalThis.fetch
+  const fetchImpl = opts.fetchImpl || createEgress({ config: opts.config || {} }).fetch
   if (typeof fetchImpl !== 'function') return activeCliVersion
   const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 8_000
   const ac = new AbortController()

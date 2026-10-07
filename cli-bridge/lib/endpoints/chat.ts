@@ -53,7 +53,7 @@ export async function chat(bridge, opts) {
   await dumpReq(`chat-${layer}`, 'POST', url, hdrs, body);
   if (noSend) return { status: 0, text: '(dry-run, not sent)' };
 
-  const res = await fetch(url, { method: 'POST', headers: hdrs, body });
+  const res = await bridge.egressFetch(url, { method: 'POST', headers: hdrs, body });
 
   /**
    * 流式边收边吐: 仅当调用方显式要求(streamStdout).

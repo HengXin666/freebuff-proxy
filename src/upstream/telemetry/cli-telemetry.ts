@@ -21,6 +21,7 @@
  - .agents/notes/proposed/architecture/2026-09-30-cli-telemetry-reports.md
  */
 import { randomUUID } from 'crypto'
+import { createEgress } from '../client/egress/index.ts'
 import { logger } from '../../util/log.ts'
 
 /** 遥测上报端点(官方真值). */
@@ -92,13 +93,13 @@ export function trackCliEvent(event: any, data = {}, level = 'info') {
 /**
  - 冲刷待发记录.best-effort:任何失败都静默,绝不影响代理可用性.
  - @param {null | ((url: string, init: object) => Promise<Response>)} fetchImpl
- - @param {{ timeoutMs?: number }} [opts]
+ - @param {{ timeoutMs?: number, config?: any }} [opts]
  - @returns {Promise<number>} 成功上报的条数
  */
 export async function flushTelemetry(fetchImpl: any, opts: any = {}) {
   if (!pending.length) return 0
   const batch = pending.splice(0, pending.length)
-  const fn = fetchImpl || globalThis.fetch
+  const fn = fetchImpl || createEgress({ config: opts.config || {} }).fetch
   if (typeof fn !== 'function') return 0
   const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 5_000
   const ac = new AbortController()
@@ -128,7 +129,7 @@ export async function flushTelemetry(fetchImpl: any, opts: any = {}) {
 /**
  - 上报[启动]这一组事件(官方 CLI 进程起来就会发的两条).
  - 必须在 fingerprint 生成之后调用 ---- data.success 如实反映结果.
- - @param {{ fingerprintSuccess?: boolean, fetchImpl?: any }} [opts]
+ - @param {{ fingerprintSuccess?: boolean, fetchImpl?: any, config?: any }} [opts]
  */
 export function reportCliLaunch(opts: any = {}) {
   trackCliEvent(CLI_EVENTS.APP_LAUNCHED, {})
@@ -136,5 +137,5 @@ export function reportCliLaunch(opts: any = {}) {
     fingerprintType: 'enhanced_cli',
     success: opts.fingerprintSuccess !== false,
   })
-  return flushTelemetry(opts.fetchImpl || null)
+  return flushTelemetry(opts.fetchImpl || null, { config: opts.config })
 }

@@ -78,10 +78,11 @@ import fs from 'node:fs'
 // 注:Node 与 Bun 同为系统 OpenSSL 栈,cipher 本就一致;"Node 无法对齐"只成立于
 // 浏览器目标(GREASE 是保留数值,OpenSSL 名字字符串表达不了).
 {
-  // ALPN 的实现已随 client.js 拆分搬进 client/transport.js(client.js 只剩
-  // 薄门面 re-export).断言必须指向真正构造 dispatcher 的那一层.
+  // ALPN 的实现随"统一出口"重构搬进了 client/egress/resolve.ts  ----  那里才是
+  // 真正构造 dispatcher(ProxyAgent / EnvHttpProxyAgent) 的一层. 断言必须指向
+  // 构造 dispatcher 的那一层, 否则会在重构后指向一个不再设置 ALPN 的文件而假红.
   const src = fs.readFileSync(
-    new URL('../../../../../../../src/upstream/client/transport.ts', import.meta.url),
+    new URL('../../../../../../../src/upstream/client/egress/resolve.ts', import.meta.url),
     'utf8',
   )
   assert.ok(

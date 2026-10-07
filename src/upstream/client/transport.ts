@@ -1,26 +1,12 @@
 /**
- * 出网传输层:代理解析 + 带[池内回落 + 单次尝试超时]的 fetch.
+ * 出网传输层:带[池内回落 + 单次尝试超时]的 fetch.
  *
- * 这一层只回答两个问题:这次请求从哪个出口出去, 以及出口坏了换谁.
+ * 出口判据不在这里 ---- 它只有一个真源, 在 ./egress/resolve.ts. 这一层只回答
+ * "这次请求怎么发, 出口坏了换谁", 不回答"从哪个出口出去".
  * 它不知道任何上游协议(路径/头/签名).
  */
-import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from 'undici'
+import { fetch as undiciFetch } from 'undici'
 import { logger } from '../../util/log.ts'
-
-/**
- * TLS 层对齐官方 CLI:ALPN 只 offer http/1.1.
- *
- * 真机抓包(mitmproxy 拦本地官方 CLI 进程)确认:
- *   Bun/1.3.14 → TLSv1.3, alpn=http/1.1, cipher=TLS_AES_256_GCM_SHA384
- * 而 undici 默认会同时 offer h2 与 http/1.1  --  与官方客户端不同,
- * 是一个可检测的 TLS 层差异.
- *
- * Node 与 Bun 都用系统 OpenSSL 栈, cipher 一致
- * (TLS_AES_256_GCM_SHA384).
- */
-const ALPN_TLS = Object.freeze({
-  requestTls: { ALPNProtocols: ['http/1.1'] },
-})
 
 /**
  * 带单次超时的 undici fetch:超时主动 abort 本次尝试.用独立的子 AbortController
@@ -54,85 +40,6 @@ async function fetchWithAttemptTimeout(url: string, init: Record<string, any>, t
   }
 }
 
-/**
- * 解析出网代理配置,返回统一结构:
- *   { kind: 'none', agent: null, url: null }
- *   { kind: 'single', agent: ProxyAgent|EnvHttpProxyAgent, url: string }
- *   { kind: 'pool', agents: ProxyAgent[], urls: string[], indexFor(key) }   // 全局代理池
- * 优先级:账号显式 proxy > upstream.proxies(全局池) > upstream.proxy > HTTP(S)_PROXY env.
- *
- * @param {any} config 已加载配置
- * @param {string | null} [accountProxy] 账号显式代理
- * @param {string} [accountId] 池内稳定分配用的 key(不参与单代理分支)
- * @returns {{ kind: string, url?: string | null, agent?: any, urls?: string[],
- *   agents?: any[], indexFor: (key: string) => number }}
- *   代理解析结果
- */
-function resolveProxy(config: any, accountProxy?: string | null, accountId?: string): any {
-  // 最后一道防线:代理值可能是脏数据(数字 / 对象 / 畸形 URL),直接喂给
-  // new ProxyAgent({uri}) 会抛 ERR_INVALID_URL  --  那发生在启动后的第一次
-  // 出网调用(启动扫尾/首次请求),用户看到的就是"起不来/一用就崩".
-  // 这里统一过一遍校验,非法值一律当作"没有这个代理".
-  const clean = (v: unknown): string | null => {
-    if (typeof v !== 'string') return null
-    const s = v.trim()
-    if (!s) return null
-    try {
-      const u = new URL(s)
-      return ['http:', 'https:', 'socks5:', 'socks:'].includes(u.protocol) ? s : null
-    } catch {
-      return null
-    }
-  }
-  const explicit = clean(accountProxy) || clean(config?.upstream?.proxy)
-  if (explicit) {
-    return {
-      kind: 'single',
-      url: explicit,
-      agent: new ProxyAgent({ uri: explicit, ...ALPN_TLS }),
-      indexFor: () => 0,
-    }
-  }
-  const pool = (config?.upstream?.proxies || []).map(clean).filter(Boolean)
-  if (pool.length) {
-    return {
-      kind: 'pool',
-      urls: pool,
-      agent: undefined,
-      agents: pool.map((u: string) => new ProxyAgent({ uri: u, ...ALPN_TLS })),
-      /** 稳定哈希:同一账号始终落到同一代理(保持 session IP 稳定) */
-      indexFor: (key: string) => hashIndex(key, pool.length),
-    }
-  }
-  const envSet = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'].some((k) =>
-    Boolean(process.env[k]),
-  )
-  if (envSet) {
-    return {
-      kind: 'single',
-      url: '(env HTTP(S)_PROXY)',
-      agent: new EnvHttpProxyAgent({ ...ALPN_TLS }),
-      indexFor: () => 0,
-    }
-  }
-  return { kind: 'none', agent: null, url: null, indexFor: () => 0 }
-}
-
-/**
- * djb2 字符串哈希 → 池内下标(同一 key 稳定落同一下标).
- *
- * @param {string} key 分配 key(账号 id / 邮箱)
- * @param {number} n 池大小
- * @returns {number} [0, n) 的下标
- */
-function hashIndex(key: any, n: number): number {
-  let h = 5381
-  for (const ch of String(key || '')) {
-    h = ((h << 5) + h + ch.charCodeAt(0)) | 0
-  }
-  return (h >>> 0) % n
-}
-
 /** 代理感知 fetch 的签名. */
 type ProxyAwareFetch = (url: string, init?: Record<string, any>) => Promise<any>
 
@@ -149,7 +56,7 @@ interface ProxyFetchOpts {
 }
 
 /**
- * 构造带代理池的 fetch(供 createUpstreamClient / createProxyFetch 共用).
+ * 构造带代理池的 fetch(供统一出口 createEgress 使用).
  *  - 无代理 / 单代理 / env:直接走对应 dispatcher
  *  - 全局池:优先分配到的代理,连接级失败(fetch 抛错)时依次回落到池内下一个;
  *    单次尝试带超时(fetchWithAttemptTimeout) -- 代理"连接成功但永不响应"
@@ -157,7 +64,7 @@ interface ProxyFetchOpts {
  *
  * 重要:单代理池也必须走 pool 分支.resolveProxy 的 pool 分支只返回 agents
  * 数组,没有 agent 字段;若把 <=1 的池当"非池"处理,agent 恒为 undefined →
- * 走 globalThis.fetch 直连,代理被整个绕过(上游拿到宿主真实出口 IP,账号被
+ * 走 globalThis.fetch 直连, 代理被整个绕过(上游拿到宿主真实出口 IP, 账号被
  * 按地区判定,报 session_model_mismatch/limited 等 -- issue #5 根因).
  * 单代理池走同一循环:dispatcher=池内唯一代理,连接失败仍走兜底重试.
  *
@@ -200,29 +107,4 @@ function buildFetchWithProxy(proxyRes: any, poolIndex: number): ProxyAwareFetch 
   }
 }
 
-/**
- * 供非上游 API 的出网请求使用的代理感知 fetch(如 catalog 自动同步拉 GitHub 源).
- * 复用与上游调用完全相同的代理解析与池回落逻辑,避免旁路直连.
- * 优先级:账号显式 proxy(可传) > upstream.proxies(全局池) > upstream.proxy > HTTP(S)_PROXY env > 直连.
- * 池分配 key 默认 'catalog'(池内稳定固定一个出口),可传 accountId 覆盖.
- *
- * @param {import('../../config.ts').ProxyConfig} config 已加载配置
- * @param {{ proxy?: string | null, accountId?: string }} [opts] 覆盖项
- * @returns {{ fetch: (url: string, init?: any) => Promise<Response>, proxyUrl: string | null }}
- *   代理感知 fetch 与其生效的出口 URL
- */
-export function createProxyFetch(
-  config: any,
-  opts: ProxyFetchOpts = {},
-): ProxyFetchResult {
-  const proxyRes = resolveProxy(config, opts.proxy, undefined)
-  const poolIndex =
-    proxyRes.kind === 'pool' ? proxyRes.indexFor(opts.accountId || 'catalog') : 0
-  const proxyUrl = proxyRes.kind === 'pool' ? proxyRes.urls[poolIndex] : proxyRes.url
-  return {
-    fetch: buildFetchWithProxy(proxyRes, poolIndex),
-    proxyUrl: proxyUrl || null,
-  }
-}
-
-export { ALPN_TLS, buildFetchWithProxy, resolveProxy, hashIndex }
+export { buildFetchWithProxy }

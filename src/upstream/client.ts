@@ -2,7 +2,8 @@
  - 上游客户端  --  薄门面(barrel).
  *
  - 实现已按职责拆进 ./client/:
- - - transport.js      代理解析 + 池内回落 fetch(不认协议)
+ - - egress/           统一出网出口(代理解析唯一真源 + 唯一请求入口)
+ - - transport.js      带池内回落与单次尝试超时的 fetch(不认协议)
  - - errors.js         UpstreamError / safeText / 错误与配额判据
  - - bun-channel.js    bun(cli-bridge)通道包装与 401 显式抛出
  - - http.js           统一头装配(UA/Bearer/目录头/设备签名)与登录重试
@@ -31,8 +32,9 @@ export {
   isSessionRecoverableGate,
 } from './client/errors/index.ts'
 
-export { createProxyFetch } from './client/transport.ts'
 export { createUpstreamClient } from './client/factory.ts'
+export { createEgress, egressForConfig } from './client/egress/index.ts'
+export type { Egress } from './client/egress/index.ts'
 export { bunEnabled, installIdFromClientState, unwrapSessionViaBun } from './client/bun-channel.ts'
 export { apiFetch, fetchLoginUpstream } from './client/http.ts'
 

@@ -5,6 +5,7 @@
  * 口径: 纯搬移, 不改行为. HOST 常量与类体逐字保留.
  */
 import { b64u, sha256Hex, derFromB64u, devicePayload } from '../wire/crypto.ts'
+import { egressFetch } from '../wire/egress.ts'
 import {
   auth, fetchCatalog, registerDeviceKey, getSession, getStreak, release,
   admit, startRun, reuseChat, finishRun, chat, _traceFor, _stepFor,
@@ -109,6 +110,16 @@ class Bridge {
     };
   }
 
+  /**
+   * 统一出口 fetch: 本实例所有上游请求都经它发出(出口来自 cfg.proxy).
+   *
+   * @param {string} url 请求地址
+   * @param {Record<string, any>} [init] fetch 初始化
+   * @returns {Promise<Response>} 上游响应
+   */
+  egressFetch(url: string, init?: Record<string, any>) {
+    return egressFetch(this.cfg, url, init)
+  }
   auth() {
     return auth(this)
   }

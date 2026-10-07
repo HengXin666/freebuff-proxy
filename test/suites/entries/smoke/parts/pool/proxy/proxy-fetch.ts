@@ -12,7 +12,7 @@ import http from 'node:http'
 
 // --- 回归:单代理池也必须走代理(issue #5 根因:1 个代理时直连绕过) ---
 {
-  const { createProxyFetch } = await import('../../../../../../../src/upstream/client.ts')
+  const { createEgress } = await import('../../../../../../../src/upstream/client.ts')
   // 最小 HTTP 代理:收到绝对形式请求直接回带标记的响应(不转发)
   let proxyHits = 0
   const proxyServer = http.createServer((req, res) => {
@@ -31,7 +31,8 @@ import http from 'node:http'
   try {
     const cfg = loadConfig()
     cfg.upstream.proxies = [`http://127.0.0.1:${proxyPort}`] // 单代理池
-    const { fetch: proxyFetch } = createProxyFetch(cfg)
+    // 出网一律经统一出口(createEgress),不再有单独的 createProxyFetch.
+    const { fetch: proxyFetch } = createEgress({ config: cfg })
     const res = await proxyFetch(`http://127.0.0.1:${targetPort}/hello`, {
       headers: { 'x-test': '1' },
     })

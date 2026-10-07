@@ -45,7 +45,7 @@ export async function fetchCatalog(bridge) {
     'x-freebuff-client': 'desktop',
   };
   await dumpReq('catalog', 'GET', url, h1, null);
-  const res = await fetch(url, { headers: h1 });
+  const res = await bridge.egressFetch(url, { headers: h1 });
   if (!res.ok) throw new Error(`catalog ${res.status}: ${(await res.text()).slice(0, 200)}`);
   bridge.catalog = await res.json();
   bridge.fid = bridge.catalog.fetchId;
@@ -61,7 +61,7 @@ export async function fetchCatalog(bridge) {
 export async function registerDeviceKey(bridge, publicKey) {
 
   const url = `${bridge.host}/api/v1/freebuff/device-keys`;
-  const res = await fetch(url, {
+  const res = await bridge.egressFetch(url, {
     method: 'POST',
     headers: {
       ...bridge.auth(),
@@ -84,7 +84,7 @@ export async function getSession(bridge, opts = {}) {
   const instanceId = opts.instanceId || null
   const heartbeat = opts.heartbeat === true
   const url = `${bridge.host}/api/v1/freebuff/session`;
-  const res = await fetch(url, {
+  const res = await bridge.egressFetch(url, {
     headers: {
       ...bridge.auth(),
       'x-freebuff-catalog-protocol': '1',
@@ -134,7 +134,7 @@ export async function getSession(bridge, opts = {}) {
 export async function getStreak(bridge) {
 
   const url = `${bridge.host}/api/v1/freebuff/streak`;
-  const res = await fetch(url, {
+  const res = await bridge.egressFetch(url, {
     headers: {
       ...bridge.auth(),
       'x-freebuff-catalog-protocol': '1',
@@ -159,7 +159,7 @@ export async function getStreak(bridge) {
 export async function release(bridge, instanceId) {
 
   const url = `${bridge.host}/api/v1/freebuff/session`;
-  const res = await fetch(url, {
+  const res = await bridge.egressFetch(url, {
     method: 'DELETE',
     headers: {
       ...bridge.auth(),

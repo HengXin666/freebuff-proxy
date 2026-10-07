@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { logger } from '../../util/log.ts'
+import { bunCanCarry } from './egress/index.ts'
 import { UpstreamError } from './errors/index.ts'
 
 /**
@@ -63,12 +64,13 @@ export function installIdFromClientState(): string | null {
  * 真正的加载推迟到第一次抓取时,不阻塞客户端构造.
  *
  * @param {string} apiBase 上游 API 主机
+ * @param {any} [egress] 统一出口(null = 直连, 由 bun 自己按 env 判定)
  * @returns {((input: object) => Promise<any>) | null} bun fetch 调用器;不可用时 null
  */
-export function makeBunFetcher(apiBase?: string): ((input: Record<string, any>) => Promise<any>) | null {
+export function makeBunFetcher(apiBase?: string, egress?: any): ((input: Record<string, any>) => Promise<any>) | null {
   let loader: Promise<any> | null = null
   return async (input: Record<string, any>) => {
-    if (bunEnabled() === false) return null
+    if (bunEnabled() === false || !bunCanCarry(egress)) return null
     if (loader === null) {
       loader = import('../../../cli-bridge/bridge.ts')
         .then((m) => (m.hasBun() ? m.callBun : null))
@@ -79,7 +81,13 @@ export function makeBunFetcher(apiBase?: string): ((input: Record<string, any>) 
     // 统一补 apiHost:无论调用方是否显式给,都以主服务配置为准
     const withHost = {
       ...input,
-      cfg: { ...(input?.cfg || {}), apiHost: input?.cfg?.apiHost || apiBase || null },
+      cfg: {
+        ...(input?.cfg || {}),
+        apiHost: input?.cfg?.apiHost || apiBase || null,
+        // 出口由 Node 侧解析后下传  --  bun 读不到控制台的代理设置.
+        // null 表示"按环境变量自行判定", 与显式直连的语义不同.
+        proxy: egress?.bunProxy ?? null,
+      },
     }
     return callBun(withHost, 30_000)
   }
@@ -92,6 +100,7 @@ export function makeBunFetcher(apiBase?: string): ((input: Record<string, any>) 
  * @param {string} [accountId] 账号 id(写进 device-key scope)
  * @param {string} apiBase 上游 API 主机
  * @param {string} [deviceKeyPath] 设备密钥文件路径
+ * @param {any} [egress] 统一出口(null = 按 env 判定)
  * @returns {(instanceId: string) => Promise<any>} 释放器;成功返回解析后的回执
  */
 export function makeReleaseViaBun(
@@ -99,11 +108,12 @@ export function makeReleaseViaBun(
   accountId?: string,
   apiBase?: string,
   deviceKeyPath?: string,
+  egress?: any,
 ): (instanceId: string) => Promise<any> {
   let loader: Promise<any> | null = null
   return async (instanceId: string) => {
     try {
-      if (!bunEnabled()) return null
+      if (!bunEnabled() || !bunCanCarry(egress)) return null
       if (loader === null) loader = import('../rpc/official-rpc.ts').catch(() => null)
       const mod: any = await loader
       if (!mod?.rpcReleaseSession || !mod?.buildRpcCfg) return null
@@ -114,6 +124,7 @@ export function makeReleaseViaBun(
       if (!cfg) return null
       cfg.installId = installIdFromClientState() || null
       cfg.apiHost = apiBase || null
+      cfg.proxy = egress?.bunProxy ?? null
       const r = await mod.rpcReleaseSession({ cfg, instanceId })
       if (!r?.ok) return null
       // 上游释放成功返回空体;构造一个最小对象供调用方判定
@@ -137,12 +148,14 @@ export function makeReleaseViaBun(
  * @param {string} token 上游 token
  * @param {string} apiBase 上游 API 主机
  * @param {(url: string, init?: any) => Promise<Response>} fallback 非 device-keys 跳的传输实现
+ * @param {any} [egress] 统一出口(null = 按 env 判定)
  * @returns {(url: string, init?: any) => Promise<Response>} 分流后的 fetch
  */
 export function makeDeviceKeysViaBun(
   token: string,
   apiBase: string | undefined,
   fallback: FetchLike,
+  egress?: any,
 ): FetchLike {
   let loader: Promise<any> | null = null
   return async (url: string, init?: any) => {
@@ -152,13 +165,13 @@ export function makeDeviceKeysViaBun(
       return fallback(url, init)
     }
     try {
-      if (!bunEnabled()) return fallback(url, init)
+      if (!bunEnabled() || !bunCanCarry(egress)) return fallback(url, init)
       if (loader === null) loader = import('../rpc/official-rpc.ts').catch(() => null)
       const mod: any = await loader
       if (!mod?.rpcRegisterDeviceKey) return fallback(url, init)
       const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {}
       if (!body?.publicKey) return fallback(url, init)
-      const cfg = { token, apiHost: apiBase || null }
+      const cfg = { token, apiHost: apiBase || null, proxy: egress?.bunProxy ?? null }
       const r = await mod.rpcRegisterDeviceKey({ cfg, publicKey: body.publicKey })
       if (!r?.ok) return fallback(url, init)
       // 返回一个最小 Response,让 DeviceSigner 的既有解析逻辑照常工作
@@ -185,6 +198,7 @@ export function makeDeviceKeysViaBun(
  * @param {string} [accountId] 账号 id
  * @param {string} apiBase 上游 API 主机
  * @param {string} [deviceKeyPath] 设备密钥文件路径
+ * @param {any} [egress] 统一出口(null = 按 env 判定)
  * @returns {(opts?: { instanceId?: string | null, heartbeat?: boolean }) => Promise<any>}
  *   会话体;bun 不可用/非 401 失败时返回 null(调用方回落 Node)
  */
@@ -193,11 +207,12 @@ export function makeSessionViaBun(
   accountId?: string,
   apiBase?: string,
   deviceKeyPath?: string,
+  egress?: any,
 ): (opts?: { instanceId?: string | null, heartbeat?: boolean }) => Promise<any> {
   let loader: Promise<any> | null = null
   return async (opts: { instanceId?: string | null, heartbeat?: boolean } = {}) => {
     try {
-      if (!bunEnabled()) return null
+      if (!bunEnabled() || !bunCanCarry(egress)) return null
       if (loader === null) loader = import('../rpc/official-rpc.ts').catch(() => null)
       const mod: any = await loader
       if (!mod?.rpcSession || !mod?.buildRpcCfg) return null
@@ -216,6 +231,8 @@ export function makeSessionViaBun(
       // 本地镜像对照变成真的打到上游), 见
       // .agents/notes/implemented/bug-fix/2026-10-03-session-via-bun-port.md
       cfg.apiHost = apiBase || null
+      // 出口同理: bun 读不到控制台代理设置, 只能由 Node 侧下传.
+      cfg.proxy = egress?.bunProxy ?? null
       const r = await mod.rpcSession({
         cfg,
         instanceId: opts.instanceId || null,

@@ -11,9 +11,13 @@
  - - 周期:启动立即一次 + 默认每 6h(trefeon REGISTRY_REFRESH 默认值).
  *
  - 零新运行时依赖:用项目已有的 undici fetch.
+ *
+ * 出网一律经统一出口(./.. 的 upstream/client/egress): 它带代理池回落, 直连只
+ * 在没有任何出口配置时发生. 这里不许自己调 globalThis.fetch.
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { createEgress } from '../upstream/client/egress/index.ts'
 import { buildCatalogFromSources } from './parser.ts'
 
 /** 上游源码常量文件(与 scripts/sync-catalog.mjs 同源). */
@@ -31,13 +35,26 @@ const JSDELIVR_BASE = 'https://cdn.jsdelivr.net/gh/CodebuffAI/freebuff@main/comm
 const FETCH_TIMEOUT_MS = 30_000
 
 /**
+ * 默认传输: 统一出口(未配置出口时为直连).
+ *
+ * 调用方可以直接传 fetchImpl(测试注入); 不传时走这里, 保证"配了代理就一定
+ * 从代理出去", 而不是悄悄直连.
+ *
+ * @param {any} config 已加载配置(可缺省)
+ * @returns {(url: string, init?: any) => Promise<any>} 出口 fetch
+ */
+function defaultEgressFetch(config: any): any {
+  return createEgress({ config: config || {} }).fetch
+}
+
+/**
  - 拉取一个常量文件:先 raw,失败再 jsDelivr.返回文本;两者都失败抛错.
  - @param {string} file
  - @param {{ fetchImpl?: typeof fetch }} [opts]
  - @returns {Promise<string>}
  */
 export async function fetchSourceFile(file: any, opts: any = {}) {
-  const fetchImpl = opts.fetchImpl || globalThis.fetch
+  const fetchImpl = opts.fetchImpl || defaultEgressFetch(opts.config)
   if (typeof fetchImpl !== 'function') {
     throw new Error('no fetch implementation available (undici not loaded)')
   }
