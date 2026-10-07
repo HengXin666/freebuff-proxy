@@ -81,9 +81,10 @@ registerHooks({
 
 /* ---------------- boot ---------------- */
 
-setUnauthorizedHandler(render)
+setUnauthorizedHandler(() => { void render() })
 
-window.addEventListener('hashchange', render)
+// 事件监听器会把 Event 传进来: 显式包一层, 避免把事件对象当成 render 的选项.
+window.addEventListener('hashchange', () => { void render() })
 window.addEventListener('DOMContentLoaded', async () => {
   // 版本号/仓库地址:由发版流水线硬编码进 dashboard/version.json;本地没有则 fallback dev
   // 语种必须在首次 render 之前定好:否则先渲染中文再切语言会闪一下.

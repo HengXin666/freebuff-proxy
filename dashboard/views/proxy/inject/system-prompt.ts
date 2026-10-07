@@ -1,7 +1,9 @@
 /**
- * 官方系统提示词卡: 一个 VSCode 编辑器 + 一个[恢复官方原文]按钮.
+ * 官方系统提示词卡: 一个 VSCode 编辑器 + [保存] + [恢复官方原文].
  *
- * 编辑即自动保存(防抖), 所以没有单独的保存按钮 ---- 少一个要用户找的控件.
+ * 手动保存(用户要求): 编辑后必须点[保存]才落盘 ----
+ * 自动保存让"改了到底生效没有"无法判断, 而这段正文直接决定模型行为.
+ * 未保存时状态栏显示[有未保存的改动], 保存成功后显示时间戳.
  * 内容始终按[自定义正文]保存; [恢复官方原文]就是把抓包原文写回编辑器并落盘,
  * 渲染出的 system 文本与[照抄官方]完全一致, 但用户看得见, 可继续改.
  *
@@ -15,8 +17,10 @@ import { toast } from '../../../lib/ui.ts'
 
 /** 编辑器句柄(同一时刻页面上只有一个). */
 let editorRef: any = null
-/** 自动保存的防抖定时器. */
-let saveTimer: any = null
+/** 已落盘的正文(用于判断是否有未保存改动). */
+let savedText = ''
+/** 未保存标记(编辑后置真, 保存成功后清除). */
+let dirty = false
 
 /**
  * 官方 system 提示词卡.
@@ -43,13 +47,18 @@ export function buildSystemPromptCard(
         el('div', { class: 'muted system-prompt-note' }, t('system.officialSystemTemplateNote')),
       ]),
       el('div', { class: 'row', style: 'gap:10px;align-items:center' }, [
-        el('span', { class: 'muted', id: 'official-system-state' }, t('system.officialSystemAutoSaved')),
+        el('span', { class: 'muted', id: 'official-system-state' }, t('system.officialSystemUnchanged')),
         wrapToggle(),
         el('button', {
           class: 'btn btn-sm', type: 'button', id: 'official-system-restore',
           disabled: disabled || !officialDefault ? '' : undefined,
           onclick: () => restoreOfficialSystemPrompt(officialDefault),
         }, t('system.officialSystemRestore')),
+        el('button', {
+          class: 'btn btn-sm btn-primary', type: 'button', id: 'official-system-save',
+          disabled: disabled ? '' : undefined,
+          onclick: () => saveNow(true),
+        }, t('system.officialSystemSave')),
       ]),
     ]),
     placeholderHelp(placeholders),
@@ -172,41 +181,72 @@ async function mountEditorWhenVisible(holder: any, text: string, disabled: boole
     height: 'fill',
     // 用保存的偏好(默认开; 关过就一直关).
     wordWrap: localStorage.getItem('fb-editor-wrap') === '0' ? 'off' : 'on',
-    onChange: () => scheduleSave(ed),
+    onChange: () => markDirty(),
   })
   editorRef = ed
+  // 基线 = 本次挂载时的值: dirty 判据与[保存]按钮的初始禁用都靠它.
+  savedText = String(text || '')
+  if (holder) {
+    setTimeout(() => {
+      const b = document.getElementById('official-system-save') as HTMLButtonElement | null
+      if (b) b.disabled = true
+    }, 0)
+  }
   holder.innerHTML = ''
   holder.append(ed.element)
   ed.setReadOnly(disabled)
 }
 
 /**
- * 防抖自动保存(编辑后 800ms).
+ * 标记为有未保存的改动, 由编辑器 onChange 调用, 不落盘.
  *
- * @param {any} ed 编辑器句柄
+ * 手动保存的意义就在这里: 状态栏明确说"还没生效", 用户点[保存]才看到生效时间.
+ *
  * @returns {void} 无返回值
  */
-function scheduleSave(ed: any) {
+function markDirty() {
+  dirty = true
   setState(t('system.officialSystemDirty'))
-  clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => { void persist(ed.getValue()) }, 800)
+  const btn = document.getElementById('official-system-save') as HTMLButtonElement | null
+  if (btn) btn.disabled = false
+}
+
+/**
+ * 立即落盘当前正文(点[保存]时调用).
+ *
+ * @param {boolean} [notify] 是否弹提示(手动保存弹, 恢复官方原文时由调用方弹)
+ * @returns {Promise<void>} 无返回值
+ */
+async function saveNow(notify: boolean) {
+  const ed = editorRef
+  if (!ed) return
+  const value = String(ed.getValue() ?? '')
+  const ok = await persist(value)
+  if (!ok) return
+  savedText = value
+  dirty = false
+  setState(t('system.officialSystemSavedAt', { time: new Date().toLocaleTimeString() }))
+  const btn = document.getElementById('official-system-save') as HTMLButtonElement | null
+  if (btn) btn.disabled = true
+  if (notify) toast(t('system.officialSystemSaved'))
 }
 
 /**
  * 落盘当前正文.
  *
  * @param {string} value 正文
- * @returns {Promise<void>} 无返回值
+ * @returns {Promise<boolean>} 是否落盘成功
  */
-async function persist(value: string) {
+async function persist(value: string): Promise<boolean> {
   try {
     await api('/api/settings', {
       method: 'POST',
       body: JSON.stringify({ officialSystemPromptMode: 'custom', officialSystemPromptText: value }),
     })
-    setState(t('system.officialSystemAutoSaved'))
+    return true
   } catch (err: any) {
     toast(err.message, true)
+    return false
   }
 }
 
@@ -230,8 +270,27 @@ function setState(text: string) {
 async function restoreOfficialSystemPrompt(officialDefault: string) {
   if (!editorRef || !officialDefault) return
   editorRef.setValue(officialDefault)
+  savedText = officialDefault
+  dirty = false
   await persist(officialDefault)
+  setState(t('system.officialSystemSavedAt', { time: new Date().toLocaleTimeString() }))
   toast(t('system.officialSystemRestored'))
 }
 
-export { saveTimer, editorRef }
+export { editorRef, markDirty, saveNow }
+
+/**
+ * 已落盘正文(切页时用于判断是否需要挽留).
+ * @returns {string} 已保存的正文
+ */
+export function savedPromptText() {
+  return savedText
+}
+
+/**
+ * 是否有未保存改动.
+ * @returns {boolean} 有未保存改动为真
+ */
+export function promptDirty() {
+  return dirty
+}

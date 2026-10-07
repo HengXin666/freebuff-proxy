@@ -18,6 +18,14 @@ import {
 } from './switches/index.ts'
 
 /* ---------------- proxy settings ---------------- */
+
+/**
+ * 最近一次渲染时看到的账号池快照(推荐值计算用).
+ *
+ * 必须由账号卡维护的最新快照来填, 而不是本页自己重拉 overview ----
+ * 本页重拉会把 state.accounts 按回旧值, 表现为同一账号池两套数字.
+ */
+let lastPoolRows: any[] = []
 export async function renderProxySettings(view: any) {
   let data = null
   let settings = null
@@ -31,14 +39,21 @@ export async function renderProxySettings(view: any) {
     settings = { freeToolSignatureEnabled: true }
   }
   state.proxies = data.proxies || []
-  // [空闲释放推荐值]要按账号池实时算(活跃模型/账号比),而 /api/proxy 只回
-  // 代理信息,不含 session.model.这里单独拉一次 overview 填充 state.accounts.
-  // 独立 try:overview 挂了也不能把上面的 settings 一起拖垮(否则整页回落到默认值).
+  /**
+   * [空闲释放推荐值]要按账号池实时算(活跃模型/账号比),而 /api/proxy 只回代理
+   * 信息,不含 session.model.这里单独拉一次 overview.
+   *
+   * 但不再用它覆盖 state.accounts: overview 是另一个时刻的快照, 而账号卡
+   * 可能刚被[一键刷新]更新到更新的版本 ---- 覆盖会把新的按回旧的, 表现为
+   * "同一个账号池在总览页与设置页显示两套数字"(用户报的缓存不统一).
+   * 推荐值只读这份临时快照, 全局状态由账号卡自己维护.
+   */
+  lastPoolRows = state.accounts || []
   try {
     const overview = await api('/api/overview')
-    if (Array.isArray(overview.accounts)) state.accounts = overview.accounts
+    if (Array.isArray(overview.accounts) && !lastPoolRows.length) lastPoolRows = overview.accounts
   } catch {
-    // 拉不到就沿用已有的 state.accounts（可能为空 → 推荐值退回默认 600s）
+    // 拉不到就用已有快照 (可能为空 -- 推荐值退回默认 600s)
   }
 
   const switches = buildToolSwitchAttrs(settings)
@@ -54,7 +69,7 @@ export async function renderProxySettings(view: any) {
   const maxNewSessions = settings.maxNewSessionsPerRequest ?? 2
   const lowBalanceThreshold = settings.lowBalanceThreshold ?? 15
   state.lowBalanceThreshold = lowBalanceThreshold
-  const advice = idleReleaseAdvice(state.accounts)
+  const advice = idleReleaseAdvice(lastPoolRows)
   // 按用途分区渲染(见 sections.ts); officialToolNames 必须原样透传 null,
   // 它与空数组在服务端语义不同(全部注入 / 一个都不注入).
   for (const section of buildSettingsSections({
@@ -131,7 +146,7 @@ function renderIdleReleaseAdvice() {
   const row = $('#idle-release-advice .advice-actions')
   const text = $('#idle-release-advice-text')
   if (!row || !text) return
-  const advice = idleReleaseAdvice(state.accounts)
+  const advice = idleReleaseAdvice(lastPoolRows)
   text.textContent = advice.why
   row.textContent = ''
   const cur = parseInt($('#idle-release-sec')?.value, 10)

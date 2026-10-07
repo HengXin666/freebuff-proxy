@@ -127,8 +127,20 @@ export default {
     'zh-CN': '长行折到窗口宽度内显示；关掉则横向滚动看原始行.',
     en: 'Fold long lines to the window; turn off to scroll horizontally.',
   },
-  'system.officialSystemAutoSaved': {
-    'zh-CN': '编辑后自动保存', en: 'Auto-saved as you type',
+  'system.officialSystemUnchanged': {
+    'zh-CN': '未修改', en: 'No changes',
+  },
+  'system.officialSystemSave': { 'zh-CN': '保存', en: 'Save' },
+  'system.officialSystemSaved': {
+    'zh-CN': '系统提示词已保存（对之后的请求生效）',
+    en: 'System prompt saved (applies to later requests)',
+  },
+  'system.officialSystemSavedAt': {
+    'zh-CN': '已保存 {time}', en: 'Saved {time}',
+  },
+  'system.officialSystemLeaveWarn': {
+    'zh-CN': '系统提示词有未保存的改动，确定离开吗？',
+    en: 'The system prompt has unsaved changes. Leave anyway?',
   },
   'system.officialSystemRestored': {
     'zh-CN': '已恢复官方原文并保存', en: 'Official text restored and saved',

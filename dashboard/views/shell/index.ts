@@ -11,6 +11,7 @@ import { renderPlayground } from '../playground/index.ts'
 import { renderSystem } from '../system/index.ts'
 import { renderUsers } from '../users/index.ts'
 import { need } from '../../lib/boot/hooks.ts'
+import { promptDirty } from '../proxy/inject/system-prompt.ts'
 
 /* ---------------- render ---------------- */
 /**
@@ -19,7 +20,9 @@ import { need } from '../../lib/boot/hooks.ts'
  - - 其他情况(hash 切换 / 局部刷新回退)→ 只更新内容区 view,
  - header/nav 骨架完全不动,不重置任何 UI 状态
  */
-export async function render(opts = {}) {
+export async function render(opts: { force?: boolean } | boolean = {}) {
+  // 允许 render(true) 这种简写; 事件监听器会把 Event 传进来, 那种情形按[非 force]处理.
+  const force = opts === true || (typeof opts === 'object' && opts?.force === true)
   const app = $('#app')
   if (!state.me) {
     app.innerHTML = ''
@@ -28,7 +31,13 @@ export async function render(opts = {}) {
   }
   const raw = (location.hash || '#overview').slice(1) || 'overview'
   // 记录上一次的完整 hash: 同一主路由下切子页不重建内容区.
-  if (currentRaw === raw) { updateNavActive(raw.split('/')[0]); return }
+  if (currentRaw === raw) {
+    // 同一路由重复渲染(hashchange 可能是子页变化): 只确保目标页可见, 不重建.
+    updateNavActive(raw.split('/')[0])
+    const cur = app.querySelector('.view')
+    if (cur) await showRoute(cur, raw.split('/')[0])
+    return
+  }
   currentRaw = raw
   // 路由可能带子页(#settings/tools 这类). 主路由取第一段, 子页由各页面自己解析.
   const route = raw.split('/')[0]
@@ -37,8 +46,11 @@ export async function render(opts = {}) {
   // 否则顶栏与导航会保留切换前的语言(它们不在这次重渲染范围内),
   // 表现就是"内容变了,顶栏没变",用户只能手动刷新页面.
   let view = app.querySelector('.view-enter, .view')
-  if (opts.force || !app.querySelector('header') || !view) {
+  if (force || !app.querySelector('header') || !view) {
     app.innerHTML = ''
+    // 骨架被清空 = 上一批页面节点已随 innerHTML 一起消失, 缓存必须同步作废,
+    // 否则下一轮会把一批游离节点当成可用缓存挂回去(界面一片空白).
+    invalidateViewCache()
     app.append(renderHeader())
     app.append(renderNav())
     view = document.createElement('div')
@@ -46,20 +58,105 @@ export async function render(opts = {}) {
     app.append(view)
   }
   updateNavActive(route)
-  view.classList.remove('view-enter')
-  void view.offsetWidth // reflow 以重放动画
-  view.classList.add('view-enter')
-  if (route === 'users' && state.me.role === 'admin') await renderUsers(view)
-  else if (route === 'settings') await renderSettings(view)
-  else if (route === 'playground') await renderPlayground(view)
-  else if (route === 'system' && state.me.role === 'admin') await renderSystem(view)
-  else if (route === 'logs' && state.me.role === 'admin') await renderLogs(view)
-  else if (route === 'me') await renderMe(view)
-  else await renderOverview(view)
+  // 系统提示词是唯一需要[丢了就白改]的内容(编辑器里可能是很长的正文):
+  // 切页前有未保存改动就拦一下, 其余页面的输入框都随 DOM 缓存保留.
+  if (!force && hasUnsavedPrompt() && !confirm(t('system.officialSystemLeaveWarn'))) {
+    location.hash = currentRaw ? '#' + currentRaw : '#overview'
+    return
+  }
+  await showRoute(view, route)
+}
+
+/** 提示词编辑器是否有未保存的改动(页面没进过时恒为假). */
+function hasUnsavedPrompt() {
+  return promptDirty() === true
+}
+
+/**
+ * 显示某个路由.
+ *
+ * 每页一个有自己容器, 全部挂在内容区里; 切页只切 display, 不拆 DOM ----
+ * 这样输入框里改了一半的值, 滚动位置, 展开状态, Monaco 编辑器都原样保留,
+ * 也省掉每次切页都重拉一轮接口的等待. 标准 SPA 行为.
+ *
+ * 缓存失效只有两条路(刻意): invalidateViewCache()(账号增删/重连/登录态变化)
+ * 与页面自己调 need('render')(). 取舍见
+ * .agents/notes/implemented/bug-fix/2026-10-08-console-page-cache-and-manual-prompt-save.md.
+ *
+ * @param {any} view 内容容器
+ * @param {string} route 主路由
+ * @returns {Promise<void>} 无返回值
+ */
+async function showRoute(view: any, route: string) {
+  let panel = viewCache.get(route)
+  if (!panel) {
+    panel = document.createElement('div')
+    panel.className = 'route-panel'
+    panel.hidden = false
+    view.append(panel)
+    viewCache.set(route, panel)
+  }
+  // 切页只切可见性: 每页的 DOM 原样留在树里.
+  for (const [key, node] of viewCache) {
+    node.hidden = key === route
+  }
+  if (panel.rendered === true) return
+  panel.rendered = true
+  panel.classList.remove('view-enter')
+  void panel.offsetWidth
+  panel.classList.add('view-enter')
+  await renderRouteInto(panel, route)
+}
+
+/**
+ * 按路由渲染到指定容器.
+ *
+ * @param {any} target 渲染目标容器
+ * @param {string} route 主路由
+ * @returns {Promise<void>} 无返回值
+ */
+async function renderRouteInto(target: any, route: string) {
+  if (route === 'users' && state.me.role === 'admin') await renderUsers(target)
+  else if (route === 'settings') await renderSettings(target)
+  else if (route === 'playground') await renderPlayground(target)
+  else if (route === 'system' && state.me.role === 'admin') await renderSystem(target)
+  else if (route === 'logs' && state.me.role === 'admin') await renderLogs(target)
+  else if (route === 'me') await renderMe(target)
+  else await renderOverview(target)
 }
 
 /** 上一次渲染用的完整 hash(含子页), 用于判断是否真的需要重建内容区. */
 let currentRaw = ''
+
+/**
+ * 已渲染页面的 DOM 缓存(路由 -> 内容容器).
+ *
+ * 为什么需要: 每次切页都 view.innerHTML = '' 再重新拉接口重建整个表单,
+ * 用户的后果是三件具体的事 ----
+ *   1. 表单里改了一半的值被清掉(输入框, 下拉, 勾选全部回默认值);
+ *   2. 页面白等一轮接口(每页 2-4 个请求), 表现是切回来先空一下;
+ *   3. 提示词编辑器(Monaco)每次重新挂载, 又慢又会丢光标位置.
+ * 标准 SPA 的做法是把页面留在 DOM 里, 切走只是隐藏, 切回来直接显示.
+ *
+ * 失效只有两个来源(刻意的): 显式 refresh(用户按了刷新按钮)与账号结构变化
+ * (增删账号 / 重连). 其余一律复用缓存 ---- 各页内部的[局部刷新]本来就负责
+ * 把自己的数据更新到最新, 不需要靠整页重建来兜底.
+ */
+const viewCache = new Map<string, any>()
+
+/**
+ * 清掉页面缓存(登录态变化 / 账号增删 / 重连后必须调, 否则会显示旧数据).
+ *
+ * 只有"页面上那批数据整体失效"时才需要它; 各页自己的局部刷新足够更新单个卡片.
+ *
+ * @returns {void} 无返回值
+ */
+export function invalidateViewCache() {
+  for (const node of viewCache.values()) {
+    try { node.remove?.() } catch { /* 已随骨架回收 */ }
+  }
+  viewCache.clear()
+}
 
 function renderLogin() {
   const wrap = el('div', { class: 'login-wrap' }, [
@@ -149,7 +246,7 @@ function buildLocaleSwitcher() {
       render({ force: true })
     },
   }, LOCALES.map((loc) =>
-    el('option', { value: loc, selected: loc === cur }, LOCALE_LABELS[loc] || loc),
+    el('option', { value: loc, selected: loc === cur }, (LOCALE_LABELS as any)[loc] || loc),
   ))
 }
 
@@ -247,6 +344,7 @@ function updateNavActive(route: any) {
 
 function logout() {
   api('/api/auth/logout', { method: 'POST' }).catch(() => {})
+  invalidateViewCache()
   state.me = null
   location.hash = ''
   render()
