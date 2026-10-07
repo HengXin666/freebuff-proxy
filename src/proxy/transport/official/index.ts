@@ -85,7 +85,15 @@ export async function tryOfficialChannel(ctx: any, args: any) {
       ctx.config,
       (m, f) => logger.warn(m, f),
     ) === 'official'
-  if (_official) {
+  /**
+   * bun 承载不了本次出口时必须整条降级到 Node 路径(official 通道只跑在 bun 上).
+   *
+   * bun 实测不支持 socks5/socks(抛 UnsupportedProxyProtocol): 照旧交给它会让这一跳
+   * 失败并回落 legacy, 而 legacy 形态上游会拒(428). Node 侧 undici 支持 socks,
+   * 因此显式降级, 让请求仍从正确的出口发出 ---- 绝不[用不了就直连].
+   */
+  const bunOk = upstream?.egress?.bunEligible !== false
+  if (_official && bunOk) {
     try {
       const rpcCfg = await buildRpcCfg(upstream, ctx.config)
       if (!rpcCfg) {

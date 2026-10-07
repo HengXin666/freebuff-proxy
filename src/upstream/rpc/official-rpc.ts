@@ -27,6 +27,30 @@ export {
 } from './ports.ts'
 
 /**
+ * RPC cfg 的初始字段(含出网出口).
+ *
+ * 出口必须随 cfg 下传: 漏掉时 session/catalog 走代理, 而官方 chat 在 bun 里
+ * 裸 fetch ---- 同进程两个出口, 上游看到的是后者(issue #5 的形态).
+ * 见 .agents/notes/implemented/architecture/2026-10-07-unified-upstream-egress.md
+ *
+ * @param {any} upstream 主服务 createUpstreamClient 的返回值
+ * @param {any} config 主服务 config
+ * @returns {any} cfg 初始字段
+ */
+function baseRpcCfg(upstream: any, config: any): any {
+  return {
+    token: upstream.token,
+    userId: upstream.accountId || null,
+    // 官方 chat 8 头里没有 install-id,chat 那一跳不需要它
+    installId: null,
+    keyId: null,
+    privateKey: null,
+    timeZone: config?.upstream?.timeZone || 'Asia/Shanghai',
+    proxy: upstream?.egress?.bunProxy ?? null,
+  }
+}
+
+/**
  * 用主服务的 upstream 客户端构造副仓库需要的 cfg.
  *
  * 主服务的设备密钥是落盘文件(data/device-keys/<accountKey>.json),
@@ -38,15 +62,7 @@ export {
  */
 export async function buildRpcCfg(upstream: any, config: any = {}) {
   if (!upstream?.token) return null
-  const cfg: any = {
-    token: upstream.token,
-    userId: upstream.accountId || null,
-    // 官方 chat 8 头里没有 install-id,chat 那一跳不需要它
-    installId: null,
-    keyId: null,
-    privateKey: null,
-    timeZone: config?.upstream?.timeZone || 'Asia/Shanghai',
-  }
+  const cfg: any = baseRpcCfg(upstream, config)
   const p = upstream.deviceKeyPath
   const host = config?.upstream?.apiBase || 'https://www.codebuff.com'
   if (p) {

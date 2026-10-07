@@ -59,8 +59,7 @@
       "src/proxy/routes/chat-request.ts::parseChatRequest": 145,
       "src/proxy/transport/errors/normalize.ts::normalizeUpstreamError": 99,
       "src/proxy/transport/forward-body.ts::buildForwardBody": 169,
-      "src/proxy/transport/forward.ts::forwardCompletions": 208,
-      "src/upstream/rpc/official-rpc.ts::buildRpcCfg": 85
+      "src/proxy/transport/forward.ts::forwardCompletions": 208
     },
     "jsdoc-baseline.json": {
       "cli-bridge/bridge.ts::hasBun": 1,
@@ -485,5 +484,5 @@
     ],
     "checkpoints": "CHECKPOINTS = { 'pre-commit': [ 'syntax', 'sizes', 'dirs', 'functions', 'format', 'style', 'md-in-comment', 'notes', 'route-table', 'declared', 'lanes', 'fingerprint', ], 'pre-push': [ 'syntax', 'sizes', 'dirs', 'functions', 'notes', 'format', 'route-table', 'declared', 'types', 'lanes', 'fingerprint', 'contract', 'response-contract', 'docs', 'i18n', ], ci: 'all', }"
   },
-  "fingerprint": "893e3e60563c3bb61e28802a40f121b2ab2cb52c362b3ddb78377323c7bd9fc8"
+  "fingerprint": "865c2cb36961f2a9023120a2eefc896f544a2a28802a856ccae3a790e31b3bbd"
 }

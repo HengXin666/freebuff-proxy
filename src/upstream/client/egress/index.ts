@@ -17,6 +17,7 @@
  *
  * 见 .agents/notes/implemented/architecture/2026-10-07-unified-upstream-egress.md
  */
+import { logger } from '../../../util/log.ts'
 import { bunCanUseProxy, bunProxyArg, resolveProxy } from './resolve.ts'
 import { buildFetchWithProxy } from '../transport.ts'
 
@@ -48,6 +49,13 @@ export interface Egress {
  * @returns {Egress} 统一出口对象
  */
 export function createEgress(opts: EgressOpts): Egress {
+  // 没有 config 就解析不出控制台配的代理池/单代理: 结果只剩 env 与直连.
+  // 这是"配了代理却直连"的形态之一, 必须可见(调用方漏传参数是装配错误).
+  if (!opts?.config) {
+    logger.warn('egress built without config; console proxy settings will not apply', {
+      accountId: opts?.accountId ?? null,
+    })
+  }
   const resolution = resolveProxy(opts.config, opts.accountProxy, opts.accountId)
   const poolIndex = resolution.kind === 'pool' ? resolution.indexFor(opts.accountId || 'catalog') : 0
   return {

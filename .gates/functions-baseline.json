@@ -12,7 +12,6 @@
     "src/proxy/routes/chat-request.ts::parseChatRequest": 145,
     "src/proxy/transport/errors/normalize.ts::normalizeUpstreamError": 99,
     "src/proxy/transport/forward-body.ts::buildForwardBody": 169,
-    "src/proxy/transport/forward.ts::forwardCompletions": 208,
-    "src/upstream/rpc/official-rpc.ts::buildRpcCfg": 85
+    "src/proxy/transport/forward.ts::forwardCompletions": 208
   }
 }

@@ -145,6 +145,12 @@ export function createUpstreamClient(config: any, token: string, opts: UpstreamC
     token,
     proxyUrl,
     /**
+     * 统一出口对象. 暴露出来是给[不走本客户端 fetchWithProxy]的跳用的:
+     * 官方 chat 由副仓库(bun)执行, 出口只能经 RPC cfg 下传 ----
+     * buildRpcCfg 从这里取 bunProxy, 否则 chat 那一跳会直连宿主 IP.
+     */
+    egress,
+    /**
      * 账号 user id -- 官方 chat 的 x-freebuff-acting-user-id 用的就是它.
      * 与 device-keys 注册作用域里的那个 id 同源(凭据文件的 id 字段).
      */

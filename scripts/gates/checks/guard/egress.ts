@@ -71,6 +71,14 @@ const BARE_FETCH = /(?<![\w.])fetch\s*\(/
  */
 const EXPLICIT_GLOBAL_FETCH = /(?:globalThis\.fetch|undiciFetch)\s*\(/
 
+/**
+ * 把全局 fetch 存进别名的形态: const pick = fetch / = globalThis.fetch / = undiciFetch.
+ *
+ * 单独判的理由: 调用点写的是 pick(url), 形态上完全看不出是出网; 只有定义处
+ * 能发现. 这是最容易蒙过"只看调用点"的门禁的绕过方式(已实测).
+ */
+const FETCH_ALIAS = /(?:const|let|var)\s+[\w$]+\s*=\s*(?:globalThis\.)?(?:undiciFetch|fetch)\s*(?:$|[;,)\n])/
+
 /** fetch 的方法/函数定义形态(名字叫 fetch 的定义, 不是调用). */
 const FETCH_DECL = /(?:^|\s)(?:async\s+)?fetch\s*\([^)]*\)\s*[:{]/
 
@@ -78,29 +86,46 @@ const FETCH_DECL = /(?:^|\s)(?:async\s+)?fetch\s*\([^)]*\)\s*[:{]/
 const BARE_AGENT = /new\s+(?:ProxyAgent|EnvHttpProxyAgent)\s*\(/
 
 /**
- * 剥掉块注释与行注释, 保留行结构(便于报行号).
+ * 剥掉注释, 保留行结构(便于报行号).
+ *
+ * 逐字符扫描, 而不是用正则在行内做替换: 字符串字面量里完全可能出现注释符
+ * (例如 accept: '*' 后面紧跟 / 这种形态, 或 URL 里带 //). 用正则会认错,
+ * 一旦把字符串里的 /* 当成块注释开头, [其后整个文件都会被剥空] ----
+ * 门禁变成"看起来跑了但什么都没看", 这比漏报单行严重得多(已实测复现).
+ *
+ * 处理三种状态: 代码 / 块注释 / 字符串(含模板串). 字符串内的内容原样保留,
+ * 因为它可能就是被检查的调用(不能把整个字符串当噪声删掉).
+ *
  * @param {string} text 源码
- * @returns {string[]} 逐行(已剥注释)
+ * @returns {string[]} 逐行(注释已剥, 字符串保留)
  */
 function stripComments(text) {
   const out = []
   let inBlock = false
+  let quote = null
   for (const raw of text.split('\n')) {
-    let line = raw
-    if (inBlock) {
-      const end = line.indexOf('*/')
-      if (end === -1) { out.push(''); continue }
-      line = line.slice(end + 2)
-      inBlock = false
+    let line = ''
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw[i]
+      const next = raw[i + 1]
+      if (inBlock) {
+        if (ch === '*' && next === '/') { inBlock = false; i++ }
+        continue
+      }
+      if (quote) {
+        line += ch
+        if (ch === '\\') { if (next !== undefined) { line += next; i++ } continue }
+        if (ch === quote) quote = null
+        continue
+      }
+      if (ch === '/' && next === '/') break
+      if (ch === '/' && next === '*') { inBlock = true; i++; continue }
+      if (ch === "'" || ch === '"' || ch === '`') { quote = ch; line += ch; continue }
+      line += ch
     }
-    // 去掉本行内的块注释与行注释(不处理字符串里出现注释符的极端情形:
-    // 那种写法在本仓不存在, 误报由豁免表兜住).
-    line = line.replace(/\/\*[\s\S]*?\*\//g, ' ')
-    const slash = line.indexOf('//')
-    if (slash !== -1) line = line.slice(0, slash)
-    const open = line.indexOf('/*')
-    if (open !== -1) { line = line.slice(0, open); inBlock = true }
+    // 模板串可能跨行: 行尾未闭合则下一行继续当字符串处理.
     out.push(line)
+    if (quote) quote = quote
   }
   return out
 }
@@ -121,6 +146,9 @@ for (const rel of files) {
     const isDecl = FETCH_DECL.test(line) && !/=>|await\s+fetch|=\s*fetch/.test(line)
     if ((BARE_FETCH.test(line) && !isDecl) || EXPLICIT_GLOBAL_FETCH.test(line)) {
       report.add(rel, i + 1, '裸 fetch 绕过统一出口（上游会拿到宿主真实出口 IP）', '改用 createEgress({ config }).fetch')
+    }
+    if (FETCH_ALIAS.test(line)) {
+      report.add(rel, i + 1, '把全局 fetch 存进别名（调用点看不出是出网）', '改用 createEgress({ config }).fetch')
     }
     if (BARE_AGENT.test(line)) {
       report.add(rel, i + 1, '直接构造出网 agent（出口判据出现第二处真源）', '出口只由 src/upstream/client/egress/resolve.ts 解析')
