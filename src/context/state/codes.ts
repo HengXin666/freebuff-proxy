@@ -76,5 +76,14 @@ export const DAY_MS = 24 * 60 * 60 * 1000
 /** 默认冷却时长(上游没给 retryAfterMs 时的兜底). */
 export const DEFAULT_COOLDOWN_MS = 60_000
 
+/**
+ * 接管探测的退避窗口(毫秒).
+ *
+ * 探到"上游有可接管会话"与"探测失败"都按它延后下一次探测: 池内每个额度不足的
+ * 账号在每个请求里各探一次 = N 个账号 x M 个在途请求次串行往返, 那是选号变慢的
+ * 直接成因. 窗口只挡重复探测, 不挡首次 ---- "别的部署建的会话"仍会被发现.
+ */
+export const PAID_UPSTREAM_PROBE_RETRY_MS = 60_000
+
 /** 封禁冷却时长: 封禁是生命周期终点, 记足一天. */
 export const BANNED_COOLDOWN_MS = DAY_MS

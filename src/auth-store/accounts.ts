@@ -42,23 +42,34 @@ export function readAccountUser(dir: string, key: string): any {
   if (directUser) return directUser
   if (!fs.existsSync(dir)) return null
   const norm = String(key || '').trim().toLowerCase()
-  let found: { u: any, full: string } | null = null
-  let ambiguous = false
+  const matches: Array<{ u: any, full: string, rank: number }> = []
   for (const file of fs.readdirSync(dir)) {
     if (!file.endsWith('.json')) continue
     const full = path.join(dir, file)
     const u = coerceUser(readJsonFile(full))
     if (!u) continue
     const k = accountKeyOf(u)
-    if (k === key || k.toLowerCase() === norm || u.email === norm) {
-      if (found) {
-        ambiguous = true
-        break
-      }
-      found = { u, full }
-    }
+    if (k === key) matches.push({ u, full, rank: 0 })
+    else if (k.toLowerCase() === norm) matches.push({ u, full, rank: 1 })
+    else if (u.email === norm) matches.push({ u, full, rank: 2 })
   }
-  if (!found || ambiguous) return null
+  if (!matches.length) return null
+  /**
+   * 命中多个同邮箱文件(GitHub / Google 用同一邮箱各登录一次)时不再判为歧义:
+   * 那会让调用方拿到 null, 表现为"账号在列表里却报 401 用不了".
+   *
+   * 确定化顺序: key 精确命中 > 小写 key 命中 > 邮箱命中; 同档按文件名升序.
+   * 结果可复现, 且与 listAccounts 的排序口径一致.
+   */
+  matches.sort((a, b) => a.rank - b.rank || a.full.localeCompare(b.full))
+  const found = matches[0]
+  if (matches.length > 1) {
+    logger.warn('按 key 命中多个同邮箱账号, 取确定的一个', {
+      key,
+      picked: accountKeyOf(found.u),
+      candidates: matches.map((m) => accountKeyOf(m.u)),
+    })
+  }
   const target = accountCredentialsPath(dir, accountKeyOf(found.u))
   if (target !== found.full && !fs.existsSync(target)) {
     try {

@@ -5,7 +5,8 @@
  *     调度就必须能用它);
  *   - 探测是惰性的: 官方建会话路径上那个 GET 会真的建出会话.
  */
-import { logger } from '../../util/log.ts'
+import { logger, skipLogOnce } from '../../util/log.ts'
+import { PAID_UPSTREAM_PROBE_RETRY_MS } from '../state/codes.ts'
 
 /**
  * Freebucks 闸门与新会话预算闸门.
@@ -62,7 +63,7 @@ if (!paidTakeover && fb?.known && fb.affordable === false) {
           : `freebucks balance ${fb.balance} < price ${fb.price} for ${model}`) +
       (fb.resetAt ? ` (refills ${fb.resetAt})` : ''),
   })
-  logger.info('skip account: freebucks cannot afford model', {
+  skipLogOnce(self, key, 'freebucks_exhausted', 'skip account: freebucks cannot afford model', {
     key,
     email: emailByKey.get(key),
     model,
@@ -105,6 +106,8 @@ return true
  * 直接封号; 而"够不够新买一条"与"能不能接管一条已付过钱的会话"分开判.
  *
  * 控制流: 返回 true 表示被闸门拦下(失败已记入 failures); false 表示放行.
+ *
+ * 见 .agents/notes/implemented/feature/2026-10-09-quota-gate-probe-throttle.md
  * @param {any} self 账号池(runtimes)
  * @param {any} rt 账号 runtime
  * @param {string} key 账号 key
@@ -169,7 +172,7 @@ export async function checkQuotaGates(
             `${units.poolLabel || units.pool || 'daily'}) for ${model}` +
           (units.resetAt ? ` (refills ${units.resetAt})` : ''),
       })
-      logger.info('skip account: session units exhausted', {
+      skipLogOnce(self, key, 'units_exhausted', 'skip account: session units exhausted', {
         key,
         email: emailByKey.get(key),
         model,
@@ -196,21 +199,33 @@ return true
  * @param {string} key 账号 key
  * @param {string} model 请求模型
  * @param {Map<string, any>} emailByKey key 到邮箱
- * @returns {() => Promise<boolean>} 幂等探测函数(命中后记住结果)
+ * 退避窗口内不再探测, 返回空串 ---- 调用方据此跳过"先问上游能不能接管"这一步.
+ *
+ * 见 .agents/notes/implemented/feature/2026-10-09-quota-gate-probe-throttle.md
+ * @returns {'' | (() => Promise<boolean>)} 幂等探测函数(命中后记住结果);
+ *   退避窗口内返回空串(视为"没有可接管会话")
  */
 export function makePaidUpstreamChecker(
   rt: any,
   key: any,
   model: any,
   emailByKey: any,
-): () => Promise<boolean> {
-  const state = { paid: false }
+): '' | (() => Promise<boolean>) {
+  /**
+   * 退避窗口内不再问上游 ---- 与"探测成功但上游没有可接管会话"共用同一个窗口.
+   *
+   * 少了它, 池内每个额度不足的账号会在每个请求里各白付一次 GET /session
+   * (N 个账号 x M 个在途请求 = N x M 次串行往返), 这就是选号变慢的直接成因.
+   * 窗口写回 runtime, 因此跨请求生效; 命中后连探测函数都不再创建.
+   */
+  if (Date.now() < (rt.paidProbeRetryAt || 0)) return ''
+  const state = { paid: false, retryAt: 0 }
   return async () => {
 
   if (state.paid) return true
   if (rt.sessions.holderFor(model)) {
     state.paid = true
-  } else {
+  } else if (Date.now() >= state.retryAt) {
     /**
      * 本地上次快照没命中时补一次只读探测(GET /session, 不建会话, 不扣费)----
      * 这是唯一能看见"别的部署建的会话"的途径.
@@ -220,8 +235,30 @@ export function makePaidUpstreamChecker(
      * (带 instanceId 的 include-unused-rate-limits)在真实上游不建会话;
      * 测试里那个"GET 会建会话"的 mock 是 get_claim_admit 专用形态.
      */
-    await rt.sessions.refresh().catch(() => {})
-    state.paid = !!rt.sessions.holderFor(model)
+    let live = true
+    try {
+      await rt.sessions.refresh()
+    } catch {
+      live = false
+    }
+    if (live) {
+      state.paid = !!rt.sessions.holderFor(model)
+      /** 探测拿到了回执(不论有没有会话) -> 窗口照常延后, 不因"没有会话"反复问. */
+      if (typeof rt.markPaidProbeDone === 'function') rt.markPaidProbeDone()
+    } else {
+      /**
+       * 探测失败要退避, 否则池内每个额度不足的账号在每个请求里都会白付一次往返.
+       * 退避窗口回写给调用方: 本函数的 state 是每请求一份的, 请求内记一次挡不住.
+       */
+      state.retryAt = Date.now() + PAID_UPSTREAM_PROBE_RETRY_MS
+      if (typeof rt.markPaidProbeDone === 'function') rt.markPaidProbeDone()
+      logger.warn(ACK_PAID_UNAVAILABLE, {
+        key,
+        email: emailByKey.get(key),
+        model,
+        retryInMs: PAID_UPSTREAM_PROBE_RETRY_MS,
+      })
+    }
   }
   if (state.paid) {
     logger.info(
@@ -238,3 +275,7 @@ export function makePaidUpstreamChecker(
   return state.paid
   }
 }
+
+/** 接管探测失败时的告警消息(判据只此一份). */
+const ACK_PAID_UNAVAILABLE =
+  'paid-session probe unavailable; retry backed off'

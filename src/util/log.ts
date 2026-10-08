@@ -154,6 +154,50 @@ export function readLogBuffer(opts: LogQuery = {}): any[] {
   return out.slice(-limit)
 }
 
+/**
+ * 拦截类日志的限频(同一账号同一拦截码在窗口内只记一条).
+ *
+ * 池内多个账号同时额度不足时, 每个请求都会对每个账号各记一条 skip 日志
+ * (13 个并发请求 x N 个账号 = 数百条), 把真正有用的选号日志淹掉.
+ * 限频不丢信息: 窗口内沉默, 窗口外再记一条, 首条带完整账目.
+ * 窗口表挂在账号池上(每进程一份), 不进账本 ---- 它只是日志节流.
+ * @param {any} self 账号池(runtimes); 缺窗口表时直接记一条
+ * @param {string} key 账号 key
+ * @param {string} code 拦截码(freebucks_exhausted / units_exhausted)
+ * @param {string} msg 日志消息
+ * @param {any} fields 附加字段
+ * @returns {boolean} 本次是否真的记了日志
+ */
+export function skipLogOnce(self: any, key: any, code: any, msg: any, fields: any): boolean {
+  if (!self) {
+    logger.info(msg, fields)
+    return true
+  }
+  const now = Date.now()
+  let seen = self._skipLogSeen
+  if (!(seen instanceof Map)) {
+    seen = new Map()
+    self._skipLogSeen = seen
+  }
+  if (seen.size > SKIP_LOG_MAX) {
+    for (const [k, at] of seen) {
+      if (now - at >= SKIP_LOG_WINDOW_MS) seen.delete(k)
+    }
+  }
+  const id = `${code}\0${key}`
+  const last = seen.get(id)
+  if (Number.isFinite(last) && now - last < SKIP_LOG_WINDOW_MS) return false
+  seen.set(id, now)
+  logger.info(msg, fields)
+  return true
+}
+
+/** 限频窗口(毫秒): 同一账号同一拦截码在窗口内只记一条. */
+const SKIP_LOG_WINDOW_MS = 60_000
+
+/** 限频窗口表的容量上限(超过即按窗口清理, 防无限增长). */
+const SKIP_LOG_MAX = 512
+
 export const logger = {
   debug: (msg: string, fields?: any) => log('debug', msg, fields),
   info: (msg: string, fields?: any) => log('info', msg, fields),

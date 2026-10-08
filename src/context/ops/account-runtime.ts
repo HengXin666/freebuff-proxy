@@ -10,6 +10,7 @@ import { accountKeyOf, readAccountUser } from '../../auth-store.ts'
 import { SessionManager } from '../../session-manager.ts'
 import { UpstreamError, createUpstreamClient } from '../../upstream/client.ts'
 import { runWithLogContext } from '../../util/log.ts'
+import { PAID_UPSTREAM_PROBE_RETRY_MS } from '../state/codes.ts'
 import { _disposeRuntime } from './account-ops.ts'
 import { _hydrateRuntime } from '../state/account-lifecycle.ts'
 
@@ -96,18 +97,33 @@ export function get(this: any, key: any) {
         return Boolean(lock && (lock.inFlight > 0 || lock.queued > 0))
       },
     })
-    const runtime = {
+    const runtime: any = {
       key: accountKey,
       id: user.id || null,
       email: user.email,
       authToken: user.authToken,
       proxy: user.proxy || null,
+      /**
+       * 接管探测的下次允许时刻(毫秒时间戳). 0 = 立即可探.
+       *
+       * 挂在 runtime 上而不是请求级 state: 探测失败的代价是"每个请求每个账号各
+       * 白付一次 GET /session", 只在请求内退避挡不住. runtime 重建(改代理/换
+       * token)时窗口一起归零, 那是正确的 ---- 出口变了就该重新问一次.
+       *
+       * 见 .agents/notes/implemented/feature/2026-10-09-quota-gate-probe-throttle.md
+       */
+      paidProbeRetryAt: 0,
+      /** 记一条"探测已完成"(成功或失败都算), 按退避窗口延后下一次. */
+      markPaidProbeDone: null,
       /** 实际生效的出网代理(全局池分配 / 账号覆盖 / env) */
       effectiveProxy: upstream.proxyUrl || null,
       user,
       upstream,
       sessions,
       source: `credentials:${accountKey}`,
+    }
+    runtime.markPaidProbeDone = () => {
+      runtime.paidProbeRetryAt = Date.now() + PAID_UPSTREAM_PROBE_RETRY_MS
     }
     this.byKey.set(accountKey, runtime)
     // 账本回灌(freebucks/quota/lastProbe/冷却)在 runtime 建好之后做:
