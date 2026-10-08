@@ -73,6 +73,32 @@ try {
     '两行都属于同一邮箱(控制台据此挂[同邮箱]标注)',
   )
 
+  // -- (4b) 平局排序必须按账号 key, 不按文件名 ------------------------------
+  // 命中后 readAccountUser 会把文件重命名成 <key>.json; 若平局按文件名排,
+  // 同一个邮箱查询就会在重命名前后挑到不同身份(评审指出).
+  // 判据(可证伪): 排序改回 a.full.localeCompare(b.full) -> 断言红.
+  {
+    const tieDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-dup-tie-'))
+    try {
+      // 故意让文件名顺序与 key 顺序相反: bbbb.json=id-aaa, aaaa.json=id-bbb
+      fs.writeFileSync(path.join(tieDir, 'bbbb.json'),
+        JSON.stringify({ id: 'id-aaa', email: 'tie@example.com', authToken: 't1' }))
+      fs.writeFileSync(path.join(tieDir, 'aaaa.json'),
+        JSON.stringify({ id: 'id-bbb', email: 'tie@example.com', authToken: 't2' }))
+      const pick1 = readAccountUser(tieDir, 'tie@example.com')?.id ?? null
+      const pick2 = readAccountUser(tieDir, 'tie@example.com')?.id ?? null
+      const pick3 = readAccountUser(tieDir, 'tie@example.com')?.id ?? null
+      ok(pick1 === 'id-aaa', '平局必须按账号 key 取最小的那个, got ' + pick1)
+      ok(pick1 === pick2 && pick2 === pick3,
+        '同一个邮箱重复查询必须稳定(重命名前后不得换身份), got ' + [pick1, pick2, pick3].join(','))
+      // 另一个身份仍能按自己的 id 精确读回
+      ok(readAccountUser(tieDir, 'id-bbb')?.id === 'id-bbb',
+        '同邮箱的另一个身份必须仍可按 id 读到')
+    } finally {
+      fs.rmSync(tieDir, { recursive: true, force: true })
+    }
+  }
+
   // -- (5) 无 id 的旧文件与有 id 的文件同邮箱: 也必须有确定结果 --------------
   saveAccountUser(dir, { email: 'legacy@example.com', authToken: 't-legacy' })
   saveAccountUser(dir, { id: 'id-new', email: 'legacy@example.com', authToken: 't-new' })

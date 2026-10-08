@@ -27,6 +27,8 @@ export interface AccountListRow {
 }
 
 /**
+ * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
+ *
  * 按 key 读取账号. key 命中不了时兜底扫描目录:
  *   - key 是邮箱 -> 按邮箱唯一匹配(兼容迁移前的旧 <email>.json);
  *   - key 是 id   -> 按文件内容 id 匹配(极端情况下旧文件还没迁移).
@@ -34,7 +36,7 @@ export interface AccountListRow {
  *
  * @param {string} dir 凭据目录
  * @param {string} key 账号 key
- * @returns {any} 账号对象;找不到或有歧义时返回 null
+ * @returns {any} 账号对象; 找不到时返回 null(命中多个同邮箱时按确定化顺序取一个)
  */
 export function readAccountUser(dir: string, key: string): any {
   const direct = accountCredentialsPath(dir, key)
@@ -58,10 +60,16 @@ export function readAccountUser(dir: string, key: string): any {
    * 命中多个同邮箱文件(GitHub / Google 用同一邮箱各登录一次)时不再判为歧义:
    * 那会让调用方拿到 null, 表现为"账号在列表里却报 401 用不了".
    *
-   * 确定化顺序: key 精确命中 > 小写 key 命中 > 邮箱命中; 同档按文件名升序.
-   * 结果可复现, 且与 listAccounts 的排序口径一致.
+   * 确定化顺序: key 精确命中 > 小写 key 命中 > 邮箱命中; 同档按账号 key 升序.
+   * 平局必须按 key(不是文件名)排 ---- 命中后下面会把文件重命名成 <key>.json,
+   * 按文件名排会让同一个邮箱查询在重命名前后挑到不同的身份.
    */
-  matches.sort((a, b) => a.rank - b.rank || a.full.localeCompare(b.full))
+  matches.sort(
+    (a, b) =>
+      a.rank - b.rank ||
+      accountKeyOf(a.u).localeCompare(accountKeyOf(b.u)) ||
+      a.full.localeCompare(b.full),
+  )
   const found = matches[0]
   if (matches.length > 1) {
     logger.warn('按 key 命中多个同邮箱账号, 取确定的一个', {

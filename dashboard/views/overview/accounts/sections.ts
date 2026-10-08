@@ -145,7 +145,6 @@ export function sectionOpen(section: any) {
   return typeof v === 'boolean' ? v : Boolean(section.open)
 }
 
-/** 建一个分区外壳(details + summary + 表).新节点按记忆/默认值决定展开. */
 /**
  - 各邮箱在池内出现的次数(同邮箱多身份标注用).
  - @param {any} accounts 账号行数组

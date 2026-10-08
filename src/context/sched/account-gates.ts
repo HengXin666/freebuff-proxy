@@ -1,5 +1,5 @@
 /**
- * 单账号承接的两道判据: 惰性接管探测 + 两本额度闸门.
+  * 单账号承接的两道判据: 惰性接管探测 + 两本额度闸门.
  *
  *   - "够不够新买一条"与"能不能接管一条已付过钱的会话"分开判(面板能显示它,
  *     调度就必须能用它);
@@ -9,7 +9,7 @@ import { logger, skipLogOnce } from '../../util/log.ts'
 import { PAID_UPSTREAM_PROBE_RETRY_MS } from '../state/codes.ts'
 
 /**
- * Freebucks 闸门与新会话预算闸门.
+  * Freebucks 闸门与新会话预算闸门.
  *
  * Freebucks 是上游的拒付/封号判据之一: units 未超标时仍可能被 rate_limited
  * (理由 freebucksShortfall{price,balance}), 所以两本账都必须过.
@@ -43,7 +43,7 @@ if (!paidTakeover && fb?.known && fb.affordable === false) {
     code: 'freebucks_exhausted',
     reason: fb.reason || null,
     /**
-     * 把这笔账挂在 failure 上:顶层错误体据此聚合出"花了多少 /
+      * 把这笔账挂在 failure 上:顶层错误体据此聚合出"花了多少 /
      * 剩多少 / 何时恢复"(见 summarizeFreebucks).
      * 只带数值,不带标识 ---- 脱敏由聚合那一步负责.
      */
@@ -100,14 +100,14 @@ return true
 }
 
 /**
- * 额度闸门: 两本账是否允许"新买一条", 以及能否改走接管.
+  * 额度闸门: 两本账是否允许"新买一条", 以及能否改走接管.
  *
  * 上游对[余额不够]的判定两条(额度跑完 / 所需 Freebucks 高于余额), 命中任一就可能
  * 直接封号; 而"够不够新买一条"与"能不能接管一条已付过钱的会话"分开判.
  *
  * 控制流: 返回 true 表示被闸门拦下(失败已记入 failures); false 表示放行.
  *
- * 见 .agents/notes/implemented/feature/2026-10-09-quota-gate-probe-throttle.md
+ * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
  * @param {any} self 账号池(runtimes)
  * @param {any} rt 账号 runtime
  * @param {string} key 账号 key
@@ -138,7 +138,7 @@ export async function checkQuotaGates(
     const units = rt.sessions.sessionUnitsFor?.(model)
     const fbGate = rt.sessions.freebucksFor?.(model)
     /**
-     * 两道额度闸门任一即将拒绝时, 先问上游"有没有可接管的已付费会话":
+      * 两道额度闸门任一即将拒绝时, 先问上游"有没有可接管的已付费会话":
      * balance: 0 只说明"再买一条买不起", 不代表已付费的那一小时不能用.
      *
      * 位置在闸门之前而非函数开头: 只有真的要新买一条时才付这次只读探测的成本,
@@ -148,7 +148,7 @@ export async function checkQuotaGates(
       (units?.known && units.exhausted) ||
       (fbGate?.known && fbGate.affordable === false)
     /**
-     * 命中可接管会话时只跳过闸门, 不在此 return rt: acquireForModel 的契约是
+      * 命中可接管会话时只跳过闸门, 不在此 return rt: acquireForModel 的契约是
      * "只选号, 不建会话", 真正建/接管会话在本函数更下方的
      * rt.sessions.ensureSession(model) ---- 那里会用 holderFor() 带 takeover 头接管,
      * 不新买. 在此 return 等于跳过 ensureSession, 会话从未接管.
@@ -187,7 +187,7 @@ return true
 }
 
 /**
- * 惰性探测"上游有没有一条我能接管的已付费会话".
+  * 惰性探测"上游有没有一条我能接管的已付费会话".
  *
  * 一次 admit 买断一小时, 这一小时内继续发请求边际成本为 0; balance: 0 只说明
  * "再买一条买不起". 额度闸门只约束"新买一条".
@@ -199,41 +199,44 @@ return true
  * @param {string} key 账号 key
  * @param {string} model 请求模型
  * @param {Map<string, any>} emailByKey key 到邮箱
- * 退避窗口内不再探测, 返回空串 ---- 调用方据此跳过"先问上游能不能接管"这一步.
+ * 本地快照先查(不受退避约束), 只有"再问上游一次"这一跳受 rt.paidProbeRetryAt 约束.
  *
- * 见 .agents/notes/implemented/feature/2026-10-09-quota-gate-probe-throttle.md
- * @returns {'' | (() => Promise<boolean>)} 幂等探测函数(命中后记住结果);
- *   退避窗口内返回空串(视为"没有可接管会话")
+ * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
+ * @returns {() => Promise<boolean>} 幂等探测函数(命中后记住结果)
  */
 export function makePaidUpstreamChecker(
   rt: any,
   key: any,
   model: any,
   emailByKey: any,
-): '' | (() => Promise<boolean>) {
-  /**
-   * 退避窗口内不再问上游 ---- 与"探测成功但上游没有可接管会话"共用同一个窗口.
-   *
-   * 少了它, 池内每个额度不足的账号会在每个请求里各白付一次 GET /session
-   * (N 个账号 x M 个在途请求 = N x M 次串行往返), 这就是选号变慢的直接成因.
-   * 窗口写回 runtime, 因此跨请求生效; 命中后连探测函数都不再创建.
-   */
-  if (Date.now() < (rt.paidProbeRetryAt || 0)) return ''
-  const state = { paid: false, retryAt: 0 }
+): () => Promise<boolean> {
+  const state = { paid: false }
   return async () => {
 
   if (state.paid) return true
+  /**
+    * 本地快照先查, 且不受退避窗口约束.
+   *
+   * 退避只该挡"再问上游一次", 不该挡"用已经知道的结果": 上一次探测已经把
+   * 可接管的持有者记进清单快照(holderFor), 窗口内把它当成没有, 等于把
+   * 已经付过钱的一小时丢掉, 再去别的账号买新的.
+   */
   if (rt.sessions.holderFor(model)) {
     state.paid = true
-  } else if (Date.now() >= state.retryAt) {
+  } else if (Date.now() >= (rt.paidProbeRetryAt || 0)) {
     /**
-     * 本地上次快照没命中时补一次只读探测(GET /session, 不建会话, 不扣费)----
+      * 本地上次快照没命中时补一次只读探测(GET /session, 不建会话, 不扣费)----
      * 这是唯一能看见"别的部署建的会话"的途径.
      *
      * 探测条件不依赖 hasInventorySnapshot(): 那会让从未对有账的账号永远探不到,
      * 而它恰恰是最需要探测的场景(新部署/刚导入, 本地什么都没有). 只读取形态
      * (带 instanceId 的 include-unused-rate-limits)在真实上游不建会话;
      * 测试里那个"GET 会建会话"的 mock 是 get_claim_admit 专用形态.
+     *
+     * 探测前置一道退避(rt.paidProbeRetryAt, 见 account-runtime): 否则池内每个
+     * 额度不足的账号会在每个请求里各白付一次往返(N 个账号 x M 个在途请求),
+     * 而 refresh() 在有在途请求时还会自跳过 ---- 这是选号变慢的直接成因.
+     * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
      */
     let live = true
     try {
@@ -243,15 +246,16 @@ export function makePaidUpstreamChecker(
     }
     if (live) {
       state.paid = !!rt.sessions.holderFor(model)
-      /** 探测拿到了回执(不论有没有会话) -> 窗口照常延后, 不因"没有会话"反复问. */
-      if (typeof rt.markPaidProbeDone === 'function') rt.markPaidProbeDone()
-    } else {
-      /**
-       * 探测失败要退避, 否则池内每个额度不足的账号在每个请求里都会白付一次往返.
-       * 退避窗口回写给调用方: 本函数的 state 是每请求一份的, 请求内记一次挡不住.
-       */
-      state.retryAt = Date.now() + PAID_UPSTREAM_PROBE_RETRY_MS
-      if (typeof rt.markPaidProbeDone === 'function') rt.markPaidProbeDone()
+    }
+    /**
+      * 探测确实问过上游之后才开窗: 窗口的语义是"别再重复问".
+     *
+     * 成功且命中持有者时也必须开窗 ---- 否则下一个请求会为同一个持有者
+     * 再探一次(命中不改变"已经问过了"这个事实). 命中那一刻已经拿到了要用的
+     * 结果, 窗口挡的是后续的重问.
+     */
+    if (typeof rt.markPaidProbeDone === 'function') rt.markPaidProbeDone()
+    if (!live) {
       logger.warn(ACK_PAID_UNAVAILABLE, {
         key,
         email: emailByKey.get(key),
@@ -275,7 +279,6 @@ export function makePaidUpstreamChecker(
   return state.paid
   }
 }
-
 /** 接管探测失败时的告警消息(判据只此一份). */
 const ACK_PAID_UNAVAILABLE =
   'paid-session probe unavailable; retry backed off'

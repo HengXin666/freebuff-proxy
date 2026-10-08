@@ -110,7 +110,7 @@ export function get(this: any, key: any) {
        * 白付一次 GET /session", 只在请求内退避挡不住. runtime 重建(改代理/换
        * token)时窗口一起归零, 那是正确的 ---- 出口变了就该重新问一次.
        *
-       * 见 .agents/notes/implemented/feature/2026-10-09-quota-gate-probe-throttle.md
+       * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
        */
       paidProbeRetryAt: 0,
       /** 记一条"探测已完成"(成功或失败都算), 按退避窗口延后下一次. */

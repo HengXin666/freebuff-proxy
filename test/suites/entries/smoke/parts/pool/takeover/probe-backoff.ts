@@ -9,6 +9,7 @@
  */
 
 import { buildAppContext } from '../../../../../../../src/app-context.ts'
+import { makePaidUpstreamChecker } from '../../../../../../../src/context/sched/account-gates.ts'
 import {
   clearRing,
   configureLogBuffer,
@@ -104,9 +105,12 @@ async function poolWithExhaustedAccounts(prefix, count) {
   )
   // 窗口随 runtime 走: 换一个 runtime(重建)后窗口归零, 允许再探一次.
   const rt0 = ctx.runtimes.get('pb0')
+  const retryAt = Number(rt0.paidProbeRetryAt)
+  const now = Date.now()
   assert.ok(
-    Number(rt0.paidProbeRetryAt) > Date.now(),
-    '退避窗口必须写回 runtime(请求级 state 挡不住下一个请求)',
+    retryAt > now,
+    '退避窗口必须写回 runtime(请求级 state 挡不住下一个请求), retryAt=' +
+      retryAt + ' now=' + now + ' 差=' + (retryAt - now) + 'ms',
   )
   rt0.paidProbeRetryAt = 0
   try {
@@ -153,4 +157,84 @@ async function poolWithExhaustedAccounts(prefix, count) {
   configureLogBuffer(cap)
   await ctx.runtimes.shutdown().catch(() => {})
   fs.rmSync(dir, { recursive: true, force: true })
+}
+
+// --- (4) 退避窗口只挡[再问上游], 不挡[用已经知道的结果] ---------------------
+{
+  /**
+   * 判据(可证伪): 把 makePaidUpstreamChecker 改回"窗口内返回空串 / 调用方把空串
+   * 换成恒 false 的 checker"-> 第二条断言红(已记录的持有者被当成没有, 等于把
+   * 已经付过钱的一小时丢掉, 再去别的账号买新的).
+   */
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-holder-window-'))
+  const cfgMod = await import('../../../../../../../src/config.ts')
+  const cfg = cfgMod.loadConfig()
+  cfg.upstream.credentialsDir = dir
+  cfg.session.pollIntervalSec = 3600
+  fs.writeFileSync(
+    path.join(dir, 'hb.json'),
+    JSON.stringify({ id: 'hb', email: 'hb@example.com', authToken: 'tok-hb' }),
+  )
+  const ctx = buildAppContext(cfg)
+  const rt = ctx.runtimes.get('hb')
+  const MODEL = 'deepseek/deepseek-v4-flash'
+  let probes = 0
+  rt.sessions.refresh = async () => {
+    probes += 1
+    // 上游清单里有一条别的部署建的, 同模型未过期的已付费会话
+    rt.sessions.desktopPurchases = [
+      {
+        holderInstanceId: 'other-deploy',
+        model: MODEL,
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      },
+    ]
+    return { status: 'none' }
+  }
+  const emailByKey = new Map([['hb', 'hb@example.com']])
+
+  const first = await makePaidUpstreamChecker(rt, 'hb', MODEL, emailByKey)()
+  assert.equal(first, true, '首次探测应发现可接管的已付费会话')
+  assert.equal(probes, 1, '首次探测应真的问上游一次')
+  const retryAt = Number(rt.paidProbeRetryAt)
+  assert.ok(
+    retryAt > Date.now(),
+    '探测问过上游后必须开窗(否则下一个请求会重复问), retryAt=' + retryAt +
+      ' now=' + Date.now(),
+  )
+
+  const second = await makePaidUpstreamChecker(rt, 'hb', MODEL, emailByKey)()
+  assert.equal(
+    second,
+    true,
+    '退避窗口内已记录的持有者必须仍能接管(旧实现: 窗口内恒 false, 白丢已付费的一小时)',
+  )
+  assert.equal(probes, 1, '窗口内不得再问上游(探测次数必须停在 1)')
+
+  await ctx.runtimes.shutdown().catch(() => {})
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
+
+// --- (5) 限频窗口表必须有硬上限(窗口内条目也要被淘汰) ---------------------
+{
+  /**
+   * 判据(可证伪): 把 retireSkipLogSeen 里[按最旧优先继续淘汰]那一段删掉
+   * (退回只清过期条目)-> 本条红(600 条都在窗口内, 一个也清不掉, 表涨到 600).
+   */
+  const { skipLogOnce } = await import('../../../../../../../src/util/log.ts')
+  const pool: any = {}
+  const N = 600
+  for (let i = 0; i < N; i++) {
+    skipLogOnce(pool, 'k' + i, 'freebucks_exhausted', 'skip account: x', { key: 'k' + i })
+  }
+  const size = pool._skipLogSeen.size
+  assert.ok(
+    size <= 512,
+    '限频窗口表必须有硬上限(<=512), got ' + size,
+  )
+  assert.ok(
+    pool._skipLogSeen.has('freebucks_exhausted\0k' + (N - 1)),
+    '淘汰必须按最旧优先, 最新一条不得被清掉',
+  )
 }

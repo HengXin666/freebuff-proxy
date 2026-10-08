@@ -50,12 +50,15 @@ Status: implemented
 
 ### 一,接管探测要退避,窗口挂在 runtime 上
 
-- runtime.paidProbeRetryAt(runtime 字段,不是请求级 state): 探测**成功或失败都按
-  PAID_UPSTREAM_PROBE_RETRY_MS(60s)延后下一次**.
-- 窗口内 makePaidUpstreamChecker 直接返回空串,调用方把它当成[没有可接管会话],
-  **连探测函数都不再创建** -> 直接走闸门结论,零上游往返.
-- 为什么[成功也要退避]: 成功但**没命中**可接管会话(常态)时,下一个请求会重复同一个
-  注定失败的探测.窗口只挡重复探测,不挡首次 ---- 别的部署刚建的会话最多晚 60s 被发现.
+- runtime.paidProbeRetryAt(runtime 字段,不是请求级 state): **问过上游一次之后
+  (不论成功失败)按 PAID_UPSTREAM_PROBE_RETRY_MS(60s)延后下一次探测**.
+- 窗口**只挡"再问上游一次"这一跳**,不挡"用已经知道的结果": 本地快照
+  (holderFor)先查且不受窗口约束.第一版把整个 checker 在窗口内短路成
+  [没有可接管会话],评审指出这会把**已经付过钱的一小时**白丢 ----
+  窗口内明明有可接管的持有者,却判成 freebucks_exhausted 去别的账号重买.
+- 为什么[成功也要退避]: 成功且命中持有者时,下一个请求会为同一个持有者再探一次;
+  命中那一刻已经拿到了要用的结果,窗口挡的是后续的重问.
+- 窗口只挡重复探测,不挡首次 ---- 别的部署刚建的会话最多晚 60s 被发现.
 - runtime 重建(改代理 / 换 token)时窗口归零:出口变了就该重新问一次.
 - 探测失败从[抛给调用方]改为**降级**:按闸门结论继续,并记一条 warn.
   上游连不通时,把整池判成[买不起]比让请求卡在探测上更符合用户利益.
@@ -102,6 +105,20 @@ skipLogOnce(self, key, code, msg, fields): 窗口内沉默,窗口外再记一条
 - **日志量**: 池内 N 个账号同时额度不足时,每 60s 每账号最多 1 条 skip 行
   (此前每个请求每账号 1 条).
 
+## Review follow-ups
+
+评审(cubic / qodo)在 PR 上提出的 6 条全部核实并处理:
+
+- **P1 窗口不许挡本地快照**(cubic, 与 qodo 第 2 条同因): 见上面的 Decision 第一条.
+  第一版把窗口内的 checker 整体短路, 已记录的持有者被当成没有 ---- 修掉, 并补可证伪用例.
+- **P1 凭据平局要按账号 key 排**(cubic): 命中后下面会把文件重命名成 <key>.json,
+  按文件名排会让同一个邮箱查询在重命名前后挑到不同身份. 改为
+  rank -> accountKeyOf -> 文件名, 并在测试里用[文件名顺序与 key 顺序相反]的目录钉住.
+- **P2 限频表上限必须真的生效**(cubic): 原先只清过期条目, 窗口内条目多于上限时
+  一个也删不掉. 改为[先清过期, 再按最旧优先淘汰到上限之下], 且退休发生在插入之前.
+- **P3 文档**: 错位的分区外壳注释删除; note 里 dashboard 用例路径补上 accounts 段;
+  探测退化的后果同时列出 freebucks_exhausted 与 units_exhausted.
+
 ## Evidence
 
 - 新增用例 test/suites/entries/smoke/parts/pool/takeover/probe-backoff.ts
@@ -109,11 +126,13 @@ skipLogOnce(self, key, code, msg, fields): 窗口内沉默,窗口外再记一条
   1. 首轮两个账号各探测 1 次(共 2 次),且确实抛出额度错误;
   2. 退避窗口内 5 个请求**探测次数不再增长**;
   3. 窗口写回 runtime.paidProbeRetryAt;手工归零后允许再探一次;
-  4. 4 个请求只留 2 条 skip 日志(每账号一条).
+  4. 4 个请求只留 2 条 skip 日志(每账号一条);
+  5. **窗口内已记录的持有者仍能接管**: 首次探测发现持有者后开窗, 第二次调用
+     仍返回 true 且探测次数不再增加(旧实现窗口内恒 false, 白丢已付费的一小时).
 - 新增用例 test/suites/entries/verify/auth/duplicate-email-resolve.ts(无网络):
   同邮箱两个身份各自独立落盘;按 id 读必须精确命中(旧行为返回 null);
   兜底扫描命中多个时必须给出确定结果且重复读稳定.
-- 新增用例 test/suites/entries/verify/dashboard/same-email-badge.ts(DOM 桩):
+- 新增用例 test/suites/entries/verify/dashboard/accounts/same-email-badge.ts(DOM 桩):
   同邮箱两行都挂徽章, 唯一邮箱不挂, 同邮箱三行都挂.
 - **反向探针(全部实测可证伪)**:
   - 删掉 if (Date.now() < (rt.paidProbeRetryAt || 0)) return '' ->
@@ -121,7 +140,11 @@ skipLogOnce(self, key, code, msg, fields): 窗口内沉默,窗口外再记一条
   - skipLogOnce 换回 logger.info -> 红在[4 个请求只应留 2 条 skip 日志, got 8];
   - 凭据解析改回 if (matches.length > 1) return null ->
     红在[按邮箱兜底扫描命中多个时必须给出确定结果];
-  - sections.ts 的同邮箱计数换成空 Map -> 红在[同邮箱的两个身份都必须挂徽章, got [0,0,0]].
+  - sections.ts 的同邮箱计数换成空 Map -> 红在[同邮箱的两个身份都必须挂徽章, got [0,0,0]];
+  - 凭据平局改回[按文件名排] -> 红在[平局必须按账号 key 取最小的那个];
+  - retireSkipLogSeen 退回[只清过期条目] -> 红在[限频窗口表必须有硬上限, got 600];
+  - makePaidUpstreamChecker 改回[窗口内恒 false] ->
+    红在[退避窗口内已记录的持有者必须仍能接管].
 - 门禁:pre-commit 全绿;三个 tsconfig 的 typecheck 均无新增错误
   (tsconfig.dashboard.json 的既存错误未变,该配置不在门禁 PROJECTS 里).
 

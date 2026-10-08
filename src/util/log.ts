@@ -161,6 +161,8 @@ export function readLogBuffer(opts: LogQuery = {}): any[] {
  * (13 个并发请求 x N 个账号 = 数百条), 把真正有用的选号日志淹掉.
  * 限频不丢信息: 窗口内沉默, 窗口外再记一条, 首条带完整账目.
  * 窗口表挂在账号池上(每进程一份), 不进账本 ---- 它只是日志节流.
+ *
+ * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
  * @param {any} self 账号池(runtimes); 缺窗口表时直接记一条
  * @param {string} key 账号 key
  * @param {string} code 拦截码(freebucks_exhausted / units_exhausted)
@@ -179,17 +181,38 @@ export function skipLogOnce(self: any, key: any, code: any, msg: any, fields: an
     seen = new Map()
     self._skipLogSeen = seen
   }
-  if (seen.size > SKIP_LOG_MAX) {
-    for (const [k, at] of seen) {
-      if (now - at >= SKIP_LOG_WINDOW_MS) seen.delete(k)
-    }
-  }
+  retireSkipLogSeen(seen, now)
   const id = `${code}\0${key}`
   const last = seen.get(id)
   if (Number.isFinite(last) && now - last < SKIP_LOG_WINDOW_MS) return false
   seen.set(id, now)
   logger.info(msg, fields)
   return true
+}
+
+/**
+ * 收敛限频窗口表: 先清过期条目; 仍超过上限时按[最旧优先]继续淘汰.
+ *
+ * 只清过期条目是不够的 ---- 窗口内条目多于上限时一个也删不掉, 表会一直涨;
+ * 上限必须是硬上限, 所以剩下按插入顺序(Map 保序 = 最旧在前)淘汰.
+ * @param {Map<string, number>} seen 窗口表
+ * @param {number} now 当前时间戳
+ * @returns {void}
+ */
+function retireSkipLogSeen(seen: Map<string, number>, now: number): void {
+  if (seen.size < SKIP_LOG_MAX) return
+  for (const [k, at] of seen) {
+    if (now - at >= SKIP_LOG_WINDOW_MS) seen.delete(k)
+  }
+  // +1: 退休发生在本次插入之前, 让插入后仍落在上限之内(否则稳态是上限 +1).
+  const over = seen.size - SKIP_LOG_MAX + 1
+  if (over <= 0) return
+  let left = over
+  for (const k of seen.keys()) {
+    if (left <= 0) break
+    seen.delete(k)
+    left -= 1
+  }
 }
 
 /** 限频窗口(毫秒): 同一账号同一拦截码在窗口内只记一条. */

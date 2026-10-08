@@ -110,14 +110,7 @@ export async function _tryAccountForModel(
      *
      * 清单可能过期(另一个部署刚买的), 所以只有在本地上次快照没命中时才补一次只读探测.
      */
-    /**
-     * 空串 = 该账号正处于探测退避窗口内: 这次不再问上游"有没有可接管的已付费
-     * 会话", 直接把闸门结论当真(视为没有). 这一跳省掉的是池内每个额度不足的
-     * 账号在每个请求里的一次 GET /session.
-     */
-    const paidProbe = makePaidUpstreamChecker(rt, key, model, emailByKey)
-    const checkPaidUpstream =
-      paidProbe === '' ? async () => false : paidProbe
+    const checkPaidUpstream = makePaidUpstreamChecker(rt, key, model, emailByKey)
     /**
      * 额度闸门(units / freebucks / 新会话预算)只约束"新买一条", 且只在真的要新买时
      * 才问上游"有没有可接管的已付费会话"(可用账号路径零开销), 有则跳过闸门直接复用.
