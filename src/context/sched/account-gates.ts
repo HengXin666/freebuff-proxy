@@ -215,54 +215,16 @@ export function makePaidUpstreamChecker(
 
   if (state.paid) return true
   /**
-    * 本地快照先查, 且不受退避窗口约束.
+   * 本地快照先查, 且不受退避窗口约束.
    *
-   * 退避只该挡"再问上游一次", 不该挡"用已经知道的结果": 上一次探测已经把
+   * 退避只该挡[再问上游一次], 不该挡[用已经知道的结果]: 上一次探测已经把
    * 可接管的持有者记进清单快照(holderFor), 窗口内把它当成没有, 等于把
    * 已经付过钱的一小时丢掉, 再去别的账号买新的.
    */
   if (rt.sessions.holderFor(model)) {
     state.paid = true
   } else if (Date.now() >= (rt.paidProbeRetryAt || 0)) {
-    /**
-      * 本地上次快照没命中时补一次只读探测(GET /session, 不建会话, 不扣费)----
-     * 这是唯一能看见"别的部署建的会话"的途径.
-     *
-     * 探测条件不依赖 hasInventorySnapshot(): 那会让从未对有账的账号永远探不到,
-     * 而它恰恰是最需要探测的场景(新部署/刚导入, 本地什么都没有). 只读取形态
-     * (带 instanceId 的 include-unused-rate-limits)在真实上游不建会话;
-     * 测试里那个"GET 会建会话"的 mock 是 get_claim_admit 专用形态.
-     *
-     * 探测前置一道退避(rt.paidProbeRetryAt, 见 account-runtime): 否则池内每个
-     * 额度不足的账号会在每个请求里各白付一次往返(N 个账号 x M 个在途请求),
-     * 而 refresh() 在有在途请求时还会自跳过 ---- 这是选号变慢的直接成因.
-     * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
-     */
-    let live = true
-    try {
-      await rt.sessions.refresh()
-    } catch {
-      live = false
-    }
-    if (live) {
-      state.paid = !!rt.sessions.holderFor(model)
-    }
-    /**
-      * 探测确实问过上游之后才开窗: 窗口的语义是"别再重复问".
-     *
-     * 成功且命中持有者时也必须开窗 ---- 否则下一个请求会为同一个持有者
-     * 再探一次(命中不改变"已经问过了"这个事实). 命中那一刻已经拿到了要用的
-     * 结果, 窗口挡的是后续的重问.
-     */
-    if (typeof rt.markPaidProbeDone === 'function') rt.markPaidProbeDone()
-    if (!live) {
-      logger.warn(ACK_PAID_UNAVAILABLE, {
-        key,
-        email: emailByKey.get(key),
-        model,
-        retryInMs: PAID_UPSTREAM_PROBE_RETRY_MS,
-      })
-    }
+    state.paid = await probeUpstream(rt, key, model, emailByKey)
   }
   if (state.paid) {
     logger.info(
@@ -278,6 +240,52 @@ export function makePaidUpstreamChecker(
   }
   return state.paid
   }
+}
+
+/**
+ * 问一次上游"有没有可接管的已付费会话", 并据回执写退避窗口.
+ *
+ * 只读取形态(GET /session, 带 instanceId 的 include-unused-rate-limits)不建会话,
+ * 也不扣费; 不依赖 hasInventorySnapshot() ---- 本地什么都没有的账号恰恰最需要问.
+ * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
+ * @param {any} rt 账号 runtime
+ * @param {string} key 账号 key
+ * @param {string} model 请求模型
+ * @param {Map<string, any>} emailByKey key 到邮箱
+ * @returns {Promise<boolean>} 上游此刻是否有可接管的持有者
+ */
+async function probeUpstream(
+  rt: any,
+  key: any,
+  model: any,
+  emailByKey: any,
+): Promise<boolean> {
+  let live = true
+  try {
+    await rt.sessions.refresh()
+  } catch {
+    live = false
+  }
+  /**
+   * 只有确实问过上游才开窗: 窗口的语义是[别再重复问].
+   *
+   * 有在途请求时 refresh 会自跳过(不碰上游, 只置 lastProbeSkipped)----
+   * 那不是[问过了], 不能开窗: 开了窗, 在途请求结束后真正想探测时会被挡住,
+   * 拿不到上游刚出现的可接管会话.
+   */
+  if (!rt.sessions.lastProbeSkipped && typeof rt.markPaidProbeDone === 'function') {
+    rt.markPaidProbeDone()
+  }
+  if (!live) {
+    logger.warn(ACK_PAID_UNAVAILABLE, {
+      key,
+      email: emailByKey.get(key),
+      model,
+      retryInMs: PAID_UPSTREAM_PROBE_RETRY_MS,
+    })
+    return false
+  }
+  return !!rt.sessions.holderFor(model)
 }
 /** 接管探测失败时的告警消息(判据只此一份). */
 const ACK_PAID_UNAVAILABLE =

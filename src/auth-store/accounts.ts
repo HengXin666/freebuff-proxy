@@ -61,14 +61,13 @@ export function readAccountUser(dir: string, key: string): any {
    * 那会让调用方拿到 null, 表现为"账号在列表里却报 401 用不了".
    *
    * 确定化顺序: key 精确命中 > 小写 key 命中 > 邮箱命中; 同档按账号 key 升序.
-   * 平局必须按 key(不是文件名)排 ---- 命中后下面会把文件重命名成 <key>.json,
+   *
+   * 平局按账号 key(不是文件名)排 ---- 命中后下面会把文件重命名成 <accountKey>.json,
    * 按文件名排会让同一个邮箱查询在重命名前后挑到不同的身份.
    */
   matches.sort(
     (a, b) =>
-      a.rank - b.rank ||
-      accountKeyOf(a.u).localeCompare(accountKeyOf(b.u)) ||
-      a.full.localeCompare(b.full),
+      a.rank - b.rank || accountKeyOf(a.u).localeCompare(accountKeyOf(b.u)),
   )
   const found = matches[0]
   if (matches.length > 1) {

@@ -94,6 +94,13 @@ try {
       // 另一个身份仍能按自己的 id 精确读回
       ok(readAccountUser(tieDir, 'id-bbb')?.id === 'id-bbb',
         '同邮箱的另一个身份必须仍可按 id 读到')
+      // 评审指出: 命中后的重命名会把一个候选从[小写/邮箱命中]提升为[精确命中],
+      // 若平局不优先取[已在目标名上]的那个, 上面的 pick 会在这一轮之后换身份.
+      const after = readAccountUser(tieDir, 'tie@example.com')?.id ?? null
+      ok(after === pick1,
+        '重命名之后再按邮箱查必须仍是同一个身份, got ' + after + ' 期望 ' + pick1)
+      ok(readAccountUser(tieDir, 'id-aaa')?.id === 'id-aaa',
+        '重命名后的精确命中必须仍落在被选中的那个身份上')
     } finally {
       fs.rmSync(tieDir, { recursive: true, force: true })
     }

@@ -181,44 +181,52 @@ export function skipLogOnce(self: any, key: any, code: any, msg: any, fields: an
     seen = new Map()
     self._skipLogSeen = seen
   }
-  retireSkipLogSeen(seen, now)
   const id = `${code}\0${key}`
+  /**
+   * 先判当前(账号, 码): 命中就直接沉默.
+   *
+   * 顺序不能反 ---- 容量淘汰删的是最旧的一条, 若先淘汰再判, 表满时重复命中的
+   * 那个最旧账号会被删掉从而再记一条, 限频被自己的清理破坏.
+   */
   const last = seen.get(id)
   if (Number.isFinite(last) && now - last < SKIP_LOG_WINDOW_MS) return false
+  /**
+   * 阈值语义: 表大小达到 SKIP_LOG_MAX 时触发一次回收; 回收后若仍满, 本次不记.
+   * 之所以允许[回收后恰好等于上限]时再插一条(稳态最多 SKIP_LOG_MAX + 1),
+   * 是为了不删任何未过期记录.
+   */
+  if (seen.size >= SKIP_LOG_MAX) {
+    /**
+     * 表满即只回收过期项, 不给新键腾位置.
+     *
+     * 腾位置必然要删一条未过期的记录, 那等于让被删的账号在窗口内又记一条 ----
+     * 限频被自己的清理破坏. 表满时的正确取舍是[宁可少记新键]: 盘内 key 数
+     * 本来就是有界的, 一旦窗口内的活跃键多于上限, 说明限频已到边际收益.
+     */
+    retireSkipLogSeen(seen, now)
+    if (seen.size >= SKIP_LOG_MAX) return false
+  }
   seen.set(id, now)
   logger.info(msg, fields)
   return true
 }
 
 /**
- * 收敛限频窗口表: 先清过期条目; 仍超过上限时按[最旧优先]继续淘汰.
- *
- * 只清过期条目是不够的 ---- 窗口内条目多于上限时一个也删不掉, 表会一直涨;
- * 上限必须是硬上限, 所以剩下按插入顺序(Map 保序 = 最旧在前)淘汰.
+ * 回收窗口表里已经过期的条目(只回收过期项, 不删未过期的).
  * @param {Map<string, number>} seen 窗口表
  * @param {number} now 当前时间戳
  * @returns {void}
  */
 function retireSkipLogSeen(seen: Map<string, number>, now: number): void {
-  if (seen.size < SKIP_LOG_MAX) return
   for (const [k, at] of seen) {
     if (now - at >= SKIP_LOG_WINDOW_MS) seen.delete(k)
-  }
-  // +1: 退休发生在本次插入之前, 让插入后仍落在上限之内(否则稳态是上限 +1).
-  const over = seen.size - SKIP_LOG_MAX + 1
-  if (over <= 0) return
-  let left = over
-  for (const k of seen.keys()) {
-    if (left <= 0) break
-    seen.delete(k)
-    left -= 1
   }
 }
 
 /** 限频窗口(毫秒): 同一账号同一拦截码在窗口内只记一条. */
 const SKIP_LOG_WINDOW_MS = 60_000
 
-/** 限频窗口表的容量上限(超过即按窗口清理, 防无限增长). */
+/** 限频窗口表的回收阈值(达到即回收过期项, 防无限增长). */
 const SKIP_LOG_MAX = 512
 
 export const logger = {
