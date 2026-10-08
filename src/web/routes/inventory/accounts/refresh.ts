@@ -156,13 +156,13 @@ export async function refreshAll(res: ServerResponse, ctx: any) {
    * 上游模型清单同时给两种口径.
    *
    * upstreamModelIds 以前直接给目录 key(m-096e75164d),下游把它当模型名就什么
-   * 都认不出 ---- 它是"哪些模型有额度"的判据表, 但展示与选用的入口应给可读名.
-   * 现在这个字段统一给可读名(displayName || key), 服务端真值仍以
+   * 都认不出 ---- 它是"哪些模型有额度"的判据表, 展示与选用的入口应给对外 id.
+   * 现在这个字段统一给无空白 id(catalogId 优先), 服务端真值仍以
    * upstreamModels[].key 并列透出.
    */
   const upstreamKeys = results.length ? modelIds : []
   const aliased = runtimes.modelAliases(upstreamKeys)
-  const readableIds = aliased.map((a: any) => a.displayName || a.key)
+  const readableIds = aliased.map((a: any) => a.publicId || a.key)
   sendJson(res, 200, {
     ok: true,
     results,

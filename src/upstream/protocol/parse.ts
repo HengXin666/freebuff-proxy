@@ -9,6 +9,7 @@
  * 解析顺序与覆盖规则逐字保留(顺序会影响"同名不同 key 时谁生效", 属行为).
  */
 import { isModelHandle } from './constants.ts'
+import { slugModelId } from '../../util/public-id.ts'
 
 /**
  * 取目录行数组(响应字段是 rows, 不是 models / data).
@@ -49,6 +50,15 @@ function indexRows(rows: any[]) {
       if (name && !keyByName.has(name)) keyByName.set(name, key)
       if (name && !keyByName.has(name.toLowerCase())) {
         keyByName.set(name.toLowerCase(), key)
+      }
+      /**
+       * 归一形态(无空白)也入表: 对外 id 用的就是它(见 util/public-id.ts),
+       * 下游照着 /v1/models 的 id 原样填回来时必须能落回目录 key.
+       */
+      const slug = slugModelId(name)
+      if (slug && !keyByName.has(slug)) keyByName.set(slug, key)
+      if (slug && !keyByName.has(slug.toLowerCase())) {
+        keyByName.set(slug.toLowerCase(), key)
       }
     }
   }

@@ -1,9 +1,15 @@
 // 模型名称的单一真源:对外名称只在这里定义(见 catalogDisplayName 的注释)
 import { catalogDisplayName } from './model.ts'
+import { publicModelId } from './util/public-id.ts'
 
 /** buildCatalogDrivenModelsResponse 的输入. */
 export interface CatalogModelsInput {
   rows?: any[]
+  /**
+   * 目录 key 到上游 legacy 模型 id(catalogId)的表, 由调用方从
+   * runtimes.modelAliases() 取(那一层是真源, 这里不做第二套映射).
+   */
+  catalogIdByKey?: Record<string, string | null>
   rateLimits?: Map<string, any> | Record<string, any>
   prices?: Map<string, number> | Record<string, number>
   accessTier?: string | null
@@ -21,10 +27,13 @@ export interface CatalogModelsInput {
  * - prices         → 每模型单价 Freebucks/小时(只挂元数据)
  * 额度与目录各自独立: 清单不因额度为 0 而消失, 额度也不因目录收录而出现.
  *
- * 对外口径:id 一律是人能认的模型名(目录行的 displayName,
- * 如 DeepSeek V4.1 Flash),freebuff_key 透出服务端标识 m-096e75164d.
- * 不用 legacyDigests 反查内置静态表.
- * 见 .agents/notes/implemented/bug-fix/2026-10-03-catalog-is-the-model-list.md
+ * 对外口径:id 取[无空白标识](catalogId 优先, 其次 displayName 归一形态,
+ * 最后目录 key),display_name 另给人类可读名,freebuff_key 透出服务端标识.
+ * 规则与理由见 src/util/public-id.ts 与
+ * .agents/notes/implemented/bug-fix/2026-10-08-model-id-without-whitespace.md
+ *
+ * input.catalogIdByKey 是目录 key 到 catalogId 的表, 由调用方从
+ * runtimes.modelAliases() 取(那一层是映射真源).
  *
  * @param {object} [input]
  * @param {any[]} [input.rows] 目录行(CatalogHolder.rows())
@@ -73,7 +82,9 @@ export function buildCatalogDrivenModelsResponse(input: CatalogModelsInput = {})
       return true
     })
     .sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
-    .map((row: any) => toEntry(row, rateLimits, prices, created, accessTier))
+    .map((row: any) =>
+      toEntry(row, rateLimits, prices, created, accessTier, input.catalogIdByKey || {}),
+    )
   return { object: 'list', data }
 }
 
@@ -107,6 +118,7 @@ function normalizeRows(rows: any[]): any[] {
  * @param {Record<string, any>} prices 目录 key -> FB/h
  * @param {number} created 创建时间戳(秒)
  * @param {string | null} accessTier 当前档位
+ * @param {Record<string, string | null>} catalogIdByKey 目录 key -> catalogId
  * @returns {any} 对外模型对象
  */
 function toEntry(
@@ -115,9 +127,11 @@ function toEntry(
   prices: Record<string, any>,
   created: number,
   accessTier: string | null,
+  catalogIdByKey: Record<string, string | null>,
 ): any {
   const key = String(row.key)
   const name = catalogDisplayName(row)
+  const catalogId = catalogIdByKey[key] ?? null
   const limit = rateLimits[key] ?? null
   const price = prices[key] ?? null
   const fbPerHour = Number.isFinite(price) ? Number(price) : null
@@ -133,11 +147,12 @@ function toEntry(
       }
     : null
   return {
-    // 主标识是可读模型名,不是 m-xxx(用户明确要求).
-    id: name,
+    // 主标识无空白(catalogId 优先);部分客户端拒绝带空白的模型 id.
+    id: publicModelId({ catalogId, displayName: name, key }),
     object: 'model',
     created,
     owned_by: 'freebuff',
+    // 人类可读名(可带空格):展示侧用它,不做寻址.
     display_name: name,
     // 服务端寻址真值(调试/高级客户端用)
     freebuff_key: key,

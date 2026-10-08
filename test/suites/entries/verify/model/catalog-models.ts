@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import { buildCatalogDrivenModelsResponse } from '../../../../../src/catalog-models.ts'
 import { isModelAllowed } from '../../../../../src/model.ts'
+import { CatalogHolder } from '../../../../../src/upstream/catalog-protocol.ts'
 
 // 六层 dirname = 仓库根(本文件比原来深一层, 见目录重组).
 const HERE = dirname(dirname(dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))))))
@@ -26,8 +27,29 @@ const sess = JSON.parse(readFileSync(join(CAP, 'session-official.json'), 'utf8')
 const rateLimits = { ...(sess.rateLimitsByModel || {}) }
 const prices = { ...(sess.freebucks?.prices || {}) }
 
+/**
+ * 目录 key -> catalogId 的表, 与生产同源(AccountRuntimes.modelAliases):
+ * 用真 CatalogHolder 的摘要反查内置静态表, 而不是另写一套映射.
+ */
+const holder = new CatalogHolder({
+  apiHost: 'https://www.codebuff.com',
+  token: 'x',
+  fetchImpl: async () => new Response('{}', { status: 200 }),
+})
+holder._apply(cat)
+const builtin = JSON.parse(
+  readFileSync(join(HERE, 'src', 'catalog', 'freebuff-catalog.json'), 'utf8'),
+).models
+const catalogIdByKey = {}
+for (const row of cat.rows) {
+  const digest = holder.digestForKey(row.key)
+  catalogIdByKey[row.key] =
+    builtin.find((m) => holder.digestOf(m.id) === digest)?.id ?? null
+}
+
 const raw = buildCatalogDrivenModelsResponse({
   rows: cat.rows,
+  catalogIdByKey,
   rateLimits,
   prices,
   accessTier: sess.accessTier,
@@ -64,24 +86,29 @@ const out = JSON.parse(JSON.stringify(raw))
 // ── 1) 清单 = 目录行(13 条),不是 rateLimits(6 条)──────────────
 assert.equal(out.data.length, 13, '13 行目录必须产出 13 条，而不是 rateLimits 的 6 条')
 
-// ── 2) id 全部可读,且都能反查回服务端 key ────────────────────────
+// ── 2) id 无空白且都能反查回服务端 key ──────────────────────────
 for (const m of out.data) {
   assert.ok(!/^m-[0-9a-f]+$/.test(pick(m, 'id')), `id 不得是目录 key: ${pick(m, 'id')}`)
   assert.ok(pick(m, 'freebuff_key'), `${pick(m, 'id')} 必须带 freebuff_key`)
+  // issue #30: 部分客户端(picoclaw)拒绝带空白的模型 id, 对外 id 一律无空白.
+  assert.ok(!/\s/.test(pick(m, 'id')), `id 不得含空白: ${JSON.stringify(pick(m, 'id'))}`)
+  assert.ok(pick(m, 'display_name'), `${pick(m, 'id')} 必须带人类可读的 display_name`)
 }
 
 // ── 3) 单价与额度正确挂上 ────────────────────────────────────────
-const ds = out.data.find((m) => pick(m, 'id') === 'DeepSeek V4.1 Flash')
-assert.ok(ds, '应包含 DeepSeek V4.1 Flash')
+// 对外 id 无空白: 有 catalogId 的用 catalogId, 没有的用 displayName 归一形态.
+const ds = out.data.find((m) => pick(m, 'id') === 'deepseek/deepseek-v4-flash')
+assert.ok(ds, '应包含 DeepSeek V4.1 Flash（对外 id 取 catalogId）')
+assert.equal(pick(ds, 'display_name'), 'DeepSeek V4.1 Flash', 'display_name 保留人类可读名')
 assert.equal(pick(ds, 'freebucks_per_hour'), 15)
 assert.equal(pick(ds, 'rate_limit')?.limit, 6)
 assert.equal(pick(ds, 'freebuff_key'), 'm-096e75164d')
 assert.equal(ds.premium, false)
 assert.deepEqual(pick(ds, 'efforts'), ['low', 'high', 'max'])
-assert.equal(pick(out.data[0], 'id'), 'MiMo 2.6 Flash', '按 sortOrder 排序')
+assert.equal(pick(out.data[0], 'id'), 'mimo/mimo-v2.5', '按 sortOrder 排序')
 
 // ── 4) 额度为 0 / 未授予额度的模型仍必须在清单里 ──────────────────
-const glm = out.data.find((m) => pick(m, 'id') === 'GLM 5.3 Flash')
+const glm = out.data.find((m) => pick(m, 'display_name') === 'GLM 5.3 Flash')
 assert.ok(glm, 'GLM 5.3 Flash 当日额度为 0，但仍必须在清单里')
 assert.equal(pick(glm, 'rate_limit')?.limit, 0)
 for (const name of [
@@ -91,7 +118,12 @@ for (const name of [
   'Ling 3.1 Flash',
   'Laguna S 2.1',
 ]) {
-  assert.ok(out.data.find((m) => pick(m, 'id') === name), `目录里的 ${name} 必须在清单里`)
+  // 对外 id 无空白: 目录新增模型没有 catalogId, 取 displayName 归一形态.
+  const slug = name.replace(/\s+/g, '-')
+  assert.ok(
+    out.data.find((m) => pick(m, 'id') === slug || pick(m, 'display_name') === name),
+    `目录里的 ${name} 必须在清单里`,
+  )
 }
 
 // ── 5) 白名单:目录里的模型必须放行(key 与可读名两个口径)─────────

@@ -32,6 +32,29 @@ export function blockPremiumModels(ctx: any) {
   return ctx.settingsStore?.get()?.blockPremiumModels === true
 }
 
+/**
+ * 目录 key 到上游 legacy 模型 id(catalogId)的表, 供对外 id 取无空白标识.
+ *
+ * 映射真源是 AccountRuntimes.modelAliases()(内部走目录摘要反查), 这里只把
+ * 结果摊平成表, 不另建索引.
+ *
+ * @param {object} ctx 依赖集合(含 runtimes)
+ * @param {any[]} rows 目录行
+ * @returns {Record<string, string | null>} 目录 key -> catalogId
+ */
+export function catalogIdByKey(ctx: any, rows: any[]): Record<string, string | null> {
+  const out: Record<string, string | null> = {}
+  try {
+    const aliased = ctx.runtimes?.modelAliases?.(rows.map((r: any) => r.key)) || []
+    for (const a of aliased) {
+      if (a && typeof a.key === 'string') out[a.key] = a.catalogId ?? null
+    }
+  } catch {
+    // 目录不可用时留空表: 对外 id 退回 displayName 归一形态.
+  }
+  return out
+}
+
 
 export async function handleModels(ctx: any, res: any) {
   /**
@@ -69,6 +92,7 @@ export async function handleModels(ctx: any, res: any) {
       200,
       buildCatalogDrivenModelsResponse({
         rows: catalog.rows,
+        catalogIdByKey: catalogIdByKey(ctx, catalog.rows),
         rateLimits: quota.rateLimits,
         prices: quota.prices,
         accessTier: quota.accessTier,
@@ -129,10 +153,11 @@ export async function handleStatus(ctx: any, res: any) {
 }
 
 /**
- * 目录行的全部可寻址口径(目录 key + 可读显示名),供白名单判定.
+ * 目录行的全部可寻址口径(目录 key + 可读显示名 + 对外 id),供白名单判定.
  *
- * 客户端可能照着 /v1/models 的可读名填,也可能用我们透出的 freebuff_key.
- * 两个都收, 不设缓存: 启动时目录尚未加载, 缓存空数组会让一段时间内所有模型
+ * 客户端可能照着 /v1/models 的 id 填(无空白, catalogId 优先),也可能照着
+ * display_name 填,也可能用我们透出的 freebuff_key ---- 三个都收.
+ * 不设缓存: 启动时目录尚未加载, 缓存空数组会让一段时间内所有模型
  * 都被 model_not_allowed 拒掉.
  *
  * @param {object} ctx 依赖集合(含 runtimes)
@@ -147,6 +172,21 @@ export function catalogModelKeys(ctx: any) {
       if (typeof row?.displayName === 'string' && row.displayName.trim()) {
         keys.push(row.displayName.trim())
       }
+    }
+    /**
+     * 对外 id(无空白)单独补一层: 下游照着 /v1/models 的 id 原样填回来时,
+     * 它既不是目录 key 也不是 displayName, 必须也放行.
+     *
+     * 这一步失败不影响上面两层 ---- 宁可少收一个口径, 也不让白名单整体变空
+     * (空了会把所有模型判成 model_not_allowed).
+     */
+    try {
+      const aliased = ctx.runtimes.modelAliases?.(rows.map((r: any) => r.key)) || []
+      for (const a of aliased) {
+        if (typeof a?.publicId === 'string' && a.publicId) keys.push(a.publicId)
+      }
+    } catch {
+      // 反查不可用: 上面两层已收齐, 退回既有判定
     }
   } catch {
     // 目录不可用时不阻塞白名单（退回其它三层判定）

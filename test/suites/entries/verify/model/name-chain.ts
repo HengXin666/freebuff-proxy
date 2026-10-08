@@ -65,14 +65,14 @@ function makeHolder(rows) {
   return holder
 }
 
-console.log('\n① 对外：只出模型名称，绝不出 m-xxx')
+console.log('\n① 对外：无空白 id + 可读名并列，绝不出 m-xxx')
 {
   const out = buildCatalogDrivenModelsResponse({ rows: ROWS })
   const ids = out.data.map((m) => m.id)
   const wantNames = ROWS.map((r) => r.displayName).sort()
   check(
-    'id 集合 == 目录行的 displayName 集合（1:1）',
-    JSON.stringify([...ids].sort()) === JSON.stringify(wantNames),
+    'id 集合 == 目录行的 displayName 归一形态（1:1）',
+    JSON.stringify([...ids].sort()) === JSON.stringify(wantNames.map((n) => n.replace(/\s+/g, '-'))),
     JSON.stringify([...ids].sort()),
   )
   check(
@@ -80,13 +80,47 @@ console.log('\n① 对外：只出模型名称，绝不出 m-xxx')
     !ids.some((id) => /^m-[0-9a-z]+$/i.test(id)),
     JSON.stringify(ids.filter((id) => /^m-/.test(id))),
   )
-  check('条数与目录行数一致（不多不少）', out.data.length === ROWS.length)
-  const keyByName = new Map(out.data.map((m) => [m.id, m.freebuff_key]))
+  /**
+   * issue #30 的判据: 对外 id 不得含空白 ---- 部分客户端(picoclaw)拒绝
+   * 带空白的模型 id, 于是模型在控制台里可用却配不进客户端.
+   */
   check(
-    '每条的 freebuff_key 与同名目录行的 key 一一对应',
-    ROWS.every((r) => keyByName.get(r.displayName) === r.key),
-    JSON.stringify([...keyByName]),
+    'id 一律不含空白字符（issue #30）',
+    !ids.some((id) => /\s/.test(id)),
+    JSON.stringify(ids.filter((id) => /\s/.test(id))),
   )
+  check(
+    'display_name 仍保留人类可读名（可含空格）',
+    out.data.every((m) => ROWS.some((r) => r.displayName === m.display_name)),
+  )
+  check('条数与目录行数一致（不多不少）', out.data.length === ROWS.length)
+  const keyById = new Map(out.data.map((m) => [m.id, m.freebuff_key]))
+  check(
+    '每条的 freebuff_key 与对应目录行的 key 一一对应',
+    ROWS.every((r) => keyById.get(r.displayName.replace(/\s+/g, '-')) === r.key),
+    JSON.stringify([...keyById]),
+  )
+  /**
+   * 反向闭合: 下游照着 /v1/models 的 id 原样填回 model 时必须能落回目录 key.
+   * 这一条防的是[改了名但用不了] ---- 名字换了却解析不回去, 请求照样 400.
+   */
+  {
+    const holder = makeHolder(ROWS)
+    for (const m of out.data) {
+      check(
+        `新 id 可被解析回目录 key：${m.id}`,
+        holder.keyForName(m.id) === m.freebuff_key,
+        String(holder.keyForName(m.id)),
+      )
+      // 下游整体大写是常见写法(issue #30 用户原话里就是 MIMO/MIMO-V2.5):
+      // 大写变体必须同样落回目录 key, 否则清单里的 id 填进去反而被 400 拒.
+      check(
+        `新 id 的大写变体同样可解析：${m.id.toUpperCase()}`,
+        holder.keyForName(m.id.toUpperCase()) === m.freebuff_key,
+        String(holder.keyForName(m.id.toUpperCase())),
+      )
+    }
+  }
   check(
     'id 与 freebuff_key 是**两个不同字段**（key 不能顶替名称）',
     out.data.every((m) => m.id !== m.freebuff_key),

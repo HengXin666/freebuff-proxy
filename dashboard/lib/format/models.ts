@@ -41,9 +41,9 @@ export function applyModelNames(payload: any) {
  - 注释里别写  + /v1/...: 紧邻斜杠会提前闭合块注释(这正是
  - 刚才写这行时踩到的语法错误).
  *
- - 后端两个字段口径已统一为可读名:upstreamModelIds 给 displayName || key,
- - upstreamModels 是带 catalogId/displayName/key 的三件套.而 /v1/models 的 id 也
- - 由 displayName || key 决定(见 src/model.ts 的 catalogDisplayName) ----
+ - 后端两个字段口径已统一为对外模型 id(无空白, catalogId 优先):
+ - upstreamModelIds 给 publicId, upstreamModels 是带 catalogId/displayName/key/publicId
+ - 的四件套.而 /v1/models 的 id 由同一规则决定(见 src/util/public-id.ts) ----
  - 三处同源, 下拉按 m.id 比对就能对上.
  -
  - 兼容:若拿到的是旧口径(裸目录 key m-xxx),这里仍用 upstreamModels 反查出
@@ -57,10 +57,10 @@ export function upstreamReadableIds() {
   for (const key of keys) {
     const row = byKey.get(key)
     /**
-     - 与 src/model.ts 的 catalogDisplayName() 同源:displayName 优先,
-     - 缺失才回退 key(不凭空编名字).key 已是可读名时反查不到,原样使用即可.
+     - 与后端 publicModelId(见 src/util/public-id.ts)同源:优先用后端算好的 publicId,
+     - 拿到旧口径(可读名 / 裸目录 key)时也能反查, 升级期不错标.
      */
-    out.add((row && (row.displayName || row.key)) || key)
+    out.add((row && (row.publicId || row.displayName || row.key)) || key)
   }
   /**
    - 目录驱动口径:后端 /api/models 的每条自带 rate_limit(有额度的才有),

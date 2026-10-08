@@ -185,8 +185,10 @@ import assert from 'node:assert/strict'
     1,
     'catalogId 与内置条目同模型时必须去重（用户不该在列表里看到两份）',
   )
-  const solar = out.find((m) => m.id === 'Solar Pro 4')
-  assert.ok(solar, '没有 catalogId 的上游模型必须以 displayName 作 id')
+  const solar = out.find((m) => m.freebuff_key === 'm-9a7e098cc1')
+  assert.ok(solar, '没有 catalogId 的上游模型必须仍在清单里（按 freebuff_key 定位）')
+  assert.equal(solar.id, 'Solar-Pro-4', '没有 catalogId 时 id 取 displayName 的归一形态（无空白）')
+  assert.equal(solar.display_name, 'Solar Pro 4', 'display_name 保留人类可读名')
   assert.equal(solar.source, 'session')
   assert.equal(solar.freebuff_key, 'm-9a7e098cc1', '原始目录 key 必须透出，便于排障')
   const unknown = out.find((m) => m.id === 'm-unknown0')

@@ -17,7 +17,8 @@ import {
   catalogDisplayName,
 } from '../../../../model.ts'
 import { buildCatalogDrivenModelsResponse } from '../../../../catalog-models.ts'
-import { catalogIdForKey } from '../../lib/helpers.ts'
+import { publicModelId } from '../../../../util/public-id.ts'
+import { catalogIdByKey, catalogIdForKey } from '../../lib/helpers.ts'
 import { probeAllAccountsSession } from '../../lib/probe.ts'
 import type { ServerResponse } from 'node:http'
 
@@ -34,15 +35,21 @@ function modelRow(row: any, quota: any, runtimes: any) {
   const name = catalogDisplayName(row)
   const info = quota.rateLimits[key] ?? null
   const price = quota.prices[key]
+  // catalogId 由映射真源反查;目录新增的模型没有 legacyDigests
+  // (如 Ling 3.1 Flash / Laguna S 2.1),此处为 null,不得因此丢掉整行.
+  const catalogId = catalogIdForKey(runtimes, key) || null
   return {
     key,
-    // ! id 是可读模型名(与 /v1/models 同源),不再是 m-xxx.
+    /**
+     * ! id 保持可读模型名 ---- 控制台内部按它合并[内置 catalog / 自定义 /
+     * 上游]三份数据, 也按它写回自定义条目; 换成无空白形态会让历史自定义条目
+     * (存的是可读名)对不上, 同一模型在表里出现两次.
+     * 对外要用的无空白 id 在并列的 publicId 字段(与 /v1/models 同源).
+     */
     id: name,
     displayName: name,
-    // catalogId 保留字段(旧消费方读它做反查);目录新增的模型没有
-    // legacyDigests(如 Ling 3.1 Flash / Laguna S 2.1),此处为 null,
-    // 前端回落到 id 即可, 不得因此丢掉整行.
-    catalogId: catalogIdForKey(runtimes, key) || null,
+    publicId: publicModelId({ catalogId, displayName: name, key }),
+    catalogId,
     premium: row.premium === true,
     access: row.access ?? null,
     multimodal: row.multimodal === true,
@@ -80,6 +87,7 @@ function listModels(res: ServerResponse, ctx: any) {
   if (catalog.rows.length) {
     const payload = buildCatalogDrivenModelsResponse({
       rows: catalog.rows,
+      catalogIdByKey: catalogIdByKey(runtimes, catalog.rows),
       rateLimits: quota.rateLimits,
       prices: quota.prices,
       accessTier: quota.accessTier,
@@ -92,8 +100,9 @@ function listModels(res: ServerResponse, ctx: any) {
     sendJson(res, 200, {
       ...payload,
       accessTier: quota.accessTier || null,
-      // 可读名口径:下游把 upstreamModelIds 当模型名用,不能给裸目录 key.
-      upstreamModelIds: aliased.map((a: any) => a.displayName || a.key),
+      // 对外 id 口径:下游把 upstreamModelIds 当模型 id 用,不能给裸目录 key,
+      // 也不能给带空白的显示名(部分客户端拒绝).
+      upstreamModelIds: aliased.map((a: any) => a.publicId || a.key),
       upstreamModels: aliased,
     })
     return
@@ -161,8 +170,8 @@ async function upstreamModels(res: ServerResponse, ctx: any, cachedOnly = false)
     sendJson(res, 200, {
       models: catalog.rows.map((row: any) => modelRow(row, quota, runtimes)),
       accessTier: quota.accessTier || null,
-      // 同上: 判据真值在 upstreamModels[].key, 这个字段给可读名.
-      upstreamModelIds: aliased.map((a: any) => a.displayName || a.key),
+      // 同上: 判据真值在 upstreamModels[].key, 这个字段给对外模型 id.
+      upstreamModelIds: aliased.map((a: any) => a.publicId || a.key),
       upstreamModels: aliased,
       catalogVersion: catalog.version || null,
       catalogIssuedAt: catalog.issuedAt || null,

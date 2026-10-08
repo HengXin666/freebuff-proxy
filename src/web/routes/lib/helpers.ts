@@ -143,6 +143,32 @@ export function catalogIdForKey(runtimes: any, key: any) {
 }
 
 /**
+ * 一批目录 key 到各自 catalogId 的表(供对外 id 取无空白标识).
+ *
+ * 与 catalogIdForKey 同源(都走 AccountRuntimes.modelAliases),只是批量化:
+ * 清单构造按行取 id,逐行单查会重复遍历账号池.
+ *
+ * @param {any} runtimes 账号运行时集合
+ * @param {any[]} rows 目录行
+ * @returns {Record<string, string | null>} 目录 key -> catalogId
+ */
+export function catalogIdByKey(runtimes: any, rows: any[]): Record<string, string | null> {
+  const out: Record<string, string | null> = {}
+  try {
+    const keys = (rows || [])
+      .map((r: any) => r?.key)
+      .filter((k: any) => typeof k === 'string' && k)
+    const aliased = runtimes.modelAliases?.(keys) || []
+    for (const a of aliased) {
+      if (a && typeof a.key === 'string') out[a.key] = a.catalogId ?? null
+    }
+  } catch {
+    // 反查不可用时留空表: 对外 id 退回 displayName 归一形态.
+  }
+  return out
+}
+
+/**
  * 目录 key(m-00032eaeec)-> 人类可读显示名(MiMo 2.6 Flash).
  *
  * ! 复用 AccountRuntimes.displayNameFor() ---- 那是唯一的展示侧映射入口

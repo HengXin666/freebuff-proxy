@@ -53,10 +53,10 @@ export const state: DashboardState = {
    */
   modelNames: {},
   /**
-   - 上游此刻给了额度的模型的[可读三件套]:{key, displayName, catalogId}.
-   - /api/models 的 id 是可读名(口径 = displayName || key,与后端
-   - catalogDisplayName() 同源),而 upstreamModelIds 是目录 key ----
-   - 标注  时必须用这张表换算,否则永远对不上.
+   - 上游此刻给了额度的模型的四件套:{key, displayName, catalogId, publicId}.
+   - /api/models 与 /v1/models 的 id 都是对外模型 id(无空白, publicId;
+   - 见 src/util/public-id.ts),upstreamModelIds 也是同一口径 ----
+   - 标注时必须用这张表换算,否则永远对不上.
    */
   upstreamModels: [],
 }

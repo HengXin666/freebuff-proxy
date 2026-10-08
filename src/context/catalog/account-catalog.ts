@@ -9,6 +9,7 @@
  */
 import { freebuffLegacyModelDigest } from '../../upstream/catalog-protocol.ts'
 import { FREEBUFF_AVAILABLE_MODELS } from '../../model.ts'
+import { publicModelId } from '../../util/public-id.ts'
 
 /**
  * 在所有已知 runtime 的目录持有者上依次尝试解析, 返回第一个非空结果.
@@ -124,18 +125,25 @@ export function _modelKeyForName(this: any, name: any) {
  * /v1/models 与 /api/models/upstream 都要这三样:key 是服务端寻址真值,
  * displayName 给人看,catalogId 是人类可读的请求口径.三者一起下发,
  * 下游照着任何一个填 model 都能被解析回去(见 proxy.js 的 chat 入口解析).
+ * publicId 是对外模型 id(无空白):下游照着清单原样填回来时必须能解析,
+ * 规则与构造同源见 util/public-id.ts.
+ *
  * @param {any} this 账号池(runtimes)
  * @param {string[]} keys
- * @returns {{ key: string, displayName: string | null, catalogId: string | null }[]}
+ * @returns {{ key: string, displayName: string | null, catalogId: string | null,
+ *   publicId: string }[]}
  */
 export function modelAliases(this: any, keys: any) {
   const out = []
   for (const key of keys || []) {
     if (typeof key !== 'string' || !key) continue
+    const displayName = this._modelDisplayName(key)
+    const catalogId = this._modelCatalogId(key)
     out.push({
       key,
-      displayName: this._modelDisplayName(key),
-      catalogId: this._modelCatalogId(key),
+      displayName,
+      catalogId,
+      publicId: publicModelId({ catalogId, displayName, key }),
     })
   }
   return out

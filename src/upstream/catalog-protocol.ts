@@ -88,6 +88,16 @@ export class CatalogHolder extends CatalogBase {
     // ② 上游 legacy 模型 id 到 key(复用同一套摘要索引, 不另算一遍)
     const byDigest = this.keyByDigest.get(freebuffLegacyModelDigest(k))
     if (byDigest) return byDigest
+    /**
+     * ②b 大小写兜底: 摘要是大小写敏感的, 而对外 id 的 catalogId 形态
+     * (mimo/mimo-v2.5)下游可能整体大写(issue #30 用户原话里就是 MIMO/MIMO-V2.5).
+     * 只在精确匹配落空后试小写 ---- 不会覆盖任何精确命中.
+     */
+    const lower = k.toLowerCase()
+    if (lower !== k) {
+      const byLower = this.keyByDigest.get(freebuffLegacyModelDigest(lower))
+      if (byLower) return byLower
+    }
     // ③ 已是目录 key: 自反
     if (this.handles.has(k)) return k
     return null

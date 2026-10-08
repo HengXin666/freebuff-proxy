@@ -97,14 +97,16 @@ export function buildModelsTable(rows: any, isLiveUpstream: any, isAdmin: any) {
           // 上游目录里没有的行整体淡化:它在列表里只是占位,调用必然失败.
           style: isLiveUpstream(m) ? null : 'opacity:.45',
         }, [
-          // 首列是对外模型名(口径 displayName || key,与 /v1/models 的 id 同源);
-          // 目录 key(m-00032eaeec)退到 title 里 ---- 排障时仍要能对上上游日志,
-          // 但不该再出现在页面上(用户要求).见
-          // .agents/notes/implemented/bug-fix/2026-10-03-readable-model-id-unification.md
+          /**
+           * 首列是对外模型 id(无空白, 与 /v1/models 同源)---- 用户照抄进客户端
+           * 配置的就是它; 可读名在右一列展示, 目录 key 退到 title 里.
+           * 见 .agents/notes/implemented/bug-fix/2026-10-08-model-id-without-whitespace.md
+           * 与 .agents/notes/implemented/bug-fix/2026-10-03-readable-model-id-unification.md
+           */
           el('td', {
             style: 'font-family:var(--mono);font-size:11px',
             title: m.key && m.key !== m.id ? t('model.idHint') + `: ${m.key}` : null,
-          }, m.id),
+          }, m.publicId || m.id),
           el('td', {}, m.display_name || m.displayName || '—'),
           /**
            - [账号可用]列:上游目录里有 = 能调用;没有 = 调了必失败.

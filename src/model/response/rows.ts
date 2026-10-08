@@ -5,6 +5,7 @@
  * isModelAllowed 是"哪些 id 算数"的判据.
  */
 import { isPremiumModel } from '../flags.ts'
+import { publicModelId } from '../../util/public-id.ts'
 import { FREEBUFF_AVAILABLE_MODELS } from './catalog-response.ts'
 
 /** 是否跳过某个模型 id 的判定函数. */
@@ -126,7 +127,7 @@ export function addSessionEntries(
     const readable = typeof e.catalogId === 'string' && e.catalogId ? e.catalogId : null
     const named =
       typeof e.displayName === 'string' && e.displayName.trim() ? e.displayName.trim() : null
-    const id = readable || named || key
+    const id = publicModelId({ catalogId: readable, displayName: named, key })
     if (byId.has(id)) continue
     if (skip(id)) continue
     byId.set(id, {
