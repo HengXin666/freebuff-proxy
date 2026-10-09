@@ -5,8 +5,9 @@
  * 就是两个独立账号(同邮箱不互斥, 见 src/auth-store/files.ts). 列表里出现两行
  * 一模一样的邮箱时, 用户/运维会以为"账号重复了"或"被别的登录覆盖了".
  *
- * 判据(可证伪): 把 sections.ts 里传给 buildAccountRow 的同邮箱计数去掉
- * (退回 buildAccountRow(a, i)), 第一条断言即红; 把判据改成 >= 1, 第二条即红.
+ * 判据(可证伪): 省略 sections.ts 传给 buildAccountRow 的 sameEmailCount,
+ * 混合邮箱的精确徽章位置断言失败; 把 > 1 改成 >= 1, 唯一邮箱零徽章断言失败,
+ * 混合邮箱的精确徽章位置断言也会捕获该变异.
  *
  * 只做结构断言: DOM 桩不记账文本, 所以按"账号列里有没有 SPAN.badge"判定,
  * 不按文字内容判定.
@@ -39,11 +40,11 @@ const hasClass = (n: any, cls: string) =>
   String(n.className || '').split(/\s+/).includes(cls)
 
 /**
- * 渲染整张表, 返回 [邮箱, 该行账号列里的徽章数].
+ * 渲染整张表, 返回逐行账号列里的徽章数.
  * @param {any} rows 账号行
- * @returns {Array<[string, number]>} 逐行结果
+ * @returns {number[]} 逐行徽章数
  */
-function emailCellBadges(rows: any) {
+function emailCellBadges(rows: any): number[] {
   body.children.length = 0
   body.append(buildAccountsTable(rows))
   const trs = body.walk((n: any) => n.tagName === 'TR' && hasClass(n, 'row-in'))
@@ -69,8 +70,8 @@ const ok = (cond: unknown, msg: string) => {
     account({ key: 'solo', email: 'solo@example.com' }),
   ])
   ok(hits.length === 3, `三行都应渲染出来, got ${hits.length}`)
-  ok(hits.filter((c) => c === 1).length === 2, `同邮箱的两个身份都必须挂徽章, got ${JSON.stringify(hits)}`)
-  ok(hits.filter((c) => c === 0).length === 1, `唯一邮箱不得挂[同邮箱]徽章, got ${JSON.stringify(hits)}`)
+  assert.deepEqual(hits, [1, 1, 0], `逐行徽章数应为 [1,1,0], got ${JSON.stringify(hits)}`)
+  n += 1
 }
 
 // -- (2) 全部唯一邮箱: 一个徽章都不该有 -------------------------------------
@@ -79,7 +80,8 @@ const ok = (cond: unknown, msg: string) => {
     account({ key: 'a', email: 'a@example.com' }),
     account({ key: 'b', email: 'b@example.com' }),
   ])
-  ok(hits.every((c) => c === 0), `唯一邮箱不得挂徽章, got ${JSON.stringify(hits)}`)
+  assert.deepEqual(hits, [0, 0], `逐行徽章数应为 [0,0], got ${JSON.stringify(hits)}`)
+  n += 1
 }
 
 // -- (3) 三个同邮箱: 三行都要标 ---------------------------------------------
@@ -89,10 +91,8 @@ const ok = (cond: unknown, msg: string) => {
     account({ key: 'k2', email: 'tri@example.com' }),
     account({ key: 'k3', email: 'tri@example.com' }),
   ])
-  ok(
-    hits.filter((c) => c === 1).length === 3,
-    `同邮箱三个身份都要标出, got ${JSON.stringify(hits)}`,
-  )
+  assert.deepEqual(hits, [1, 1, 1], `逐行徽章数应为 [1,1,1], got ${JSON.stringify(hits)}`)
+  n += 1
 }
 
 console.log(`同邮箱多身份标注 ${n} 条断言通过`)
