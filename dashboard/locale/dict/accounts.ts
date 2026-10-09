@@ -7,6 +7,13 @@
 export default {
   // ---- 账号 ----
   'account.email': { 'zh-CN': '账号', en: 'Account' },
+  'account.sameEmail': { 'zh-CN': '同邮箱', en: 'Same email' },
+  'account.sameEmailTip': {
+    'zh-CN': '同一邮箱的另一个身份'
+      + '（GitHub / Google 各一次登录会得到两个独立的 Freebuff 账号，各自独立计费与冷却）。',
+    en: 'Another identity on the same email (signing in with GitHub and Google '
+      + 'creates two separate Freebuff accounts, each with its own quota and cooldown).',
+  },
   'account.session': { 'zh-CN': 'Session', en: 'Session' },
   'account.concurrency': { 'zh-CN': '并发', en: 'Concurrency' },
   'account.timeline': { 'zh-CN': '时间轴（导入/更新/调度）', en: 'Timeline (imported/updated/scheduled)' },

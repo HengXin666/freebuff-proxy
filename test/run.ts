@@ -40,11 +40,13 @@ const SUITES = [
   ['reasoning-override', 'suites/entries/verify/effort/reasoning-override.ts'],
   ['official-template', 'suites/entries/verify/system/official-template.ts'],
   ['signin', 'suites/entries/verify/signin.ts'],
+  ['auth-duplicate-email-resolve', 'suites/entries/verify/auth/duplicate-email-resolve.ts'],
   ['dashboard-cold-start-state', 'suites/entries/verify/dashboard/cold-start-account-state.ts'],
   ['dashboard-signin-rerender', 'suites/entries/verify/dashboard/signin-rerender.ts'],
   ['dashboard-effort-card', 'suites/entries/verify/dashboard/effort-card.ts'],
   ['dashboard-account-scheduling-switch', 'suites/entries/verify/dashboard/account-scheduling-switch.ts'],
   ['dashboard-route-panel-visibility', 'suites/entries/verify/dashboard/route-panel-visibility.ts'],
+  ['dashboard-same-email-badge', 'suites/entries/verify/dashboard/accounts/same-email-badge.ts'],
   ['e2e-dashboard-latency', 'suites/entries/e2e/dashboard-latency.ts'],
 ]
 

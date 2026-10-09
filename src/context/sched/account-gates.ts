@@ -1,14 +1,15 @@
 /**
- * 单账号承接的两道判据: 惰性接管探测 + 两本额度闸门.
+  * 单账号承接的两道判据: 惰性接管探测 + 两本额度闸门.
  *
  *   - "够不够新买一条"与"能不能接管一条已付过钱的会话"分开判(面板能显示它,
  *     调度就必须能用它);
  *   - 探测是惰性的: 官方建会话路径上那个 GET 会真的建出会话.
  */
-import { logger } from '../../util/log.ts'
+import { logger, skipLogOnce } from '../../util/log.ts'
+import { PAID_UPSTREAM_PROBE_RETRY_MS } from '../state/codes.ts'
 
 /**
- * Freebucks 闸门与新会话预算闸门.
+  * Freebucks 闸门与新会话预算闸门.
  *
  * Freebucks 是上游的拒付/封号判据之一: units 未超标时仍可能被 rate_limited
  * (理由 freebucksShortfall{price,balance}), 所以两本账都必须过.
@@ -42,7 +43,7 @@ if (!paidTakeover && fb?.known && fb.affordable === false) {
     code: 'freebucks_exhausted',
     reason: fb.reason || null,
     /**
-     * 把这笔账挂在 failure 上:顶层错误体据此聚合出"花了多少 /
+      * 把这笔账挂在 failure 上:顶层错误体据此聚合出"花了多少 /
      * 剩多少 / 何时恢复"(见 summarizeFreebucks).
      * 只带数值,不带标识 ---- 脱敏由聚合那一步负责.
      */
@@ -62,7 +63,7 @@ if (!paidTakeover && fb?.known && fb.affordable === false) {
           : `freebucks balance ${fb.balance} < price ${fb.price} for ${model}`) +
       (fb.resetAt ? ` (refills ${fb.resetAt})` : ''),
   })
-  logger.info('skip account: freebucks cannot afford model', {
+  skipLogOnce(self, key, 'freebucks_exhausted', 'skip account: freebucks cannot afford model', {
     key,
     email: emailByKey.get(key),
     model,
@@ -99,12 +100,14 @@ return true
 }
 
 /**
- * 额度闸门: 两本账是否允许"新买一条", 以及能否改走接管.
+  * 额度闸门: 两本账是否允许"新买一条", 以及能否改走接管.
  *
  * 上游对[余额不够]的判定两条(额度跑完 / 所需 Freebucks 高于余额), 命中任一就可能
  * 直接封号; 而"够不够新买一条"与"能不能接管一条已付过钱的会话"分开判.
  *
  * 控制流: 返回 true 表示被闸门拦下(失败已记入 failures); false 表示放行.
+ *
+ * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
  * @param {any} self 账号池(runtimes)
  * @param {any} rt 账号 runtime
  * @param {string} key 账号 key
@@ -135,7 +138,7 @@ export async function checkQuotaGates(
     const units = rt.sessions.sessionUnitsFor?.(model)
     const fbGate = rt.sessions.freebucksFor?.(model)
     /**
-     * 两道额度闸门任一即将拒绝时, 先问上游"有没有可接管的已付费会话":
+      * 两道额度闸门任一即将拒绝时, 先问上游"有没有可接管的已付费会话":
      * balance: 0 只说明"再买一条买不起", 不代表已付费的那一小时不能用.
      *
      * 位置在闸门之前而非函数开头: 只有真的要新买一条时才付这次只读探测的成本,
@@ -145,7 +148,7 @@ export async function checkQuotaGates(
       (units?.known && units.exhausted) ||
       (fbGate?.known && fbGate.affordable === false)
     /**
-     * 命中可接管会话时只跳过闸门, 不在此 return rt: acquireForModel 的契约是
+      * 命中可接管会话时只跳过闸门, 不在此 return rt: acquireForModel 的契约是
      * "只选号, 不建会话", 真正建/接管会话在本函数更下方的
      * rt.sessions.ensureSession(model) ---- 那里会用 holderFor() 带 takeover 头接管,
      * 不新买. 在此 return 等于跳过 ensureSession, 会话从未接管.
@@ -169,7 +172,7 @@ export async function checkQuotaGates(
             `${units.poolLabel || units.pool || 'daily'}) for ${model}` +
           (units.resetAt ? ` (refills ${units.resetAt})` : ''),
       })
-      logger.info('skip account: session units exhausted', {
+      skipLogOnce(self, key, 'units_exhausted', 'skip account: session units exhausted', {
         key,
         email: emailByKey.get(key),
         model,
@@ -184,7 +187,7 @@ return true
 }
 
 /**
- * 惰性探测"上游有没有一条我能接管的已付费会话".
+  * 惰性探测"上游有没有一条我能接管的已付费会话".
  *
  * 一次 admit 买断一小时, 这一小时内继续发请求边际成本为 0; balance: 0 只说明
  * "再买一条买不起". 额度闸门只约束"新买一条".
@@ -196,6 +199,9 @@ return true
  * @param {string} key 账号 key
  * @param {string} model 请求模型
  * @param {Map<string, any>} emailByKey key 到邮箱
+ * 本地快照先查(不受退避约束), 只有"再问上游一次"这一跳受 rt.paidProbeRetryAt 约束.
+ *
+ * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
  * @returns {() => Promise<boolean>} 幂等探测函数(命中后记住结果)
  */
 export function makePaidUpstreamChecker(
@@ -208,20 +214,17 @@ export function makePaidUpstreamChecker(
   return async () => {
 
   if (state.paid) return true
+  // 本地持有者不受退避窗口或正在执行的刷新约束.
   if (rt.sessions.holderFor(model)) {
     state.paid = true
-  } else {
-    /**
-     * 本地上次快照没命中时补一次只读探测(GET /session, 不建会话, 不扣费)----
-     * 这是唯一能看见"别的部署建的会话"的途径.
-     *
-     * 探测条件不依赖 hasInventorySnapshot(): 那会让从未对有账的账号永远探不到,
-     * 而它恰恰是最需要探测的场景(新部署/刚导入, 本地什么都没有). 只读取形态
-     * (带 instanceId 的 include-unused-rate-limits)在真实上游不建会话;
-     * 测试里那个"GET 会建会话"的 mock 是 get_claim_admit 专用形态.
-     */
-    await rt.sessions.refresh().catch(() => {})
-    state.paid = !!rt.sessions.holderFor(model)
+  } else if (rt.paidProbeInFlight || Date.now() >= (rt.paidProbeRetryAt || 0)) {
+    if (!rt.paidProbeInFlight) {
+      rt.paidProbeInFlight = probeUpstream(rt, key, model, emailByKey).finally(() => {
+        rt.paidProbeInFlight = null
+      })
+    }
+    const live = await rt.paidProbeInFlight
+    state.paid = live && !!rt.sessions.holderFor(model)
   }
   if (state.paid) {
     logger.info(
@@ -238,3 +241,46 @@ export function makePaidUpstreamChecker(
   return state.paid
   }
 }
+
+/**
+ * 问一次上游"有没有可接管的已付费会话", 并据回执写退避窗口.
+ *
+ * 只读取形态(GET /session, 带 instanceId 的 include-unused-rate-limits)不建会话,
+ * 也不扣费; 不依赖 hasInventorySnapshot() ---- 本地什么都没有的账号恰恰最需要问.
+ * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
+ * @param {any} rt 账号 runtime
+ * @param {string} key 账号 key
+ * @param {string} model 请求模型
+ * @param {Map<string, any>} emailByKey key 到邮箱
+ * @returns {Promise<boolean>} 刷新是否成功完成(含跳过刷新)
+ */
+async function probeUpstream(
+  rt: any,
+  key: any,
+  model: any,
+  emailByKey: any,
+): Promise<boolean> {
+  let live = true
+  try {
+    await rt.sessions.refresh()
+  } catch {
+    live = false
+  }
+  // 实际刷新成功或失败都开窗, 自跳过的刷新不开窗.
+  if (!rt.sessions.lastProbeSkipped && typeof rt.markPaidProbeDone === 'function') {
+    rt.markPaidProbeDone()
+  }
+  if (!live) {
+    logger.warn(ACK_PAID_UNAVAILABLE, {
+      key,
+      email: emailByKey.get(key),
+      model,
+      retryInMs: PAID_UPSTREAM_PROBE_RETRY_MS,
+    })
+    return false
+  }
+  return true
+}
+/** 接管探测失败时的告警消息(判据只此一份). */
+const ACK_PAID_UNAVAILABLE =
+  'paid-session probe unavailable; retry backed off'

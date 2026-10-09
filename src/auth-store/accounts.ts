@@ -27,14 +27,15 @@ export interface AccountListRow {
 }
 
 /**
- * 按 key 读取账号. key 命中不了时兜底扫描目录:
- *   - key 是邮箱 -> 按邮箱唯一匹配(兼容迁移前的旧 <email>.json);
- *   - key 是 id   -> 按文件内容 id 匹配(极端情况下旧文件还没迁移).
- * 找到后顺手把旧文件名迁移到 <key>.json,避免每次扫描.
+ * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
+ *
+ * 按 key 读取账号. 直接读取未命中时扫描目录, 按文件内容的账号 key 或邮箱匹配.
+ * 多候选按匹配优先级与账号 key 确定化选择.
+ * 命中后在目标不存在时将旧文件名迁移到 <accountKey>.json.
  *
  * @param {string} dir 凭据目录
  * @param {string} key 账号 key
- * @returns {any} 账号对象;找不到或有歧义时返回 null
+ * @returns {any} 账号对象; 找不到时返回 null(命中多个同邮箱时按确定化顺序取一个)
  */
 export function readAccountUser(dir: string, key: string): any {
   const direct = accountCredentialsPath(dir, key)
@@ -42,23 +43,31 @@ export function readAccountUser(dir: string, key: string): any {
   if (directUser) return directUser
   if (!fs.existsSync(dir)) return null
   const norm = String(key || '').trim().toLowerCase()
-  let found: { u: any, full: string } | null = null
-  let ambiguous = false
+  const matches: Array<{ u: any, full: string, rank: number }> = []
   for (const file of fs.readdirSync(dir)) {
     if (!file.endsWith('.json')) continue
     const full = path.join(dir, file)
     const u = coerceUser(readJsonFile(full))
     if (!u) continue
     const k = accountKeyOf(u)
-    if (k === key || k.toLowerCase() === norm || u.email === norm) {
-      if (found) {
-        ambiguous = true
-        break
-      }
-      found = { u, full }
-    }
+    if (k === key) matches.push({ u, full, rank: 0 })
+    else if (k.toLowerCase() === norm) matches.push({ u, full, rank: 1 })
+    else if (u.email === norm) matches.push({ u, full, rank: 2 })
   }
-  if (!found || ambiguous) return null
+  if (!matches.length) return null
+  // 匹配优先级: 精确 key > 规范化/小写 key > 邮箱; 同档按 accountKeyOf 升序.
+  matches.sort(
+    (a, b) =>
+      a.rank - b.rank || accountKeyOf(a.u).localeCompare(accountKeyOf(b.u)),
+  )
+  const found = matches[0]
+  if (matches.length > 1) {
+    logger.warn('按 key 命中多个同邮箱账号, 取确定的一个', {
+      key,
+      picked: accountKeyOf(found.u),
+      candidates: matches.map((m) => accountKeyOf(m.u)),
+    })
+  }
   const target = accountCredentialsPath(dir, accountKeyOf(found.u))
   if (target !== found.full && !fs.existsSync(target)) {
     try {

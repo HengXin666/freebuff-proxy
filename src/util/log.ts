@@ -62,9 +62,18 @@ export function configureLogger(opts: Record<string, any>): void {
   if (Number.isInteger(opts?.ringCap) && opts.ringCap >= 0) ringCap = opts.ringCap
 }
 
-export function log(level: string, msg: string, fields: any = undefined): void {
+/**
+ * 判断日志级别是否达到当前输出阈值.
+ * @param {string} level 消息级别
+ * @returns {boolean} 是否允许输出
+ */
+function levelEnabled(level: string): boolean {
   const lv = LEVELS as Record<string, number>
-  if ((lv[level] ?? 99) < (lv[settings.level] ?? 20)) return
+  return !((lv[level] ?? 99) < (lv[settings.level] ?? 20))
+}
+
+export function log(level: string, msg: string, fields: any = undefined): void {
+  if (!levelEnabled(level)) return
   const ctx = currentLogContext()
   const f = fields && typeof fields === 'object' ? fields : {}
   /**
@@ -153,6 +162,64 @@ export function readLogBuffer(opts: LogQuery = {}): any[] {
   const limit = Number.isFinite(opts.limit) ? Math.max(1, Math.floor(opts.limit as number)) : 200
   return out.slice(-limit)
 }
+
+/**
+ * 拦截类日志的限频(同一账号同一拦截码在窗口内只记一条).
+ *
+ * 窗口表属于账号池, 不持久化; 日志保留传入的附加字段.
+ *
+ * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
+ * @param {any} self 账号池(runtimes); 为 null 时不使用窗口表, 按级别判断输出
+ * @param {string} key 账号 key
+ * @param {string} code 拦截码(freebucks_exhausted / units_exhausted)
+ * @param {string} msg 日志消息
+ * @param {any} fields 附加字段
+ * @returns {boolean} 本次是否真的记了日志
+ */
+export function skipLogOnce(self: any, key: any, code: any, msg: any, fields: any): boolean {
+  if (!levelEnabled('info')) return false
+  if (!self) {
+    logger.info(msg, fields)
+    return true
+  }
+  const now = Date.now()
+  let seen = self._skipLogSeen
+  if (!(seen instanceof Map)) {
+    seen = new Map()
+    self._skipLogSeen = seen
+  }
+  const id = `${code}\0${key}`
+  // 先检查当前(账号, 码)是否命中未过期窗口.
+  const last = seen.get(id)
+  if (Number.isFinite(last) && now - last < SKIP_LOG_WINDOW_MS) return false
+  // 表大小达到 512 时只回收过期条目.
+  if (seen.size >= SKIP_LOG_MAX) {
+    retireSkipLogSeen(seen, now)
+    // 回收后仍满则返回, 不输出日志.
+    if (seen.size >= SKIP_LOG_MAX) return false
+  }
+  logger.info(msg, fields)
+  seen.set(id, now)
+  return true
+}
+
+/**
+ * 回收窗口表里已经过期的条目(只回收过期项, 不删未过期的).
+ * @param {Map<string, number>} seen 窗口表
+ * @param {number} now 当前时间戳
+ * @returns {void}
+ */
+function retireSkipLogSeen(seen: Map<string, number>, now: number): void {
+  for (const [k, at] of seen) {
+    if (now - at >= SKIP_LOG_WINDOW_MS) seen.delete(k)
+  }
+}
+
+/** 限频窗口(毫秒): 同一账号同一拦截码在窗口内只记一条. */
+const SKIP_LOG_WINDOW_MS = 60_000
+
+/** 限频窗口表上限: 达到即回收过期项, 仍满时不插入. */
+const SKIP_LOG_MAX = 512
 
 export const logger = {
   debug: (msg: string, fields?: any) => log('debug', msg, fields),

@@ -145,8 +145,29 @@ export function sectionOpen(section: any) {
   return typeof v === 'boolean' ? v : Boolean(section.open)
 }
 
-/** 建一个分区外壳(details + summary + 表).新节点按记忆/默认值决定展开. */
-export function buildAccountSection(section: any, rows: any) {
+/**
+ - 各邮箱在池内出现的次数(同邮箱多身份标注用).
+ - @param {any} accounts 账号行数组
+ - @returns {Map<string, number>} 小写邮箱 -> 出现次数
+ */
+export function emailCounts(accounts: any) {
+  const counts = new Map()
+  for (const a of accounts || []) {
+    const key = String(a?.email || '').toLowerCase()
+    if (!key) continue
+    counts.set(key, (counts.get(key) || 0) + 1)
+  }
+  return counts
+}
+
+/**
+ - 建一个分区外壳(details + summary + 表).
+ - @param {any} section 分区定义
+ - @param {any} rows 该分区的账号行
+ - @param {Map<string, number>} sameEmail 邮箱 -> 出现次数
+ - @returns {any} details 节点
+ */
+export function buildAccountSection(section: any, rows: any, sameEmail = new Map()) {
   const table = el('div', { class: 'table-wrap' }, [
     el('table', {}, [
       el('thead', {}, el('tr', {}, [
@@ -162,7 +183,11 @@ export function buildAccountSection(section: any, rows: any) {
         t('account.cooldown'),
         t('common.actions'),
       ].map((h) => el('th', {}, h)))),
-      el('tbody', {}, rows.map((a: any, i: any) => buildAccountRow(a, i))),
+      el('tbody', {}, rows.map((a: any, i: any) => buildAccountRow(
+        a,
+        i,
+        sameEmail.get(String(a?.email || '').toLowerCase()) || 0,
+      ))),
     ]),
   ])
   const details = el('details', {
@@ -186,11 +211,12 @@ export function buildAccountSection(section: any, rows: any) {
 
 export function buildAccountsTable(accounts: any) {
   const groups = groupAccounts(accounts)
+  const sameEmail = emailCounts(accounts)
   const node = el('div', { style: 'margin-top:12px' })
   for (const section of ACCOUNT_SECTIONS) {
     const rows = groups.get(section.id) || []
     if (!rows.length) continue
-    node.append(buildAccountSection(section, rows))
+    node.append(buildAccountSection(section, rows, sameEmail))
   }
   return node
 }
@@ -207,6 +233,7 @@ export function applyAccountsSections(accounts: any) {
   const host = $('#accounts-sections')
   if (!host) return false
   const groups = groupAccounts(accounts)
+  const sameEmail = emailCounts(accounts)
   const keep = new Set()
   for (const section of ACCOUNT_SECTIONS) {
     const rows = groups.get(section.id) || []
@@ -215,11 +242,17 @@ export function applyAccountsSections(accounts: any) {
     let node = host.querySelector(`details.acct-section[data-section="${section.id}"]`)
     if (node) {
       const tbody = node.querySelector('tbody')
-      if (tbody) tbody.replaceChildren(...rows.map((a, i) => buildAccountRow(a, i)))
+      if (tbody) {
+        tbody.replaceChildren(...rows.map((a, i) => buildAccountRow(
+          a,
+          i,
+          sameEmail.get(String(a?.email || '').toLowerCase()) || 0,
+        )))
+      }
       const badge = node.querySelector('summary .badge')
       if (badge) badge.textContent = String(rows.length)
     } else {
-      node = buildAccountSection(section, rows)
+      node = buildAccountSection(section, rows, sameEmail)
     }
     // append 对已存在的节点 = 移动到新位置,不重建,不重置展开状态.
     host.append(node)

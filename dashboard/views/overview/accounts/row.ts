@@ -141,7 +141,45 @@ function quotaCell(a: any) {
   ]
 }
 
-export function buildAccountRow(a: any, i: any) {
+/**
+ * 账号列(邮箱 + 同邮箱标注 + 用户 ID + 最近使用).
+ *
+ * 单独成函数的理由: 同邮箱多身份的标注把这一格撑到十几行, 而 buildAccountRow
+ * 已经贴着单函数 80 行的上限.
+ * @param {any} a 账号行(runtimes.list() 的一项)
+ * @param {number} sameEmailCount 同邮箱在池内出现的次数
+ * @returns {any} td 节点
+ */
+function accountCell(a: any, sameEmailCount: any) {
+  return el('td', {}, [
+    a.email,
+    /**
+     * 同邮箱的另一个身份必须标出来.
+     *
+     * key 用 Freebuff 用户 id, 所以同一邮箱用 GitHub / Google 各登录一次就是
+     * 两个独立账号(GitHub / Google 同邮箱不互斥, 见 src/auth-store/files.ts).
+     * 不标出来时用户看到两行一模一样邮箱, 以为"账号重复了"或"被谁覆盖了".
+     */
+    sameEmailCount > 1
+      ? el('span', {
+          class: 'badge warn',
+          style: 'margin-left:6px',
+          title: t('account.sameEmailTip'),
+        }, t('account.sameEmail'))
+      : '',
+    a.id && a.id !== a.email ? el('div', { class: 'muted', style: 'font-size:11px' }, `ID ${a.id}`) : '',
+    a.lastUsed ? el('span', { class: 'badge ok', style: 'margin-left:6px' }, t('account.lastUsed')) : '',
+  ])
+}
+
+/**
+ - 账号表的一行.
+ - @param {any} a 账号行(runtimes.list() 的一项)
+ - @param {any} i 行序号(入场动画错峰用)
+ - @param {number} sameEmailCount 同邮箱在池内出现的次数(>1 时挂[同邮箱]徽章)
+ - @returns {any} tr 节点
+ */
+export function buildAccountRow(a: any, i: any, sameEmailCount = 0) {
   const cd = a.cooldownUntil ? new Date(a.cooldownUntil).toLocaleString() : null
   // Session 列同时回答两件事:(1) 这条会话还能白用多久;(2) 这个号
   // 到现在为止买过几条 / 复用了几次----后者是"我们在省钱"的直接证据,
@@ -216,11 +254,7 @@ export function buildAccountRow(a: any, i: any) {
       : null,
   ])
   return el('tr', { class: 'row-in', style: `animation-delay:${Math.min(i * 40, 400)}ms` }, [
-    el('td', {}, [
-      a.email,
-      a.id && a.id !== a.email ? el('div', { class: 'muted', style: 'font-size:11px' }, `ID ${a.id}`) : '',
-      a.lastUsed ? el('span', { class: 'badge ok', style: 'margin-left:6px' }, t('account.lastUsed')) : '',
-    ]),
+    accountCell(a, sameEmailCount),
     el('td', {}, statusBadge),
     el('td', {}, schedulingCell(a)),
     el('td', { class: 'mono', style: 'font-size:12px' }, sess),
