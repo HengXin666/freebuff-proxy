@@ -166,13 +166,10 @@ export function readLogBuffer(opts: LogQuery = {}): any[] {
 /**
  * 拦截类日志的限频(同一账号同一拦截码在窗口内只记一条).
  *
- * 池内多个账号同时额度不足时, 每个请求都会对每个账号各记一条 skip 日志
- * (13 个并发请求 x N 个账号 = 数百条), 把真正有用的选号日志淹掉.
- * 限频不丢信息: 窗口内沉默, 窗口外再记一条, 首条带完整账目.
- * 窗口表挂在账号池上(每进程一份), 不进账本 ---- 它只是日志节流.
+ * 窗口表属于账号池, 不持久化; 日志保留传入的附加字段.
  *
  * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
- * @param {any} self 账号池(runtimes); 缺窗口表时直接记一条
+ * @param {any} self 账号池(runtimes); 为 null 时不使用窗口表, 按级别判断输出
  * @param {string} key 账号 key
  * @param {string} code 拦截码(freebucks_exhausted / units_exhausted)
  * @param {string} msg 日志消息
@@ -192,28 +189,13 @@ export function skipLogOnce(self: any, key: any, code: any, msg: any, fields: an
     self._skipLogSeen = seen
   }
   const id = `${code}\0${key}`
-  /**
-   * 先判当前(账号, 码): 命中就直接沉默.
-   *
-   * 顺序不能反 ---- 容量淘汰删的是最旧的一条, 若先淘汰再判, 表满时重复命中的
-   * 那个最旧账号会被删掉从而再记一条, 限频被自己的清理破坏.
-   */
+  // 先检查当前(账号, 码)是否命中未过期窗口.
   const last = seen.get(id)
   if (Number.isFinite(last) && now - last < SKIP_LOG_WINDOW_MS) return false
-  /**
-   * 阈值语义: 表大小达到 SKIP_LOG_MAX 时触发一次回收; 回收后若仍满, 本次不记.
-   * 之所以允许[回收后恰好等于上限]时再插一条(稳态最多 SKIP_LOG_MAX + 1),
-   * 是为了不删任何未过期记录.
-   */
+  // 表大小达到 512 时只回收过期条目.
   if (seen.size >= SKIP_LOG_MAX) {
-    /**
-     * 表满即只回收过期项, 不给新键腾位置.
-     *
-     * 腾位置必然要删一条未过期的记录, 那等于让被删的账号在窗口内又记一条 ----
-     * 限频被自己的清理破坏. 表满时的正确取舍是[宁可少记新键]: 盘内 key 数
-     * 本来就是有界的, 一旦窗口内的活跃键多于上限, 说明限频已到边际收益.
-     */
     retireSkipLogSeen(seen, now)
+    // 回收后仍满则返回, 不输出日志.
     if (seen.size >= SKIP_LOG_MAX) return false
   }
   logger.info(msg, fields)
@@ -236,7 +218,7 @@ function retireSkipLogSeen(seen: Map<string, number>, now: number): void {
 /** 限频窗口(毫秒): 同一账号同一拦截码在窗口内只记一条. */
 const SKIP_LOG_WINDOW_MS = 60_000
 
-/** 限频窗口表的回收阈值(达到即回收过期项, 防无限增长). */
+/** 限频窗口表上限: 达到即回收过期项, 仍满时不插入. */
 const SKIP_LOG_MAX = 512
 
 export const logger = {
