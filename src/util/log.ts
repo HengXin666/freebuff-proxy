@@ -62,9 +62,18 @@ export function configureLogger(opts: Record<string, any>): void {
   if (Number.isInteger(opts?.ringCap) && opts.ringCap >= 0) ringCap = opts.ringCap
 }
 
-export function log(level: string, msg: string, fields: any = undefined): void {
+/**
+ * 判断日志级别是否达到当前输出阈值.
+ * @param {string} level 消息级别
+ * @returns {boolean} 是否允许输出
+ */
+function levelEnabled(level: string): boolean {
   const lv = LEVELS as Record<string, number>
-  if ((lv[level] ?? 99) < (lv[settings.level] ?? 20)) return
+  return !((lv[level] ?? 99) < (lv[settings.level] ?? 20))
+}
+
+export function log(level: string, msg: string, fields: any = undefined): void {
+  if (!levelEnabled(level)) return
   const ctx = currentLogContext()
   const f = fields && typeof fields === 'object' ? fields : {}
   /**
@@ -171,6 +180,7 @@ export function readLogBuffer(opts: LogQuery = {}): any[] {
  * @returns {boolean} 本次是否真的记了日志
  */
 export function skipLogOnce(self: any, key: any, code: any, msg: any, fields: any): boolean {
+  if (!levelEnabled('info')) return false
   if (!self) {
     logger.info(msg, fields)
     return true
@@ -206,8 +216,8 @@ export function skipLogOnce(self: any, key: any, code: any, msg: any, fields: an
     retireSkipLogSeen(seen, now)
     if (seen.size >= SKIP_LOG_MAX) return false
   }
-  seen.set(id, now)
   logger.info(msg, fields)
+  seen.set(id, now)
   return true
 }
 

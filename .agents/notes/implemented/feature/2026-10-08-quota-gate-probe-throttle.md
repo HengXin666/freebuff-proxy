@@ -55,6 +55,9 @@ balance: 0 只说明[再买一条买不起], 不说明已付费的一小时不�
 skipLogOnce(self, key, code, msg, fields) 在账号池内按(账号 key, 闸门码)限频 60s,
 窗口内沉默, 窗口外可再记一条. 日志保留对应账目字段, 窗口表不持久化到额度账本.
 
+- 窗口只记录实际输出的 info: 使用与 log 相同的级别判断, 被 warn/error 阈值过滤时
+  返回 false, 不创建或更新窗口表; 无 self 的直接输出回退也遵守这个判断.
+- 只有 info 输出完成后才写入窗口时间戳. 恢复 info 后此前被过滤的键可立即输出首条.
 - 必须先检查已有键是否未过期, 再进行容量清理.
 - SKIP_LOG_MAX=512 是回收阈值: 表大小 >=512 时, 插入前只回收过期条目.
   回收后仍 >=512 则跳过本次日志及新键插入; 实现保证表大小 <=512.
@@ -121,6 +124,9 @@ skipLogOnce(self, key, code, msg, fields) 在账号池内按(账号 key, 闸门�
 - test/suites/entries/smoke/parts/pool/takeover/skip-log-throttle.ts 对 600 个不同 key
   断言窗口表大小 <=513 且最旧的未过期键 k0 保留. 测试容许阈值多一项,
   实现则在 512 回收阈值处拒绝仍满时的插入, 上限为 512.
+  测试显式启用 info, 捕获 console 输出并在 finally 恢复日志级别与 console.
+  warn/error 下返回 false 且不创建窗口表, 无 self 回退也无输出;
+  恢复 info 后相同键立即输出一条, 窗口内重复调用返回 false 且不增加输出.
 - test/suites/entries/verify/auth/duplicate-email-resolve.ts 不访问网络:
   同邮箱身份独立落盘, 按 id 精确命中, 重复邮箱读取稳定.
   文件名与账号 key 顺序相反时稳定选择 id-aaa, 迁移前后不换身份.
