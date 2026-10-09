@@ -38,12 +38,16 @@ balance: 0 只说明[再买一条买不起], 不说明已付费的一小时不�
 
 - rt.paidProbeRetryAt 属于 runtime, 初始为 0, 不是请求级 state.
   实际尝试上游刷新完成后, 无论成功失败, 设置为当前时间 + PAID_UPSTREAM_PROBE_RETRY_MS(60_000ms).
+- rt.paidProbeInFlight 初始为 null, 同一 runtime 的并发探测共享一个刷新 Promise,
+  完成或失败后清为 null. 共享值只表示刷新未抛异常(包括跳过刷新), 不表示模型是否有持有者;
+  每个等待方在刷新完成后独立检查自己请求模型的 holderFor(model).
 - holderFor(model) 的本地快照必须先于重试时间检查, 窗口内仍可接管已知持有者.
   若窗口挡住本地快照, 已付费的一小时会被当成不可用, 请求可能转向别的账号重买.
-- lastProbeSkipped=true 的刷新不得开窗: 它没有访问上游, 在途请求结束后必须能立即真正探测.
+- lastProbeSkipped=true 的共享刷新不得开窗: 它没有访问上游, flight 清理后不留退避;
+  在途请求或其他跳过条件结束后必须能立即真正探测.
 - 窗口只挡重复网络探测, 不挡首次探测. 成功也开窗, 因为已获得的结果无需重复询问.
-- 改代理 / 换 token 导致 runtime 重建时窗口归零, 新运行时可重新探测.
-- 探测失败降级为 false 并记 warn, 继续使用 freebucks_exhausted 或 units_exhausted
+- 改代理 / 换 token 导致 runtime 重建时窗口归零且 flight 为 null, 新运行时可重新探测.
+- 探测失败降级为 false 并按共享 flight 记一次 warn, 继续使用 freebucks_exhausted 或 units_exhausted
   的具名闸门结论, 不向调用方抛出探测错误.
 
 ### Quota-skip log throttling
@@ -107,6 +111,13 @@ skipLogOnce(self, key, code, msg, fields) 在账号池内按(账号 key, 闸门�
 - test/suites/entries/smoke/parts/pool/takeover/probe/skip-window.ts 使用刷新替身验证:
   lastProbeSkipped=true 时 retryAt 保持 0; 跳过条件结束后可立即真正探测并开窗;
   紧接着再次调用 checker 不刷新, 由直接计数断言保证.
+- test/suites/entries/smoke/parts/pool/takeover/probe/concurrent.ts 使用 deferred 刷新替身验证调度:
+  1. 十个独立 checker 在刷新完成前只调用一次 refresh, 不提前返回或设置退避时间;
+  2. 共享刷新后仅模型 A 的持有者命中, 模型 B 不复用 A 的结果, flight 清为 null;
+  3. 实际刷新成功或失败均在完成后只更新一次窗口, 窗口内不再刷新, 本地已知持有者仍可接管;
+  4. 失败的十个并发等待方全部返回 false, 共享 flight 清空后立即调用仍退避;
+  5. 跳过的共享刷新零窗口更新且清理 flight, 下一波十个请求立即共享一次真实刷新,
+     合计两次刷新后仅更新一次窗口, 紧接着调用不再刷新.
 - test/suites/entries/smoke/parts/pool/takeover/skip-log-throttle.ts 对 600 个不同 key
   断言窗口表大小 <=513 且最旧的未过期键 k0 保留. 测试容许阈值多一项,
   实现则在 512 回收阈值处拒绝仍满时的插入, 上限为 512.
@@ -126,3 +137,5 @@ skipLogOnce(self, key, code, msg, fields) 在账号池内按(账号 key, 闸门�
 - 表满仍插入会违反容量断言; 表满淘汰最旧项会违反[未过期 k0 保留]的断言.
 - 被跳过的刷新也开窗会违反[retryAt 保持 0 且随后立即允许真探测]的断言.
 - 窗口内 checker 恒返回 false 会违反[已记录持有者仍能接管]的断言.
+- 绕过 runtime flight 共享会违反[十个并发 checker 只调用一次 refresh]的断言.
+- 共享模型 A 的持有者结果会违反[模型 B 无持有者时返回 false]的断言.

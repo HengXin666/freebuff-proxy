@@ -41,6 +41,7 @@ await import('./parts/pool/takeover/takeover-reject.ts') // pool: 接管的反�
 await import('./parts/pool/takeover/probe-backoff.ts') // pool: 接管探测退避
 await import('./parts/pool/takeover/skip-log-throttle.ts') // pool: 拦截日志限频
 await import('./parts/pool/takeover/probe/skip-window.ts') // pool: 被跳过的探测不开窗
+await import('./parts/pool/takeover/probe/concurrent.ts') // pool: 并发接管探测共享刷新
 await import('./parts/scheduling/tier/limited-tier.ts') // scheduling: limited 档位不是封锁
 await import('./parts/scheduling/tier/country-block.ts') // scheduling: 地理封锁
 await import('./parts/scheduling/tier/banned.ts') // scheduling: 账号封禁

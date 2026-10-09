@@ -214,17 +214,17 @@ export function makePaidUpstreamChecker(
   return async () => {
 
   if (state.paid) return true
-  /**
-   * 本地快照先查, 且不受退避窗口约束.
-   *
-   * 退避只该挡[再问上游一次], 不该挡[用已经知道的结果]: 上一次探测已经把
-   * 可接管的持有者记进清单快照(holderFor), 窗口内把它当成没有, 等于把
-   * 已经付过钱的一小时丢掉, 再去别的账号买新的.
-   */
+  // 本地持有者不受退避窗口或正在执行的刷新约束.
   if (rt.sessions.holderFor(model)) {
     state.paid = true
-  } else if (Date.now() >= (rt.paidProbeRetryAt || 0)) {
-    state.paid = await probeUpstream(rt, key, model, emailByKey)
+  } else if (rt.paidProbeInFlight || Date.now() >= (rt.paidProbeRetryAt || 0)) {
+    if (!rt.paidProbeInFlight) {
+      rt.paidProbeInFlight = probeUpstream(rt, key, model, emailByKey).finally(() => {
+        rt.paidProbeInFlight = null
+      })
+    }
+    const live = await rt.paidProbeInFlight
+    state.paid = live && !!rt.sessions.holderFor(model)
   }
   if (state.paid) {
     logger.info(
@@ -252,7 +252,7 @@ export function makePaidUpstreamChecker(
  * @param {string} key 账号 key
  * @param {string} model 请求模型
  * @param {Map<string, any>} emailByKey key 到邮箱
- * @returns {Promise<boolean>} 上游此刻是否有可接管的持有者
+ * @returns {Promise<boolean>} 刷新是否成功完成(含跳过刷新)
  */
 async function probeUpstream(
   rt: any,
@@ -266,13 +266,7 @@ async function probeUpstream(
   } catch {
     live = false
   }
-  /**
-   * 只有确实问过上游才开窗: 窗口的语义是[别再重复问].
-   *
-   * 有在途请求时 refresh 会自跳过(不碰上游, 只置 lastProbeSkipped)----
-   * 那不是[问过了], 不能开窗: 开了窗, 在途请求结束后真正想探测时会被挡住,
-   * 拿不到上游刚出现的可接管会话.
-   */
+  // 实际刷新成功或失败都开窗, 自跳过的刷新不开窗.
   if (!rt.sessions.lastProbeSkipped && typeof rt.markPaidProbeDone === 'function') {
     rt.markPaidProbeDone()
   }
@@ -285,7 +279,7 @@ async function probeUpstream(
     })
     return false
   }
-  return !!rt.sessions.holderFor(model)
+  return true
 }
 /** 接管探测失败时的告警消息(判据只此一份). */
 const ACK_PAID_UNAVAILABLE =

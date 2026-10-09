@@ -61,7 +61,6 @@ export function get(this: any, key: any) {
       })
     }
     const accountKey = accountKeyOf(user)
-
     const existing = this.byKey.get(accountKey)
     if (
       existing &&
@@ -76,7 +75,6 @@ export function get(this: any, key: any) {
       this._disposeRuntime(existing, 'account credentials/proxy changed')
       this.byKey.delete(accountKey)
     }
-
     const upstream = buildUpstream(this, user, accountKey)
     const sessions = new SessionManager({
       upstream,
@@ -105,14 +103,12 @@ export function get(this: any, key: any) {
       proxy: user.proxy || null,
       /**
        * 接管探测的下次允许时刻(毫秒时间戳). 0 = 立即可探.
-       *
-       * 挂在 runtime 上而不是请求级 state: 探测失败的代价是"每个请求每个账号各
-       * 白付一次 GET /session", 只在请求内退避挡不住. runtime 重建(改代理/换
-       * token)时窗口一起归零, 那是正确的 ---- 出口变了就该重新问一次.
-       *
+       * 实际刷新成功或失败完成后延后截止时间, runtime 替换时归零.
        * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
        */
       paidProbeRetryAt: 0,
+      /** 并发接管探测共享的刷新可用性 Promise. */
+      paidProbeInFlight: null,
       /** 记一条"探测已完成"(成功或失败都算), 按退避窗口延后下一次. */
       markPaidProbeDone: null,
       /** 实际生效的出网代理(全局池分配 / 账号覆盖 / env) */
