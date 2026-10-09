@@ -37,8 +37,8 @@ try {
   // -- (2) 按 id 读必须精确命中, 不得串到同邮箱的另一个 ----------------------
   const gh = readAccountUser(dir, 'github-u1')
   const go = readAccountUser(dir, 'google-u1')
-  ok(!!gh, '同邮箱并存时按 id 读取不得返回 null(旧行为即此, 表现为 401)')
-  ok(!!go, '同邮箱并存时按 id 读取不得返回 null(旧行为即此, 表现为 401)')
+  ok(!!gh, '同邮箱并存时按 github-u1 读取必须命中账号, got ' + (gh?.id ?? null))
+  ok(!!go, '同邮箱并存时按 google-u1 读取必须命中账号, got ' + (go?.id ?? null))
   ok(gh.id === 'github-u1' && gh.authToken === 't-gh', '精确 id 命中不得串号, got ' + gh?.id)
   ok(go.id === 'google-u1' && go.authToken === 't-go', '精确 id 命中不得串号, got ' + go?.id)
 
