@@ -29,10 +29,9 @@ export interface AccountListRow {
 /**
  * 见 .agents/notes/implemented/feature/2026-10-08-quota-gate-probe-throttle.md
  *
- * 按 key 读取账号. key 命中不了时兜底扫描目录:
- *   - key 是邮箱 -> 按邮箱唯一匹配(兼容迁移前的旧 <email>.json);
- *   - key 是 id   -> 按文件内容 id 匹配(极端情况下旧文件还没迁移).
- * 找到后顺手把旧文件名迁移到 <key>.json,避免每次扫描.
+ * 按 key 读取账号. 直接读取未命中时扫描目录, 按文件内容的账号 key 或邮箱匹配.
+ * 多候选按匹配优先级与账号 key 确定化选择.
+ * 命中后在目标不存在时将旧文件名迁移到 <accountKey>.json.
  *
  * @param {string} dir 凭据目录
  * @param {string} key 账号 key
@@ -56,15 +55,7 @@ export function readAccountUser(dir: string, key: string): any {
     else if (u.email === norm) matches.push({ u, full, rank: 2 })
   }
   if (!matches.length) return null
-  /**
-   * 命中多个同邮箱文件(GitHub / Google 用同一邮箱各登录一次)时不再判为歧义:
-   * 那会让调用方拿到 null, 表现为"账号在列表里却报 401 用不了".
-   *
-   * 确定化顺序: key 精确命中 > 小写 key 命中 > 邮箱命中; 同档按账号 key 升序.
-   *
-   * 平局按账号 key(不是文件名)排 ---- 命中后下面会把文件重命名成 <accountKey>.json,
-   * 按文件名排会让同一个邮箱查询在重命名前后挑到不同的身份.
-   */
+  // 匹配优先级: 精确 key > 规范化/小写 key > 邮箱; 同档按 accountKeyOf 升序.
   matches.sort(
     (a, b) =>
       a.rank - b.rank || accountKeyOf(a.u).localeCompare(accountKeyOf(b.u)),

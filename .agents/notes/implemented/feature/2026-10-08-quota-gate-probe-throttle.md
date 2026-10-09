@@ -69,8 +69,8 @@ skipLogOnce(self, key, code, msg, fields) 在账号池内按(账号 key, 闸门�
 
 - readAccountUser 兜底扫描优先级为精确账号 key > 规范化/小写 key > 邮箱匹配.
   同档只按 accountKeyOf 升序, 不按文件名或是否已在目标文件名上排序; 多候选时记 warn.
-- 迁移到 <accountKey>.json 不得改变重复邮箱查询选中的身份.
-  按文件名打破平局会使迁移前后选择不同账号.
+- accountKeyOf 在迁移到 <accountKey>.json 前后保持稳定, 按它打破平局使重复邮箱查询保持同一身份.
+  文件名会随迁移改变, 按文件名排序会使迁移前后选择不同账号.
 - 同一邮箱在池内出现多行时, 所有这些行都带[同邮箱]徽章; 唯一邮箱不带.
   不合并不同 key 的独立账号.
 
