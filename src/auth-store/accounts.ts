@@ -62,7 +62,6 @@ export function readAccountUser(dir: string, key: string): any {
   )
   const found = matches[0]
   if (matches.length > 1) {
-    // 多候选扫描逐次调用 warn, 不使用额度日志的限频窗口.
     logger.warn('按 key 命中多个同邮箱账号, 取确定的一个', {
       key,
       picked: accountKeyOf(found.u),
