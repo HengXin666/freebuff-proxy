@@ -8,7 +8,7 @@
  *
  * 判据(可证伪): 去掉 rt.paidProbeRetryAt 的窗口判断 -> 探测计数回到每请求每账号
  * 一次, 断言 (2) 变红; 把 skipLogOnce 换回 logger.info -> 断言 (3) 变红;
- * 让被跳过的探测也开窗 -> 断言 (6) 变红.
+ * 被跳过的探测不得开窗由 probe/skip-window.ts 验证.
  */
 
 import { buildAppContext } from '../../../../../../../src/app-context.ts'
