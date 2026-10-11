@@ -125,7 +125,7 @@ export async function forwardCompletions(
   let rpcResponse = false
   {
     const rpc = await tryOfficialChannel(ctx, {
-      upstream, instanceId, forwardBody, schedulingDeadline, upstreamModel, requestBody,
+      upstream, instanceId, forwardBody, schedulingDeadline, upstreamModel, requestBody, stream,
       carrierPlan: plan, declaredToolNames, declaredToolSchemas,
     })
     upstreamRes = rpc.upstreamRes

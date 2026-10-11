@@ -255,7 +255,7 @@ async function runOfficialRpc(ctx: any, args: any) {
     messages: args.forwardBody.messages,
     tools: args.forwardBody.tools,
     layer: 'worker',
-    stream: true,
+    stream: args.wantStream,
     // 强制档位(null = 不覆盖, 副仓库据此不发该 metadata 键).
     reasoningEffort: forcedEffort?.effort ?? null,
     // 官方工具注入名单: undefined = 不裁剪(全注入).
