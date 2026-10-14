@@ -181,6 +181,8 @@ export async function buildHeaders(bridge, url, body) {
       'ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.25 runtime/bun/1.4.2',
     'x-freebuff-acting-user-id': bridge.cfg.userId,
     'x-freebuff-catalog-fetch': bridge.fid,
+    // SSE gzip 恢复标记头(官方 chat 带).
+    'x-freebuff-sse-gzip-recovery': '1',
     ...(await bridge.signHeaders('POST', url, body, bridge.fid)),
   };
 }

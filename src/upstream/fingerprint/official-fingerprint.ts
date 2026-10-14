@@ -110,6 +110,15 @@ export function officialSessionHeaders(method: any, token: any, opts: any = {}) 
   const headers: any = {
     Authorization: 'Bearer ' + token,
     [HEADER_FIRST_TAB_DISCOUNT]: opts.firstTabDiscount ? '1' : '0',
+    // 桌面端身份组(取值对齐 orchestrator.js 的 FREEBUFF_CLIENT_HEADER /
+    // FREEBUFF_CLIENT_VERSION_HEADER / FREEBUFF_INSTALL_ID_HEADER):
+    // client-version 取 FREEBUFF_APP_VERSION, 缺省用当前桌面版 0.0.173.
+    'x-freebuff-client': 'desktop',
+    'x-freebuff-client-version':
+      (process.env.FREEBUFF_APP_VERSION || '').trim() || '0.0.173',
+    ...((process.env.FREEBUFF_INSTALL_ID || '').trim()
+      ? { 'x-freebuff-install-id': (process.env.FREEBUFF_INSTALL_ID || '').trim() }
+      : {}),
     // 客户端环境描述符：官方在 session 与广告请求上都带（见
     // cli/src/utils/client-environment.ts）。缺它就不像官方客户端。
     //  不再发 `x-freebuff-env` 头：desktop 客户端 0 次。
@@ -153,7 +162,7 @@ export function officialSessionHeaders(method: any, token: any, opts: any = {}) 
   //  不再发 x-freebuff-compact-session:desktop 客户端 0 次.
   if (method === 'POST') {
     if (opts.model) headers[HEADER_MODEL] = opts.model
-    headers[HEADER_WALLET_SPEND_LIMIT] = String(opts.walletSpendLimit ?? 0)
+    headers[HEADER_WALLET_SPEND_LIMIT] = String(opts.walletSpendLimit ?? 'session')
     // 显式接管:只在调用方拿到 currentInstanceId 时带, 未拿到时保持官方默认形态
     if (opts.takeoverInstanceId) {
       headers[HEADER_TAKEOVER_INSTANCE_ID] = String(opts.takeoverInstanceId)
