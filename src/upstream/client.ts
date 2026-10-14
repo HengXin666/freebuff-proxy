@@ -35,7 +35,8 @@ export {
 export { createUpstreamClient } from './client/factory.ts'
 export { createEgress, egressForConfig } from './client/egress/index.ts'
 export type { Egress } from './client/egress/index.ts'
-export { bunEnabled, installIdFromClientState, unwrapSessionViaBun } from './client/bun-channel.ts'
+export { bunEnabled, unwrapSessionViaBun } from './client/bun-channel.ts'
+export { installIdFromClientState, resolveInstallId } from './client/client-state.ts'
 export { apiFetch, fetchLoginUpstream } from './client/http.ts'
 
 // 常量真源在 ./official-fingerprint.ts(逐字取自官方二进制).这里 re-export

@@ -6,6 +6,16 @@ import { dumpReq } from '../wire/dump.ts'
 import { devicePayload } from '../wire/crypto.ts'
 
 /**
+ - 桌面端身份头 x-freebuff-client-version 的取值: FREEBUFF_APP_VERSION 优先,
+ - 缺省用当前对齐的桌面版(升级对齐时与 src/upstream/fingerprint/official-fingerprint.ts
+ - 的 KNOWN_DESKTOP_VERSION 同步改).
+ - @returns {string} 版本号
+ */
+function desktopClientVersion() {
+  return (process.env.FREEBUFF_APP_VERSION || '').trim() || '0.0.173';
+}
+
+/**
  - admission: x-freebuff-model 必须传 handle(fbm1.xxx), 不是 key.
  - purchase_capacity 是付费槽位瞬时排队, 可重试(0/4/8s 退避), 不是账号故障.
  - @param {any} bridge Bridge 实例
@@ -33,10 +43,13 @@ export async function admit(bridge, row, opts = {}) {
         'x-freebuff-catalog-protocol': '1',
         'x-freebuff-catalog-fetch': bridge.fid,
         'x-freebuff-client': 'desktop',
+        //  身份组补齐:与 Node 侧 officialSessionHeaders 同一形态, 值同源约定
+        //  (见 .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md).
+        'x-freebuff-client-version': desktopClientVersion(),
         //  不要发字面量 'null':主服务没传 installId 时整个头应省略
       ...(bridge.cfg.installId ? { 'x-freebuff-install-id': bridge.cfg.installId } : {}),
         'x-freebuff-model': row.handle,
-        'x-freebuff-wallet-spend-limit': '0',
+        'x-freebuff-wallet-spend-limit': 'session',
         'x-freebuff-first-tab-discount': '0',
         'x-fb-timezone': bridge.cfg.timeZone
           || (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'),
