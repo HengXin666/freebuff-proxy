@@ -1,74 +1,73 @@
-# 文件格式
+# Note 格式与关联契约
 
-写或审一篇 note 的时候,加载这份.
-
-## 头部块
-
-前三行是精确的:
+每篇 note 只拥有一个决策, 路径为 `.agents/notes/<lifecycle>/<class>/YYYY-MM-DD-topic.md`. lifecycle 为 implemented, proposed, rejected, class 为 architecture, feature, bug-fix, simplification, process, testing. 文件名日期为首次提出日期, 移动生命周期时保留日期和 Decision-ID
 
 ```markdown
-# Agent Note: <标题>
+# Agent Note: 有界重试
 
-Status: <状态>
-```
+Status: implemented
 
-`Status:` 的取值与所在生命周期目录一致,门禁会交叉核对:
+Decision-ID: bounded-retry
 
-- `proposed/` → `Status: proposed`
-- `implemented/` → `Status: implemented`
-- `rejected/` → `Status: rejected — <一行说明为什么输了>`
+## Code
 
-状态里不带日期、不带括号说明:文件名已经承载了首次提出的日期,其余都在 git 里. **拒绝理由是唯一带内容的状态**,因为读者点开一篇 rejected note,要的就是那句判决.
+- `src/client/retry.py`
+- `src/server/dispatch.ts`
 
-## 正文骨架
-
-note 以 `## Problem` 开头,而且必须**脱离方案也能独立成立**. 复现的章节用下面这些精确名字;真正定制的章节(拓扑、线上契约、schema)夹在必需章节之间.
-
-**小标题用英文,正文随你.** 这些标题是被机器校验的词元,正文不是. 本仓库已有的 note(HX-Memory 那 13 篇)就是「英文小标题 + 中文正文」—— 正文写中文完全不影响门禁;门禁另外也认几个中文别名(`## 问题` / `## 决策` / `## 备选方案` / `## 后果`),但**别混用**:一篇里要么全英文标题、要么全中文标题,混用会让章节配对和译文骨架检查变得不可读.
-
-**`proposed/`**
-
-```markdown
 ## Problem
-## Proposal
-…定制章节…
-## Alternatives considered
-## Acceptance criteria
-## Risks
-```
 
-`Proposal` 可以用将来时. `Acceptance criteria` 要说明**什么可观察的条件**才算完成. `Risks` 既涵盖可能出什么问题,**也**涵盖这次改动明知放弃了什么.
+请求失败后需要限制重复执行次数
 
-**`implemented/`**
-
-```markdown
-## Problem
 ## Decision
-…定制章节…
+
+调用端和服务端都执行同一重试上限
+
 ## Alternatives considered
+
+- 无限重试: 可以等待短暂故障恢复, 但无法约束重复执行次数
+- 什么都不做 / 复用现有: 无需额外状态, 但现有调用没有统一次数上限
+
 ## Consequences
+
+执行次数可验证, 长时间故障需要调用方显式处理失败
 ```
 
-`Decision` 用现在时描述已上线的现实. 提案期的标题会被门禁拒绝:`## Proposal`、`## Plan`、`## Migration plan`、`## Acceptance criteria` 都不许出现在 implemented note 里 —— 因为一份还在为自己辩护的文档,读起来就是还没落地. `## Testing`、`## Verification`、`## Deferred`、`## Related` 是可以的,只要它们陈述的是现在时的事实.
+`## Code` 是机器契约, 仅允许上例的逐行精确路径. 禁止 glob, 花括号, 目录, 行号片段, Markdown 链接和路径后的说明. 所有路径从仓库根开始, 使用 `/`, 不使用 `./` 或 `../`. 引用必须落在 guarded 目录内的现存源码文件
 
-**`rejected/`**
+同一 Decision-ID 在 active notes 中只能出现一次. 一个 note 的每个直接父目录只列一个代表文件, 并且该目录的源码只能有一个对该 note 的引用位置. 例如 `a/b/c.py`, `a/b/d.py`, `a/e.py`, `a/g/f.py` 只列 `a/b/c.py`, `a/e.py`, `a/g/f.py`. `a/b/d.py` 不重复放引用, 其 diff 仍归属于 `a/b` 的决策
 
-rejected note 就是那份被冻结的提案. 它保留提案期原有的章节,判决留在 `Status:` 行. 它**同样要带 `## Alternatives considered`** —— 门禁要求每一篇 active note 都有这一节 —— 而且 `Status:` 行必须写明理由,因为没有理由的否决,是没人能据以行动的判决.
+目录范围严格为直接父目录, 不递归吞并子目录. 一个目录可以有不同决策, 每个决策各有一个锚点. 修改这个目录中的任意受保护源码会检查所有属于该目录的决策. 脚本不能识别两个不同 ID 是否语义重复, 整理和 review 时必须搜索问题与备选方案再判断
 
-## Alternatives considered
+## 函数锚点
 
-每一篇 active note 都必填:每个真实的备选方案以及它为什么输,一个对手一段;有争议的可以用 `### Why not <X>?` 子章节. 这一节为什么最重要,见 [机制说明](mechanism.md#alternatives-才是重点).
+```ts
+/**
+ * 限制每次调用的重试次数
+ * .agents/notes/implemented/architecture/2026-10-07-bounded-retry.md
+ */
+export function retry() {
+  return 3
+}
+```
 
-## 事实保持现行,决策不行
+```python
+def retry():
+    """限制每次调用的重试次数
+    .agents/notes/implemented/architecture/2026-10-07-bounded-retry.md
+    """
+    return 3
+```
 
-当一个已落地决策的**实现方式**变了 —— 路径移了、包改名了、默认值改了 —— 就地改写事实. 不要追加 `### 2026-09-02 更新:把 X 改名成 Y`;站在 HEAD 上的读者应该看到**一份前后一致的现在时状态**.
+C++, TS, TSX, JS, MJS, Go, Rust 使用紧邻函数声明上方的多行 `/* ... */` 或 `/** ... */`. Python 没有块注释语法, 使用函数首条多行 docstring, 或紧邻定义上方连续至少两行 `#` 注释. 允许 export, decorator, template, Rust attribute 以及变量声明包裹的函数表达式, 具体 AST 判据见 `ast-contract.md`
 
-当**决策本身**被推翻时,那是一次新决策,要写新 note. 两边互相链接,旧的那篇只要还在解释新 note 所移动的那条边界,就留着;只有按[生命周期规则](lifecycle.md)才归档它.
+不要把路径写入普通字符串, 类头, 文件头与声明之间的空白块, 单行注释或函数中段. 代码只保存简短约束与 note 路径, 不复制整篇理由
 
-## 中文对照
+## 更新与退役
 
-`.zh.md` 对照件逐节镜像它的英文原件. 头部词元(`# Agent Note: ` 和 `Status:` 行)**保持英文原样** —— 它们是被机器校验的. 格式门禁读的是英文那侧,并跳过对照件;骨架配对检查则比对双方的章节数.
+先读拥有决策的旧 note, 事实过时就地改写. 新决策使用新 ID 和新 note, 不把旧 note 偷换成另一个决策. 部分取代时保留仍有效的记录并互链; 完全取代时把仍有用的理由并入新 note, 修复全部入站引用并删除旧文件
 
-## 模板
+proposed 和 rejected 也需要真实的关联代码与锚点, 分别表示约束正在评审和不可重犯的选择. 纯构想尚无源码时先留在 Issue 或普通设计文档, 不伪造占位函数来满足门禁
 
-从 [../templates/proposed.md](../templates/proposed.md)、[../templates/implemented.md](../templates/implemented.md)、[../templates/rejected.md](../templates/rejected.md) 起手,或者用 `notes:new` 生成文件 —— 它会替你定好路径、日期和状态.
+不生成引入提交 SHA 字段: 同次提交的自身 SHA 无法可靠内嵌, 使用 Git 历史追溯. 不追加历史流水账, 不保存失效记录充当现行权威. 无指导价值的记录直接淘汰, 历史由 Git 保留
+
+纯声明源码没有函数时, 可把同样的多行注释绑定到实际导出, 变量, 类型或接口声明, 具体节点规则见 ast-contract.md. 不添加占位函数. 根目录源码通过单文件 guarded 路径纳入范围

@@ -1,20 +1,26 @@
-# Agent Note: <the proposal that lost>
+# Agent Note: <title>
 
-Status: rejected — <one line: why it loses>
+Status: rejected
+
+Decision-ID: <decision-id>
+
+## Code
+
+- `<code-path>`
 
 ## Problem
 
-<The problem the proposal addressed, so the rejection is legible on its own.>
+<The concrete constraint that requires a decision>
 
-## Proposal
+## Decision
 
-<The frozen proposal. A rejected note is a proposal, not a rewrite: keep the sections
-it had, and leave the verdict on the Status line.>
+<One decision, its current mechanism, and its boundary>
 
 ## Alternatives considered
 
-<Mandatory here too: the gate requires the section in every active note, including a rejected one.
-Use it for the options weighed instead of this proposal.>
+- <Strongest alternative>: <its strongest argument, then why it loses>
+- Do nothing / reuse existing: <its strongest argument, then why it loses>
 
-- **<What we did instead>** — <why it wins where this proposal loses.>
-- **<Do nothing>** — <why that was also not chosen.>
+## Consequences
+
+<What this buys and what it costs>

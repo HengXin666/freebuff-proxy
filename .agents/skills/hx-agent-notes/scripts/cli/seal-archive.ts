@@ -4,7 +4,7 @@
  * Without --write this is a pure verifier: the same rules the CI gate runs.
  */
 import { relative, resolve } from 'node:path'
-import { describe, loadNotes, parseArgv, readManifest, verifyArchive, verifyManifestAppendOnly } from './notes-lib.ts'
+import { describe, loadNotes, parseArgv, readManifest, verifyArchive, verifyManifestAppendOnly } from '../lib/notes-lib.ts'
 
 const argv = process.argv.slice(2)
 const parsed = parseArgv(argv, ['--repo', '--baseline'])

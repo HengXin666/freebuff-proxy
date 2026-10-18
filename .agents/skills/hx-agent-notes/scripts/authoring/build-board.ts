@@ -9,7 +9,7 @@
  */
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { loadNotes, parseArgv } from './notes-lib.ts'
+import { loadNotes, parseArgv } from '../lib/notes-lib.ts'
 
 const argv = process.argv.slice(2)
 const parsed = parseArgv(argv, ['--repo'])
@@ -22,7 +22,7 @@ if (mode === null) {
 const cwd = parsed.values['--repo'] !== undefined && parsed.values['--repo'] !== '' ? resolve(parsed.values['--repo'] as string) : process.cwd()
 const rest = parsed.positionals
 const here = import.meta.dirname
-const templatePath = resolve(here, '..', 'assets', 'board-template.html')
+const templatePath = resolve(here, '..', '..', 'assets', 'board-template.html')
 const template = readFileSync(templatePath, 'utf8')
 const loaded = loadNotes(cwd)
 

@@ -1,66 +1,27 @@
-# 这套机制,以及每条规则为什么存在
+# 决策机制与整理
 
-下面每条规则都是承重的. 它们各自对应一种**只在 agent(而不是人)改仓库时**才会出现的失败.
+本地参考为 deepseek-harness 的 `.agents/notes/README.md`, `.agents/notes/AGENTS.md` 和 implemented 规则. 保留其一篇记录拥有一条决策, 事实就地更新, 备选方案先给最强理由, 新建先检查是否已有权威这几条. 这里额外用 AST 和双向图把源码关系变成机器契约
 
-## note 到底为什么存在
+本 skill 按当前需求淘汰废弃记录, 不沿用 DSH 的永久封存策略. 旧封存脚本仅供迁移存量, 不自动扫描年龄或字数后删除决策. Git 保存被删除内容的历史
 
-Agent 的会话是从零开始的. 它读到的是当下的代码,代码只说明「现在是什么」,对「什么已经试过了」一字不提. 于是有两种失败,而且**都不会在 review 里露头**:
+## 整理操作
 
-- **重复论证.** 三个月前被否掉的一条路线 —— 原因只存在于某个旧 PR 里 —— 会被重新提出,讲得头头是道,然后落地.
-- **看起来合理的简化.** 一条刻意的约束,在看不见它为何存在的读者眼里就是多余的负担,于是被干净利落地删掉.
-
-Note 就是那道护栏:理由、被否掉的对手、已知的代价,写在**下一个 agent 动手之前一定会读到**的地方.
-
-## 路径即身份,并且没有索引
-
-`{lifecycle}/{class}/yyyy-mm-dd-topic.md` 用路径编码了两个维度. 前两段回答**这条决策处在它生命的哪个阶段**和**它是哪一类决策**;文件名的日期是这条主题**首次被提出**的那天,不是落地那天.
-
-刻意禁止 `INDEX.md`. 一个共享文件是冲突磁铁:两个分支各自动了不同决策,却都要改它,而这个合并既费手工又有损,根本不值得. **目录树本身就是索引**;而且类别集合是封闭且小的,翻三个文件夹的成本极低.
-
-## 生命周期是时间,类别是种类
-
-把它们分在两段,意味着「提案落地」只改一个路径段,「已落地决策被归档」改的是另一个. 如果把它们塞进文件名或 frontmatter,这两次移动就变成了重命名或改写,还得跟着修链接.
-
-## 三种形态
-
-- **`proposed/`** —— 还没建,或只建了一部分. 这里用将来时是对的;计划、迁移步骤、未决问题都该待在文件里,因为工作还没落地.
-- **`implemented/`** —— 已上线. 用现在时,描述「现在是什么」. 这个文件**与代码保持同步**:文件被移走、包被改名、默认值变了,都要在同一次改动里修正它. 事实就地更新,不追加变更历史.
-- **`rejected/`** —— 输掉的提案. 判决写在 `Status:` 行,正文保持冻结的提案原样. 它只在**还能拦住一个有人可能真去重犯的错误**时保留;一旦这个想法彻底死了(API 没了、前提消散了),就删掉,别让目录树堆满没人需要的判决书.
-
-## Alternatives 才是重点
-
-`## Alternatives considered` 在每一篇 active note 里都是必填,而且是**让整套动作值回票价的那一节**. 一篇没记录自己打败了什么的决策,等于在邀请别人重新论证:读者手里只有被选中的方案和问题本身,那它当然看着对. 记录每个对手时,先写出它**最强**的论据再去驳回 —— 只在最弱处被驳倒的对手是稻草人,而稻草人教不会任何人任何东西.
-
-必须包含「什么都不做,或复用已有的」这一档. 这是 agent 最容易顺手去够的选项,所以它需要一个被记录下来的回答.
-
-## 锚点:note 标注在决策被强制执行的位置
-
-如果 agent 从不打开这个目录,整棵 notes 树就是废的. 源码引用 note 时,要**紧贴这条决策所约束的那个声明** —— 不是文件头,不是 changelog:
-
-```ts
-/**
- * True when the executor's own timeout was the first cause to cut the command short.
- * Mutually exclusive with {@link aborted}: one fused deadline drives both, so a timeout
- * and an abort racing before process close report the single first-abort cause
- * (see .agents/notes/implemented/architecture/2026-07-06-timeout-deadline-library.md).
- */
-timedOut: boolean
+```sh
+uv run --with-requirements .agents/skills/hx-agent-notes/scripts/redline/requirements.txt python .agents/skills/hx-agent-notes/scripts/setup/maintain.py --repo .
 ```
 
-**位置本身就是它能起作用的原因.** 一个正准备改 `timedOut` 的人,在需要它的那一刻看见这条约束;而一个准备改别处的人不会被它打断. 在上游 DSH 里,36 处源码引用有 21 处落在文件前 20 行 —— 但那些文件**本身就是那套机制**(一个提示词模板、一张注册表),不是什么随便挑的入口文件.
+清单输出每篇 note 的 Decision-ID, 精确代码锚点和结构问题. 按代码目录调研, 搜索相同问题和备选方案, 对每篇作保留, 更新, 合并或删除的判断. 不根据引用数量直接推断价值, 不为清理数量删掉仍能阻止错误的约束
 
-**没有标记词.** DSH 没有 `// Note:` 这个约定:那些引用是普通句子、JSDoc 从句、或相对 markdown 链接,而 `// Note:` 全仓库只出现 2 次 —— 两次都是讲微任务的无关散文. **要求一个魔法标记词,正是这个 skill 一开始犯的错**:它在 DSH 上报出 310 条违规,其中 308 条是幻觉(散文撞上了标记词,加上标记词本身就躺在门禁自己的源码里). 现在门禁认的是**任何指向 note 路径的引用**,只校验它是否还能解析.
+- 保留: 现行决策仍与函数行为一致, 双向图和位置检查通过
+- 更新: 路径或事实过时, 就地改写 note 并修复函数锚点
+- 合并: 保留一个权威 ID, 迁入仍有用的理由, 去掉同目录重复锚点, 修复所有入站链接
+- 删除: 决策无效或已完全被替代, 先修复源码和其他 note 的引用, 再直接淘汰
 
-而这个性质才是真正值得要的:**因为引用就是路径,归档一篇 note 却忘了改引用,门禁就会变红** —— 这正好就是一次取代动作所需要的待办清单.
+```sh
+uv run --with-requirements .agents/skills/hx-agent-notes/scripts/redline/requirements.txt python .agents/skills/hx-agent-notes/scripts/setup/maintain.py --delete .agents/notes/implemented/architecture/2026-10-07-obsolete.md
+uv run --with-requirements .agents/skills/hx-agent-notes/scripts/redline/requirements.txt python .agents/skills/hx-agent-notes/scripts/setup/maintain.py --delete .agents/notes/implemented/architecture/2026-10-07-obsolete.md --apply
+```
 
-## 覆盖率门禁
+第一条只列计划和入站引用, 第二条才删除精确指定的文件. 尚有引用即拒绝删除, 删除后仍须跑 diff 门禁. 删除源码与 note 两端属于有效配对; 只删一端会报断链或需要 review
 
-最容易犯的错就是宣称「这次改动太小,不用记录」. 覆盖率门禁取消了这个人肉判断:**动了受保护的源码路径,就必须在同一次改动里带上 note**,以 diff 为准. 逃生舱依然保持显式 —— 把理由写进 `<notes-root>/NOTE-EXEMPT.md` —— 这样豁免就是一个有署名的、被记录下来的动作,而不是一次静默的放过.
-
-## 冻结归档
-
-归档不是删除. 被归档的 note 是**仍可能被引用的历史**,所以它连同字节一起被 seal 进 `manifest.json`. Seal 是**仅追加**的:一个在更早版本里存在过的哈希,永远不能被删除或修改. 把被篡改的 note 重新哈希也没用,因为校验比的是**变更前的那个提交**.
-
-## 译文是可选的,而且是配对的
-
-如果项目维护中文对照(`foo.zh.md`),它逐节镜像英文原件的骨架,而**机器校验的头部词元** —— `# Agent Note: ` 和 `Status:` 的取值 —— 保持英文原样,这样门禁才读得懂. 两个文件一起移动、一起归档. 只出单一语言的项目可以完全忽略这一节;把 `translationSuffixes` 设成 `[]` 就关掉了配对检查.
+看板由 `scripts/authoring/build-board.ts` 与 `assets/board-template.html` 生成, 只用于浏览. 概率辅助 `scripts/triage/note-triage.py` 不参与红线裁决. 不让它们的结果覆盖严格门禁
