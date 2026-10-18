@@ -6,10 +6,8 @@
  *
  * 从 src/upstream/client.ts 拆出(原 1499 行单文件).
  */
-import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { logger } from '../../util/log.ts'
+import { resolveInstallId } from './client-state.ts'
 import { bunCanCarry } from './egress/index.ts'
 import { UpstreamError } from './errors/index.ts'
 
@@ -33,21 +31,6 @@ type FetchLike = (url: string, init?: any) => Promise<Response>
  */
 export function bunEnabled(): boolean {
   return process.env.FREEBUFF_DISABLE_BUN !== '1'
-}
-
-/**
- * 读官方客户端登录态里的 installId(只读 best-effort).
- *
- * @returns {string | null} installId;读不到返回 null
- */
-export function installIdFromClientState(): string | null {
-  try {
-    const p = join(homedir(), '.config/freebuff-desktop/state.json')
-    const st = JSON.parse(readFileSync(p, 'utf8'))
-    return typeof st?.installId === 'string' ? st.installId : null
-  } catch {
-    return null
-  }
 }
 
 /**
@@ -122,7 +105,7 @@ export function makeReleaseViaBun(
         { upstream: { timeZone: 'Asia/Shanghai', apiBase } },
       )
       if (!cfg) return null
-      cfg.installId = installIdFromClientState() || null
+      cfg.installId = resolveInstallId()
       cfg.apiHost = apiBase || null
       cfg.proxy = egress?.bunProxy ?? null
       const r = await mod.rpcReleaseSession({ cfg, instanceId })
@@ -226,7 +209,7 @@ export function makeSessionViaBun(
       )
       if (!cfg) return null
       // 会话这一跳客户端是带 install-id 的(chat 不带,故 buildRpcCfg 置 null)
-      cfg.installId = installIdFromClientState() || null
+      cfg.installId = resolveInstallId()
       // 主机随主服务配置走, 保证镜像对照与主服务指向同一上游(硬编码会让
       // 本地镜像对照变成真的打到上游), 见
       // .agents/notes/implemented/bug-fix/2026-10-03-session-via-bun-port.md

@@ -25,7 +25,12 @@ Status: implemented
 `end_turn`.该面已由
 [2026-09-19-genuine-tool-signature.md](2026-09-19-genuine-tool-signature.md) 接手.
 
-取值全部来自对官方发布二进制的**静态提取**(不是猜测,也不是从报文反推):
+对"客户端身份"的检查在 2026-10-14 又收紧一步:chat 一跳开始按[这场会话像不像桌面
+客户端]判,缺桌面端身份组时 `/api/v1/chat/completions` 一律 410
+`freebuff_update_required`(官方通道下 body 为空),而同一时刻的 session/admission
+与 agent-runs 仍是 200 -- 门禁落在 chat 一跳,判据却来自整场会话的身份形态.
+
+取值全部来自对官方发布产物的**静态提取**(不是猜测,也不是从报文反推):
 
 ```sh
 npm view freebuff version                      # 0.0.178
@@ -33,38 +38,47 @@ curl -L https://codebuff.com/api/releases/download/0.0.178/freebuff-linux-x64.ta
 tar xzf freebuff-linux-x64.tar.gz && strings -n 6 freebuff > fbref-str.txt
 ```
 
+桌面端那一组常量取自桌面客户端 0.0.173 AppImage 里的 `orchestrator.js`,同样逐字:
+
+| 头 | 官方原文 |
+|---|---|
+| `x-freebuff-client` | `FREEBUFF_CLIENT_HEADER = "x-freebuff-client"` / `FREEBUFF_CLIENT_DESKTOP = "desktop"` |
+| `x-freebuff-client-version` | `clientVersionHeaders()`:`process.env.FREEBUFF_APP_VERSION?.trim()` |
+| `x-freebuff-install-id` | `installIdHeaders()`:`installId ? { [FREEBUFF_INSTALL_ID_HEADER]: installId } : {}` |
+| `x-freebuff-wallet-spend-limit`(POST) | 准入请求里的字面量 `"session"` |
+| `x-freebuff-sse-gzip-recovery`(chat) | `FREEBUFF_SSE_GZIP_RECOVERY_HEADER` / `FREEBUFF_SSE_GZIP_RECOVERY_VALUE = "1"` |
+
 ## Decision
 
 **把官方指纹收敛到一个单一真源模块 `src/upstream/official-fingerprint.ts`,逐字对齐.**
 
-- 常量直源:`KNOWN_CLI_VERSION`(0.0.178),`officialChatUserAgent()`,
-  `officialSessionHeaders()`,`officialChatHeaders()`,`officialApiKeyHeaders()`,
-  `SESSION_ADMISSION_ENDPOINT` / `SESSION_ENDPOINT`,`AGENT_STOP_SEQUENCE`,
-  全部 `HEADER_*`.每项都带二进制原文锚点注释,改值必须回去对原文.
+- 常量直源:`KNOWN_CLI_VERSION`(0.0.178),`KNOWN_DESKTOP_VERSION`(0.0.173),
+  `officialChatUserAgent()`,`desktopClientVersion()`,`officialSessionHeaders()`,
+  `officialChatHeaders()`,`SESSION_ADMISSION_ENDPOINT` / `SESSION_ENDPOINT`,
+  `AGENT_STOP_SEQUENCE`,全部 `HEADER_*`.每项都带原文锚点注释,改值必须回去对原文.
 - 版本号**不写死**:`refreshCliVersion()` 启动时从 npm 取 `freebuff@latest` 对齐
   (best-effort,失败保留现值,unref 定时器).写死版本会随官方发版自然过期,
   而过期本身就是可用指纹.
 - `client.js` 的 session 请求改用 `officialSessionHeaders()`,POST 优先打
   `.../session/admission`;对 404/405 **回落** `.../session`(官方自己把这两个状态码
   当作 `session_admission_unavailable`).对齐绝不能换来可用性下降.
-- `proxy.js` 的 chat 改用 `officialChatHeaders()`.`filterRequestHeaders` 已经剥离
-  下游带来的 `x-freebuff-*`,但**不剥** `x-codebuff-api-key`,所以下游的头会透传
-  ——这是下面那条已知偏差的一部分.
+- `proxy.js` 的 chat 改用 `officialChatHeaders()`,并按桌面形态补
+  `x-freebuff-sse-gzip-recovery: 1`.鉴权头统一来自 `freebuffAuthHeaders()`
+  (只发 `Bearer`).
+- 会话请求发**桌面端身份组**:`x-freebuff-client: desktop`,
+  `x-freebuff-client-version`(`FREEBUFF_APP_VERSION` 优先,缺省
+  `KNOWN_DESKTOP_VERSION`),`x-freebuff-install-id`(调用方用 `resolveInstallId()`
+  解析一次:env 优先,回落官方客户端 `state.json`,读不到整头省略);POST 的
+  `wallet-spend-limit` 缺省 `session`.
+- 桥接端准入(`cli-bridge/lib/endpoints/session.ts`)与 Node 装配同一形态.
+- 理由,原文锚点与取舍只在本文;**实现处只留一行指向本文的引用** -- 决策记录不进
+  实现注释(repo 规则),改这些值时回到本文对齐.
 
-### 已知偏差(**故意未消除**,不是遗漏)
+### `x-codebuff-api-key`:不再发送
 
-官方 chat **不带** `x-codebuff-api-key`;本代理仍带.原因:`upstream.raw()` 统一注入
-`freebuffAuthHeaders()`(= Bearer + api-key),而 `auth-store.js` 记录
-[Login-issued tokens need both headers (Bearer alone → 401)],且该结论**在本仓库内
-没有任何回归测试或文档证据**(只有这条注释本身).
-
-两种取值都可能错,代价不对称:
-
-- 删掉它若确实必需 → **全部账号立刻 401**,代理彻底不可用.
-- 留着它 → 只是多一个头,功能不受影响,最坏是削弱指纹对齐的效果.
-
-在没有实测证据前,选择**留着**,并把这条偏差写进 `test/smoke.mjs` 的断言
-(断言"当前确实带了"),让它可见而不是被静默当成已对齐.
+官方 chat 不带该头(客户端 165 条抓包里出现 0 次,见 `docs/reverse/20` §20.4),
+本代理同样只发 `Bearer`:常量进 `RETIRED_HEADERS`,契约门禁禁止回加,`test/smoke`
+断言"chat 不得再带".此前[删了会 401]的顾虑没有取得任何证据,鉴权形态以实测为准.
 
 ## Alternatives considered
 
@@ -78,10 +92,20 @@ tar xzf freebuff-linux-x64.tar.gz && strings -n 6 freebuff > fbref-str.txt
 - **硬编码当前版本号(0.0.178)并定期人工更新** — 简单直接.但它把"跟着上游发版"
   变成一个人工流程,必然会忘;而版本过期正是最能识别代理的信号之一.
   改为启动时从 npm 对齐,把这件事变成自动的.
-- **删掉 `x-codebuff-api-key` 以完全对齐 chat 头** — 理论收益是消掉最后一个 chat
-  头差异.但见上:它可能承载真实认证,且现有注释声称删了会 401,而该声称**无证据**.
-  在"可能打死全部认证"与"少一个头"之间,取后者.**待验证项**:用单个账号打一次
-  chat,去掉该头看是否 401;有结论后再决定删或留.
+- **维持 CLI 形态,只把 CLI 版本刷到 npm 最新(0.2.27)** -- 实测仍 410
+  `freebuff_update_required`:门禁看的不是 CLI 版本号,而是这场会话的身份像不像桌面
+  客户端;CLI 与桌面客户端本就不是同一形态,刷版本号补不上身份组.
+- **只补 `x-freebuff-client: desktop`,版本号与 install-id 留空** -- 身份组是一个整体,
+  缺项等于继续声明"我不是桌面客户端";桌面端在这两条上本来是"有则带"的字段,
+  我们部署里给得出同一份.门禁背后是否还有单个必需项,**本轮没有逐项 A/B**.
+- **跟官方 `clientVersionHeaders()` 一样"env 没设就省略该头"** -- 最贴近原文,但官方
+  桌面进程自己总有 `FREEBUFF_APP_VERSION`;我们的部署没有桌面进程,省略等于把身份组
+  打回缺项.故保留写死兜底,并把"升级对齐"收敛成两处同步改.
+- **install-id 保持 env-only** -- 与 bun 会话请求的身份源就分叉了(那一跳读客户端
+  `state.json`),同一场会话会出现两个身份.改为两边共用 `resolveInstallId()`.
+- **删掉 `x-codebuff-api-key` 以完全对齐 chat 头** -- 当时的顾虑是它可能承载真实认证,
+  而"删了会 401"只有一条注释,没有证据,所以先保留;现在该头已按官方形态移除
+  (Bearer 实测可用,见测试段).
 - **把 \`x-codebuff-api-key\` 从 `filterRequestHeaders` 里剥掉** — 能消除"下游透传"这一路,
   但 `raw()` 自己还会注入,所以不解决根本问题;且剥离任何 `x-*` 头都可能误伤,
   不是这次的目标.
@@ -92,9 +116,16 @@ tar xzf freebuff-linux-x64.tar.gz && strings -n 6 freebuff > fbref-str.txt
 - POST 准入端点改为官方的 `/admission`,并带 `x-fb-timezone`,
   `x-freebuff-first-tab-discount`,`x-freebuff-wallet-spend-limit`.
   老部署若没有该端点,回落逻辑保证行为不变.
-- **chat 头仍多一个 `x-codebuff-api-key`**(已知偏差,见上).
+- **chat 头不再多带任何头**(`x-codebuff-api-key` 已移除,见上).
+- 桌面版号没有可自动对齐的公开 registry(与 CLI 的 npm 对齐不同):部署侧用
+  `FREEBUFF_APP_VERSION` 覆盖,未设置时用 `KNOWN_DESKTOP_VERSION`(0.0.173);
+  桥接端(`cli-bridge/lib/endpoints/session.ts`)有同一份兜底,升级对齐要一起改.
+- install-id 的解析提到会话装配处(`resolveInstallId()`):Node 准入与 bun 会话请求
+  取同一个值,两处都读不到时整头省略(不发明值).
+- chat 一跳的门禁解除:身份组补齐后 `/v1/chat/completions` 由 410 变 200 + 完整
+  流式回复(部署实测).各字段是否**单独**必需未逐项 A/B,判据边界仍以上游为准.
 - 指纹常量集中在 `official-fingerprint.js`:官方发版后只改这一处;每个常量都有
-  二进制原文锚点,避免下次有人凭记忆改.
+  原文锚点,避免下次有人凭记忆改.
 - 测试新增一组断言(独立账号目录 + 真实准入),把"UA 形状 / 准入端点 / 官方头 /
   已知偏差"钉住;`test/proxy-test-helpers.mjs` 的真实 HTTP mock 同步接受
   `/admission`(否则测的就不是真实链路).
@@ -103,13 +134,16 @@ tar xzf freebuff-linux-x64.tar.gz && strings -n 6 freebuff > fbref-str.txt
 
 - `test/smoke.mjs`(指纹组):独立账号目录起服务 → 首个请求必经准入 → 断言
   `user-agent` 匹配 `^ai-sdk/openai-compatible/\d+\.\d+\.\d+/codebuff$` 且不含
-  `/1.0.0/`;POST 命中 `.../session/admission`;带 model / wallet-spend-limit /
-  first-tab-discount / `x-fb-timezone`;`x-codebuff-api-key` 断言为"仍带"(已知偏差).
+  `/1.0.0/`;POST 命中 `.../session/admission`;带 model / wallet-spend-limit
+  (= `session`)/ first-tab-discount / `x-fb-timezone`;桌面身份组断言
+  `x-freebuff-client` = `desktop`,`client-version` = `desktopClientVersion()`,
+  `install-id` = `resolveInstallId()`;`x-codebuff-api-key` 断言为**不得再带**.
 - 上表四处偏差的原文锚点:二进制 `strings` 提取,命令见本文 Problem 段.
 - `test/smoke.mjs`(指纹组)另断言:转发上游的工具集会被
   `detectForeignClient` 判为**自己人**(`signal === null`)—— 见
   [2026-09-19-genuine-tool-signature.md](2026-09-19-genuine-tool-signature.md).
-- **未做的验证**(诚实边界):`x-codebuff-api-key` 对 chat 是否必需 —— 需要打线上,
-  本轮**未执行**.至于"指纹对齐后上游是否不再返回 tool-schema 404":判据真源已在
+- **未做的验证**(诚实边界):桌面身份组里各字段是否**单独**必需 —— 线上只验证了
+  整组补齐后 chat 由 410 变 200,没有逐项 A/B.至于"指纹对齐后上游是否不再返回
+  tool-schema 404":判据真源已在
   [2026-09-19-genuine-tool-signature.md](2026-09-19-genuine-tool-signature.md)
   测绘并有本地对照实验,但**线上实测同样未做**.

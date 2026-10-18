@@ -70,6 +70,8 @@ export const H_TIMEZONE = 'x-fb-timezone'
 export const H_CATALOG_PROTOCOL = 'x-freebuff-catalog-protocol'
 export const H_CATALOG_FETCH = 'x-freebuff-catalog-fetch'
 export const H_CLIENT = 'x-freebuff-client'
+/** 桌面端身份组(session/admission 带). */
+export const H_CLIENT_VERSION = 'x-freebuff-client-version'
 export const H_INSTALL_ID = 'x-freebuff-install-id'
 export const H_INSTANCE_ID = 'x-freebuff-instance-id'
 export const H_MODEL = 'x-freebuff-model'
@@ -82,6 +84,8 @@ export const H_HEARTBEAT = 'x-freebuff-heartbeat'
 export const H_DESKTOP_ATTEMPT_ID = 'x-freebuff-desktop-attempt-id'
 export const H_TAKEOVER_INSTANCE_ID = 'x-freebuff-takeover-instance-id'
 export const H_ACTING_USER_ID = 'x-freebuff-acting-user-id'
+/** chat 的 SSE gzip 恢复标记. */
+export const H_SSE_GZIP_RECOVERY = 'x-freebuff-sse-gzip-recovery'
 // 设备签名三头
 export const H_DEVICE_KEY = 'x-freebuff-device-key'
 export const H_DEVICE_TS = 'x-freebuff-device-ts'
@@ -95,6 +99,7 @@ export const BUSINESS_HEADERS = [
   H_CATALOG_FETCH,
   H_CLIENT,
   H_INSTALL_ID,
+  H_CLIENT_VERSION,
   H_INSTANCE_ID,
   H_MODEL,
   H_WALLET_SPEND_LIMIT,
@@ -106,6 +111,7 @@ export const BUSINESS_HEADERS = [
   H_DESKTOP_ATTEMPT_ID,
   H_TAKEOVER_INSTANCE_ID,
   H_ACTING_USER_ID,
+  H_SSE_GZIP_RECOVERY,
   H_DEVICE_KEY,
   H_DEVICE_TS,
   H_DEVICE_SIG,

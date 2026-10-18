@@ -181,6 +181,9 @@ export async function buildHeaders(bridge, url, body) {
       'ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.25 runtime/bun/1.4.2',
     'x-freebuff-acting-user-id': bridge.cfg.userId,
     'x-freebuff-catalog-fetch': bridge.fid,
+    // SSE gzip 恢复标记(官方 chat 固定带, 原文 FREEBUFF_SSE_GZIP_RECOVERY_HEADER).
+    // 取值与取舍见 .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md.
+    'x-freebuff-sse-gzip-recovery': '1',
     ...(await bridge.signHeaders('POST', url, body, bridge.fid)),
   };
 }

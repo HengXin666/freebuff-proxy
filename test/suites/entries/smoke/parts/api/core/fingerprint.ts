@@ -10,6 +10,8 @@ import { AccountRuntimes } from '../../../../../../../src/app-context.ts'
 import { saveAccountUser } from '../../../../../../../src/auth-store.ts'
 import { loadConfig } from '../../../../../../../src/config.ts'
 import { startServer } from '../../../../../../../src/server.ts'
+import { resolveInstallId } from '../../../../../../../src/upstream/client.ts'
+import { desktopClientVersion } from '../../../../../../../src/upstream/fingerprint/official-fingerprint.ts'
 import { state } from '../../../../../smoke/state.ts'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -89,9 +91,29 @@ import path from 'node:path'
     'POST 准入端点应为 .../session/admission, got ' + admitCall.url,
   )
   assert.equal(admitCall.headers['x-freebuff-model'], 'deepseek/deepseek-v4-flash')
-  assert.equal(admitCall.headers['x-freebuff-wallet-spend-limit'], '0')
+  /**
+   * - 桌面准入的缺省额度口径是 'session'(CLI 形态才是 '0').
+   * - 见 .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md.
+   */
+  assert.equal(admitCall.headers['x-freebuff-wallet-spend-limit'], 'session')
   assert.equal(admitCall.headers['x-freebuff-first-tab-discount'], '0')
   assert.ok(admitCall.headers['x-fb-timezone'], '准入请求应带本机时区')
+  /**
+   * - 桌面端身份组:client 固定 desktop;client-version 与请求时同一来源
+   * - (desktopClientVersion());install-id 与同一解析器(resolveInstallId())
+   * - 给出的值一致,两处都读不到时整头省略.
+   */
+  assert.equal(admitCall.headers['x-freebuff-client'], 'desktop')
+  assert.equal(
+    admitCall.headers['x-freebuff-client-version'],
+    desktopClientVersion(),
+    '准入的 client-version 必须与 desktopClientVersion() 一致',
+  )
+  assert.equal(
+    admitCall.headers['x-freebuff-install-id'] ?? null,
+    resolveInstallId(),
+    '准入的 install-id 必须与 resolveInstallId() 同一来源',
+  )
   /**
    * - x-freebuff-env 头不再发送:desktop 客户端 165 条抓包 0 次
    * - (docs/reverse/20 §20.2 / 21 §21.3).它来自官方 CLI 源码,

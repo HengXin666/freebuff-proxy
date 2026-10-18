@@ -11,6 +11,7 @@ import { freebuffAuthHeaders } from '../../../auth-store.ts'
 import { FREEBUFF_AVAILABLE_MODELS } from '../../../model.ts'
 import { isModelHandle } from '../../catalog-protocol.ts'
 import { officialSessionHeaders } from '../../fingerprint/official-fingerprint.ts'
+import { resolveInstallId } from '../client-state.ts'
 
 /**
  * 把请求的模型解析成上线形态(目录句柄).
@@ -50,14 +51,14 @@ async function resolveModelForWire(requested: any, displayName: any, catalog: an
 /**
  * 装配 /session 的请求头.
  *
- * 头集合逐字对齐官方 jg():Authorization + x-fb-timezone +
+ * 头集合逐字对齐官方 jg() 并按桌面形态补齐身份组:Authorization + x-fb-timezone +
  * x-freebuff-first-tab-discount,POST 另带 model / wallet-spend-limit.
- * 见 officialSessionHeaders 与
+ * install-id 在这里用 resolveInstallId() 解析一次(env 优先, 回落官方客户端登录态),
+ * 与 bun 会话请求同一个值;读不到时整头省略. 见 officialSessionHeaders 与
  * .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md.
  *
- * 注意:官方 jg() 不含 x-codebuff-api-key.但本项目 token 由网页登录签发,
- * 既有实现记录[只带 Bearer 会 401],故这里额外保留该头(唯一的已知残留
- * 差异,理由与待验证项见同一篇 note).
+ * 鉴权头只发 Bearer(freebuffAuthHeaders()):官方 jg() 不含 x-codebuff-api-key,
+ * 本仓库也不再发该头(见同一篇 note 的 x-codebuff-api-key 一节).
  *
  * @param {object} ctx 出站依赖(含 token / catalog)
  * @param {'GET'|'POST'|'DELETE'} method 方法
@@ -77,6 +78,7 @@ export async function sessionHeaders(ctx: any, method: string, opts: any): Promi
       instanceId: opts.instanceId,
       compact: opts.compact,
       walletSpendLimit: opts.walletSpendLimit,
+      installId: resolveInstallId(),
       /**
        * 槽位被占时显式接管(官方 x-freebuff-takeover-instance-id).
        * 见 session-manager 里"槽位被占 → takeover 重试"的说明.

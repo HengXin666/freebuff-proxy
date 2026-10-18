@@ -5,10 +5,11 @@
  * (freebuff 源码 freebuff-models.ts 引用了 docs/freebuff-abuse-detection.md 的
  * tool-schema 检查). 因此每个会出现在线上 wire 上的常量都逐字对齐官方.
  *
- * 全部取值来自对官方发布二进制的静态提取(不是猜测, 也不是从报文反推):
+ * 全部取值来自对官方发布产物的静态提取(不是猜测, 也不是从报文反推):
  *   npm freebuff@0.0.178 → launcher 下载
  *   https://codebuff.com/api/releases/download/0.0.178/freebuff-linux-x64.tar.gz
  *   strings -n 6 freebuff
+ * 桌面端常量(身份组 / SSE 标记)取自桌面客户端 0.0.173 AppImage 里的 orchestrator.js.
  * 提取到的原文锚点见各项注释.
  *
  * 保鲜期:这些值随官方 CLI 发版变化.版本号优先由调用方传入(从 npm 对齐的最新
@@ -47,6 +48,10 @@ export const SESSION_ENDPOINT = '/api/v1/freebuff/session'
 /** 头部常量(二进制原文逐字). */
 export const HEADER_MODEL = 'x-freebuff-model'
 export const HEADER_INSTANCE_ID = 'x-freebuff-instance-id'
+/** 桌面端身份组(原文 FREEBUFF_CLIENT_HEADER / _CLIENT_VERSION_HEADER / _INSTALL_ID_HEADER). */
+export const HEADER_CLIENT = 'x-freebuff-client'
+export const HEADER_CLIENT_VERSION = 'x-freebuff-client-version'
+export const HEADER_INSTALL_ID = 'x-freebuff-install-id'
 /**  x-freebuff-compact-session 常量已删除:客户端 0 次,见 RETIRED_HEADERS. */
 export const HEADER_WALLET_SPEND_LIMIT = 'x-freebuff-wallet-spend-limit'
 export const HEADER_FIRST_TAB_DISCOUNT = 'x-freebuff-first-tab-discount'
@@ -92,6 +97,25 @@ export function localTimeZone() {
 }
 
 /**
+ * 当前对齐的官方桌面端版本 -- 桌面身份头 x-freebuff-client-version 的兜底值.
+ *
+ * 桌面版号没有可自动对齐的公开 registry(与 CLI 的 refreshCliVersion 不同): 部署侧用
+ * FREEBUFF_APP_VERSION 覆盖, 未设置时用这里;桥接端 lib/endpoints/session.ts 有同一份
+ * 兜底, 升级对齐时两处一起改. 不跟官方 clientVersionHeaders() 一样"env 没有就省略":
+ * 官方桌面进程自己总是有该 env, 我们的部署没有, 省略等于身份组缺项. 见
+ * .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md.
+ */
+export const KNOWN_DESKTOP_VERSION = '0.0.173'
+
+/**
+ * 本次请求要发的桌面端版本号(FREEBUFF_APP_VERSION 优先).
+ * @returns {string} 版本号(形如 0.0.173)
+ */
+export function desktopClientVersion() {
+  return (process.env.FREEBUFF_APP_VERSION || '').trim() || KNOWN_DESKTOP_VERSION
+}
+
+/**
  * 构造官方风格的会话请求头(POST 准入 / GET / DELETE 三态,对齐二进制 jg()).
  *
  * 官方原文逐字翻译:
@@ -100,9 +124,13 @@ export function localTimeZone() {
  *   if (GET && compact)              L[compact-session] = '1'
  *   if (POST) { if (model) L[model] = model; L[wallet-spend-limit] = String(limit ?? 0) }
  *
+ * 本仓按桌面形态发:另带身份组(client / client-version / install-id),POST 的
+ * wallet-spend-limit 缺省 'session'(CLI 形态是 '0').取值来源与取舍见
+ * .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md.
+ *
  * @param {'GET'|'POST'|'DELETE'} method
  * @param {string} token
- * @param {{ model?: string, instanceId?: string, compact?: boolean, walletSpendLimit?: number, firstTabDiscount?: boolean }} [opts]
+ * @param {{ model?: string, instanceId?: string, compact?: boolean, walletSpendLimit?: number | string, firstTabDiscount?: boolean, installId?: string | null }} [opts]
  * @returns {Record<string, string>}
  */
 export function officialSessionHeaders(method: any, token: any, opts: any = {}) {
@@ -110,6 +138,13 @@ export function officialSessionHeaders(method: any, token: any, opts: any = {}) 
   const headers: any = {
     Authorization: 'Bearer ' + token,
     [HEADER_FIRST_TAB_DISCOUNT]: opts.firstTabDiscount ? '1' : '0',
+    // 桌面端身份组(原文锚点与取舍见
+    // .agents/notes/implemented/bug-fix/2026-09-18-official-cli-fingerprint.md).
+    [HEADER_CLIENT]: 'desktop',
+    [HEADER_CLIENT_VERSION]: desktopClientVersion(),
+    // installId 由调用方用同一解析器给出(env 优先, 回落官方客户端登录态, 见
+    // src/upstream/client/client-state.ts 的 resolveInstallId);读不到时整头省略.
+    ...(opts.installId ? { [HEADER_INSTALL_ID]: opts.installId } : {}),
     // 客户端环境描述符：官方在 session 与广告请求上都带（见
     // cli/src/utils/client-environment.ts）。缺它就不像官方客户端。
     //  不再发 `x-freebuff-env` 头：desktop 客户端 0 次。
@@ -153,7 +188,9 @@ export function officialSessionHeaders(method: any, token: any, opts: any = {}) 
   //  不再发 x-freebuff-compact-session:desktop 客户端 0 次.
   if (method === 'POST') {
     if (opts.model) headers[HEADER_MODEL] = opts.model
-    headers[HEADER_WALLET_SPEND_LIMIT] = String(opts.walletSpendLimit ?? 0)
+    // 缺省 'session':桌面准入的额度口径(orchestrator.js 的
+    // FREEBUFF_WALLET_SPEND_LIMIT_HEADER = "session"), 不是 CLI 的 0.
+    headers[HEADER_WALLET_SPEND_LIMIT] = String(opts.walletSpendLimit ?? 'session')
     // 显式接管:只在调用方拿到 currentInstanceId 时带, 未拿到时保持官方默认形态
     if (opts.takeoverInstanceId) {
       headers[HEADER_TAKEOVER_INSTANCE_ID] = String(opts.takeoverInstanceId)
