@@ -1,29 +1,26 @@
-# Agent Note: <what this decides, as a claim>
+# Agent Note: <title>
 
 Status: proposed
 
+Decision-ID: <decision-id>
+
+## Code
+
+- `<code-path>`
+
 ## Problem
 
-<What breaks, what must change, and what happens if nothing does. Delete the rest of
-the file and this section still describes the same problem — that is the test.>
+<The concrete constraint that requires a decision>
 
-## Proposal
+## Decision
 
-<The intended change, in enough detail to act on: "use SQLite for session storage",
-not "use a better database". Future tense is allowed while nothing has shipped.>
-
-<Bespoke sections go here — topology, wire contracts, schemas — between Proposal and
-Alternatives. Keep mechanism names searchable.>
+<One decision, its current mechanism, and its boundary>
 
 ## Alternatives considered
 
-- **<Strongest rival>** — <its best argument stated fairly>, then why it loses here.
-- **<Do nothing / reuse what exists>** — <why the status quo is not enough.>
+- <Strongest alternative>: <its strongest argument, then why it loses>
+- Do nothing / reuse existing: <its strongest argument, then why it loses>
 
-## Acceptance criteria
+## Consequences
 
-<The observable state that means done: which path, what magnitude, which command.>
-
-## Risks
-
-<What could go wrong, and what this knowingly gives up.>
+<What this buys and what it costs>

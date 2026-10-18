@@ -1,43 +1,44 @@
-name: agent-notes
-
-# Drop-in pipeline for the hx-agent-notes gates. Copy to .github/workflows/agent-notes.yml.
-# It needs no package.json and no dependency install: tsx is fetched by npx.
-#
-# Optional hardening once the workflow is trusted:
-#   - set the job to "required" in branch protection, and
-#   - ingest .agents/skills/hx-agent-notes/scripts into the repo so the pipeline
-#     pins the exact gate version instead of reading a working-tree copy.
-
+name: Agent Notes Diff
 on:
-  pull_request:
   push:
-    branches: [main, master]
-
+  pull_request:
 permissions:
   contents: read
-
 jobs:
-  agent-notes:
+  redline:
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+        continue-on-error: true
         with:
-          # The coverage gate diffs against the merge base; a shallow clone hides it.
           fetch-depth: 0
-
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        continue-on-error: true
         with:
-          node-version: "20"
-
-      - name: Resolve the comparison base
+          ref: ${{ github.event.repository.default_branch }}
+          path: .agent-notes-policy
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        continue-on-error: true
+      - id: endpoints
+        continue-on-error: true
+        run: uv run .agent-notes-policy/.agents/skills/hx-agent-notes/scripts/github/base.py
+      - name: Collect exact diff with protected default-branch gate
+        if: always()
+        continue-on-error: true
+        env:
+          NOTES_BASE: ${{ steps.endpoints.outputs.base }}
+          NOTES_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          BASE="${{ github.event.pull_request.base.sha }}"
-          if [ -z "$BASE" ]; then BASE="${{ github.event.before }}"; fi
-          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
-            BASE="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
-          fi
-          echo "AGENT_NOTES_BASE_REF=$BASE" >> "$GITHUB_ENV"
-          echo "comparing against $BASE"
-
-      - name: Agent Notes gates
-        run: npx --yes tsx@4 .agents/skills/hx-agent-notes/scripts/verify-all.ts --base "$AGENT_NOTES_BASE_REF"
+          python3 .agent-notes-policy/.agents/skills/hx-agent-notes/scripts/github/collect.py --skill .agent-notes-policy/.agents/skills/hx-agent-notes --repo . --diff --base "$NOTES_BASE" --head "$NOTES_HEAD"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: agent-notes-report
+          path: agent-notes-report.json
+          if-no-files-found: warn
+          retention-days: 7

@@ -5,7 +5,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { describe, filesUnder, isExternalLink, loadNotes, markdownLinks, parseArgv, walkNotes } from './notes-lib.ts'
+import { describe, filesUnder, isExternalLink, loadNotes, markdownLinks, parseArgv, walkNotes } from '../lib/notes-lib.ts'
 
 const parsed = parseArgv(process.argv.slice(2), ['--repo'])
 const cwd = parsed.values['--repo'] !== undefined && parsed.values['--repo'] !== '' ? resolve(parsed.values['--repo'] as string) : process.cwd()
