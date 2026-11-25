@@ -1,0 +1,32 @@
+# hx-governance: managed v1 (由 HX-Workflows 仓库治理生成, 删掉这一行后不再自动覆盖)
+name: commit-lint
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: commit-lint-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  commit-lint:
+    name: commit-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 拉取仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 检查 PR 标题与提交信息
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/commit_lint.py ci

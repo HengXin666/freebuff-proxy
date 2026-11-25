@@ -1,0 +1,73 @@
+# hx-governance: managed v1 (由 HX-Workflows 仓库治理生成, 删掉这一行后不再自动覆盖)
+name: 🐛 缺陷报告
+description: 报告一个错误或异常行为. 截图、录屏和日志能大大加快定位.
+labels: ["type: fix", "status: triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先搜索是否已有相同问题. 可以直接把图片或录屏拖进输入框, 或者截图后 Ctrl+V 粘贴, GitHub 会自动上传并插入链接. 请尽量图文并茂.
+  - type: textarea
+    id: summary
+    attributes:
+      label: 现象
+      description: 一两句话说清楚哪里出了问题.
+      placeholder: |
+        例: 在设置页点击「保存」后页面白屏, 刷新后修改丢失.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 按顺序写出最少的操作步骤, 别人照做就能看到问题.
+      placeholder: |
+        1. 打开 设置 -> 个人资料
+        2. 修改昵称为超过 20 个字符的名字
+        3. 点击「保存」
+        4. 页面白屏
+    validations:
+      required: true
+  - type: textarea
+    id: expected-vs-actual
+    attributes:
+      label: 期望 vs 实际
+      description: 期望看到什么, 实际看到什么.
+      placeholder: |
+        期望: 提示「昵称不能超过 20 个字符」.
+        实际: 页面白屏, 控制台报 TypeError.
+    validations:
+      required: true
+  - type: textarea
+    id: media
+    attributes:
+      label: 截图 / 录屏
+      description: |
+        出错画面、控制台、网络面板的截图, 或者一段录屏. 可以直接把图片或录屏拖进输入框, 或者截图后 Ctrl+V 粘贴, GitHub 会自动上传并插入链接. 请尽量图文并茂.
+      placeholder: |
+        ![出错截图](拖入图片后自动生成链接)
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      description: 操作系统、浏览器或运行时、项目版本或提交号.
+      placeholder: |
+        - 系统: Windows 11 23H2
+        - 浏览器 / 运行时: Chrome 131 / Python 3.12
+        - 版本: v1.4.2 (或提交 abc1234)
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: 相关的报错或日志, 粘贴原文即可, 会自动按代码块显示. 记得去掉令牌和密码.
+      render: shell
+      placeholder: |
+        Traceback (most recent call last):
+          File "app.py", line 42, in save
+        TypeError: ...
+    validations:
+      required: false

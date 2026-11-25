@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# hx-governance: managed v1 (由 HX-Workflows 仓库治理生成, 删掉这一行后不再自动覆盖)
+# 安装: git config core.hooksPath .github/hooks
+root="$(git rev-parse --show-toplevel)" || exit 0
+command -v python3 >/dev/null 2>&1 || { echo "commit-msg: 没有 python3, 跳过提交规范检查" >&2; exit 0; }
+exec python3 "$root/.github/scripts/commit_lint.py" hook "$1"
