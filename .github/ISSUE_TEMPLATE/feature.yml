@@ -1,0 +1,64 @@
+# hx-governance: managed v1 (由 HX-Workflows 仓库治理生成, 删掉这一行后不再自动覆盖)
+name: ✨ 功能需求
+description: 提出新功能或改进. 请尽量图文并茂, 写清楚为什么需要和怎样才算完成.
+labels: ["type: feat", "status: triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢提出需求! 可以直接把图片或录屏拖进输入框, 或者截图后 Ctrl+V 粘贴, GitHub 会自动上传并插入链接. 请尽量图文并茂.
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景 / 痛点
+      description: 现在遇到了什么问题, 谁会遇到, 发生得多频繁. 可以附一张现状截图.
+      placeholder: |
+        例: 每次导出报表都要手动筛选 3 次, 数据量大时要等 5 分钟以上.
+        ![现状截图](拖入图片后自动生成链接)
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+      description: 希望它怎样工作. 写用户能看到的结果, 不必写实现方案.
+      placeholder: |
+        例: 导出页增加「按日期范围导出」, 选好范围后一次导出, 30 秒内完成.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 满足哪些条件才算完成. 建议用勾选列表, 每条都能验证.
+      placeholder: |
+        - [ ] 可以选择开始和结束日期
+        - [ ] 10 万行数据 30 秒内导出完成
+        - [ ] 导出的文件名包含日期范围
+    validations:
+      required: true
+  - type: textarea
+    id: mockup
+    attributes:
+      label: 原型 / 截图
+      description: |
+        上传原型图、手绘草图、参考产品的截图或录屏. 可以直接把图片或录屏拖进输入框, 或者截图后 Ctrl+V 粘贴, GitHub 会自动上传并插入链接. 请尽量图文并茂.
+        图片多时可以用表格并排放, 例如 `| 现在 | 期望 |`.
+      placeholder: |
+        ![原型](拖入图片后自动生成链接)
+        参考: https://example.com/similar-feature
+    validations:
+      required: false
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 优先级
+      description: 维护者会按这里的选择打上 priority 标签.
+      options:
+        - P0 紧急, 阻塞使用
+        - P1 高, 希望尽快
+        - P2 中, 排期处理
+        - P3 低, 有空再做
+      default: 2
+    validations:
+      required: true

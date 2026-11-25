@@ -1,0 +1,29 @@
+# hx-governance: managed v1 (由 HX-Workflows 仓库治理生成, 删掉这一行后不再自动覆盖)
+name: 💬 提问 / 讨论
+description: 使用上的疑问、设计讨论或想法. 不确定是不是缺陷时也可以先在这里问.
+labels: ["type: question", "status: triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        可以直接把图片或录屏拖进输入框, 或者截图后 Ctrl+V 粘贴, GitHub 会自动上传并插入链接. 请尽量图文并茂.
+  - type: textarea
+    id: question
+    attributes:
+      label: 问题 / 想讨论的内容
+      description: 想知道什么, 或者想讨论什么方案.
+      placeholder: |
+        例: 配置文件里的 `timeout` 是按秒还是毫秒? 我设置 30 之后好像没有生效.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: 背景与已尝试的做法
+      description: 你的使用场景, 已经看过的文档或试过的办法. 可以附截图.
+      placeholder: |
+        - 场景: 在 CI 里调用接口
+        - 已尝试: 把 timeout 改成 30000, 仍然 30 毫秒超时
+        ![截图](拖入图片后自动生成链接)
+    validations:
+      required: false

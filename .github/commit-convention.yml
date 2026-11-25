@@ -1,0 +1,12 @@
+# hx-governance: managed v1 (由 HX-Workflows 仓库治理生成, 删掉这一行后不再自动覆盖)
+# 提交规范. CI (.github/workflows/commit-lint.yml) 和本地钩子 (.github/hooks/commit-msg) 都读这个文件.
+# 本地启用钩子: git config core.hooksPath .github/hooks
+# style: conventional = type(scope): 描述 ; bracket = [type]: 描述
+style: conventional
+types: [feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert]
+max_header_length: 72
+# 接入时默认分支的最新提交. 它和它之前的提交都不检查.
+baseline: 04f65c738b67897fb765f4a05049b9b7b887cb2f
+# PR 里单个提交不合规时: warn 只提示, error 让检查失败, off 不检查. squash 合并只保留 PR 标题.
+pr_commits: warn
+skip_bot_commits: true
